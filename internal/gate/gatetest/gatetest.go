@@ -7,6 +7,7 @@ package gatetest
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -56,6 +57,51 @@ func WriteFile(t testing.TB, path string, data string, mode os.FileMode) {
 	if err := os.Chmod(path, mode); err != nil { // not subject to umask
 		t.Fatal(err)
 	}
+}
+
+// moduleRoot finds the module root from the test's working directory.
+func moduleRoot(t testing.TB) string {
+	t.Helper()
+	d, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(d, "go.mod")); err == nil {
+			return d
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			t.Fatal("module root not found")
+		}
+		d = parent
+	}
+}
+
+// Build compiles a package of this module (relative to the module root)
+// with CGO_ENABLED=0 into dir/name, mode 0755, and returns the path.
+func Build(t testing.TB, pkg, dir, name string, env []string, extraArgs ...string) string {
+	t.Helper()
+	out := filepath.Join(dir, name)
+	args := append([]string{"build", "-trimpath", "-o", out}, extraArgs...)
+	args = append(args, "./"+pkg)
+	cmd := exec.Command("go", args...) //nolint:gosec // test helper: module-relative package, test-controlled args
+	cmd.Dir = moduleRoot(t)
+	cmd.Env = append(append(os.Environ(), "CGO_ENABLED=0"), env...)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build %s: %v\n%s", pkg, err, b)
+	}
+	if err := os.Chmod(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// BuildProbe builds the test child (testdata/probe) into dir/name. outside
+// is baked into the binary as the path read-outside tries to read.
+func BuildProbe(t testing.TB, dir, name, outside string) string {
+	t.Helper()
+	return Build(t, "internal/gate/gatetest/testdata/probe", dir, name, nil, "-ldflags", "-X main.outside="+outside)
 }
 
 // Mkdir creates a directory (and parents) with the given mode.
