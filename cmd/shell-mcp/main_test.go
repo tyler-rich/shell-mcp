@@ -7,13 +7,19 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/pem"
+	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/crypto/ssh"
+
+	"github.com/tyler-rich/shell-mcp/internal/config"
+	"github.com/tyler-rich/shell-mcp/internal/transport"
 )
 
 // All values below are invented test fixtures.
@@ -54,7 +60,7 @@ func TestHealthcheckExitCodes(t *testing.T) {
 }
 
 func TestHealthcheckUnreachable(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +105,7 @@ func lookup(m map[string]string) func(string) (string, bool) {
 
 const testToken = "tok-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH"
 
-func testEnv(t *testing.T) (map[string]string, []byte) {
+func testEnv(t *testing.T) (env map[string]string, seed []byte) {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -184,5 +190,61 @@ func TestUnknownSubcommand(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run(context.Background(), []string{"shell"}, lookup(nil), &out, &errb); code != 2 {
 		t.Fatalf("unknown subcommand exit %d, want 2", code)
+	}
+}
+
+func TestMCPStatelessServesNoTools(t *testing.T) {
+	env, _ := testEnv(t)
+	delete(env, "SHELL_MCP_TOKEN")
+	env["SHELL_MCP_AUTH_MODE"] = "none"
+	env["SHELL_MCP_ALLOW_UNAUTHENTICATED"] = "true"
+	cfg, err := config.Load(lookup(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := newMCPServer(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := transport.New(cfg, mcpHTTPHandler(server, slog.New(slog.DiscardHandler)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(srv.Handler)
+	defer ts.Close()
+
+	// Raw request: stateless JSON response, no session header.
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/mcp",
+		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+	res, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if res.StatusCode != http.StatusOK || !strings.HasPrefix(res.Header.Get("Content-Type"), "application/json") ||
+		res.Header.Get("Mcp-Session-Id") != "" || !strings.Contains(string(body), `"tools":[]`) {
+		t.Fatalf("status %d, headers %v, body %s", res.StatusCode, res.Header, body)
+	}
+
+	// SDK client at its latest protocol revision.
+	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+	cs, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: ts.URL + "/mcp", DisableStandaloneSSE: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cs.Close() }()
+	lt, err := cs.ListTools(context.Background(), &mcp.ListToolsParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lt.Tools) != 0 {
+		t.Fatalf("tools = %v", lt.Tools)
+	}
+	if v := cs.InitializeResult(); v == nil || v.ProtocolVersion != "2026-07-28" {
+		t.Fatalf("negotiated protocol: %+v", v)
 	}
 }

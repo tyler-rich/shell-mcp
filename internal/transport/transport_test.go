@@ -41,7 +41,7 @@ func TestHealthzExactResponse(t *testing.T) {
 	srv := newTestServer(t)
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		rec := httptest.NewRecorder()
-		srv.Handler.ServeHTTP(rec, httptest.NewRequest(method, "/healthz", http.NoBody))
+		srv.Handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), method, "/healthz", http.NoBody))
 		res := rec.Result()
 		body, _ := io.ReadAll(res.Body)
 		_ = res.Body.Close()
@@ -76,7 +76,7 @@ func TestHealthzExactResponse(t *testing.T) {
 func TestHealthzRejectsOtherMethods(t *testing.T) {
 	srv := newTestServer(t)
 	rec := httptest.NewRecorder()
-	srv.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/healthz", strings.NewReader("{}")))
+	srv.Handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/healthz", strings.NewReader("{}")))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST /healthz status = %d", rec.Code)
 	}
@@ -85,7 +85,7 @@ func TestHealthzRejectsOtherMethods(t *testing.T) {
 func TestHealthzBypassesMCPHandler(t *testing.T) {
 	srv := newTestServer(t)
 	rec := httptest.NewRecorder()
-	srv.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", http.NoBody))
+	srv.Handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/healthz", http.NoBody))
 	if rec.Header().Get("X-Test-Mcp") != "" {
 		t.Fatal("/healthz was routed through the MCP handler")
 	}
@@ -94,13 +94,13 @@ func TestHealthzBypassesMCPHandler(t *testing.T) {
 func TestMCPPathRoutesToHandlerAndOthersAre404(t *testing.T) {
 	srv := newTestServer(t)
 	rec := httptest.NewRecorder()
-	srv.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader("{}")))
+	srv.Handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", strings.NewReader("{}")))
 	if rec.Code != http.StatusTeapot {
 		t.Fatalf("/mcp not routed to MCP handler: %d", rec.Code)
 	}
 	for _, p := range []string{"/", "/mcp/extra", "/healthz/x", "/metrics"} {
 		rec = httptest.NewRecorder()
-		srv.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, http.NoBody))
+		srv.Handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, p, http.NoBody))
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("%s status = %d, want 404", p, rec.Code)
 		}

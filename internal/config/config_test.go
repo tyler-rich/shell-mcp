@@ -69,6 +69,9 @@ func writeFile(t *testing.T, name, content string, mode os.FileMode) string {
 	if err := os.WriteFile(p, []byte(content), mode); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(p, mode); err != nil { // the umask may have masked WriteFile's mode
+		t.Fatal(err)
+	}
 	return p
 }
 
@@ -137,7 +140,7 @@ func TestRuleNoneOverHTTPWithoutAllow(t *testing.T) {
 }
 
 func TestRuleNoneOverHTTPNonLoopback(t *testing.T) {
-	for _, bind := range []string{"0.0.0.0", "192.0.2.10", "::", "localhost"} {
+	for _, bind := range []string{"0.0.0.0", "192.0.2.10", "::"} {
 		t.Run(bind, func(t *testing.T) {
 			env := baseEnv(t)
 			env["SHELL_MCP_AUTH_MODE"] = "none"
@@ -392,10 +395,7 @@ func TestFileUnreadable(t *testing.T) {
 func TestSecretFileReadableByOthersWarns(t *testing.T) {
 	env := baseEnv(t)
 	delete(env, "SHELL_MCP_TOKEN")
-	p := writeFile(t, "token", testToken, 0o600)
-	if err := os.Chmod(p, 0o644); err != nil { // explicit: umask may mask WriteFile's mode
-		t.Fatal(err)
-	}
+	p := writeFile(t, "token", testToken, 0o644)
 	env["SHELL_MCP_TOKEN_FILE"] = p
 	cfg := mustLoad(t, env)
 	if !containsWarning(cfg, "SHELL_MCP_TOKEN_FILE is readable by group or other") {
@@ -534,4 +534,10 @@ func assertSecretsAbsentList(k testKey) []string {
 		fmt.Sprintf("%x", k.seed),
 		fmt.Sprintf("%v", k.seed)[:30],
 	}
+}
+
+func TestBindMustBeIPAddress(t *testing.T) {
+	env := baseEnv(t)
+	env["SHELL_MCP_BIND"] = "localhost"
+	wantReason(t, env, `SHELL_MCP_BIND must be an IP address (got "localhost")`)
 }
