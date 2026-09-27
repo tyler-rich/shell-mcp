@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -581,4 +582,145 @@ func TestRedactPatternsFileUnreadable(t *testing.T) {
 	env := baseEnv(t)
 	env["SHELL_MCP_REDACT_PATTERNS_FILE"] = filepath.Join(t.TempDir(), "missing")
 	wantReason(t, env, "SHELL_MCP_REDACT_PATTERNS_FILE: cannot read file")
+}
+
+// --- SHELL_MCP_SSH_KEY as single-line base64 --------------------------------
+// Stack-editor environment stores often cannot hold multi-line values, so
+// SHELL_MCP_SSH_KEY also accepts `base64 -w0 <keyfile>` of the whole key file.
+
+func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
+
+func TestSSHKeyRawPEM(t *testing.T) {
+	k := newEd25519Key(t)
+	env := baseEnv(t)
+	env["SHELL_MCP_SSH_KEY"] = k.pem
+	cfg := mustLoad(t, env)
+	if !strings.HasPrefix(cfg.Targets[0].Key.Fingerprint(), "SHA256:") {
+		t.Fatalf("no key loaded: %v", cfg.Targets[0].Key)
+	}
+}
+
+func TestSSHKeyBase64PEM(t *testing.T) {
+	k := newEd25519Key(t)
+	raw := baseEnv(t)
+	raw["SHELL_MCP_SSH_KEY"] = k.pem
+	want := mustLoad(t, raw).Targets[0].Key.Fingerprint()
+
+	for name, v := range map[string]string{
+		"plain":             b64(k.pem),
+		"surrounding space": "  " + b64(k.pem) + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := baseEnv(t)
+			env["SHELL_MCP_SSH_KEY"] = v
+			if got := mustLoad(t, env).Targets[0].Key.Fingerprint(); got != want {
+				t.Fatalf("fingerprint %q, want %q (same key as raw PEM)", got, want)
+			}
+		})
+	}
+}
+
+func TestSSHKeyInvalidBase64(t *testing.T) {
+	for _, v := range []string{"not base64 at all!", "QUJD$$$", "AAAA=AAAA"} {
+		env := baseEnv(t)
+		env["SHELL_MCP_SSH_KEY"] = v
+		wantReason(t, env, "SHELL_MCP_SSH_KEY: value is neither an OpenSSH private key nor its single-line base64 encoding")
+	}
+}
+
+func TestSSHKeyBase64OfSomethingElse(t *testing.T) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8 := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+	for name, v := range map[string]string{
+		"text":      b64("hello, this is not a key"),
+		"pkcs8 pem": b64(pkcs8),
+		"public":    b64("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlaceholderPlaceholderPlaceholder00 test"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := baseEnv(t)
+			env["SHELL_MCP_SSH_KEY"] = v
+			wantReason(t, env, "SHELL_MCP_SSH_KEY: base64 value does not decode to an OpenSSH private key")
+		})
+	}
+}
+
+func TestSSHKeyBase64NotEd25519(t *testing.T) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKey(priv, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := baseEnv(t)
+	env["SHELL_MCP_SSH_KEY"] = b64(string(pem.EncodeToMemory(block)))
+	wantReason(t, env, "SHELL_MCP_SSH_KEY: private key is not Ed25519")
+}
+
+func TestSSHKeyBase64PassphraseProtected(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "test", []byte("invented-passphrase"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := baseEnv(t)
+	env["SHELL_MCP_SSH_KEY"] = b64(string(pem.EncodeToMemory(block)))
+	wantReason(t, env, "SHELL_MCP_SSH_KEY: private key is passphrase-protected and no passphrase source is supported")
+}
+
+func TestSSHKeyValueNeverInErrorsOrCheckOutput(t *testing.T) {
+	k := newEd25519Key(t)
+	good := b64(k.pem)
+
+	// Error paths: the reason never echoes the value or a fragment of it.
+	for _, v := range []string{
+		"bm90LWEta2V5LWJ1dC1sb29rcy1saWtlLWJhc2U2NA==",
+		"invalid-base64-VALUE-that-must-not-leak-" + good[:20],
+		good[:len(good)-8], // truncated: still base64-looking
+	} {
+		env := baseEnv(t)
+		env["SHELL_MCP_SSH_KEY"] = v
+		_, err := Load(lookupFrom(env))
+		if err == nil {
+			t.Fatalf("truncated/invalid key accepted")
+		}
+		for _, frag := range []string{v, v[:16], good[:16]} {
+			if strings.Contains(err.Error(), frag) {
+				t.Fatalf("error %q echoes the value", err)
+			}
+		}
+	}
+
+	// Success path: check output shows only the fingerprint.
+	env := baseEnv(t)
+	env["SHELL_MCP_SSH_KEY"] = good
+	cfg := mustLoad(t, env)
+	eff, err := json.Marshal(cfg.Effective())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dumps := []string{string(eff), fmt.Sprintf("%+v", cfg), fmt.Sprintf("%#v", *cfg)}
+	for _, d := range dumps {
+		for i := 0; i+24 <= len(good); i += 24 {
+			if strings.Contains(d, good[i:i+24]) {
+				t.Fatalf("output contains part of the base64 key value")
+			}
+		}
+		for _, s := range assertSecretsAbsentList(k) {
+			if strings.Contains(d, s) {
+				t.Fatalf("output contains key material %q", s)
+			}
+		}
+	}
 }
