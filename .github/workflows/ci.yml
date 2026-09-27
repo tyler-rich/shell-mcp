@@ -165,4 +165,5 @@ jobs:
           echo "required job results: ${{ join(needs.*.result, ', ') }}"
           exit 1
       - name: report
-        run: echo "required job results: ${{ join(needs.*.result, ', ') }}"
+        run: |
+          echo "required job results: ${{ join(needs.*.result, ', ') }}"
