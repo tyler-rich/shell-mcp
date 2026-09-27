@@ -177,7 +177,7 @@ All variables are read at startup; `*_FILE` reads the value from a file (Docker 
 | `SHELL_MCP_APPROVAL_TIERS` | `destructive` | `destructive` or `operator,destructive`. Destructive operations and privileged operations of tier operator or above always need approval; adding `operator` also gates ordinary (unprivileged) writes. `destructive` cannot be removed. |
 | `SHELL_MCP_APPROVAL_FALLBACK` | `deny` | For clients that do not declare elicitation: `deny` (refuse with `approval_unavailable`) or `confirm-argument` (explicit opt-out: a `confirm: true` argument is accepted; WARN at startup and on every use). |
 | `SHELL_MCP_APPROVAL_TTL` | `120` | Seconds an approval request stays valid (30..600). |
-| `SHELL_MCP_REDACT_PATTERNS` | — | Extra regexes for output redaction (RE2 syntax). |
+| `SHELL_MCP_REDACT_PATTERNS` / `_FILE` | — | Extra regexes for output redaction (RE2 syntax), one per line. `_FILE` wins, for environment stores that cannot hold multi-line values. |
 | `SHELL_MCP_LOG_LEVEL` / `_LOG_FORMAT` | `info` / `json` | stdio transport logs to stderr only. |
 
 Targets file:

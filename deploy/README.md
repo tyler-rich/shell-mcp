@@ -49,4 +49,4 @@ Publish the port only on loopback, or on a specific LAN/VPN interface address. T
 
 ## Stack editors (DockHand, Portainer, …)
 
-In a stack editor such as DockHand or Portainer, put secrets in the tool's encrypted environment store, never in the YAML. Set `SHELL_MCP_TOKEN` and `SHELL_MCP_SSH_KEY` there, drop the `secrets:` blocks and the `*_FILE` variables, and keep every hardening flag from the reference compose.
+In a stack editor such as DockHand or Portainer, put secrets in the tool's encrypted environment store, never in the YAML. Set `SHELL_MCP_TOKEN` and `SHELL_MCP_SSH_KEY` there, drop the `secrets:` blocks and the `*_FILE` variables, and keep every hardening flag from the reference compose. Environment stores that cannot hold multi-line values can still take several redaction patterns: mount a file with one pattern per line and point `SHELL_MCP_REDACT_PATTERNS_FILE` at it.

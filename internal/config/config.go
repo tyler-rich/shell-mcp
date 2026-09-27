@@ -332,13 +332,15 @@ func tierOrder(t string) int {
 	return 1
 }
 
-// redactPatterns reads SHELL_MCP_REDACT_PATTERNS: one RE2 pattern per line
-// (a single-line value is one pattern). Newline separation avoids clashing
-// with the commas that regex quantifiers such as {20,} contain.
+// redactPatterns reads SHELL_MCP_REDACT_PATTERNS_FILE, or else
+// SHELL_MCP_REDACT_PATTERNS: one RE2 pattern per line (a single-line value is
+// one pattern; blank lines are skipped). Newline separation avoids clashing
+// with the commas that regex quantifiers such as {20,} contain; the file form
+// serves environment stores that cannot hold multi-line values.
 func (l *loader) redactPatterns() ([]*regexp.Regexp, error) {
-	raw, ok := l.lookup("SHELL_MCP_REDACT_PATTERNS")
-	if !ok {
-		return nil, nil
+	raw, ok, err := l.fileOrValue("SHELL_MCP_REDACT_PATTERNS")
+	if err != nil || !ok {
+		return nil, err
 	}
 	var out []*regexp.Regexp
 	n := 0
@@ -575,6 +577,21 @@ func (l *loader) secret(name string) (value string, ok bool, err error) {
 			return "", false, err
 		}
 		return string(data), true, nil
+	}
+	v, ok := l.lookup(name)
+	return v, ok, nil
+}
+
+// fileOrValue is secret for non-secret settings: NAME_FILE wins over NAME,
+// without the group/other-readable warning.
+func (l *loader) fileOrValue(name string) (value string, ok bool, err error) {
+	fileVar := name + "_FILE"
+	if path := l.get(fileVar, ""); path != "" {
+		data, err := readBounded(path, maxSecretFileBytes)
+		if err != nil {
+			return "", false, errorf("%s: cannot read file", fileVar)
+		}
+		return string(stripOneNewline(data)), true, nil
 	}
 	v, ok := l.lookup(name)
 	return v, ok, nil
