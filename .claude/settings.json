@@ -68,10 +68,14 @@
       "Read(./.git/info/private-terms)",
       "Edit(./.git/**)",
       "Write(./.git/**)",
+      "Edit(./.claude/settings.json)",
+      "Write(./.claude/settings.json)",
       "Read(./secrets/**)",
+      "Write(./secrets/**)",
       "Read(./.env)",
-      "Read(./.env.*)",
-      "Write(./secrets/**)"
+      "Read(./.env.local)",
+      "Read(./**/.env)",
+      "Read(./**/.env.local)"
     ]
   }
 }
