@@ -145,11 +145,15 @@ jobs:
           {
             echo "### Runner probes"
             echo "- kernel: $(uname -r)"
-            echo "- runner: $(go run ./scripts/probe/landlock 2>&1 || true)"
+            go build -o /tmp/landlock-probe ./scripts/probe/landlock
+            echo "- runner: $(/tmp/landlock-probe 2>&1 || true)"
             echo "- golang container: $(docker run --rm -v "$PWD:/src:ro" -w /src -e GOFLAGS=-buildvcs=false -e HOME=/tmp -u 65532:65532 \
                 "$(awk 'toupper($1) == "FROM" && $2 ~ /^golang:/ { print $2; exit }' Dockerfile)" \
                 sh -c 'GOCACHE=/tmp/c GOMODCACHE=/tmp/m go run ./scripts/probe/landlock' 2>&1 | tail -n1 || true)"
-            echo "- $(bash scripts/probe/systemd.sh 2>&1 | head -n1 || true)"
+            echo "- systemd probe:"
+            echo '```'
+            bash scripts/probe/systemd.sh 2>&1 || true
+            echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
   ci:

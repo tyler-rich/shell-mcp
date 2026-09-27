@@ -38,8 +38,9 @@ running | degraded)
 	echo "systemd-container: available (is-system-running=$state; unprivileged, cgroupns=private, rw cgroup2)"
 	;;
 *)
-	echo "systemd-container: unavailable (is-system-running=${state:-none}); last log lines:"
-	docker logs "$name" 2>&1 | tail -n 5 | sed 's/^/  /'
+	echo "systemd-container: unavailable (is-system-running=${state:-none}; container $(docker inspect -f '{{.State.Status}}, exit {{.State.ExitCode}}' "$name" 2>/dev/null || echo gone))"
+	echo "  last log lines:"
+	docker logs "$name" 2>&1 | tail -n 20 | sed 's/^/  /'
 	exit 3
 	;;
 esac
