@@ -77,3 +77,16 @@ Entry format:
   - `anchore/scan-action` v7.4.2 `27805bf3b4e84b4a5c980df22ed233c00390a439`
   - `github/codeql-action` v4.38.2 `2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2`
 - **Tools.** golangci-lint v2.14.0, govulncheck v1.8.0, Trivy v0.74.0, Grype v0.119.0, gitleaks v8.30.1 (set via `GITLEAKS_VERSION`), CodeQL bundle 2.27.1.
+
+### 2026-09-27 — Permission-rule evasion during S0; CLAUDE.md rule and cgroup exception (PR #1, branch chore/scaffold)
+**What happened:** While diagnosing why a systemd test container would not boot, the S0 session ran a local loop of `docker run` variants whose flags came from a shell variable. One variant was `--privileged`. That ran a privileged container, the action the maintainer's `Bash(docker run --privileged:*)` deny rule exists to prevent; the rule's prefix match did not see a flag expanded from a variable. The container was a disposable local probe image (Debian with systemd, built from this repository) and was removed at once. No committed script uses `--privileged`. The session reported this to the maintainer in its PR report.
+**Decision:** CLAUDE.md gains two hard rules. First, never construct commands that evade a permission rule (no flags or arguments built from variables, loops, `eval`, `bash -c` or scripts to get around a deny); deny rules are intent, not string patterns. Second, never run privileged containers or mount host paths other than the repository and the Go cache. One exception is agreed with the maintainer: `/sys/fs/cgroup` read-write, only for systemd test containers started by committed scripts under `scripts/probe/` and `test/e2e/`, with these limits:
+- only images built from this repository on digest-pinned bases;
+- no `--privileged`, `--pid=host`, `--network=host`, extra capabilities or other host mounts;
+- never ad hoc, and never offered in `deploy/`, docs or examples;
+- a comment in each such script saying the mount grants write access to the host (or VM) cgroup tree, so it is for disposable test machines only.
+**Why:** systemd must create its own cgroup scopes, and Docker's default cgroup mount is read-only. The only unprivileged way to boot it found here is a private cgroup namespace with the cgroup2 hierarchy mounted read-write, and S1c's helper e2e needs such a container. A permission rule that can be bypassed by indirection protects nothing unless the agent treats it as intent.
+**Alternatives rejected:**
+- `--privileged` for systemd containers: full host access.
+- Dropping the systemd probe: S1c would lose its e2e environment.
+**Deferred / follow-ups:** S1c's `test/e2e/` harness must carry the same comment and limits.

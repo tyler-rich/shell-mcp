@@ -14,9 +14,14 @@ name="shell-mcp-probe-systemd-$$"
 docker build -q -t "$image" -f "$here/Dockerfile.systemd" "$here" >/dev/null
 trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
 
-# No --privileged: a private cgroup namespace with the cgroup2 hierarchy
-# mounted read-write (systemd must create its own scopes), the tmpfs mounts
-# systemd expects, and container=docker so it detects the container.
+# CLAUDE.md cgroup exception. No --privileged, no added capabilities, no other
+# host mount; the image is built from this repository on a digest-pinned base.
+# systemd must create its own cgroup scopes, which it cannot do on Docker's
+# read-only cgroup mount, so the host's cgroup2 hierarchy is mounted
+# read-write inside a private cgroup namespace. That grants the container
+# write access to the host (or VM) cgroup tree: run this on disposable test
+# machines only (a workstation's Docker VM, a CI runner). The tmpfs mounts are
+# what systemd expects; container=docker lets it detect the container.
 docker run -d -t --name "$name" --cgroupns=private \
 	-v /sys/fs/cgroup:/sys/fs/cgroup:rw -e container=docker \
 	--tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
