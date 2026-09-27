@@ -537,7 +537,34 @@ func (l *loader) sharedKey() (*PrivateKey, error) {
 	if err != nil || !ok || data == "" {
 		return nil, err
 	}
-	return parsePrivateKey("SHELL_MCP_SSH_KEY", []byte(data))
+	pemBytes := []byte(data)
+	if l.get("SHELL_MCP_SSH_KEY_FILE", "") == "" {
+		if pemBytes, err = decodeKeyValue("SHELL_MCP_SSH_KEY", data); err != nil {
+			return nil, err
+		}
+	}
+	return parsePrivateKey("SHELL_MCP_SSH_KEY", pemBytes)
+}
+
+const openSSHKeyHeader = "-----BEGIN OPENSSH PRIVATE KEY-----"
+
+// decodeKeyValue accepts the key as PEM, or — for environment stores that
+// cannot hold multi-line values — as the single-line standard base64 of the
+// whole OpenSSH key file (`base64 -w0 <keyfile>`), recognised by the absence
+// of a "-----BEGIN" header. The base64 form must decode to an OpenSSH private
+// key. Reasons never echo the value.
+func decodeKeyValue(source, value string) ([]byte, error) {
+	if strings.Contains(value, "-----BEGIN") {
+		return []byte(value), nil
+	}
+	decoded, err := base64.StdEncoding.Strict().DecodeString(strings.TrimSpace(value))
+	if err != nil || len(decoded) == 0 {
+		return nil, errorf("%s: value is neither an OpenSSH private key nor its single-line base64 encoding", source)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(string(decoded)), openSSHKeyHeader) {
+		return nil, errorf("%s: base64 value does not decode to an OpenSSH private key", source)
+	}
+	return decoded, nil
 }
 
 func parsePrivateKey(source string, data []byte) (*PrivateKey, error) {

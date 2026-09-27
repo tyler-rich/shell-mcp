@@ -168,7 +168,7 @@ All variables are read at startup; `*_FILE` reads the value from a file (Docker 
 | `SHELL_MCP_TARGETS_FILE` | — | YAML list of targets (below). Mutually exclusive with the single-target variables. |
 | `SHELL_MCP_TARGET_NAME` / `_HOST` / `_PORT` / `_USER` | — / — / `22` / — | Single-target shorthand for stack-editor deployments. |
 | `SHELL_MCP_TARGET_HOST_KEYS` | *(required)* | Comma list of pinned `SHA256:` fingerprints (list allows rotation). |
-| `SHELL_MCP_SSH_KEY` / `_FILE` | *(required)* | OpenSSH-format Ed25519 private key. |
+| `SHELL_MCP_SSH_KEY` / `_FILE` | *(required)* | OpenSSH-format Ed25519 private key, unencrypted. `_FILE` (a mounted secret) is recommended and wins. The plain variable also accepts the single-line standard base64 of the whole key file (recognised by the absence of a `-----BEGIN` header; it must decode to an OpenSSH private key), for environment stores that cannot hold multi-line values. |
 | `SHELL_MCP_DEFAULT_TARGET` | — | Makes `target` optional when several targets exist. |
 | `SHELL_MCP_SSH_CONNECT_TIMEOUT` | `10` | Seconds. |
 | `SHELL_MCP_SSH_MAX_SESSIONS` | `4` | Concurrent sessions per target. |

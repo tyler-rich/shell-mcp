@@ -12,6 +12,9 @@ mkdir -p secrets && chmod 700 secrets
 head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n' > secrets/mcp_token
 ssh-keygen -t ed25519 -N '' -C shell-mcp -f secrets/ssh_key
 chmod 600 secrets/*
+# The container runs as UID 65532 and bind-mounts these files: hand the two
+# it reads to that UID (as root). The .pub file stays yours.
+chown 65532:65532 secrets/mcp_token secrets/ssh_key
 ```
 
 Install `secrets/ssh_key.pub` on the target as described in the target setup guide, and pin the target's host key: `ssh-keyscan -t ed25519 <host> | ssh-keygen -lf -` prints the `SHA256:` fingerprint. Check it against the host's own `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` over a trusted channel. Never trust a key on first use.
@@ -49,4 +52,20 @@ Publish the port only on loopback, or on a specific LAN/VPN interface address. T
 
 ## Stack editors (DockHand, Portainer, …)
 
-In a stack editor such as DockHand or Portainer, put secrets in the tool's encrypted environment store, never in the YAML. Set `SHELL_MCP_TOKEN` and `SHELL_MCP_SSH_KEY` there, drop the `secrets:` blocks and the `*_FILE` variables, and keep every hardening flag from the reference compose. Environment stores that cannot hold multi-line values can still take several redaction patterns: mount a file with one pattern per line and point `SHELL_MCP_REDACT_PATTERNS_FILE` at it.
+In a stack editor such as DockHand or Portainer, never put secrets in the YAML, and keep every hardening flag from the reference compose.
+
+- **SSH key — recommended:** keep it a mounted file and set `SHELL_MCP_SSH_KEY_FILE`, as in the reference compose, if your tool can provide one (Docker secrets, or a bind-mounted file readable only by the container user, UID 65532).
+- **SSH key — fallback:** put it in the tool's encrypted environment store as `SHELL_MCP_SSH_KEY`. Environment stores usually cannot hold the key's multi-line PEM, so store the single-line base64 of the whole key file instead:
+
+  ```sh
+  base64 -w0 secrets/ssh_key            # Linux
+  ```
+
+  ```powershell
+  [Convert]::ToBase64String([IO.File]::ReadAllBytes("secrets\ssh_key"))   # Windows PowerShell
+  ```
+
+  `shell-mcp check` shows only the key's fingerprint, never the value.
+- **Bearer token:** `SHELL_MCP_TOKEN` in the encrypted environment store. It is a single line.
+- **What to drop:** the `secrets:` blocks and any `*_FILE` variable you are not using.
+- **Several redaction patterns:** mount a file with one pattern per line and point `SHELL_MCP_REDACT_PATTERNS_FILE` at it, because environment stores cannot hold the multi-line value.
