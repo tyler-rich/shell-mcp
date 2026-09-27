@@ -39,6 +39,7 @@ running | degraded)
 	;;
 *)
 	echo "systemd-container: unavailable (is-system-running=${state:-none}; container $(docker inspect -f '{{.State.Status}}, exit {{.State.ExitCode}}' "$name" 2>/dev/null || echo gone))"
+	echo "  docker: $(docker info --format 'server {{.ServerVersion}}, cgroup driver {{.CgroupDriver}}, cgroup v{{.CgroupVersion}}' 2>/dev/null || echo unknown)"
 	echo "  last log lines:"
 	docker logs "$name" 2>&1 | tail -n 20 | sed 's/^/  /'
 	exit 3
