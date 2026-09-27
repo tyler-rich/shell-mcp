@@ -1,0 +1,38 @@
+# Reference deployment (docs/SECURITY.md §7, normative hardening flags).
+# All names, hosts and fingerprints are placeholders.
+services:
+  shell-mcp:
+    image: ghcr.io/tyler-rich/shell-mcp:0.0.1 # TODO(S5): pin digest
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    ports:
+      - "127.0.0.1:8080:8080"           # or a specific LAN/VPN interface address; never all interfaces by accident
+    environment:
+      SHELL_MCP_BIND: 0.0.0.0           # inside the container; exposure is controlled by `ports`
+      SHELL_MCP_PROFILE: read-only
+      SHELL_MCP_TOKEN_FILE: /run/secrets/mcp_token
+      SHELL_MCP_SSH_KEY_FILE: /run/secrets/ssh_key
+      SHELL_MCP_TARGET_NAME: app-host
+      SHELL_MCP_TARGET_HOST: target-a.example.test
+      SHELL_MCP_TARGET_USER: svc-shell
+      SHELL_MCP_TARGET_HOST_KEYS: "SHA256:placeholder"
+      SHELL_MCP_ALLOWED_HOSTS: localhost,127.0.0.1,mcp.example.test
+    secrets: [mcp_token, ssh_key]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    pids_limit: 64
+    deploy:
+      resources:
+        limits: { cpus: "0.50", memory: 128M, pids: 64 }   # pids repeated: Compose rejects pids_limit next to a limits block without it
+    healthcheck:
+      test: ["CMD", "/shell-mcp", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+secrets:
+  mcp_token: { file: ./secrets/mcp_token }
+  ssh_key: { file: ./secrets/ssh_key }
