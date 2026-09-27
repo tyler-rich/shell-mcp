@@ -7,9 +7,14 @@
 package install
 
 import (
-	"errors"
+	"fmt"
+	"os"
+	"os/user"
+	"slices"
+	"strconv"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
+	"github.com/tyler-rich/shell-mcp/internal/protocol"
 )
 
 // DeniedGroups is the D-020 deny list. Membership in the helper's socket
@@ -26,9 +31,28 @@ type Identity struct {
 }
 
 // Current returns the running process's identity. Group names come from
-// the system group database (pure Go: /etc/group).
+// the system group database (pure Go with CGO_ENABLED=0: /etc/group only,
+// so the service account's groups must be local, as D-020 requires).
 func Current() (Identity, error) {
-	return Identity{}, errors.New("not implemented")
+	sup, err := os.Getgroups()
+	if err != nil {
+		return Identity{}, fmt.Errorf("getgroups: %w", err)
+	}
+	gids := []uint32{uint32(os.Getgid()), uint32(os.Getegid())}
+	for _, g := range sup {
+		gids = append(gids, uint32(g))
+	}
+	return Identity{
+		UID:  uint32(os.Getuid()),
+		GIDs: gids,
+		GroupName: func(gid uint32) (string, error) {
+			g, err := user.LookupGroupId(strconv.FormatUint(uint64(gid), 10))
+			if err != nil {
+				return "", err
+			}
+			return g.Name, nil
+		},
+	}, nil
 }
 
 // Env is everything the install checks look at.
@@ -53,5 +77,43 @@ func (e *Error) Error() string { return e.Detail }
 
 // Check runs every install check except the policy's (policy.Load).
 func Check(env Env) error {
-	return errors.New("not implemented")
+	id := env.Identity
+	if id.UID == 0 {
+		return &Error{"gate is running as root", "gate process runs as uid 0"}
+	}
+	if env.Trust.Owns(id.UID) {
+		return &Error{"gate is running as the owner of its policy", fmt.Sprintf("gate process uid %d is a trusted owner of the policy and binaries", id.UID)}
+	}
+	if id.GroupName == nil {
+		return &Error{"gate cannot resolve its groups", "no group resolver"}
+	}
+	seen := map[uint32]bool{}
+	for _, gid := range id.GIDs {
+		if seen[gid] {
+			continue
+		}
+		seen[gid] = true
+		if gid == 0 {
+			return &Error{"gate process belongs to a privileged group", "gate process belongs to gid 0 (root)"}
+		}
+		name, err := id.GroupName(gid)
+		if err != nil {
+			return &Error{"gate cannot resolve one of its groups", fmt.Sprintf("group id %d has no name in the group database", gid)}
+		}
+		if slices.Contains(DeniedGroups, name) {
+			return &Error{"gate process belongs to a privileged group", fmt.Sprintf("gate process belongs to group %q (gid %d), which D-020 forbids", name, gid)}
+		}
+	}
+	if env.SSHOriginalCommand != nil && *env.SSHOriginalCommand != protocol.Hello {
+		return &Error{"unexpected SSH_ORIGINAL_COMMAND", "SSH_ORIGINAL_COMMAND is set and is not " + protocol.Hello}
+	}
+	real, err := policy.CheckChain(env.Trust, env.Executable)
+	if err != nil {
+		return &Error{"gate binary ownership or permissions are insecure", "gate binary: " + err.Error()}
+	}
+	fi, err := os.Stat(real)
+	if err != nil || !fi.Mode().IsRegular() {
+		return &Error{"gate binary is not a regular file", "gate binary " + real + " is not a regular file"}
+	}
+	return nil
 }
