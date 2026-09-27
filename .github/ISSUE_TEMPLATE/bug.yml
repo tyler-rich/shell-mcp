@@ -1,0 +1,56 @@
+name: Bug report
+description: Something in shell-mcp, shell-mcp-gate or shell-mcp-privd behaves incorrectly.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **This repository is public.** Never paste real hostnames, IP addresses, domains, usernames, SSH keys or host-key fingerprints, bearer tokens, or policies containing real paths. Replace them with placeholders such as `target-a.example.test`, `192.0.2.10`, `svc-shell` and `/srv/app`.
+
+        Security problems go through private vulnerability reporting (Security → Report a vulnerability), not here.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `shell-mcp version` (and `shell-mcp-gate version` / `shell-mcp-privd version` if relevant).
+      placeholder: shell-mcp 0.1.0 (commit …, go1.27.1)
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - shell-mcp (server)
+        - shell-mcp-gate
+        - shell-mcp-privd
+        - container image / deployment
+        - documentation
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Redacted configuration
+      description: |
+        Output of `shell-mcp check` (it masks the token and key) or the relevant policy excerpt, with every hostname, IP, username, fingerprint and real path replaced by placeholders. Never paste tokens, keys or unredacted policies.
+      render: text
+  - type: checkboxes
+    id: redaction
+    attributes:
+      label: Redaction
+      options:
+        - label: I removed every hostname, IP, domain, username, key, token, fingerprint and real path from this report.
+          required: true

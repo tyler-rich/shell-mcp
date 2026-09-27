@@ -1,0 +1,175 @@
+# CI gate. The branch rulesets require the aggregating check named `ci`.
+# Every action is pinned to the commit SHA of its newest release (D-013); the
+# tool versions below are kept in step with scripts/ci-local.sh.
+name: ci
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOLANGCI_LINT_VERSION: v2.14.0
+  GOVULNCHECK_VERSION: v1.8.0
+  TRIVY_VERSION: v0.74.0
+  GRYPE_VERSION: v0.119.0
+  GOTOOLCHAIN: local
+
+jobs:
+  go:
+    name: go (fmt, vet, lint, test, vuln, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "gofmt: files need formatting:"; echo "$out"; exit 1; fi
+      - name: go vet
+        run: go vet ./...
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+      - name: go test -race
+        run: go test -race -count=1 ./...
+      - name: govulncheck
+        run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
+      - name: cross-build (linux/amd64, linux/arm64)
+        run: |
+          for arch in amd64 arm64; do
+            for c in shell-mcp shell-mcp-gate shell-mcp-privd; do
+              CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags '-s -w' -o "/tmp/$c-$arch" "./cmd/$c"
+              echo "built $c linux/$arch"
+            done
+          done
+
+  deps-current:
+    name: deps-current
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: deps-current
+        run: bash scripts/deps-current.sh
+      - name: deps-current self-test
+        run: bash scripts/deps-current_test.sh
+
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # No license key: this repository belongs to a personal account.
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+          GITLEAKS_VERSION: 8.30.1
+
+  image:
+    name: image (build, Trivy, Grype)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: docker build (no push)
+        run: docker build --build-arg VERSION=ci --build-arg REVISION="${GITHUB_SHA}" -t shell-mcp:ci .
+      - name: image smoke test
+        run: |
+          docker run --rm shell-mcp:ci version
+          test "$(docker image inspect shell-mcp:ci --format '{{.Config.User}}')" = "65532:65532"
+      - name: Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: image
+          image-ref: shell-mcp:ci
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          format: table
+          trivyignores: .trivyignore
+      - name: Grype
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: shell-mcp:ci
+          grype-version: ${{ env.GRYPE_VERSION }}
+          config: .grype.yaml
+          fail-build: "true"
+          severity-cutoff: high
+          output-format: table
+
+  probes:
+    # Report-only: can this runner support Session 1's Landlock tests and
+    # Session 1c's systemd-container e2e? Not in the `ci` job's needs, marked
+    # continue-on-error, and every command is `|| true`, so it never fails a
+    # required check. The helper e2e approach is decided in S1c.
+    name: probes (Landlock, systemd container)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: probe
+        run: |
+          {
+            echo "### Runner probes"
+            echo "- kernel: $(uname -r)"
+            echo "- runner: $( { go build -o /tmp/landlock-probe ./scripts/probe/landlock && /tmp/landlock-probe; } 2>&1 | tail -n1 || true)"
+            echo "- golang container: $(docker run --rm -v "$PWD:/src:ro" -w /src -e GOFLAGS=-buildvcs=false -e HOME=/tmp -u 65532:65532 \
+                "$(awk 'toupper($1) == "FROM" && $2 ~ /^golang:/ { print $2; exit }' Dockerfile)" \
+                sh -c 'GOCACHE=/tmp/c GOMODCACHE=/tmp/m go run ./scripts/probe/landlock' 2>&1 | tail -n1 || true)"
+            echo "- systemd probe:"
+            echo '```'
+            bash scripts/probe/systemd.sh 2>&1 || true
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  ci:
+    name: ci
+    if: always()
+    needs: [go, deps-current, gitleaks, image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: fail if a required job did not succeed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: |
+          echo "required job results: ${{ join(needs.*.result, ', ') }}"
+          exit 1
+      - name: report
+        run: |
+          echo "required job results: ${{ join(needs.*.result, ', ') }}"

@@ -157,7 +157,7 @@ services:
     pids_limit: 64
     deploy:
       resources:
-        limits: { cpus: "0.50", memory: 128M }
+        limits: { cpus: "0.50", memory: 128M, pids: 64 }   # pids repeated: Compose rejects pids_limit next to a limits block without it
     healthcheck:
       test: ["CMD", "/shell-mcp", "healthcheck"]
       interval: 30s

@@ -1,0 +1,10 @@
+# Grype configuration. The ignore list is empty by design: HIGH/CRITICAL
+# findings fail CI.
+#
+# An entry is allowed only with a justification comment directly above it,
+# in this format, and is removed as soon as its condition clears:
+#
+#   # <ID>: <package> — <why it does not affect shell-mcp, or why no fix exists>
+#   # added YYYY-MM-DD by <PR link>; remove when <condition>
+#   - vulnerability: <ID>
+ignore: []

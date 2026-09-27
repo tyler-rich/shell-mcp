@@ -1,0 +1,33 @@
+# Dependabot version updates (D-013). GitHub reads this file only from the
+# default branch (main); every entry targets dev, where all work lands.
+# Security updates are deliberately off: they can only target main.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: daily
+    groups:
+      gomod-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: dev
+    schedule:
+      interval: daily
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /scripts/probe
+    target-branch: dev
+    schedule:
+      interval: daily
+    groups:
+      docker-minor-patch:
+        update-types: [minor, patch]

@@ -28,3 +28,6 @@ targets.local.yaml
 *.log
 .DS_Store
 Thumbs.db
+
+# ci-local caches (scripts/ci-local.sh uses a named Docker volume by default)
+/.cache/
