@@ -68,7 +68,7 @@ func TestPublicMaterialUntouched(t *testing.T) {
 func TestAuthorizationAndBearer(t *testing.T) {
 	r := New(nil)
 	cases := map[string][]string{
-		"Authorization: Basic dXNlcjpwYXNzd29yZA==\r\nHost: x\r\n":  {"dXNlcjpwYXNzd29yZA"},
+		"Authorization: Basic dXNlcjpwYXNzd29yZA==\r\nHost: x\r\n":   {"dXNlcjpwYXNzd29yZA"},
 		"authorization:Token abc123secret\n":                         {"abc123secret"},
 		"Proxy-Authorization: Negotiate YIIsecret\n":                 {"YIIsecret"},
 		"curl -H 'Authorization: Bearer eyJhbGciOi.payload.sig' x\n": {"eyJhbGciOi", "payload.sig"},

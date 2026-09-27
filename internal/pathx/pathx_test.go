@@ -14,18 +14,18 @@ func TestCheckClean(t *testing.T) {
 		}
 	}
 	bad := map[string]error{
-		"":                   ErrEmpty,
-		"a/b":                ErrNotAbsolute,
-		"./a":                ErrNotAbsolute,
-		"/a/":                ErrNotClean,
-		"//a":                ErrNotClean,
-		"/a//b":              ErrNotClean,
-		"/a/./b":             ErrNotClean,
-		"/a/../b":            ErrNotClean,
-		"/..":                ErrNotClean,
-		"/a/..":              ErrNotClean,
-		"/.":                 ErrNotClean,
-		"/a\x00b":            ErrNUL,
+		"":                                      ErrEmpty,
+		"a/b":                                   ErrNotAbsolute,
+		"./a":                                   ErrNotAbsolute,
+		"/a/":                                   ErrNotClean,
+		"//a":                                   ErrNotClean,
+		"/a//b":                                 ErrNotClean,
+		"/a/./b":                                ErrNotClean,
+		"/a/../b":                               ErrNotClean,
+		"/..":                                   ErrNotClean,
+		"/a/..":                                 ErrNotClean,
+		"/.":                                    ErrNotClean,
+		"/a\x00b":                               ErrNUL,
 		"/" + strings.Repeat("a", MaxPathBytes): ErrTooLong,
 	}
 	for p, want := range bad {

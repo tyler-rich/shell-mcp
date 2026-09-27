@@ -74,17 +74,17 @@ func TestMatchExact(t *testing.T) {
 		mustParse(t, "re", "{regex:^a|b$}"),
 	}
 	ok := map[string][]string{
-		"status":                      {"status"},
-		"status -x":                   {"status", "-x"},
-		"list -H -o name,size":        {"list", "-H", "-o", "name,size"},
-		"show /srv/app/x":             {"show", "/real/srv/app/x"},
-		"write /srv/app/config/y":     {"write", "/real/srv/app/config/y"},
-		"unit example-app.service":    {"unit", "example-app.service"},
-		"n 7":                         {"n", "7"},
-		"n 100":                       {"n", "100"},
-		"--domain api.example.test":   {"--domain", "api.example.test"},
-		"re a":                        {"re", "a"},
-		"re b":                        {"re", "b"},
+		"status":                    {"status"},
+		"status -x":                 {"status", "-x"},
+		"list -H -o name,size":      {"list", "-H", "-o", "name,size"},
+		"show /srv/app/x":           {"show", "/real/srv/app/x"},
+		"write /srv/app/config/y":   {"write", "/real/srv/app/config/y"},
+		"unit example-app.service":  {"unit", "example-app.service"},
+		"n 7":                       {"n", "7"},
+		"n 100":                     {"n", "100"},
+		"--domain api.example.test": {"--domain", "api.example.test"},
+		"re a":                      {"re", "a"},
+		"re b":                      {"re", "b"},
 	}
 	for in, want := range ok {
 		got, err := Match(tpls, strings.Fields(in), r)

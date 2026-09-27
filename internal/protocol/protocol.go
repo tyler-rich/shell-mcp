@@ -5,6 +5,7 @@ package protocol
 
 import (
 	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"io"
 )
@@ -169,20 +170,111 @@ func (e *DecodeError) Error() string { return e.Code + ": " + e.Msg }
 // DecodeRequest reads exactly one request from r. It reads at most
 // MaxRequestBytes+1 bytes; unknown fields, duplicate object keys, invalid
 // UTF-8, trailing data and more than one JSON value are errors.
+//
+// encoding/json/v2 (stable in Go 1.27) rejects duplicate object names and
+// invalid UTF-8 by default, matches names case-sensitively, and requires the
+// input to be exactly one JSON value; RejectUnknownMembers adds unknown
+// fields. Messages are fixed strings and never echo request content.
 func DecodeRequest(r io.Reader) (*Request, error) {
-	return nil, errors.New("not implemented")
+	data, err := io.ReadAll(io.LimitReader(r, MaxRequestBytes+1))
+	if err != nil {
+		return nil, &DecodeError{CodeBadRequest, "request could not be read"}
+	}
+	if len(data) > MaxRequestBytes {
+		return nil, &DecodeError{CodeTooLarge, "request exceeds 2 MiB"}
+	}
+	var req Request
+	if err := json.Unmarshal(data, &req, json.RejectUnknownMembers(true)); err != nil {
+		// A request from a different protocol version may carry fields this
+		// version does not know; report the version, not the field.
+		var peek struct {
+			V *int `json:"v"`
+		}
+		if json.Unmarshal(data, &peek) == nil && peek.V != nil && *peek.V != Version {
+			return nil, &DecodeError{CodeProtocolMismatch, "unsupported protocol version"}
+		}
+		return nil, &DecodeError{CodeBadRequest, "request is not one strict JSON object with known fields"}
+	}
+	if req.V != Version {
+		return nil, &DecodeError{CodeProtocolMismatch, "unsupported protocol version"}
+	}
+	if !validID(req.ID) {
+		return nil, &DecodeError{CodeBadRequest, "id must be 1-64 characters of [A-Za-z0-9._-]"}
+	}
+	if !validOp(req.Op) {
+		return nil, &DecodeError{CodeBadRequest, "op is missing or malformed"}
+	}
+	if req.TimeoutMS < 0 {
+		return nil, &DecodeError{CodeBadRequest, "timeout_ms must not be negative"}
+	}
+	if len(req.Args) > 0 {
+		switch req.Args.Kind() {
+		case '{':
+		case 'n':
+			req.Args = nil
+		default:
+			return nil, &DecodeError{CodeBadRequest, "args must be an object"}
+		}
+	}
+	return &req, nil
+}
+
+func validID(s string) bool {
+	if s == "" || len(s) > MaxIDBytes {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func validOp(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; !(c >= 'a' && c <= 'z' || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 // DecodeArgs strictly decodes op arguments into v (a pointer to a struct).
 // Absent arguments decode as an empty object.
 func DecodeArgs(raw jsontext.Value, v any) error {
-	return errors.New("not implemented")
+	if len(raw) == 0 || raw.Kind() == 'n' {
+		raw = jsontext.Value("{}")
+	}
+	if err := json.Unmarshal(raw, v, json.RejectUnknownMembers(true)); err != nil {
+		return errors.New("args are not a strict object of known fields with the expected types")
+	}
+	return nil
 }
+
+// marshalOpts: deterministic output; invalid UTF-8 in host data (file
+// names, command output) is replaced with U+FFFD rather than failing.
+var marshalOpts = json.JoinOptions(json.Deterministic(true), jsontext.AllowInvalidUTF8(true))
 
 // EncodeResponse writes resp followed by a newline. It fails without writing
 // anything if the encoding exceeds MaxResponseBytes.
 func EncodeResponse(w io.Writer, resp *Response) error {
-	return errors.New("not implemented")
+	if resp.Warnings == nil {
+		resp.Warnings = []string{}
+	}
+	out, err := json.Marshal(resp, marshalOpts)
+	if err != nil {
+		return err
+	}
+	if len(out)+1 > MaxResponseBytes {
+		return ErrResponseTooLarge
+	}
+	_, err = w.Write(append(out, '\n'))
+	return err
 }
 
 // ErrResponseTooLarge is returned by EncodeResponse.
@@ -190,5 +282,6 @@ var ErrResponseTooLarge = errors.New("response exceeds 4 MiB")
 
 // Marshal encodes v as JSON with the protocol's options.
 func Marshal(v any) (jsontext.Value, error) {
-	return nil, errors.New("not implemented")
+	out, err := json.Marshal(v, marshalOpts)
+	return jsontext.Value(out), err
 }

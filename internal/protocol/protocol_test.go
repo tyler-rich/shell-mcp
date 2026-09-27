@@ -120,10 +120,13 @@ func TestDecodeArgsStrict(t *testing.T) {
 	if err := DecodeArgs([]byte(`{"path":"/a","path":"/b"}`), &a); err == nil {
 		t.Fatal("duplicate arg accepted")
 	}
-	if err := DecodeArgs(nil, &a); err != nil || a.Path != "" {
-		t.Fatalf("absent args: %v %+v", err, a)
+	var b struct {
+		Path string `json:"path"`
 	}
-	if err := DecodeArgs([]byte(`null`), &a); err != nil {
+	if err := DecodeArgs(nil, &b); err != nil || b.Path != "" {
+		t.Fatalf("absent args: %v %+v", err, b)
+	}
+	if err := DecodeArgs([]byte(`null`), &b); err != nil {
 		t.Fatalf("null args: %v", err)
 	}
 }
