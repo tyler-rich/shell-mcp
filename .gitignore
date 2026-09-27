@@ -1,0 +1,30 @@
+# Build output
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+coverage.*
+
+# Go
+/vendor/
+
+# Secrets and local config — never commit
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+id_ed25519*
+*.token
+known_hosts
+targets.local.yaml
+
+# Local tooling
+.claude/settings.local.json
+.idea/
+.vscode/
+*.log
+.DS_Store
+Thumbs.db

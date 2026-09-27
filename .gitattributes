@@ -1,0 +1,10 @@
+# Normalise line endings: the repo is edited on Windows and built on Linux.
+* text=auto eol=lf
+*.go text eol=lf
+*.sh text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+go.sum text eol=lf -diff
+*.png binary
+*.jpg binary
