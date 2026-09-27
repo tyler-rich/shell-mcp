@@ -128,10 +128,13 @@ jobs:
           output-format: table
 
   probes:
-    # Informational: can this runner support Session 1's Landlock tests and
-    # Session 1c's systemd-container e2e? Never fails the build.
+    # Report-only: can this runner support Session 1's Landlock tests and
+    # Session 1c's systemd-container e2e? Not in the `ci` job's needs, marked
+    # continue-on-error, and every command is `|| true`, so it never fails a
+    # required check. The helper e2e approach is decided in S1c.
     name: probes (Landlock, systemd container)
     runs-on: ubuntu-latest
+    continue-on-error: true
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -145,8 +148,7 @@ jobs:
           {
             echo "### Runner probes"
             echo "- kernel: $(uname -r)"
-            go build -o /tmp/landlock-probe ./scripts/probe/landlock
-            echo "- runner: $(/tmp/landlock-probe 2>&1 || true)"
+            echo "- runner: $( { go build -o /tmp/landlock-probe ./scripts/probe/landlock && /tmp/landlock-probe; } 2>&1 | tail -n1 || true)"
             echo "- golang container: $(docker run --rm -v "$PWD:/src:ro" -w /src -e GOFLAGS=-buildvcs=false -e HOME=/tmp -u 65532:65532 \
                 "$(awk 'toupper($1) == "FROM" && $2 ~ /^golang:/ { print $2; exit }' Dockerfile)" \
                 sh -c 'GOCACHE=/tmp/c GOMODCACHE=/tmp/m go run ./scripts/probe/landlock' 2>&1 | tail -n1 || true)"
