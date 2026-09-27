@@ -14,7 +14,6 @@
 package fsx
 
 import (
-	"errors"
 	"os"
 
 	"github.com/tyler-rich/shell-mcp/internal/pathx"
@@ -173,71 +172,3 @@ type DeleteResult struct {
 	First   []string `json:"first"`
 	Deleted bool     `json:"deleted"`
 }
-
-var errTODO = errors.New("not implemented")
-
-// Stat describes p without following a final symlink.
-func (f *FS) Stat(p string) (Entry, error) { return Entry{}, errTODO }
-
-// ListDir lists the directory p.
-func (f *FS) ListDir(p string, includeHidden bool, limit int) (ListResult, error) {
-	return ListResult{}, errTODO
-}
-
-// ReadFile reads the regular file p.
-func (f *FS) ReadFile(p string, o ReadOptions) (ReadResult, error) { return ReadResult{}, errTODO }
-
-// Find walks the directory p.
-func (f *FS) Find(p string, o FindOptions) (FindResult, error) { return FindResult{}, errTODO }
-
-// WriteFile atomically writes content to p under a write root.
-func (f *FS) WriteFile(p string, content []byte, o WriteOptions) (WriteResult, error) {
-	return WriteResult{}, errTODO
-}
-
-// Mkdir creates the directory p under a write root.
-func (f *FS) Mkdir(p string, mode *os.FileMode, parents bool) (MkdirResult, error) {
-	return MkdirResult{}, errTODO
-}
-
-// Copy copies the regular file src (any root) to dst (a write root).
-func (f *FS) Copy(src, dst string, overwrite bool) (WriteResult, error) {
-	return WriteResult{}, errTODO
-}
-
-// Move renames src to dst; both must be under the same write root.
-func (f *FS) Move(src, dst string, overwrite bool) (MoveResult, error) {
-	return MoveResult{}, errTODO
-}
-
-// Chmod sets the mode of p under a write root.
-func (f *FS) Chmod(p string, mode os.FileMode) (ChmodResult, error) {
-	return ChmodResult{}, errTODO
-}
-
-// Delete removes p under a write root (recursively only if recursive).
-func (f *FS) Delete(p string, recursive bool) (DeleteResult, error) {
-	return DeleteResult{}, errTODO
-}
-
-// DeletePreview reports what Delete would remove, removing nothing.
-func (f *FS) DeletePreview(p string, recursive bool) (DeleteResult, error) {
-	return DeleteResult{}, errTODO
-}
-
-// ResolveRead returns the real path of an existing object under a read or
-// write root (for {path:read}).
-func (f *FS) ResolveRead(p string) (string, error) { return "", errTODO }
-
-// ResolveWrite returns the real path of p under a write root; p need not
-// exist, but its parent must (for {path:write}).
-func (f *FS) ResolveWrite(p string) (string, error) { return "", errTODO }
-
-// ResolveDir returns the real path of a directory under a read or write
-// root (for an exec cwd).
-func (f *FS) ResolveDir(p string) (string, error) { return "", errTODO }
-
-// ParseMode parses an octal mode string ("0640" or "640") and applies the
-// gate's mode rules: permission bits only, no setuid/setgid/sticky, no
-// world-write.
-func ParseMode(s string) (os.FileMode, error) { return 0, errTODO }

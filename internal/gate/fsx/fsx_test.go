@@ -145,11 +145,17 @@ func TestSymlinks(t *testing.T) {
 	if b, _ := os.ReadFile(filepath.Join(e.outside, "passwd")); string(b) != "OUTSIDE" {
 		t.Fatal("outside file changed")
 	}
-	// An intermediate symlink that stays inside the root and is not denied is fine.
-	must(t, os.Symlink(e.write, filepath.Join(e.read, "cfg")))
+	// A relative intermediate symlink that stays inside the root and is not
+	// denied is followed.
+	must(t, os.Symlink("config", filepath.Join(e.read, "cfg")))
 	if _, err := e.fs.ReadFile(filepath.Join(e.read, "cfg", "app.yaml"), ReadOptions{MaxBytes: 10}); err != nil {
 		t.Fatalf("in-root intermediate symlink: %v", err)
 	}
+	// os.Root refuses absolute symlink targets even when they point back
+	// inside the root.
+	must(t, os.Symlink(e.write, filepath.Join(e.read, "cfgabs")))
+	_, err = e.fs.ReadFile(filepath.Join(e.read, "cfgabs", "app.yaml"), ReadOptions{MaxBytes: 10})
+	wantCode(t, err, protocol.CodePathDenied)
 }
 
 // TestSwapRace swaps a directory for a symlink to outside the root while
@@ -206,6 +212,9 @@ func TestSwapRace(t *testing.T) {
 		t.Fatal("outside file changed")
 	}
 	t.Logf("%d successful reads, %d successful writes under the swap", reads, writes)
+	if reads == 0 || writes == 0 {
+		t.Fatalf("race test is vacuous: %d reads, %d writes succeeded", reads, writes)
+	}
 }
 
 func TestWriteRules(t *testing.T) {
@@ -245,7 +254,7 @@ func TestWriteRules(t *testing.T) {
 	// An existing setuid file is not rewritten with its bits preserved.
 	suid := filepath.Join(e.write, "suid")
 	put(t, suid, "x")
-	must(t, os.Chmod(suid, 0o4755))
+	must(t, os.Chmod(suid, 0o755|os.ModeSetuid))
 	_, err = e.fs.WriteFile(suid, []byte("y"), WriteOptions{Create: true})
 	wantCode(t, err, protocol.CodePolicyDenied)
 	// Size cap.
