@@ -3,9 +3,11 @@ package protocol
 import (
 	"bytes"
 	"errors"
+	"io"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func decodeErr(t *testing.T, in string) *DecodeError {
@@ -107,6 +109,31 @@ func TestDecodeRequestBoundedRead(t *testing.T) {
 	}
 	if r.n > MaxRequestBytes+64<<10 {
 		t.Fatalf("read %d bytes from an endless reader", r.n)
+	}
+}
+
+// The request is one newline-terminated line: the gate must not wait for
+// EOF from a client that keeps its stdin open.
+func TestDecodeRequestStopsAtNewline(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	go func() { _, _ = pw.Write([]byte(`{"v":1,"id":"a","op":"hello"}` + "\n")) }()
+	done := make(chan error, 1)
+	go func() {
+		_, err := DecodeRequest(pr)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("DecodeRequest waited for EOF after the newline")
+	}
+	// A pretty-printed (multi-line) request is cut at its first newline.
+	if de := decodeErr(t, "{\n\"v\":1,\"id\":\"a\",\"op\":\"hello\"}\n"); de.Code != CodeBadRequest {
+		t.Fatalf("multi-line request: %s", de.Code)
 	}
 }
 
