@@ -541,3 +541,44 @@ func TestBindMustBeIPAddress(t *testing.T) {
 	env["SHELL_MCP_BIND"] = "localhost"
 	wantReason(t, env, `SHELL_MCP_BIND must be an IP address (got "localhost")`)
 }
+
+// --- SHELL_MCP_REDACT_PATTERNS_FILE ------------------------------------------
+// Stack-editor environment stores often cannot hold multi-line values, so
+// several patterns are supplied through a file, one per line.
+
+func TestRedactPatternsFileOnePerLine(t *testing.T) {
+	env := baseEnv(t)
+	content := "token=[A-Za-z0-9]{20,}\r\n\n  password=\\S+  \nAKIA[0-9A-Z]{16}\n"
+	env["SHELL_MCP_REDACT_PATTERNS_FILE"] = writeFile(t, "patterns", content, 0o600)
+	cfg := mustLoad(t, env)
+	got := make([]string, 0, len(cfg.RedactPatterns))
+	for _, re := range cfg.RedactPatterns {
+		got = append(got, re.String())
+	}
+	want := []string{`token=[A-Za-z0-9]{20,}`, `password=\S+`, `AKIA[0-9A-Z]{16}`}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("patterns = %q, want %q", got, want)
+	}
+}
+
+func TestRedactPatternsFileWinsOverPlain(t *testing.T) {
+	env := baseEnv(t)
+	env["SHELL_MCP_REDACT_PATTERNS"] = "broken(["
+	env["SHELL_MCP_REDACT_PATTERNS_FILE"] = writeFile(t, "patterns", "secret=\\S+\n", 0o600)
+	cfg := mustLoad(t, env)
+	if len(cfg.RedactPatterns) != 1 || cfg.RedactPatterns[0].String() != `secret=\S+` {
+		t.Fatalf("file did not win: %v", cfg.RedactPatterns)
+	}
+}
+
+func TestRedactPatternsFileBadPatternNamesLine(t *testing.T) {
+	env := baseEnv(t)
+	env["SHELL_MCP_REDACT_PATTERNS_FILE"] = writeFile(t, "patterns", "ok=\\S+\n\nbroken([\n", 0o600)
+	wantReason(t, env, "SHELL_MCP_REDACT_PATTERNS: pattern 2 does not compile: error parsing regexp: missing closing ]: `[`")
+}
+
+func TestRedactPatternsFileUnreadable(t *testing.T) {
+	env := baseEnv(t)
+	env["SHELL_MCP_REDACT_PATTERNS_FILE"] = filepath.Join(t.TempDir(), "missing")
+	wantReason(t, env, "SHELL_MCP_REDACT_PATTERNS_FILE: cannot read file")
+}
