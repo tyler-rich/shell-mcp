@@ -20,8 +20,19 @@ const maxGlobComponents = 128
 //     rejected so that no pattern means something other than it appears to.
 //   - Empty, "." and ".." components are rejected.
 type Glob struct {
-	raw   string
-	comps []string
+	raw     string
+	comps   []string
+	literal bool // every component matches by equality (LiteralGlob)
+}
+
+// LiteralGlob returns a Glob matching exactly the clean absolute path p,
+// with no metacharacters: a host path such as the service account's home
+// may legitimately contain "*" or "[".
+func LiteralGlob(p string) (Glob, error) {
+	if err := CheckClean(p); err != nil {
+		return Glob{}, err
+	}
+	return Glob{raw: p, comps: split(p), literal: true}, nil
 }
 
 // CompileGlob parses a deny or protected pattern.
@@ -67,7 +78,7 @@ func (g Glob) String() string { return g.raw }
 
 // Anchored reports whether the pattern starts with a literal component
 // (its position in the tree is fixed) rather than "**".
-func (g Glob) Anchored() bool { return len(g.comps) == 0 || g.comps[0] != "**" }
+func (g Glob) Anchored() bool { return g.literal || len(g.comps) == 0 || g.comps[0] != "**" }
 
 // Match reports whether the clean absolute path p matches the pattern exactly.
 func (g Glob) Match(p string) bool {
@@ -100,10 +111,12 @@ func (g Glob) match(path []string, prefix bool) bool {
 		case j == ns && prefix:
 			// Path exhausted: anything beneath can still match the rest.
 			r = true
-		case g.comps[i] == "**":
+		case !g.literal && g.comps[i] == "**":
 			r = rec(i+1, j) || (j < ns && rec(i, j+1))
 		case j == ns:
 			r = false
+		case g.literal:
+			r = g.comps[i] == path[j] && rec(i+1, j+1)
 		default:
 			r = componentMatch(g.comps[i], path[j]) && rec(i+1, j+1)
 		}

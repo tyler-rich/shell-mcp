@@ -126,6 +126,19 @@ func TestMatcherCoversAncestors(t *testing.T) {
 	}
 }
 
+func TestLiteralGlob(t *testing.T) {
+	g, err := LiteralGlob("/home/a*[1]/**")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !g.Match("/home/a*[1]/**") || g.Match("/home/ab[1]/x") || !g.MayContain("/home") || !g.Anchored() {
+		t.Fatal("literal glob must match only itself")
+	}
+	if _, err := LiteralGlob("relative"); err == nil {
+		t.Fatal("relative accepted")
+	}
+}
+
 func TestGlobAnchored(t *testing.T) {
 	for pat, want := range map[string]bool{"/a/b": true, "/a/**": true, "**/x": false, "/**/x": false} {
 		g, err := CompileGlob(pat)

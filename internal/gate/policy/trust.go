@@ -1,7 +1,5 @@
 package policy
 
-import "errors"
-
 // Trust is the set of uids trusted to own the policy, its directories, the
 // gate binary and command binaries. In production it is exactly {0}. It can
 // only be widened through TrustForTesting, which nothing outside test code
@@ -35,11 +33,3 @@ type OwnershipError struct {
 }
 
 func (e *OwnershipError) Error() string { return e.Path + ": " + e.Reason }
-
-// CheckChain verifies that p (after resolving symlinks) and every parent
-// directory up to "/" are owned by a trusted uid and not group/other-
-// writable; symlink components of the path as written must also be owned by
-// a trusted uid. It returns the resolved path.
-func CheckChain(t Trust, p string) (string, error) {
-	return "", errors.New("not implemented")
-}

@@ -6,7 +6,6 @@
 package policy
 
 import (
-	"errors"
 	"fmt"
 	"regexp"
 
@@ -118,9 +117,9 @@ type Paths struct {
 
 // Services is the services section.
 type Services struct {
-	Status        []string
-	ControlUnits  []string
-	ControlVerbs  []string
+	Status       []string
+	ControlUnits []string
+	ControlVerbs []string
 }
 
 // Journal is the journal section.
@@ -195,16 +194,4 @@ type LoadOptions struct {
 	// ServiceHome is the service account's home directory; it joins the
 	// protected set and is HOME for commands.
 	ServiceHome string
-}
-
-// Load checks the ownership of the policy file and every parent directory,
-// reads it (bounded), and parses and validates it.
-func Load(file string, opts LoadOptions) (*Policy, error) {
-	return nil, errors.New("not implemented")
-}
-
-// Parse validates policy bytes. file is the policy's path (it joins the
-// protected set).
-func Parse(data []byte, file string, opts LoadOptions) (*Policy, error) {
-	return nil, errors.New("not implemented")
 }
