@@ -50,7 +50,7 @@ Entry format:
 **Environment facts:**
 - **Local Landlock.** Available, ABI 3, inside `golang:1.27.1-trixie` on Docker Desktop (WSL2 kernel), with the default seccomp profile. The probe calls `landlock_create_ruleset(…, LANDLOCK_CREATE_RULESET_VERSION)`, because `/sys/kernel/security/lsm` is not readable in the container (securityfs is not mounted).
 - **Local systemd container.** Boots without `--privileged` (`is-system-running=degraded`) using `--cgroupns=private -v /sys/fs/cgroup:/sys/fs/cgroup:rw -e container=docker -t --tmpfs /run --tmpfs /run/lock --tmpfs /tmp`. Without the read-write cgroup2 mount, systemd exits with "Failed to create /init.scope control group: Read-only file system".
-- **CI runner.** Recorded in the follow-up entry below, from this PR's `probes` job.
+- **CI runner.** Recorded in the "Scaffold review follow-ups" entry below, from this PR's `probes` job.
 **Alternatives rejected:**
 - `go.yaml.in/yaml/v4` (release candidates only).
 - Forcing graph-only modules into go.mod with blank imports (adds unused code dependencies).
@@ -59,7 +59,7 @@ Entry format:
 **Deferred / follow-ups:**
 - **S2:** auth, Host/Origin allow-list, rate limits, SSH, the `check` SSH round trip, and catalogue schema hashes in `tools`.
 - **S5:** the image digest in the compose file.
-- **Manual tracking.** The golangci-lint image and version, the govulncheck version, and the stable YAML v4 are outside Dependabot's view, so each session's refresh checks them by hand. The Go builder image is shared with `ci-local.sh` by reading it from the Dockerfile.
+- **Manual tracking.** The golangci-lint image and version, the govulncheck version, and the stable YAML v4 are outside Dependabot's view. Superseded: `deps-current` now enforces the first two and reports the third (see the follow-up entry below). The Go builder image is shared with `ci-local.sh` by reading it from the Dockerfile.
 - **govulncheck finding.** It reports GO-2026-5932 (`golang.org/x/crypto/openpgp` unmaintained) at module level only. Nothing imports it, and there is no fixed version.
 **Versions:**
 - **Go and modules.** Go 1.27.1. Direct: `github.com/modelcontextprotocol/go-sdk` v1.8.0, `golang.org/x/crypto` v0.57.0, `golang.org/x/sys` v0.48.0, `go.yaml.in/yaml/v3` v3.0.5. Indirect: `github.com/google/jsonschema-go` v0.4.3, `github.com/segmentio/asm` v1.2.1, `github.com/segmentio/encoding` v0.5.4, `github.com/yosida95/uritemplate/v3` v3.0.2, `golang.org/x/oauth2` v0.37.0, `golang.org/x/sync` v0.23.0, `golang.org/x/time` v0.16.0.
@@ -90,3 +90,29 @@ Entry format:
 - `--privileged` for systemd containers: full host access.
 - Dropping the systemd probe: S1c would lose its e2e environment.
 **Deferred / follow-ups:** S1c's `test/e2e/` harness must carry the same comment and limits.
+
+### 2026-09-27 — Scaffold review follow-ups: CI runner facts, enforced tool freshness, env-store-friendly secrets (PR #1, branch chore/scaffold)
+**CI runner facts** (GitHub `ubuntu-latest`, from the `probes` job):
+- **Kernel and Landlock.** Kernel 6.17 (Azure). Landlock **available, ABI 7**, both on the runner host (`landlock` is in `/sys/kernel/security/lsm`) and inside the digest-pinned `golang` container under Docker's default seccomp profile.
+- **Docker.** Server 28.0.4, **`systemd` cgroup driver**, cgroup v2. The workstation's Docker Desktop is 29.8.0 with the `cgroupfs` driver.
+- **systemd container: does not boot on the runner** with the recipe that boots locally (`--cgroupns=private -v /sys/fs/cgroup:/sys/fs/cgroup:rw -e container=docker -t` plus tmpfs mounts). systemd 257 exits: "Failed to create /init.scope control group: No such file or directory … Failed to allocate manager object". The only difference found between the two hosts is the cgroup driver. Under the `systemd` driver, Docker places the container in a host-managed `system.slice/docker-<id>.scope`, and the bind-mounted host hierarchy does not line up with what the container's private cgroup namespace makes systemd look for. The exact kernel-level path was not traced.
+- **Nothing loosened.** Per the maintainer, S1c chooses the helper e2e approach, not this session. The options put to the maintainer are: the runner VM's own systemd in a CI-only job; Podman `--systemd=always`; anything requiring `--privileged` or broader mounts, which is ruled out.
+- **Probe is report-only.** The `probes` job is not in the `ci` job's `needs`, is `continue-on-error`, and every command in it is `|| true`, so it can never fail a required check.
+- **SHA-pin enforcement.** The repository's "require actions pinned to a full-length commit SHA" setting accepted every action, including trivy-action's nested `setup-trivy` and `actions/cache`. No action had to be replaced by a CLI or container step.
+- **CI results on this PR.** All jobs green: `go`, `deps-current` (+ self-test, 10/10), `gitleaks`, `image` (Trivy: 0 in debian 13.7 and gobinary; Grype: no vulnerabilities), `probes`, the aggregating `ci`, and CodeQL `analyze (go)`. The first push was rejected as a workflow-file error, an unquoted `: ` in a `run:` value; it was fixed and `actionlint` added to the session's checks.
+**Decisions (maintainer-requested during review):**
+- **`deps-current` enforces what S0 had listed as manual tracking.**
+  - For every direct requirement, it queries the module proxy for the next major path (`<path>/vN+1`, `/v2` for v0/v1, `gopkg.in/x.vN+1`) and fails on a stable release there. A next major with only pre-releases is info (currently `go.yaml.in/yaml/v4 v4.0.0-rc.6`).
+  - It fails when the golangci-lint pin (newest stable from `git ls-remote --tags`) or the govulncheck pin (module proxy `@latest`) in `ci.yml` and `scripts/ci-local.sh` is older than the newest stable release, or when the two files disagree.
+  - `deps-current_test.sh` covers each case and fails without the check. A direct `/vN` module with a stable `/vN+1`, a v1 module with a stable `/v2`, an old golangci-lint pin, an old govulncheck pin and pin drift each make the check fail, and the pre-release case must be reported as info. The golangci-lint image digest in `ci-local.sh` still has to be bumped by hand alongside its version.
+- **`SHELL_MCP_REDACT_PATTERNS_FILE`.** One pattern per line, blank lines skipped, and it wins over the plain variable. Added for environment stores that cannot hold multi-line values; ARCHITECTURE §5 is updated.
+- **`SHELL_MCP_SSH_KEY` as single-line base64.**
+  - **Form.** The plain variable also accepts the standard base64 of the whole key file (`base64 -w0`, or `[Convert]::ToBase64String(...)` in PowerShell), recognised by the absence of a `-----BEGIN` header.
+  - **Validation.** The value must decode to an OpenSSH private key; the Ed25519-only and passphrase rules then apply. Reasons are fixed strings that never echo the value, and `check` shows only the fingerprint.
+  - **Scope.** Only the plain variable is decoded this way; `_FILE` and `key_file` stay PEM.
+  - **Docs.** `SHELL_MCP_SSH_KEY_FILE` stays the recommended form and is listed first in `deploy/README.md` and `.env.example`.
+- **Deploy README fix.** The reference compose bind-mounts secret files into a container running as UID 65532, so the files must be readable by that UID. The README now includes `chown 65532:65532` for the two files, and the stack-editor section no longer suggests a root-owned `0600` file.
+**Deferred / follow-ups:**
+- **S1c:** choose and implement the helper e2e environment. The CLAUDE.md container rules and cgroup exception stand unless the maintainer changes them.
+- **Manual bump:** the golangci-lint image digest in `ci-local.sh`, alongside its version.
+**Versions:** unchanged from the scaffold entry. CI runner tools: Docker 28.0.4, systemd 257.13 (in the probe image).
