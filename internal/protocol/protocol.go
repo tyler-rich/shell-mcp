@@ -4,6 +4,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -176,7 +177,7 @@ func (e *DecodeError) Error() string { return e.Code + ": " + e.Msg }
 // input to be exactly one JSON value; RejectUnknownMembers adds unknown
 // fields. Messages are fixed strings and never echo request content.
 func DecodeRequest(r io.Reader) (*Request, error) {
-	data, err := io.ReadAll(io.LimitReader(r, MaxRequestBytes+1))
+	data, err := readLine(r, MaxRequestBytes+1)
 	if err != nil {
 		return nil, &DecodeError{CodeBadRequest, "request could not be read"}
 	}
@@ -217,6 +218,30 @@ func DecodeRequest(r io.Reader) (*Request, error) {
 		}
 	}
 	return &req, nil
+}
+
+// readLine reads up to and including the first newline, or to EOF, or until
+// limit bytes have been read. The request is one newline-terminated line
+// (ARCHITECTURE §4), so the gate never waits for EOF from a client that
+// keeps its stdin open; anything after the newline is not consumed as part
+// of the request.
+func readLine(r io.Reader, limit int) ([]byte, error) {
+	buf := make([]byte, 0, 4096)
+	chunk := make([]byte, 32<<10)
+	for len(buf) < limit {
+		n, err := r.Read(chunk[:min(len(chunk), limit-len(buf))])
+		if i := bytes.IndexByte(chunk[:n], '\n'); i >= 0 {
+			return append(buf, chunk[:i+1]...), nil
+		}
+		buf = append(buf, chunk[:n]...)
+		if errors.Is(err, io.EOF) {
+			return buf, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return buf, nil
 }
 
 func validID(s string) bool {
