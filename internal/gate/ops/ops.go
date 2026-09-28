@@ -267,9 +267,3 @@ func (s *server) timeout() time.Duration {
 	}
 	return d
 }
-
-// GitArgs is not implemented yet.
-func GitArgs(_, _ string, _ ...string) []string { return nil }
-
-// GitEnv is not implemented yet.
-func GitEnv(_, _ string) []string { return nil }

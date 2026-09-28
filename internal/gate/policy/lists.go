@@ -17,8 +17,9 @@ var builtinDeny = []string{
 // builtinProtected is the built-in protected set (POLICY §3). The gate
 // binary, the service user's home and the policy file itself are added at
 // load time. Nothing covered by it is ever writable, and a write root equal
-// to, inside, or containing an entry is a policy error. For "**/.ssh",
-// "containing" cannot be decided statically, so it is enforced per request.
+// to, inside, or containing an entry is a policy error. For "**/.ssh" and
+// "**/.git", "containing" cannot be decided statically, so it is enforced
+// per request (a write root may contain a repository; never its .git).
 var builtinProtected = []string{
 	"/etc/shell-mcp", "/etc/ssh", "/etc/sudoers", "/etc/sudoers.d", "/etc/pam.d",
 	"/etc/security", "/etc/systemd", "/usr/lib/systemd", "/lib/systemd", "/run/systemd",
@@ -26,6 +27,10 @@ var builtinProtected = []string{
 	"/etc/ld.so.conf", "/etc/ld.so.conf.d", "/etc/ld.so.preload", "/etc/passwd",
 	"/etc/group", "/etc/shadow*", "/etc/gshadow*", "/etc/fstab", "/boot", "/usr", "/bin",
 	"/sbin", "/lib", "/lib64", "/root", "**/.ssh",
+	// Every .git directory (POLICY §3): its config, hooks and attributes can
+	// make git run commands or fetch from another host. The gate's git ops
+	// write there through git itself, never through fsx.
+	"**/.git",
 }
 
 // forbiddenRoots may not be roots or contain roots' paths (POLICY §3).

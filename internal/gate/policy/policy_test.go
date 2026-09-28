@@ -279,6 +279,8 @@ func TestRoots(t *testing.T) {
 		"write policy dir": "paths:\n  write: [{ETC}]\n",
 		"write in .ssh":    "paths:\n  write: [{R}/.ssh]\n",
 		"write under .ssh": "paths:\n  write: [{R}/.ssh/keys]\n",
+		"write in .git":    "paths:\n  write: [{R}/deploy/.git]\n",
+		"write under .git": "paths:\n  write: [{R}/deploy/.git/hooks]\n",
 		"write boot":       "paths:\n  write: [/boot/efi]\n",
 		"bad deny glob":    "paths:\n  deny: [\"relative/**\"]\n",
 		"bad deny glob [":  "paths:\n  deny: [\"/srv/[ab]\"]\n",
