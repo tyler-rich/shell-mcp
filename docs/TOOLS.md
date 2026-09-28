@@ -27,7 +27,7 @@ Common optional inputs on tools that run a process: `timeout_seconds` (1..`SHELL
 | `shell_read_file` | `read_file` | `target`, `path`, `offset=0`, `max_bytes=65536 (1..max_read_bytes)`, `tail_lines?` (1..5000; mutually exclusive with `offset`) | UTF-8 text returned as text; binary returned as `binary: true` with size and SHA-256 only. | S3 |
 | `shell_find_files` | `find` | `target`, `root`, `name_glob?`, `type?` (`file\|dir\|symlink`), `max_depth=4`, `limit=200`, `modified_within?` | Native bounded walk; never the `find` binary. | S3 |
 | `shell_inspect_certificate` | `cert_inspect` | `target`, `path` | Every certificate in the file (PEM or DER): subject, issuer, SANs, not-before/after, days remaining, key type/size, SHA-256. A file containing a private key is refused and nothing of it is returned. | S3 |
-| `shell_get_git_status` | `git_status` | `target`, `repo` | Branch, upstream, ahead/behind, porcelain v2 summary. Every git tool refuses a repository whose `.git/config` holds anything beyond the inert keys `git clone` writes (POLICY §7). | S3 |
+| `shell_get_git_status` | `git_status` | `target`, `repo` | Branch, upstream, ahead/behind, porcelain v2 summary. Every git tool refuses a repository whose `.git/config` holds a key outside the data-only list in POLICY §7 (Git LFS is not supported in v1). | S3 |
 | `shell_get_git_log` | `git_log` | `target`, `repo`, `limit=20 (1..200)` | Hash, author name, date, subject (no bodies). | S3 |
 | `shell_get_git_diff` | `git_diff` | `target`, `repo`, `staged=false`, `max_output_bytes` | Working-tree diff; redacted; capped. | S3 |
 | `shell_run_read_command` | `exec` | `target`, `command_id`, `args: list[str] (≤ 64)`, `cwd?`, `timeout_seconds?` | Only commands whose policy tier is `read`. No `stdin`. | S3 |

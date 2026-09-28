@@ -298,3 +298,48 @@ Entry format:
 - **Go and modules:** Go 1.27.1 (newest stable per go.dev). `go get -u` changed nothing. Direct: `github.com/landlock-lsm/go-landlock` v0.10.1, `github.com/modelcontextprotocol/go-sdk` v1.8.0, `go.yaml.in/yaml/v3` v3.0.5, `golang.org/x/crypto` v0.57.0, `golang.org/x/sys` v0.48.0. Indirect: unchanged from the S1 entry.
 - **Dependencies added:** none. The new code uses only the standard library (`crypto/x509`, `encoding/pem`, `net/http/httptest`, `net/http/cgi`) and existing modules.
 - **Tools:** golangci-lint v2.14.0, govulncheck v1.8.0 (both newest; deps-current passes). Target components verified: systemd 257.13 and 259.5, polkit 126 and 127, git 2.47.3 and 2.53.0.
+
+### 2026-09-28 — Git config allowlist widened to data-only keys, with value checks and actionable refusals (PR #4, branch feat/gate-ops)
+**Decision:** The maintainer asked, before the PR was ready, for a less strict repository-config allowlist. POLICY §7 now accepts these keys, but only with the values git itself accepts:
+- **Identity:** `user.name`, `user.email`
+- **Line endings:** `core.autocrlf`, `core.eol`, `core.safecrlf` (`core.ignorecase` was already allowed)
+- **Pull strategy:** `pull.rebase`, `pull.ff`, `branch.<name>.rebase`
+- **Defaults:** `init.defaultBranch`
+- **Pruning and tags:** `fetch.prune`, `remote.origin.prune`, `remote.origin.tagOpt`
+- **Colors:** `color.*` (except `color.blame.*`)
+- **Hints:** `advice.*`
+- **Auto-gc threshold:** `gc.auto`
+
+The accepted values, with the reasoning per key family, are in the POLICY §7 table. Anything else is still refused. The `policy_denied` message names the key and gives the command that removes it, run in the repository: `git config --remove-section <section.subsection>` for a key under a subsection, otherwise `git config --unset-all <key>`. The message also says that Git LFS repositories are not supported in v1, because LFS works through filter programs.
+
+**Why:** Refusing everything beyond what `git init`/`git clone` write would reject ordinary repositories, for example one with an identity, line-ending settings or forced colours, for no security gain. Each added key was verified against the git 2.47.3 and 2.55.0 documentation and source. 2.55.0 is the git version in the CI image, as seen in the CI log. Behaviour was also tested on 2.55:
+- **No accepted value names anything.** None can name a program, a path git executes or reads config from, a URL, a proxy, credentials, an include, a filter, a hook, an editor, a pager, a signing program, or another git directory or work tree.
+- **pull.rebase / branch.<name>.rebase / pull.ff:** `builtin/pull.c` never reads them for `pull --ff-only --no-rebase`, because the command line sets the options first. `pull.rebase=interactive` with `pull.ff=false` pulls as a fast-forward, with no editor (`TestGitDataKeysAllowed`, real git).
+- **color.\*:** every key is a colour boolean or a colour, except `color.blame.highlightRecent` (colours and dates). It is excluded along with the rest of `color.blame.*`, because blame never runs. With `color.ui=always` and every `color.*` set to `always`, none of the output the gate parses carries escape codes. Only `pull`'s diffstat on stdout is coloured, and the gate does not parse it.
+- **advice.\*:** all booleans; hints go to stderr.
+- **user.\*:** used only as the reflog identity, since the gate never commits.
+- **gc.auto:** a number.
+
+**Value checks (new):** a malformed value is refused because it is a denial of service against the op:
+- A valueless `remote.<name>.tagOpt` segfaults git (`strcmp` on NULL in `remote.c`, reproduced on 2.55, same code in 2.47). It must be exactly `--tags` or `--no-tags`.
+- A non-numeric `gc.auto` makes 2.55's merge exit 128 *after* the fast-forward, because 2.55 reads it when deciding on auto-maintenance.
+- Invalid booleans or colours, and a valueless `user.*`, are fatal to every command.
+
+`gitx.KV` now records whether a key had a value. The colour check is a conservative subset of git's `color_parse`.
+
+**Tests (committed failing first):**
+- `93bc302`: `TestConfigAllowlistDataKeys`, `TestRefusalHint`, `TestGitDataKeysAllowed`, and `TestGitLFSRefusedActionably` (`filter.lfs.clean`/`smudge`/`process`/`required` refused with the actionable message; after `--remove-section filter.lfs` the repo is accepted; `core.editor` is still refused with its `--unset-all` hint).
+- `346a7b9`: `TestConfigAllowlistValues`.
+- **Still refused:** near misses in the same families, namely `user.signingkey`, `gpg.ssh.program`, `pull.twohead`, `pull.octopus`, `fetch.recursesubmodules`, `remote.origin.proxy`, `remote.origin.receivepack`, `remote.origin.vcs`, `branch.<name>.pushremote`, `gc.autodetach`, `maintenance.auto`, `init.templatedir`, `core.gitproxy`, `filter.lfs.process` and `lfs.url`.
+- **Fuzzing:** `FuzzConfig` re-run for 60 s after the change: 60,129,833 execs, no crashers.
+
+**Alternatives rejected:**
+- Allowing `color.blame.*`: blame never runs, and `highlightRecent` is not a plain colour.
+- Accepting any value for the new keys: this enables the crash and die-mid-operation cases above.
+- Pinning `core.ignorecase` with `-c`: it was already allowed, and pinning would change the §7 flag list. Flagged to the maintainer below.
+
+**Deferred / follow-ups (for the maintainer):**
+- **Auto-maintenance detaches.** Found during this verification, not caused by the allowlist change. With git's defaults (`maintenance.auto` true, `gc.autoDetach` true), `git pull` starts `git maintenance run --auto --detach` after fetch and after merge. `daemonize()` forks, the parent exits, and the child calls `setsid()`, so the maintenance process leaves the gate's process group. The gate's group kill then cannot reach it, and it outlives the request. It stays in the gate's Landlock + no_new_privs domain and cgroup, and `core.hooksPath=/dev/null` reaches it, so `pre-auto-gc` does not run. Adding `-c maintenance.auto=false` to the §7 flags stops it on both 2.47 and 2.55 (verified). That is a change to the POLICY §7 flag list, so it needs the maintainer's decision.
+- **core.ignorecase** changes which files git treats as tracked or ignored (so what `clean` removes) but cannot run anything. Pinning it with `-c core.ignorecase=false` is the same kind of flag-list decision.
+
+**Versions:** unchanged from the entry above. git verified: 2.47.3 (Debian 13, local image) and 2.55.0 (CI image).
