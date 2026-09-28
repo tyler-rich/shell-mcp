@@ -100,8 +100,7 @@ func (s *server) gitRepo(p string, write bool) (*gitRepo, error) {
 	}
 	e, err := s.fs.Stat(p + "/.git")
 	if err != nil {
-		var fe *fsx.Error
-		if errors.As(err, &fe) && fe.Code == protocol.CodeNotFound {
+		if notFound(err) {
 			return nil, errf(protocol.CodeNotFound, "repo has no .git directory")
 		}
 		return nil, err
@@ -109,13 +108,23 @@ func (s *server) gitRepo(p string, write bool) (*gitRepo, error) {
 	if e.Type != "dir" {
 		return nil, errf(protocol.CodePolicyDenied, "repo/.git must be a real directory (a gitfile or a symlink is refused)")
 	}
-	if gd, err := s.fs.ResolveDir(p + "/.git"); err != nil || gd != realPath+"/.git" {
+	if gd, gerr := s.fs.ResolveDir(p + "/.git"); gerr != nil || gd != realPath+"/.git" {
 		return nil, errf(protocol.CodePolicyDenied, "repo/.git must be a real directory inside the root")
 	}
-	if _, err := s.fs.Stat(p + "/.git/commondir"); err == nil {
+	// A commondir redirects git to another repository's configuration and
+	// objects. Anything but "not found" is refused (fail closed).
+	switch _, cerr := s.fs.Stat(p + "/.git/commondir"); {
+	case cerr == nil:
 		return nil, errf(protocol.CodePolicyDenied, "repo/.git has a commondir (a linked worktree); only plain repositories are allowed")
+	case !notFound(cerr):
+		return nil, cerr
 	}
 	return &gitRepo{path: p, real: realPath, remote: s.p.Git.Repos[i].Remote, deadline: time.Now().Add(s.timeout()), s: s}, nil
+}
+
+func notFound(err error) bool {
+	var fe *fsx.Error
+	return errors.As(err, &fe) && fe.Code == protocol.CodeNotFound
 }
 
 // run runs one git subcommand within the request's remaining time.

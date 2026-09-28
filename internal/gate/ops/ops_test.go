@@ -482,3 +482,16 @@ func TestPolicySummary(t *testing.T) {
 		t.Fatalf("paths %+v", s.Paths)
 	}
 }
+
+// TestProductionOptionsHaveNoTestHooks: the production constructor never
+// sets a test-only hook, uses the fixed built-in binary paths, and audits.
+func TestProductionOptionsHaveNoTestHooks(t *testing.T) {
+	o, err := ops.ProductionOptions("v", "/etc/shell-mcp/policy.yaml", "readonly")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.TestGitCAFile != "" || o.InjectReadBackFault != nil || o.Audit == nil ||
+		o.Systemctl != ops.SystemctlPath || o.Journalctl != ops.JournalctlPath || o.Git != ops.GitPath {
+		t.Fatalf("production options %+v", o)
+	}
+}
