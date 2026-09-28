@@ -10,9 +10,9 @@ import (
 // Bytes or Truncate; Truncate never exceeds its limit; with no secrets
 // present, Bytes is the identity.
 func FuzzRedact(f *testing.F) {
-	f.Add([]byte("-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----\n"), 20)
+	f.Add([]byte(keyBegin("RSA ")+"\nabc\n"+keyEnd("RSA ")+"\n"), 20)
 	f.Add([]byte("Authorization: Bearer abc.def\r\nHost: x\r\n"), 10)
-	f.Add([]byte("x -----BEGIN OPENSSH PRIVATE KEY----- y"), 5)
+	f.Add([]byte("x "+keyBegin("OPENSSH ")+" y"), 5)
 	f.Add([]byte("api_key=1234567890"), 8)
 	f.Add([]byte("plain text only"), 100)
 	r := New([]*regexp.Regexp{regexp.MustCompile(`api_key=\S+`)})

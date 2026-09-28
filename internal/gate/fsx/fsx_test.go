@@ -280,7 +280,8 @@ func TestReadBackFault(t *testing.T) {
 func TestPrivateKeyAndBinary(t *testing.T) {
 	e := newEnv(t)
 	// Invented, not key material.
-	put(t, filepath.Join(e.read, "k.pem"), "x\n-----BEGIN OPENSSH PRIVATE KEY-----\ninvented\n-----END OPENSSH PRIVATE KEY-----\n")
+	// Assembled at runtime so no key-shaped literal is in the source.
+	put(t, filepath.Join(e.read, "k.pem"), "x\n-----BEGIN OPENSSH PRIVATE "+"KEY-----\ninvented\n-----END OPENSSH PRIVATE "+"KEY-----\n")
 	_, err := e.fs.ReadFile(filepath.Join(e.read, "k.pem"), ReadOptions{MaxBytes: 1024})
 	wantCode(t, err, protocol.CodePathDenied)
 	// Copying it is refused too.

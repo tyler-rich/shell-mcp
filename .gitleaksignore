@@ -1,0 +1,11 @@
+# gitleaks ignore list: exact fingerprints (commit:file:rule:line) only.
+# Every entry is an invented test fixture, not a credential. Entries are
+# never broader than one line of one commit; later commits build such
+# fixtures at runtime so they no longer appear as literals.
+#
+# Branch sec/gate-core (PR #3), redaction tests: an invented OpenSSH/RSA
+# private-key PEM block and an invented Authorization header.
+8638631da479ec209cbc53a6dd1a2e9b74cfa394:internal/redact/redact_test.go:private-key:10
+8638631da479ec209cbc53a6dd1a2e9b74cfa394:internal/redact/redact_test.go:private-key:44
+8638631da479ec209cbc53a6dd1a2e9b74cfa394:internal/redact/redact_test.go:curl-auth-header:74
+a53197e4d089d6c98ad594d5e09d75417438bcdc:internal/redact/fuzz_test.go:private-key:13
