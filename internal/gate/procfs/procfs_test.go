@@ -46,10 +46,10 @@ func TestParseMeminfoUptimeLoadavgStat(t *testing.T) {
 	if err != nil || m.TotalBytes != 2048*1024 || m.AvailableBytes != 1536*1024 || m.CachedBytes != 2048 {
 		t.Fatalf("meminfo %+v %v", m, err)
 	}
-	if _, err := ParseMeminfo([]byte("MemFree: 1 kB\n")); err == nil {
+	if _, err = ParseMeminfo([]byte("MemFree: 1 kB\n")); err == nil {
 		t.Fatal("meminfo without MemTotal accepted")
 	}
-	if _, err := ParseMeminfo([]byte("MemTotal: x kB\n")); err == nil {
+	if _, err = ParseMeminfo([]byte("MemTotal: x kB\n")); err == nil {
 		t.Fatal("non-numeric meminfo accepted")
 	}
 	up, err := ParseUptime([]byte("12345.67 54321.00\n"))
@@ -57,7 +57,7 @@ func TestParseMeminfoUptimeLoadavgStat(t *testing.T) {
 		t.Fatalf("uptime %v %v", up, err)
 	}
 	for _, bad := range []string{"", "x 1", "-1 2", "NaN 1", "+Inf 1"} {
-		if _, err := ParseUptime([]byte(bad)); err == nil {
+		if _, err = ParseUptime([]byte(bad)); err == nil {
 			t.Fatalf("uptime accepted %q", bad)
 		}
 	}
@@ -65,7 +65,7 @@ func TestParseMeminfoUptimeLoadavgStat(t *testing.T) {
 	if err != nil || la.Load1 != 0.5 || la.Load15 != 0.1 || la.Running != 2 || la.Total != 345 {
 		t.Fatalf("loadavg %+v %v", la, err)
 	}
-	if _, err := ParseLoadavg([]byte("0.5 0.2\n")); err == nil {
+	if _, err = ParseLoadavg([]byte("0.5 0.2\n")); err == nil {
 		t.Fatal("short loadavg accepted")
 	}
 	st, err := ParseStat([]byte("cpu  1 2 3\ncpu0 1 2 3\ncpu1 1 2 3\nintr 1\nbtime 1700000000\nprocesses 5\n"))
@@ -128,7 +128,7 @@ func TestParsePIDStat(t *testing.T) {
 		t.Fatalf("stat %+v %v", s, err)
 	}
 	for _, bad := range []string{"", "1 (x S 1", "1 (x) S", "a (x) S 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"} {
-		if _, err := ParsePIDStat([]byte(bad)); err == nil {
+		if _, err = ParsePIDStat([]byte(bad)); err == nil {
 			t.Fatalf("accepted %q", bad)
 		}
 	}

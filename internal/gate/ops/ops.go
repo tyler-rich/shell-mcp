@@ -209,7 +209,7 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 		}
 		return Failure("", protocol.CodeInstallInsecure, msg)
 	}
-	p, err := policy.Load(o.PolicyPath, policy.LoadOptions{Trust: o.Trust, GateExecutable: o.Executable, ServiceHome: o.ServiceHome})
+	p, err := policy.Load(o.PolicyPath, &policy.LoadOptions{Trust: o.Trust, GateExecutable: o.Executable, ServiceHome: o.ServiceHome})
 	if err != nil {
 		return Failure("", protocol.CodeInstallInsecure, "gate policy is missing, insecure or invalid (run shell-mcp-gate check-policy on the host)")
 	}

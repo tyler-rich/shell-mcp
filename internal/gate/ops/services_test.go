@@ -148,7 +148,7 @@ func TestServiceList(t *testing.T) {
 	f.fail("service_list", m{"limit": -1}, "bad_request")
 }
 
-var epochArg = regexp.MustCompile(`^@[0-9]{10}$`)
+var epochArg = regexp.MustCompile(`^@\d{10}$`)
 
 func TestJournal(t *testing.T) {
 	f := newFixture(t, "read")

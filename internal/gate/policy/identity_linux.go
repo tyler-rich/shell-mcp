@@ -60,7 +60,7 @@ func scanDenied(dirs []string) []*deniedFile {
 			continue
 		}
 		seen[rd] = true
-		f, err := os.Open(rd) //nolint:gosec // G304: a fixed system binary directory
+		f, err := os.Open(rd)
 		if err != nil {
 			continue
 		}

@@ -9,7 +9,7 @@ import (
 var zeroHash = strings.Repeat("0", 64)
 
 func TestRuleGolden(t *testing.T) {
-	got, err := Rule(Spec{User: "svc-shell", Units: []string{"example-app.service", "example-worker@1.service"},
+	got, err := Rule(&Spec{User: "svc-shell", Units: []string{"example-app.service", "example-worker@1.service"},
 		Verbs: []string{"restart", "reload"}, PolicySHA256: zeroHash})
 	if err != nil {
 		t.Fatal(err)
@@ -22,7 +22,7 @@ func TestRuleGolden(t *testing.T) {
 		t.Fatalf("rule differs from testdata/two-units.rules:\n%s", got)
 	}
 	// Deterministic.
-	again, _ := Rule(Spec{User: "svc-shell", Units: []string{"example-app.service", "example-worker@1.service"},
+	again, _ := Rule(&Spec{User: "svc-shell", Units: []string{"example-app.service", "example-worker@1.service"},
 		Verbs: []string{"restart", "reload"}, PolicySHA256: zeroHash})
 	if again != got {
 		t.Fatal("not deterministic")
@@ -32,7 +32,7 @@ func TestRuleGolden(t *testing.T) {
 func TestRuleEscapedUnit(t *testing.T) {
 	// systemd-escaped names contain a backslash; it must reach JavaScript
 	// as one backslash inside a string literal.
-	got, err := Rule(Spec{User: "svc-shell", Units: []string{`example\x2dapp.service`}, Verbs: []string{"start"}, PolicySHA256: zeroHash})
+	got, err := Rule(&Spec{User: "svc-shell", Units: []string{`example\x2dapp.service`}, Verbs: []string{"start"}, PolicySHA256: zeroHash})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,12 +70,12 @@ func TestRuleRefusals(t *testing.T) {
 			s.Units = append([]string(nil), ok.Units...)
 			s.Verbs = append([]string(nil), ok.Verbs...)
 			mutate(&s)
-			if out, err := Rule(s); err == nil {
+			if out, err := Rule(&s); err == nil {
 				t.Fatalf("accepted:\n%s", out)
 			}
 		})
 	}
-	if _, err := Rule(ok); err != nil {
+	if _, err := Rule(&ok); err != nil {
 		t.Fatal(err)
 	}
 }

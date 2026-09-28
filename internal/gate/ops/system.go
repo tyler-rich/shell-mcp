@@ -90,7 +90,7 @@ func (s *server) sysinfo(raw jsontext.Value) (data any, warns []string, failure 
 		warnings = append(warnings, "os-release could not be read")
 	}
 	var u unix.Utsname
-	if err := unix.Uname(&u); err != nil {
+	if err = unix.Uname(&u); err != nil {
 		return nil, nil, errf(protocol.CodeInternal, "uname failed")
 	}
 	d.Kernel = kernelInfo{Sysname: cstr(u.Sysname[:]), Release: cstr(u.Release[:]), Version: cstr(u.Version[:]), Machine: cstr(u.Machine[:])}
@@ -278,7 +278,7 @@ func (s *server) processes(raw jsontext.Value) (data any, warns []string, failur
 	}
 	d := processesData{Processes: []processEntry{}}
 	var warnings []string
-	if ms, err := mounts(); err == nil {
+	if ms, merr := mounts(); merr == nil {
 		if on, mode := procfs.HidePID(ms); on {
 			d.HidePID = hidePIDInfo{Active: true, Mode: mode}
 			warnings = append(warnings, "/proc is mounted with hidepid="+mode+": other users' processes are hidden, so this list is partial")

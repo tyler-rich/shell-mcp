@@ -23,7 +23,7 @@ func (v *validator) identity(field, _ string, _ os.FileInfo, _ *LoadOptions) boo
 }
 
 // Load is Linux-only.
-func Load(_ string, _ LoadOptions) (*Policy, error) { return nil, errLinuxOnly }
+func Load(_ string, _ *LoadOptions) (*Policy, error) { return nil, errLinuxOnly }
 
 // Parse is Linux-only.
-func Parse(_ []byte, _ string, _ LoadOptions) (*Policy, error) { return nil, errLinuxOnly }
+func Parse(_ []byte, _ string, _ *LoadOptions) (*Policy, error) { return nil, errLinuxOnly }

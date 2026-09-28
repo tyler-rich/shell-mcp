@@ -46,7 +46,7 @@ func TestBinaryIdentity(t *testing.T) {
 	}
 	f.mustFail(t, cmdAt("report-tool"), `hard-denied "bash"`)
 
-	b, err := os.ReadFile(filepath.Join(sys, "bash"))
+	b, err := os.ReadFile(filepath.Join(sys, "bash")) //nolint:gosec // G304: the test's own fixture
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestBinaryIdentity(t *testing.T) {
 	f.mustFail(t, cmdAt("status-tool"), `hard-denied "bash"`)
 
 	// A copy of a binary that only a denied name (sh, a symlink) points to.
-	b, _ = os.ReadFile(filepath.Join(sys, "multicall"))
+	b, _ = os.ReadFile(filepath.Join(sys, "multicall")) //nolint:gosec // G304: the test's own fixture
 	gatetest.WriteFile(t, filepath.Join(f.bin, "helper"), string(b), 0o755)
 	f.mustFail(t, cmdAt("helper"), `hard-denied "sh"`)
 
@@ -65,7 +65,7 @@ func TestBinaryIdentity(t *testing.T) {
 
 	// An unrelated binary, including a copy of an unrelated system binary.
 	f.mustLoad(t, cmdAt("example-tool"))
-	u, _ := os.ReadFile(filepath.Join(sys, "zpool"))
+	u, _ := os.ReadFile(filepath.Join(sys, "zpool")) //nolint:gosec // G304: the test's own fixture
 	gatetest.WriteFile(t, filepath.Join(f.bin, "pool-status"), string(u), 0o755)
 	f.mustLoad(t, cmdAt("pool-status"))
 }

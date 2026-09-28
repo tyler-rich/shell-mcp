@@ -89,12 +89,12 @@ func (s *server) gitRepo(p string, write bool) (*gitRepo, error) {
 	if _, ok := pathx.Longest(s.p.Paths.Write, p); write && !ok {
 		return nil, errf(protocol.CodePolicyDenied, "repo is not inside a write root")
 	}
-	real, err := s.fs.ResolveDir(p)
+	realPath, err := s.fs.ResolveDir(p)
 	if err != nil {
 		return nil, err
 	}
 	if write {
-		if _, err := s.fs.ResolveWrite(p); err != nil {
+		if _, err = s.fs.ResolveWrite(p); err != nil {
 			return nil, err
 		}
 	}
@@ -109,13 +109,13 @@ func (s *server) gitRepo(p string, write bool) (*gitRepo, error) {
 	if e.Type != "dir" {
 		return nil, errf(protocol.CodePolicyDenied, "repo/.git must be a real directory (a gitfile or a symlink is refused)")
 	}
-	if gd, err := s.fs.ResolveDir(p + "/.git"); err != nil || gd != real+"/.git" {
+	if gd, err := s.fs.ResolveDir(p + "/.git"); err != nil || gd != realPath+"/.git" {
 		return nil, errf(protocol.CodePolicyDenied, "repo/.git must be a real directory inside the root")
 	}
 	if _, err := s.fs.Stat(p + "/.git/commondir"); err == nil {
 		return nil, errf(protocol.CodePolicyDenied, "repo/.git has a commondir (a linked worktree); only plain repositories are allowed")
 	}
-	return &gitRepo{path: p, real: real, remote: s.p.Git.Repos[i].Remote, deadline: time.Now().Add(s.timeout()), s: s}, nil
+	return &gitRepo{path: p, real: realPath, remote: s.p.Git.Repos[i].Remote, deadline: time.Now().Add(s.timeout()), s: s}, nil
 }
 
 // run runs one git subcommand within the request's remaining time.
@@ -246,7 +246,7 @@ func (s *server) gitStatus(raw jsontext.Value) (data any, warns []string, failur
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err := r.checkConfig(); err != nil {
+	if _, err = r.checkConfig(); err != nil {
 		return nil, nil, err
 	}
 	st, truncated, err := r.status("normal", true)
@@ -283,12 +283,12 @@ func (s *server) gitLog(raw jsontext.Value) (data any, warns []string, failure e
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err := r.checkConfig(); err != nil {
+	if _, err = r.checkConfig(); err != nil {
 		return nil, nil, err
 	}
 	d := gitLogData{Repo: a.Repo, Commits: []gitx.Commit{}}
-	if h, err := r.head(); err != nil || h == "" {
-		return d, nil, err
+	if h, herr := r.head(); herr != nil || h == "" {
+		return d, nil, herr
 	}
 	out, err := r.output("log", "--no-color", "--no-show-signature", "--no-ext-diff", "--no-textconv",
 		"--format="+gitx.LogFormat, "-n", strconv.Itoa(a.Limit))
@@ -335,7 +335,7 @@ func (s *server) gitDiff(raw jsontext.Value) (data any, warns []string, failure 
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err := r.checkConfig(); err != nil {
+	if _, err = r.checkConfig(); err != nil {
 		return nil, nil, err
 	}
 	args := []string{"diff", "--no-color", "--no-ext-diff", "--no-textconv"}
@@ -407,8 +407,8 @@ func (s *server) gitPull(raw jsontext.Value) (data any, warns []string, failure 
 		if old != "" {
 			// The pull's fetch updated FETCH_HEAD; exit 1 from --is-ancestor
 			// means HEAD is not an ancestor of it: not a fast-forward.
-			mb, err := r.run(gitHashMaxBytes, "merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD")
-			if err == nil && exited(&mb, 1) {
+			mb, mberr := r.run(gitHashMaxBytes, "merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD")
+			if mberr == nil && exited(&mb, 1) {
 				return nil, nil, errf(protocol.CodePolicyDenied, "the pull is not a fast-forward (local and remote history diverge); nothing was changed")
 			}
 		}
@@ -487,7 +487,7 @@ func (s *server) gitDiscardPreview(raw jsontext.Value) (data any, warns []string
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err := r.checkConfig(); err != nil {
+	if _, err = r.checkConfig(); err != nil {
 		return nil, nil, err
 	}
 	d, err := r.discardPreview()
@@ -508,17 +508,17 @@ func (s *server) gitDiscard(raw jsontext.Value) (data any, warns []string, failu
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err := r.checkConfig(); err != nil {
+	if _, err = r.checkConfig(); err != nil {
 		return nil, nil, err
 	}
 	d, err := r.discardPreview()
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err := r.output("reset", "--hard", "-q"); err != nil {
+	if _, err = r.output("reset", "--hard", "-q"); err != nil {
 		return nil, nil, err
 	}
-	if _, err := r.output("clean", "-f", "-d", "-q"); err != nil {
+	if _, err = r.output("clean", "-f", "-d", "-q"); err != nil {
 		return nil, nil, err
 	}
 	d.Applied = true

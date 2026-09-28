@@ -46,7 +46,7 @@ func needABI(t *testing.T, n int) {
 
 func parse(t *testing.T, y string) *policy.Policy {
 	t.Helper()
-	p, err := policy.Parse([]byte(y), "/nonexistent/policy.yaml", policy.LoadOptions{
+	p, err := policy.Parse([]byte(y), "/nonexistent/policy.yaml", &policy.LoadOptions{
 		Trust: policy.RootTrust(), GateExecutable: "/nonexistent/shell-mcp-gate", ServiceHome: "/nonexistent/home",
 	})
 	if err != nil {
@@ -457,22 +457,22 @@ func TestSocketDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	real := filepath.Join(d, "journal", "dev-log")
-	gatetest.Mkdir(t, filepath.Dir(real), 0o755)
-	l, err := (&net.ListenConfig{}).ListenPacket(t.Context(), "unixgram", real)
+	sock := filepath.Join(d, "journal", "dev-log")
+	gatetest.Mkdir(t, filepath.Dir(sock), 0o755)
+	l, err := (&net.ListenConfig{}).ListenPacket(t.Context(), "unixgram", sock)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = l.Close() }()
 	gatetest.Mkdir(t, filepath.Join(d, "dev"), 0o755)
 	link := filepath.Join(d, "dev", "log")
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(sock, link); err != nil {
 		t.Fatal(err)
 	}
-	if got, ok := sandbox.SocketDir(link); !ok || got != filepath.Dir(real) {
+	if got, ok := sandbox.SocketDir(link); !ok || got != filepath.Dir(sock) {
 		t.Fatalf("SocketDir(link) = %q %v", got, ok)
 	}
-	if got, ok := sandbox.SocketDir(real); !ok || got != filepath.Dir(real) {
+	if got, ok := sandbox.SocketDir(sock); !ok || got != filepath.Dir(sock) {
 		t.Fatalf("SocketDir(real) = %q %v", got, ok)
 	}
 	gatetest.WriteFile(t, filepath.Join(d, "plain"), "x", 0o644)

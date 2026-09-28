@@ -160,14 +160,14 @@ func polkitWith(args []string, stdout, stderr io.Writer, trust policy.Trust) int
 	if err != nil {
 		return fail("cannot resolve own path: %v", err)
 	}
-	p, err := policy.Load(*policyPath, policy.LoadOptions{Trust: trust, GateExecutable: exe, ServiceHome: u.HomeDir})
+	p, err := policy.Load(*policyPath, &policy.LoadOptions{Trust: trust, GateExecutable: exe, ServiceHome: u.HomeDir})
 	if err != nil {
 		for _, line := range strings.Split(err.Error(), "\n") {
 			_, _ = fmt.Fprintf(stderr, "shell-mcp-gate polkit: %s\n", line)
 		}
 		return 1
 	}
-	rule, err := polkit.Rule(polkit.Spec{User: *userName, Units: p.Services.ControlUnits, Verbs: p.Services.ControlVerbs, PolicySHA256: p.SHA256})
+	rule, err := polkit.Rule(&polkit.Spec{User: *userName, Units: p.Services.ControlUnits, Verbs: p.Services.ControlVerbs, PolicySHA256: p.SHA256})
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -223,7 +223,7 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust
 	}
 	pr("     service home used for the protected set: %q", home)
 
-	p, err := policy.Load(*policyPath, policy.LoadOptions{Trust: trust, GateExecutable: exe, ServiceHome: home})
+	p, err := policy.Load(*policyPath, &policy.LoadOptions{Trust: trust, GateExecutable: exe, ServiceHome: home})
 	if err != nil {
 		for _, line := range strings.Split(err.Error(), "\n") {
 			failf("%s", line)

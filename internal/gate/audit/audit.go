@@ -52,7 +52,7 @@ func truncate(s string) string {
 		return s
 	}
 	s = s[:maxText]
-	for !utf8.ValidString(s) && len(s) > 0 {
+	for !utf8.ValidString(s) && s != "" {
 		s = s[:len(s)-1]
 	}
 	return s + "..."

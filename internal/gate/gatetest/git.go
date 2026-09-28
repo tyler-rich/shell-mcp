@@ -4,7 +4,7 @@ package gatetest
 
 import (
 	"encoding/pem"
-	"net/http/cgi"
+	"net/http/cgi" //nolint:gosec // G504: test-only CGI host for git http-backend; the httpoxy issue was fixed in Go 1.6.3
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -25,8 +25,8 @@ const GitBin = "/usr/bin/git"
 // and system configuration.
 func Git(t testing.TB, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.CommandContext(t.Context(), GitBin, append([]string{"-c", "user.name=Example", "-c", "user.email=dev@example.test",
-		"-c", "init.defaultBranch=main", "-c", "protocol.file.allow=always"}, args...)...) //nolint:gosec // G204: test setup with fixed git
+	setup := []string{"-c", "user.name=Example", "-c", "user.email=dev@example.test", "-c", "init.defaultBranch=main", "-c", "protocol.file.allow=always"}
+	cmd := exec.CommandContext(t.Context(), GitBin, append(setup, args...)...) //nolint:gosec // G204: test setup running the fixed git binary
 	cmd.Dir = dir
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + dir, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "LC_ALL=C.UTF-8"}
 	out, err := cmd.CombinedOutput()

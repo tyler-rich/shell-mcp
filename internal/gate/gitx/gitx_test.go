@@ -161,7 +161,7 @@ func FuzzConfig(f *testing.F) {
 func FuzzLogAndUnquote(f *testing.F) {
 	f.Add([]byte(strings.Repeat("a", 40) + "\x1fA\x1f2026-09-27T10:00:00Z\x1fs\x1e\n"))
 	f.Add([]byte(`"a\303\251\n"`))
-	f.Fuzz(func(t *testing.T, b []byte) {
+	f.Fuzz(func(_ *testing.T, b []byte) {
 		_, _ = ParseLog(b)
 		_, _ = Unquote(string(b))
 	})

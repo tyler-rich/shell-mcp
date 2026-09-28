@@ -126,7 +126,7 @@ func ParseListUnits(out []byte) ([]Unit, error) {
 	return units, nil
 }
 
-var relRE = regexp.MustCompile(`^-([1-9][0-9]{0,6})([smhdw])$`)
+var relRE = regexp.MustCompile(`^-([1-9]\d{0,6})([smhdw])$`)
 
 // JournalTime converts a since/until value — RFC 3339 with a zone ("Z" or
 // an offset), or a relative "-N<s|m|h|d|w>" of at most ten years — into

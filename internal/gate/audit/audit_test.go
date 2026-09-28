@@ -82,7 +82,7 @@ func TestSanitizeArgs(t *testing.T) {
 	}
 }
 
-func listen(t *testing.T) (*net.UnixConn, string) {
+func listen(t *testing.T) (conn *net.UnixConn, path string) {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "log")
 	c, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: p, Net: "unixgram"})

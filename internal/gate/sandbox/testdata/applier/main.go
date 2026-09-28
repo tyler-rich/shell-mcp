@@ -68,7 +68,7 @@ func main() {
 		fail(&out, err)
 	}
 	self, _ := os.Executable()
-	p, err := policy.Parse(data, *pol, policy.LoadOptions{Trust: policy.RootTrust(), GateExecutable: self, ServiceHome: "/nonexistent-home"})
+	p, err := policy.Parse(data, *pol, &policy.LoadOptions{Trust: policy.RootTrust(), GateExecutable: self, ServiceHome: "/nonexistent-home"})
 	if err != nil {
 		fail(&out, err)
 	}

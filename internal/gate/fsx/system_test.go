@@ -36,10 +36,10 @@ func TestSystemFiles(t *testing.T) {
 	if pids, trunc, _ := ListPIDs(1); len(pids) != 1 || (!trunc && len(pids) > 1) {
 		t.Fatalf("limit: %v", pids)
 	}
-	if _, err := Statfs("/", time.Second); err != nil {
+	if _, err = Statfs("/", time.Second); err != nil {
 		t.Fatalf("statfs /: %v", err)
 	}
-	if _, err := Statfs("relative", time.Second); err == nil {
+	if _, err = Statfs("relative", time.Second); err == nil {
 		t.Fatal("relative statfs")
 	}
 	_, _, err = ReadSystemFile("/proc/999999999/stat", 10)

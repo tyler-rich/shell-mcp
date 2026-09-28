@@ -160,7 +160,7 @@ func decodeStrict(data []byte, out *rawPolicy) error {
 	return nil
 }
 
-func parse(data []byte, files []string, opts LoadOptions) (*Policy, error) {
+func parse(data []byte, files []string, opts *LoadOptions) (*Policy, error) {
 	var raw rawPolicy
 	if err := decodeStrict(data, &raw); err != nil {
 		return nil, &Error{"", err.Error()}
@@ -298,7 +298,7 @@ func checkRoot(p string) error {
 	return nil
 }
 
-func (v *validator) paths(p *Policy, raw *rawPaths, files []string, opts LoadOptions) {
+func (v *validator) paths(p *Policy, raw *rawPaths, files []string, opts *LoadOptions) {
 	if raw == nil {
 		raw = &rawPaths{}
 	}
@@ -617,7 +617,7 @@ func (v *validator) redact(p *Policy, raw *rawRedact) {
 
 var commandIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
-func (v *validator) commands(p *Policy, raw []rawCommand, opts LoadOptions) {
+func (v *validator) commands(p *Policy, raw []rawCommand, opts *LoadOptions) {
 	if len(raw) > maxCommands {
 		v.fail("commands", "has more than %d commands", maxCommands)
 	}
@@ -682,7 +682,7 @@ func (v *validator) commands(p *Policy, raw []rawCommand, opts LoadOptions) {
 // resolveCommand resolves the binary, applies the hard-deny list to the
 // base name as written and as resolved, requires root_equivalent for
 // container CLIs, and checks ownership of the binary and its directories.
-func (v *validator) resolveCommand(field string, rc *rawCommand, opts LoadOptions) (resolved string, ok bool) {
+func (v *validator) resolveCommand(field string, rc *rawCommand, opts *LoadOptions) (resolved string, ok bool) {
 	if err := pathx.CheckClean(rc.Path); err != nil {
 		v.fail(field+".path", "%v", err)
 		return "", false
@@ -723,7 +723,7 @@ func (v *validator) resolveCommand(field string, rc *rawCommand, opts LoadOption
 		v.fail(field+".path", "%s is not executable", resolved)
 		return "", false
 	}
-	if !v.identity(field, resolved, fi, &opts) {
+	if !v.identity(field, resolved, fi, opts) {
 		return "", false
 	}
 	for _, base := range []string{filepath.Base(rc.Path), filepath.Base(resolved)} {

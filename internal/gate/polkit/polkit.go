@@ -48,7 +48,7 @@ func quote(s string) string {
 
 // Rule returns the rule text for s. It refuses anything but exact unit
 // names, known verbs and a plain user name; there are no wildcards.
-func Rule(s Spec) (string, error) {
+func Rule(s *Spec) (string, error) {
 	switch {
 	case !userRE.MatchString(s.User):
 		return "", fmt.Errorf("user %q is not a plain account name", s.User)

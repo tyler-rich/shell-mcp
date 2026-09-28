@@ -61,15 +61,15 @@ func (s *server) builtin(p, name string) (string, error) {
 	return rp, nil
 }
 
-// runBuiltin runs a built-in binary with the gate's fixed environment
-// (plus extra variables) and the policy's output cap.
-func (s *server) runBuiltin(bin, name string, args, extraEnv []string, dir string) (execx.Result, error) {
+// runBuiltin runs a built-in binary from "/" with the gate's fixed
+// environment and the policy's output cap.
+func (s *server) runBuiltin(bin, name string, args []string) (execx.Result, error) {
 	rp, err := s.builtin(bin, name)
 	if err != nil {
 		return execx.Result{}, err
 	}
 	res, err := execx.Run(context.Background(), &execx.Spec{
-		Path: rp, Args: args, Env: append(execx.Environment(s.p.ServiceHome), extraEnv...), Dir: dir,
+		Path: rp, Args: args, Env: execx.Environment(s.p.ServiceHome), Dir: "/",
 		Timeout: s.timeout(), MaxOutput: s.p.Limits.MaxOutputBytes,
 	})
 	if err != nil {
@@ -147,7 +147,7 @@ func numberOrNil[T int64 | uint64](v string) *T {
 // status runs `systemctl show` for unit and shapes the result.
 func (s *server) status(unit string) (serviceStatus, error) {
 	res, err := s.runBuiltin(s.o.Systemctl, "systemctl",
-		[]string{"show", "--no-pager", "-p", strings.Join(systemd.ShowProperties, ","), "--", unit}, nil, "/")
+		[]string{"show", "--no-pager", "-p", strings.Join(systemd.ShowProperties, ","), "--", unit})
 	if err != nil {
 		return serviceStatus{}, err
 	}
@@ -218,7 +218,7 @@ func (s *server) serviceList(raw jsontext.Value) (data any, warns []string, fail
 	if a.FailedOnly {
 		args = append(args, "--state=failed")
 	}
-	res, err := s.runBuiltin(s.o.Systemctl, "systemctl", args, nil, "/")
+	res, err := s.runBuiltin(s.o.Systemctl, "systemctl", args)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -313,7 +313,7 @@ func (s *server) journal(raw jsontext.Value) (data any, warns []string, failure 
 		args = append(args, "-p", a.Priority)
 	}
 	args = append(args, "-u", a.Unit)
-	res, err := s.runBuiltin(s.o.Journalctl, "journalctl", args, nil, "/")
+	res, err := s.runBuiltin(s.o.Journalctl, "journalctl", args)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -379,7 +379,7 @@ func (s *server) serviceControl(raw jsontext.Value) (data any, warns []string, f
 	if !slices.Contains(s.p.Services.ControlVerbs, a.Action) {
 		return nil, nil, errf(protocol.CodePolicyDenied, "action is not in services.control.verbs")
 	}
-	res, err := s.runBuiltin(s.o.Systemctl, "systemctl", []string{"--no-ask-password", a.Action, "--", a.Unit}, nil, "/")
+	res, err := s.runBuiltin(s.o.Systemctl, "systemctl", []string{"--no-ask-password", a.Action, "--", a.Unit})
 	if err != nil {
 		return nil, nil, err
 	}

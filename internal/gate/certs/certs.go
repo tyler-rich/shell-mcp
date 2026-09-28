@@ -205,7 +205,7 @@ func describe(i int, c *x509.Certificate, now time.Time) Cert {
 	return d
 }
 
-func keyInfo(c *x509.Certificate) (string, int) {
+func keyInfo(c *x509.Certificate) (keyType string, bits int) {
 	switch k := c.PublicKey.(type) {
 	case *rsa.PublicKey:
 		return "RSA", k.N.BitLen()

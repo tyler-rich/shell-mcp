@@ -27,7 +27,7 @@ func TestExamplePolicies(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			p, err := policy.Parse(data, "/etc/shell-mcp/"+name, policy.LoadOptions{
+			p, err := policy.Parse(data, "/etc/shell-mcp/"+name, &policy.LoadOptions{
 				Trust: gatetest.Trust(), GateExecutable: "/usr/local/bin/shell-mcp-gate", ServiceHome: "/home/svc-shell",
 			})
 			if err != nil {

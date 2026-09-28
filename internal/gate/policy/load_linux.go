@@ -18,7 +18,7 @@ import (
 // following a final symlink and its owner, mode and type are re-checked on
 // the open descriptor, so the bytes validated are the bytes of the file
 // that passed the check.
-func Load(file string, opts LoadOptions) (*Policy, error) {
+func Load(file string, opts *LoadOptions) (*Policy, error) {
 	if err := pathx.CheckClean(file); err != nil {
 		return nil, &Error{"--policy", err.Error()}
 	}
@@ -58,6 +58,6 @@ func Load(file string, opts LoadOptions) (*Policy, error) {
 // Parse validates policy bytes. file is the policy's path (it joins the
 // protected set). Command binaries are still resolved and ownership-checked
 // on this host.
-func Parse(data []byte, file string, opts LoadOptions) (*Policy, error) {
+func Parse(data []byte, file string, opts *LoadOptions) (*Policy, error) {
 	return parse(data, []string{file}, opts)
 }
