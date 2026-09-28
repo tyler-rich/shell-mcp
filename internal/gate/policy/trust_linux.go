@@ -43,11 +43,11 @@ func CheckChain(t Trust, p string) (string, error) {
 			}
 		}
 	}
-	real, err := filepath.EvalSymlinks(p)
+	rp, err := filepath.EvalSymlinks(p)
 	if err != nil {
 		return "", &OwnershipError{p, "cannot be resolved: " + errReason(err)}
 	}
-	for q := real; ; q = filepath.Dir(q) {
+	for q := rp; ; q = filepath.Dir(q) {
 		fi, err := os.Lstat(q)
 		if err != nil {
 			return "", &OwnershipError{q, "cannot be inspected: " + errReason(err)}
@@ -62,7 +62,7 @@ func CheckChain(t Trust, p string) (string, error) {
 			break
 		}
 	}
-	return real, nil
+	return rp, nil
 }
 
 func checkOwner(t Trust, p string, fi fs.FileInfo) error {

@@ -8,6 +8,7 @@ package install
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"os/user"
 	"slices"
@@ -38,12 +39,12 @@ func Current() (Identity, error) {
 	if err != nil {
 		return Identity{}, fmt.Errorf("getgroups: %w", err)
 	}
-	gids := []uint32{uint32(os.Getgid()), uint32(os.Getegid())}
+	gids := []uint32{ID(os.Getgid()), ID(os.Getegid())}
 	for _, g := range sup {
-		gids = append(gids, uint32(g))
+		gids = append(gids, ID(g))
 	}
 	return Identity{
-		UID:  uint32(os.Getuid()),
+		UID:  ID(os.Getuid()),
 		GIDs: gids,
 		GroupName: func(gid uint32) (string, error) {
 			g, err := user.LookupGroupId(strconv.FormatUint(uint64(gid), 10))
@@ -53,6 +54,16 @@ func Current() (Identity, error) {
 			return g.Name, nil
 		},
 	}, nil
+}
+
+// ID converts a uid or gid from the os package (an int) to uint32. Linux ids
+// are 32-bit and never negative; anything out of range maps to the
+// overflow id 4294967295 (never trusted, never a known group).
+func ID(v int) uint32 {
+	if v < 0 || v > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(v)
 }
 
 // Env is everything the install checks look at.
@@ -76,7 +87,7 @@ type Error struct {
 func (e *Error) Error() string { return e.Detail }
 
 // Check runs every install check except the policy's (policy.Load).
-func Check(env Env) error {
+func Check(env *Env) error {
 	id := env.Identity
 	if id.UID == 0 {
 		return &Error{"gate is running as root", "gate process runs as uid 0"}
@@ -107,13 +118,13 @@ func Check(env Env) error {
 	if env.SSHOriginalCommand != nil && *env.SSHOriginalCommand != protocol.Hello {
 		return &Error{"unexpected SSH_ORIGINAL_COMMAND", "SSH_ORIGINAL_COMMAND is set and is not " + protocol.Hello}
 	}
-	real, err := policy.CheckChain(env.Trust, env.Executable)
+	rp, err := policy.CheckChain(env.Trust, env.Executable)
 	if err != nil {
 		return &Error{"gate binary ownership or permissions are insecure", "gate binary: " + err.Error()}
 	}
-	fi, err := os.Stat(real)
+	fi, err := os.Stat(rp)
 	if err != nil || !fi.Mode().IsRegular() {
-		return &Error{"gate binary is not a regular file", "gate binary " + real + " is not a regular file"}
+		return &Error{"gate binary is not a regular file", "gate binary " + rp + " is not a regular file"}
 	}
 	return nil
 }

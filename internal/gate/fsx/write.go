@@ -54,7 +54,7 @@ func isSHA256Hex(s string) bool {
 		return false
 	}
 	for i := 0; i < len(s); i++ {
-		if c := s[i]; !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+		if c := s[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
 	}
@@ -102,9 +102,9 @@ func (f *FS) writeAtomic(l *loc, content []byte, mode *os.FileMode, newMode os.F
 		if um&0o7002 != 0 {
 			return res, errf(protocol.CodePolicyDenied, "existing file has setuid, setgid, sticky or world-write bits")
 		}
-		old, err := f.openTarget(l, os.O_RDONLY|syscall.O_NONBLOCK)
-		if err != nil {
-			return res, err
+		old, oerr := f.openTarget(l)
+		if oerr != nil {
+			return res, oerr
 		}
 		h := sha256.New()
 		lines := &lineCounter{}
@@ -148,38 +148,38 @@ func (f *FS) writeAtomic(l *loc, content []byte, mode *os.FileMode, newMode os.F
 			_ = l.parent.Remove(tmp)
 		}
 	}()
-	if _, err := tf.Write(content); err != nil {
+	if _, err = tf.Write(content); err != nil {
 		return res, mapErr(err)
 	}
-	if err := tf.Chmod(newMode); err != nil {
+	if err = tf.Chmod(newMode); err != nil {
 		return res, mapErr(err)
 	}
 	res.OwnerPreserved = true
 	if exists {
-		if tfi, err := tf.Stat(); err == nil {
+		if tfi, serr := tf.Stat(); serr == nil {
 			if st, ok := tfi.Sys().(*syscall.Stat_t); ok && (st.Uid != oldUID || st.Gid != oldGID) {
 				res.OwnerPreserved = tf.Chown(int(oldUID), int(oldGID)) == nil
 			}
 		}
 	}
-	if err := tf.Sync(); err != nil {
+	if err = tf.Sync(); err != nil {
 		return res, mapErr(err)
 	}
 	closed = true
-	if err := tf.Close(); err != nil {
+	if err = tf.Close(); err != nil {
 		return res, mapErr(err)
 	}
-	if err := l.parent.Rename(tmp, l.base); err != nil {
+	if err = l.parent.Rename(tmp, l.base); err != nil {
 		return res, mapErr(err)
 	}
 	committed = true
-	if d, err := l.parent.Open("."); err == nil {
+	if d, derr := l.parent.Open("."); derr == nil {
 		_ = d.Sync()
 		_ = d.Close()
 	}
 
 	// Read-back verification: a mismatch is a failure, never a warning.
-	rf, err := f.openTarget(l, os.O_RDONLY|syscall.O_NONBLOCK)
+	rf, err := f.openTarget(l)
 	if err != nil {
 		return res, errf(protocol.CodeVerifyFailed, "written file could not be re-opened for verification")
 	}
@@ -269,7 +269,7 @@ func (f *FS) Mkdir(p string, mode *os.FileMode, parents bool) (MkdirResult, erro
 	if err != nil {
 		return res, mapErr(err)
 	}
-	defer top.Close()
+	defer func() { _ = top.Close() }()
 	l := &loc{p: p, write: true, root: root, top: top}
 	if l.rootReal, err = realPathOfRoot(top); err != nil {
 		return res, mapErr(err)
@@ -325,20 +325,20 @@ func (f *FS) mkdirIn(l *loc, dir *os.Root, dirReal, name string, m os.FileMode) 
 	if e := f.checkReal(l, join(dirReal, name), true); e != nil {
 		return false, e
 	}
-	if err := dir.Mkdir(name, 0o700); err != nil {
+	if err = dir.Mkdir(name, 0o700); err != nil {
 		return false, mapErr(err)
 	}
 	sub, _, _, err := f.openSubdir(l, dir, join(dirReal, name), name)
 	if err != nil {
 		return true, err
 	}
-	defer sub.Close()
+	defer func() { _ = sub.Close() }()
 	d, err := sub.Open(".")
 	if err != nil {
 		return true, mapErr(err)
 	}
-	defer d.Close()
-	if err := d.Chmod(m); err != nil {
+	defer func() { _ = d.Close() }()
+	if err = d.Chmod(m); err != nil {
 		return true, mapErr(err)
 	}
 	return true, nil
@@ -353,11 +353,11 @@ func (f *FS) Copy(src, dst string, overwrite bool) (WriteResult, error) {
 		return WriteResult{}, err
 	}
 	defer ls.close()
-	file, err := f.openTarget(ls, os.O_RDONLY|syscall.O_NONBLOCK)
+	file, err := f.openTarget(ls)
 	if err != nil {
 		return WriteResult{}, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	fi, err := file.Stat()
 	if err != nil {
 		return WriteResult{}, mapErr(err)
@@ -432,12 +432,12 @@ func (f *FS) Move(src, dst string, overwrite bool) (MoveResult, error) {
 		if pathx.Within(src, dst) {
 			return res, errf(protocol.CodeBadRequest, "cannot move a directory into itself")
 		}
-		sub, subReal, _, err := f.openSubdir(ls, ls.parent, ls.targetReal(), ls.base)
-		if err != nil {
-			return res, err
+		sub, subReal, _, serr := f.openSubdir(ls, ls.parent, ls.targetReal(), ls.base)
+		if serr != nil {
+			return res, serr
 		}
 		count := 0
-		err = f.walkTree(ls, sub, src, subReal, 1, func(lp string, _ fs.FileInfo) error {
+		werr := f.walkTree(ls, sub, src, subReal, 1, func(lp string, _ fs.FileInfo) error {
 			count++
 			if count > f.cfg.Limits.MaxDeleteEntries {
 				return errf(protocol.CodeTooLarge, "directory has more than %d entries", f.cfg.Limits.MaxDeleteEntries)
@@ -445,8 +445,8 @@ func (f *FS) Move(src, dst string, overwrite bool) (MoveResult, error) {
 			return f.checkPath(join(dst, pathx.Rel(src, lp)), true).orNil()
 		})
 		_ = sub.Close()
-		if err != nil {
-			return res, err
+		if werr != nil {
+			return res, werr
 		}
 	}
 	dfi, err := ld.parent.Lstat(ld.base)
@@ -496,11 +496,11 @@ func (f *FS) Chmod(p string, mode os.FileMode) (ChmodResult, error) {
 		return ChmodResult{}, err
 	}
 	defer l.close()
-	file, err := f.openTarget(l, os.O_RDONLY|syscall.O_NONBLOCK)
+	file, err := f.openTarget(l)
 	if err != nil {
 		return ChmodResult{}, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	fi, err := file.Stat()
 	if err != nil {
 		return ChmodResult{}, mapErr(err)
@@ -535,7 +535,7 @@ func (f *FS) ResolveWrite(p string) (string, error) {
 	case fi.Mode()&fs.ModeSymlink != 0:
 		return "", errf(protocol.CodePathDenied, "final path component is a symlink")
 	}
-	file, err := f.openTarget(l, os.O_RDONLY|syscall.O_NONBLOCK)
+	file, err := f.openTarget(l)
 	if err != nil {
 		return "", err
 	}

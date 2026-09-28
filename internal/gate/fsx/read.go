@@ -12,7 +12,6 @@ import (
 	"os"
 	"path"
 	"strings"
-	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -66,13 +65,13 @@ func (f *FS) ListDir(p string, includeHidden bool, limit int) (ListResult, error
 		return ListResult{}, err
 	}
 	if owned {
-		defer dir.Close()
+		defer func() { _ = dir.Close() }()
 	}
 	d, err := dir.Open(".")
 	if err != nil {
 		return ListResult{}, mapErr(err)
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	res := ListResult{Path: p, Entries: []Entry{}}
 	n := newNames()
 	scanned := 0
@@ -148,11 +147,11 @@ func (f *FS) ReadFile(p string, o ReadOptions) (ReadResult, error) {
 		return ReadResult{}, err
 	}
 	defer l.close()
-	file, err := f.openTarget(l, os.O_RDONLY|syscall.O_NONBLOCK)
+	file, err := f.openTarget(l)
 	if err != nil {
 		return ReadResult{}, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	fi, err := file.Stat()
 	if err != nil {
 		return ReadResult{}, mapErr(err)
@@ -267,7 +266,7 @@ func (f *FS) Find(p string, o FindOptions) (FindResult, error) {
 		return FindResult{}, err
 	}
 	if owned {
-		defer dir.Close()
+		defer func() { _ = dir.Close() }()
 	}
 	w := &finder{f: f, l: l, o: o, n: newNames(), res: FindResult{Path: p, Entries: []Entry{}}}
 	if o.ModifiedWithinS > 0 {
@@ -291,12 +290,12 @@ type finder struct {
 	res     FindResult
 }
 
-func (w *finder) walk(dir *os.Root, logical, real string, depth int) error {
+func (w *finder) walk(dir *os.Root, logical, dirReal string, depth int) error {
 	d, err := dir.Open(".")
 	if err != nil {
 		return nil // unreadable directory: skip
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	for {
 		ents, rerr := d.ReadDir(readDirChunk)
 		for _, en := range ents {
@@ -306,7 +305,7 @@ func (w *finder) walk(dir *os.Root, logical, real string, depth int) error {
 				return errStop
 			}
 			name := en.Name()
-			lp, rp := join(logical, name), join(real, name)
+			lp, rp := join(logical, name), join(dirReal, name)
 			if w.f.cfg.Deny.Covers(lp) || w.f.cfg.Deny.Covers(rp) {
 				continue
 			}
@@ -362,7 +361,7 @@ func (f *FS) ResolveRead(p string) (string, error) {
 		return "", err
 	}
 	defer l.close()
-	file, err := f.openTarget(l, os.O_RDONLY|syscall.O_NONBLOCK)
+	file, err := f.openTarget(l)
 	if err != nil {
 		return "", err
 	}
@@ -378,12 +377,12 @@ func (f *FS) ResolveDir(p string) (string, error) {
 		return "", err
 	}
 	defer l.close()
-	dir, real, owned, err := f.openDirRoot(l)
+	dir, rp, owned, err := f.openDirRoot(l)
 	if err != nil {
 		return "", err
 	}
 	if owned {
 		_ = dir.Close()
 	}
-	return real, nil
+	return rp, nil
 }

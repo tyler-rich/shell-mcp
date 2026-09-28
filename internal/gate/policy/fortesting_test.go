@@ -50,7 +50,7 @@ func TestForTestingOnlyInTests(t *testing.T) {
 		if strings.HasPrefix(p, gatetestDir) {
 			return nil
 		}
-		src, err := os.ReadFile(p)
+		src, err := os.ReadFile(p) //nolint:gosec // G304: walking this repository's own source files
 		if err != nil {
 			return err
 		}

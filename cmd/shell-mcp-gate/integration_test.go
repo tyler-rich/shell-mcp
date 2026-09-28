@@ -89,7 +89,7 @@ paths:
   read: [{R}]
   write: [{W}]
   deny: ["{R}/secrets/**"]
-{EXTRA}commands:
+commands:
   - id: probe
     path: {BIN}/probe
     tier: read
@@ -128,14 +128,14 @@ func newGate(t *testing.T) *gate {
 	gatetest.WriteFile(t, filepath.Join(g.secrets, "token"), "TOPSECRET", 0o644)
 	gatetest.WriteFile(t, filepath.Join(g.outside, "secret.txt"), "OUTSIDE", 0o644)
 	g.probe = gatetest.BuildProbe(t, g.bin, "probe", filepath.Join(g.outside, "secret.txt"))
-	g.policy("destructive", defaultMode(), "", "")
+	g.policy("destructive", defaultMode(), "")
 	g.env = []string{harnessEnv + "=1", "HARNESS_UID=60123", "HARNESS_GIDS=60123,60124",
 		"HARNESS_GROUPS=60123=svc-shell,60124=svc-shell-priv,101=systemd-journal,999=docker", "HARNESS_HOME=" + g.home}
 	return g
 }
 
-func (g *gate) policy(tier, mode, ports, extra string) {
-	y := strings.NewReplacer("{TIER}", tier, "{MODE}", mode, "{PORTS}", ports, "{EXTRA}", extra,
+func (g *gate) policy(tier, mode, ports string) {
+	y := strings.NewReplacer("{TIER}", tier, "{MODE}", mode, "{PORTS}", ports,
 		"{R}", g.read, "{W}", g.write, "{BIN}", g.bin).Replace(integrationPolicy)
 	gatetest.WriteFile(g.t, g.pol, y, 0o644)
 }
@@ -156,9 +156,9 @@ type resp struct {
 }
 
 // serve runs the harness as `serve --policy … --principal test` with in on stdin.
-func (g *gate) serve(in string, extraEnv ...string) resp {
+func (g *gate) serve(in string, extraEnv ...string) *resp {
 	g.t.Helper()
-	cmd := exec.Command(harness(g.t), "serve", "--policy", g.pol, "--principal", "test") //nolint:gosec // the test's own harness
+	cmd := exec.CommandContext(g.t.Context(), harness(g.t), "serve", "--policy", g.pol, "--principal", "test") //nolint:gosec // G204: the test's own harness
 	cmd.Env = append(append([]string{"PATH=/usr/bin:/bin"}, g.env...), extraEnv...)
 	cmd.Stdin = strings.NewReader(in)
 	var stderr strings.Builder
@@ -174,16 +174,16 @@ func (g *gate) serve(in string, extraEnv ...string) resp {
 	if stderr.Len() != 0 {
 		g.t.Fatalf("gate wrote to stderr: %q", stderr.String())
 	}
-	return r
+	return &r
 }
 
-func (g *gate) call(op string, args any, extraEnv ...string) resp {
+func (g *gate) call(op string, args any, extraEnv ...string) *resp {
 	g.t.Helper()
 	a, _ := json.Marshal(args)
 	return g.serve(fmt.Sprintf(`{"v":1,"id":"it-1","op":%q,"args":%s,"timeout_ms":10000}`+"\n", op, a), extraEnv...)
 }
 
-func (g *gate) want(r resp, code string) resp {
+func (g *gate) want(r *resp, code string) *resp {
 	g.t.Helper()
 	if code == "" {
 		if !r.OK {
@@ -344,7 +344,7 @@ func TestIntegrationPolicyRefusals(t *testing.T) {
 
 func TestIntegrationTiersAndDecoding(t *testing.T) {
 	g := newGate(t)
-	g.policy("read", defaultMode(), "", "")
+	g.policy("read", defaultMode(), "")
 	g.want(g.call("write_file", m{"path": filepath.Join(g.write, "x"), "content_b64": ""}), "tier_denied")
 	g.want(g.call("delete", m{"path": filepath.Join(g.write, "x")}), "tier_denied")
 	g.want(g.call("priv_read_file", m{"path": "/etc/example-app/x"}), "privileged_disabled")
@@ -420,9 +420,9 @@ func TestIntegrationSandboxRefusalAndDegradation(t *testing.T) {
 		t.Skipf("needs a kernel with Landlock below ABI %d (this one has %d); runs locally on ABI 3", sandbox.RequiredMinABI, k)
 	}
 	g := newGate(t)
-	g.policy("read", "required", "", "")
+	g.policy("read", "required", "")
 	g.want(g.call("hello", m{}), "sandbox_unavailable")
-	g.policy("read", "best-effort", "", "")
+	g.policy("read", "best-effort", "")
 	r := g.want(g.call("hello", m{}), "")
 	var h struct {
 		Sandbox sandbox.Report `json:"sandbox"`
@@ -439,9 +439,9 @@ func TestIntegrationSandboxRefusalAndDegradation(t *testing.T) {
 	}
 }
 
-func listen(t *testing.T) (int, func()) {
+func listen(t *testing.T) (port int, stop func()) {
 	t.Helper()
-	l, err := net.Listen("tcp4", "127.0.0.1:0")
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,7 +466,7 @@ func TestIntegrationSandboxNetwork(t *testing.T) {
 	defer c1()
 	other, c2 := listen(t)
 	defer c2()
-	g.policy("read", "required", "  tcp_connect_ports: ["+strconv.Itoa(listed)+"]\n", "")
+	g.policy("read", "required", "  tcp_connect_ports: ["+strconv.Itoa(listed)+"]\n")
 	if d := g.exec([]string{"connect", strconv.Itoa(other)}, nil); strings.TrimSpace(d.Stdout) != "EACCES" {
 		t.Fatalf("unlisted connect: %q", d.Stdout)
 	}
@@ -483,7 +483,7 @@ func TestIntegrationSandboxNetwork(t *testing.T) {
 func TestIntegrationSandboxSignalScope(t *testing.T) {
 	needABI(t, sandbox.ABIScope)
 	g := newGate(t)
-	victim := exec.Command(g.probe, "sleep", "30s") //nolint:gosec // test child
+	victim := exec.CommandContext(t.Context(), g.probe, "sleep", "30s") //nolint:gosec // G204: test child
 	if err := victim.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -504,7 +504,7 @@ func TestProductionBinaryRefusesTestOwnedPolicy(t *testing.T) {
 	}
 	g := newGate(t)
 	bin := gatetest.Build(t, "cmd/shell-mcp-gate", g.dir, "real-gate", nil)
-	cmd := exec.Command(bin, "serve", "--policy", g.pol) //nolint:gosec // the binary this test built
+	cmd := exec.CommandContext(t.Context(), bin, "serve", "--policy", g.pol) //nolint:gosec // G204: the binary this test built
 	cmd.Stdin = strings.NewReader(`{"v":1,"id":"a","op":"hello"}` + "\n")
 	cmd.Env = []string{"PATH=/usr/bin:/bin"}
 	out, err := cmd.Output()
@@ -512,18 +512,18 @@ func TestProductionBinaryRefusesTestOwnedPolicy(t *testing.T) {
 	if err != nil || json.Unmarshal(out, &r) != nil {
 		t.Fatalf("real gate: %v %q", err, out)
 	}
-	g.want(r, "install_insecure")
+	g.want(&r, "install_insecure")
 }
 
 // TestCGOBuiltGateRefuses: a gate built with cgo refuses to serve.
 func TestCGOBuiltGateRefuses(t *testing.T) {
 	g := newGate(t)
 	d := t.TempDir()
-	out, err := exec.Command("go", "env", "CC").Output()
+	out, err := exec.CommandContext(t.Context(), "go", "env", "CC").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := exec.LookPath(strings.TrimSpace(string(out))); err != nil {
+	if _, err = exec.LookPath(strings.TrimSpace(string(out))); err != nil {
 		if os.Getenv(gatetest.RequireSecureEnv) != "" {
 			t.Fatalf("no C compiler (%s) to prove the cgo guard", strings.TrimSpace(string(out)))
 		}
@@ -531,7 +531,7 @@ func TestCGOBuiltGateRefuses(t *testing.T) {
 	}
 	dir, _ := filepath.EvalSymlinks(d)
 	cgoHarness := gatetest.BuildTest(t, "cmd/shell-mcp-gate", dir, "cgo-gate", []string{"CGO_ENABLED=1"})
-	gateCmd := exec.Command(cgoHarness, "serve", "--policy", g.pol, "--principal", "test") //nolint:gosec // built by this test
+	gateCmd := exec.CommandContext(t.Context(), cgoHarness, "serve", "--policy", g.pol, "--principal", "test") //nolint:gosec // G204: built by this test
 	gateCmd.Env = append([]string{"PATH=/usr/bin:/bin"}, g.env...)
 	gateCmd.Stdin = strings.NewReader(`{"v":1,"id":"a","op":"hello"}` + "\n")
 	out, err = gateCmd.Output()
@@ -539,7 +539,7 @@ func TestCGOBuiltGateRefuses(t *testing.T) {
 	if err != nil || json.Unmarshal(out, &r) != nil {
 		t.Fatalf("cgo gate: %v %q", err, out)
 	}
-	g.want(r, "install_insecure")
+	g.want(&r, "install_insecure")
 	if !strings.Contains(r.Error.Message, "cgo") {
 		t.Fatalf("message %q", r.Error.Message)
 	}

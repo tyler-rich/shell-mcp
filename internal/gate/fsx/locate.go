@@ -98,7 +98,7 @@ func realPathOfRoot(r *os.Root) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return realPathOfFile(f)
 }
 
@@ -155,15 +155,15 @@ func (f *FS) checkPath(p string, write bool) *Error {
 // checkReal re-checks a real path against the root and the lists, both as
 // is and translated back under the configured root name (a root may itself
 // be a symlink, and policy patterns name configured paths).
-func (f *FS) checkReal(l *loc, real string, write bool) *Error {
-	if !pathx.Within(l.rootReal, real) {
+func (f *FS) checkReal(l *loc, rp string, write bool) *Error {
+	if !pathx.Within(l.rootReal, rp) {
 		return errf(protocol.CodePathDenied, "path resolves outside its root")
 	}
 	logical := l.root
-	if real != l.rootReal {
-		logical = join(l.root, pathx.Rel(l.rootReal, real))
+	if rp != l.rootReal {
+		logical = join(l.root, pathx.Rel(l.rootReal, rp))
 	}
-	if e := f.checkPath(real, write); e != nil {
+	if e := f.checkPath(rp, write); e != nil {
 		return e
 	}
 	return f.checkPath(logical, write)
@@ -234,7 +234,8 @@ func (l *loc) lstat() (fs.FileInfo, error) {
 // verifies that the opened object is exactly parentReal/base (os.Root
 // follows a final symlink within the root, so a symlink swapped in after
 // the Lstat shows up here as a different real path).
-func (f *FS) openTarget(l *loc, flags int) (*os.File, error) {
+func (f *FS) openTarget(l *loc) (*os.File, error) {
+	const flags = os.O_RDONLY | syscall.O_NONBLOCK // never block on a FIFO
 	var file *os.File
 	var err error
 	if l.parent == nil {
@@ -252,16 +253,16 @@ func (f *FS) openTarget(l *loc, flags int) (*os.File, error) {
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	real, err := realPathOfFile(file)
+	rp, err := realPathOfFile(file)
 	if err != nil {
 		_ = file.Close()
 		return nil, mapErr(err)
 	}
-	if real != l.targetReal() {
+	if rp != l.targetReal() {
 		_ = file.Close()
 		return nil, errf(protocol.CodePathDenied, "path changed while opening, or its final component is a symlink")
 	}
-	if e := f.checkReal(l, real, l.write); e != nil {
+	if e := f.checkReal(l, rp, l.write); e != nil {
 		_ = file.Close()
 		return nil, e
 	}
@@ -271,7 +272,7 @@ func (f *FS) openTarget(l *loc, flags int) (*os.File, error) {
 // openDirRoot opens the target directory as an os.Root and verifies it.
 // When the target is the root itself it returns l.top (not to be closed
 // separately; close reports whether the caller must close it).
-func (f *FS) openDirRoot(l *loc) (dir *os.Root, real string, owned bool, err error) {
+func (f *FS) openDirRoot(l *loc) (dir *os.Root, rp string, owned bool, err error) {
 	if l.parent == nil {
 		return l.top, l.rootReal, false, nil
 	}
@@ -290,25 +291,25 @@ func (f *FS) openDirRoot(l *loc) (dir *os.Root, real string, owned bool, err err
 
 // openSubdir opens name inside dir as an os.Root and requires its real path
 // to be exactly want.
-func (f *FS) openSubdir(l *loc, dir *os.Root, want, name string) (*os.Root, string, bool, error) {
-	sub, err := dir.OpenRoot(name)
+func (f *FS) openSubdir(l *loc, dir *os.Root, want, name string) (sub *os.Root, rp string, owned bool, err error) {
+	sub, err = dir.OpenRoot(name)
 	if err != nil {
 		return nil, "", false, mapErr(err)
 	}
-	real, err := realPathOfRoot(sub)
+	rp, err = realPathOfRoot(sub)
 	if err != nil {
 		_ = sub.Close()
 		return nil, "", false, mapErr(err)
 	}
-	if real != want {
+	if rp != want {
 		_ = sub.Close()
 		return nil, "", false, errf(protocol.CodePathDenied, "directory changed while opening, or is a symlink")
 	}
-	if e := f.checkReal(l, real, l.write); e != nil {
+	if e := f.checkReal(l, rp, l.write); e != nil {
 		_ = sub.Close()
 		return nil, "", false, e
 	}
-	return sub, real, true, nil
+	return sub, rp, true, nil
 }
 
 // names resolves owner and group names with a per-call cache.

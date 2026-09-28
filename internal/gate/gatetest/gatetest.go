@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/install"
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
 )
 
@@ -20,7 +21,7 @@ import (
 const RequireSecureEnv = "SHELL_MCP_REQUIRE_SECURE_TMP"
 
 // Trust is the test trust set: root and the uid running the tests.
-func Trust() policy.Trust { return policy.TrustForTesting(uint32(os.Getuid())) }
+func Trust() policy.Trust { return policy.TrustForTesting(install.ID(os.Getuid())) }
 
 // SecureDir returns a fresh temp directory whose whole parent chain passes
 // the gate's ownership checks under Trust(). The default /tmp is world-
@@ -30,11 +31,11 @@ func Trust() policy.Trust { return policy.TrustForTesting(uint32(os.Getuid())) }
 func SecureDir(t testing.TB) string {
 	t.Helper()
 	d := t.TempDir()
-	real, err := filepath.EvalSymlinks(d)
+	rp, err := filepath.EvalSymlinks(d)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := policy.CheckChain(Trust(), real); err != nil {
+	if _, err := policy.CheckChain(Trust(), rp); err != nil {
 		msg := "temp directory chain is not trustworthy for gate ownership checks (" + err.Error() +
 			"); set TMPDIR to a directory whose parents are not group/other-writable, as scripts/ci-local.sh and CI do"
 		if os.Getenv(RequireSecureEnv) != "" {
@@ -42,7 +43,7 @@ func SecureDir(t testing.TB) string {
 		}
 		t.Skip(msg)
 	}
-	return real
+	return rp
 }
 
 // RequireSecure applies SecureDir's rule to an existing directory: skip,
@@ -63,28 +64,28 @@ func RequireSecure(t testing.TB, dir string) {
 func BuildTest(t testing.TB, pkg, dir, name string, env []string) string {
 	t.Helper()
 	out := filepath.Join(dir, name)
-	cmd := exec.Command("go", "test", "-c", "-trimpath", "-o", out, "./"+pkg) //nolint:gosec // test helper: module-relative package
+	cmd := exec.CommandContext(t.Context(), "go", "test", "-c", "-trimpath", "-o", out, "./"+pkg) //nolint:gosec // G204: test helper, module-relative package
 	cmd.Dir = moduleRoot(t)
 	cmd.Env = append(append(os.Environ(), "CGO_ENABLED=0"), env...)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go test -c %s: %v\n%s", pkg, err, b)
 	}
-	if err := os.Chmod(out, 0o755); err != nil {
+	if err := os.Chmod(out, 0o755); err != nil { //nolint:gosec // G302: a test binary must be executable
 		t.Fatal(err)
 	}
 	return out
 }
 
 // WriteFile writes a file (creating parents) with the given mode.
-func WriteFile(t testing.TB, path string, data string, mode os.FileMode) {
+func WriteFile(t testing.TB, path, data string, mode os.FileMode) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(data), mode); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(path, mode); err != nil { // not subject to umask
+	if err := os.Chmod(path, mode); err != nil { // exact mode: not subject to umask
 		t.Fatal(err)
 	}
 }
@@ -115,13 +116,13 @@ func Build(t testing.TB, pkg, dir, name string, env []string, extraArgs ...strin
 	out := filepath.Join(dir, name)
 	args := append([]string{"build", "-trimpath", "-o", out}, extraArgs...)
 	args = append(args, "./"+pkg)
-	cmd := exec.Command("go", args...) //nolint:gosec // test helper: module-relative package, test-controlled args
+	cmd := exec.CommandContext(t.Context(), "go", args...) //nolint:gosec // G204: test helper, module-relative package
 	cmd.Dir = moduleRoot(t)
 	cmd.Env = append(append(os.Environ(), "CGO_ENABLED=0"), env...)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build %s: %v\n%s", pkg, err, b)
 	}
-	if err := os.Chmod(out, 0o755); err != nil {
+	if err := os.Chmod(out, 0o755); err != nil { //nolint:gosec // G302: a test binary must be executable
 		t.Fatal(err)
 	}
 	return out

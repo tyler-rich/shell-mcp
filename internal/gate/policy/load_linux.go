@@ -22,33 +22,33 @@ func Load(file string, opts LoadOptions) (*Policy, error) {
 	if err := pathx.CheckClean(file); err != nil {
 		return nil, &Error{"--policy", err.Error()}
 	}
-	real, err := CheckChain(opts.Trust, file)
+	rp, err := CheckChain(opts.Trust, file)
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(real, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, 0)
+	f, err := os.OpenFile(rp, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, 0) //nolint:gosec // G304: the administrator-chosen policy path, ownership-checked by CheckChain and re-checked on the descriptor
 	if err != nil {
-		return nil, &OwnershipError{real, "cannot be opened: " + errReason(err)}
+		return nil, &OwnershipError{rp, "cannot be opened: " + errReason(err)}
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	fi, err := f.Stat()
 	if err != nil {
-		return nil, &OwnershipError{real, "cannot be inspected: " + errReason(err)}
+		return nil, &OwnershipError{rp, "cannot be inspected: " + errReason(err)}
 	}
-	if err := checkFile(opts.Trust, real, fi); err != nil {
-		return nil, err
+	if cerr := checkFile(opts.Trust, rp, fi); cerr != nil {
+		return nil, cerr
 	}
 	if fi.Size() > MaxPolicyBytes {
 		return nil, &Error{"", fmt.Sprintf("policy file is larger than %d bytes", MaxPolicyBytes)}
 	}
 	data, err := io.ReadAll(io.LimitReader(f, MaxPolicyBytes+1))
 	if err != nil {
-		return nil, &OwnershipError{real, "cannot be read: " + errReason(err)}
+		return nil, &OwnershipError{rp, "cannot be read: " + errReason(err)}
 	}
 	if len(data) > MaxPolicyBytes {
 		return nil, &Error{"", fmt.Sprintf("policy file is larger than %d bytes", MaxPolicyBytes)}
 	}
-	p, err := parse(data, []string{file, real}, opts)
+	p, err := parse(data, []string{file, rp}, opts)
 	if err != nil {
 		return nil, err
 	}

@@ -12,9 +12,9 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
 )
 
-func runCmd(args []string, stdin string) (int, string, string) {
+func runCmd(args []string, stdin string) (code int, stdout, stderr string) {
 	var out, errb bytes.Buffer
-	code := run(args, strings.NewReader(stdin), &out, &errb)
+	code = run(args, strings.NewReader(stdin), &out, &errb)
 	return code, out.String(), errb.String()
 }
 

@@ -57,7 +57,7 @@ func (r resolver) MatchUnit(v string) bool {
 // responseBudget leaves room for the envelope inside MaxResponseBytes.
 const responseBudget = protocol.MaxResponseBytes - 256<<10
 
-func (s *server) exec(raw jsontext.Value) (any, []string, error) {
+func (s *server) exec(raw jsontext.Value) (data any, warns []string, failure error) {
 	var a execArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
@@ -104,7 +104,7 @@ func (s *server) exec(raw jsontext.Value) (any, []string, error) {
 		maxOut = a.MaxOutputBytes
 	}
 
-	res, err := execx.Run(context.Background(), execx.Spec{
+	res, err := execx.Run(context.Background(), &execx.Spec{
 		Path:      c.Resolved,
 		Args:      args,
 		Env:       execx.Environment(s.p.ServiceHome),

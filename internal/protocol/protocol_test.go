@@ -116,7 +116,7 @@ func TestDecodeRequestBoundedRead(t *testing.T) {
 // EOF from a client that keeps its stdin open.
 func TestDecodeRequestStopsAtNewline(t *testing.T) {
 	pr, pw := io.Pipe()
-	defer pw.Close()
+	defer func() { _ = pw.Close() }()
 	go func() { _, _ = pw.Write([]byte(`{"v":1,"id":"a","op":"hello"}` + "\n")) }()
 	done := make(chan error, 1)
 	go func() {

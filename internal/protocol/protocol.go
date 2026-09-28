@@ -250,7 +250,7 @@ func validID(s string) bool {
 	}
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-') {
+		if !isIDChar(c) {
 			return false
 		}
 	}
@@ -262,7 +262,7 @@ func validOp(s string) bool {
 		return false
 	}
 	for i := 0; i < len(s); i++ {
-		if c := s[i]; !(c >= 'a' && c <= 'z' || c == '_') {
+		if c := s[i]; (c < 'a' || c > 'z') && c != '_' {
 			return false
 		}
 	}
@@ -309,4 +309,8 @@ var ErrResponseTooLarge = errors.New("response exceeds 4 MiB")
 func Marshal(v any) (jsontext.Value, error) {
 	out, err := json.Marshal(v, marshalOpts)
 	return jsontext.Value(out), err
+}
+
+func isIDChar(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-'
 }

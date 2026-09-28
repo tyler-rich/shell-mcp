@@ -311,9 +311,9 @@ func (v *validator) paths(p *Policy, raw *rawPaths, files []string, opts LoadOpt
 		if e == "" || e == "/" {
 			continue
 		}
-		g, err := pathx.LiteralGlob(e)
-		if err != nil {
-			v.fail("", "trust anchor %q: %v", e, err)
+		g, gerr := pathx.LiteralGlob(e)
+		if gerr != nil {
+			v.fail("", "trust anchor %q: %v", e, gerr)
 			continue
 		}
 		prot.Add(g)
@@ -502,7 +502,7 @@ func (v *validator) git(p *Policy, raw *rawGit) {
 				v.fail(field+".path", "duplicate repo %s", r.Path)
 			}
 		}
-		p.Git.Repos = append(p.Git.Repos, Repo{Path: r.Path, Remote: r.Remote})
+		p.Git.Repos = append(p.Git.Repos, Repo(r))
 	}
 }
 
@@ -602,7 +602,7 @@ func (v *validator) commands(p *Policy, raw []rawCommand, opts LoadOptions) {
 			continue
 		}
 		c.Description = rc.Description
-		resolved, ok := v.resolveCommand(field, rc, opts)
+		resolved, ok := v.resolveCommand(field, &rc, opts)
 		if !ok {
 			continue
 		}
@@ -640,7 +640,7 @@ func (v *validator) commands(p *Policy, raw []rawCommand, opts LoadOptions) {
 // resolveCommand resolves the binary, applies the hard-deny list to the
 // base name as written and as resolved, requires root_equivalent for
 // container CLIs, and checks ownership of the binary and its directories.
-func (v *validator) resolveCommand(field string, rc rawCommand, opts LoadOptions) (string, bool) {
+func (v *validator) resolveCommand(field string, rc *rawCommand, opts LoadOptions) (resolved string, ok bool) {
 	if err := pathx.CheckClean(rc.Path); err != nil {
 		v.fail(field+".path", "%v", err)
 		return "", false
@@ -664,7 +664,7 @@ func (v *validator) resolveCommand(field string, rc rawCommand, opts LoadOptions
 			return "", false
 		}
 	}
-	if _, err := CheckChain(opts.Trust, resolved); err != nil {
+	if _, err = CheckChain(opts.Trust, resolved); err != nil {
 		v.fail(field+".path", "%v", err)
 		return "", false
 	}

@@ -61,7 +61,7 @@ func harnessOptions(version, policyPath, principal string) (ops.Options, error) 
 			}
 			return "", os.ErrNotExist
 		}},
-		Trust:        policy.TrustForTesting(uint32(os.Getuid())),
+		Trust:        policy.TrustForTesting(install.ID(os.Getuid())),
 		Executable:   exe,
 		ServiceHome:  os.Getenv("HARNESS_HOME"),
 		ApplySandbox: sandbox.Apply,

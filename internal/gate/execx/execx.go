@@ -119,7 +119,7 @@ func (w *capWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func (w *capWriter) result(limit int) ([]byte, bool, bool) {
+func (w *capWriter) result(limit int) (out []byte, truncated, hit bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return bytes.Clone(w.buf), w.total > int64(limit), w.hit
@@ -132,7 +132,9 @@ func (w *capWriter) result(limit int) ([]byte, bool, bool) {
 // child (os/exec) and to the whole group. After the child exits, WaitDelay
 // bounds how long pipes held open by grandchildren can delay Wait, and the
 // group is always sent SIGKILL so nothing the command started outlives it.
-func Run(ctx context.Context, s Spec) (Result, error) {
+func Run(ctx context.Context, spec *Spec) (Result, error) {
+	sc := *spec // defaults below must not change the caller's Spec
+	s := &sc
 	if !filepath.IsAbs(s.Path) {
 		return Result{}, fmt.Errorf("%w: path is not absolute", ErrStart)
 	}
@@ -157,7 +159,7 @@ func Run(ctx context.Context, s Spec) (Result, error) {
 	defer cancel()
 
 	// An absolute path: exec.CommandContext does no PATH lookup.
-	cmd := exec.CommandContext(ctx, s.Path, s.Args...)
+	cmd := exec.CommandContext(ctx, s.Path, s.Args...) //nolint:gosec // G204: the path is resolved and ownership-checked at policy load and the argv matched a policy template; no shell is involved
 	cmd.Env = env
 	cmd.Dir = dir
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
@@ -251,7 +253,7 @@ func userTasks(uid int) uint64 {
 	if err != nil {
 		return 0
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	names, err := d.Readdirnames(maxProcScan + 1)
 	if err != nil || len(names) > maxProcScan {
 		return 0
@@ -262,7 +264,7 @@ func userTasks(uid int) uint64 {
 		if n == "" || n[0] < '0' || n[0] > '9' {
 			continue
 		}
-		f, err := os.Open("/proc/" + n + "/status")
+		f, err := os.Open("/proc/" + n + "/status") //nolint:gosec // G304: n is a numeric /proc entry name
 		if err != nil {
 			continue
 		}

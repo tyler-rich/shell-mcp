@@ -32,19 +32,19 @@ func lookup(gid uint32) (string, error) {
 // The fake service uid differs from the test uid, which is trusted.
 const serviceUID = 60123
 
-func env(t *testing.T, gids ...uint32) install.Env {
+func env(t *testing.T, gids ...uint32) *install.Env {
 	t.Helper()
 	d := gatetest.SecureDir(t)
 	exe := filepath.Join(d, "shell-mcp-gate")
 	gatetest.WriteFile(t, exe, "invented", 0o755)
-	return install.Env{
+	return &install.Env{
 		Identity:   install.Identity{UID: serviceUID, GIDs: gids, GroupName: lookup},
 		Trust:      gatetest.Trust(),
 		Executable: exe,
 	}
 }
 
-func wantInsecure(t *testing.T, e install.Env, detail string) {
+func wantInsecure(t *testing.T, e *install.Env, detail string) {
 	t.Helper()
 	err := install.Check(e)
 	var ie *install.Error
@@ -74,7 +74,7 @@ func TestRootRefused(t *testing.T) {
 
 func TestTrustedUIDRefused(t *testing.T) {
 	e := env(t, 60123)
-	e.Identity.UID = uint32(os.Getuid()) // the trusted owner in tests; uid 0 in production
+	e.Identity.UID = install.ID(os.Getuid()) // the trusted owner in tests; uid 0 in production
 	wantInsecure(t, e, "trusted owner")
 }
 
@@ -123,20 +123,12 @@ func TestSSHOriginalCommand(t *testing.T) {
 
 func TestExecutableOwnership(t *testing.T) {
 	e := env(t, 60123)
-	if err := os.Chmod(e.Executable, 0o775); err != nil {
-		t.Fatal(err)
-	}
+	chmod(t, e.Executable, 0o775)
 	wantInsecure(t, e, "writable")
-	if err := os.Chmod(e.Executable, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(filepath.Dir(e.Executable), 0o777); err != nil {
-		t.Fatal(err)
-	}
+	chmod(t, e.Executable, 0o755)
+	chmod(t, filepath.Dir(e.Executable), 0o777)
 	wantInsecure(t, e, "writable")
-	if err := os.Chmod(filepath.Dir(e.Executable), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	chmod(t, filepath.Dir(e.Executable), 0o700)
 	e.Executable = filepath.Dir(e.Executable)
 	wantInsecure(t, e, "regular")
 }
@@ -146,7 +138,15 @@ func TestCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id.UID != uint32(os.Getuid()) || !slices.Contains(id.GIDs, uint32(os.Getgid())) || id.GroupName == nil {
+	if id.UID != install.ID(os.Getuid()) || !slices.Contains(id.GIDs, install.ID(os.Getgid())) || id.GroupName == nil {
 		t.Fatalf("Current() = %+v", id)
+	}
+}
+
+// chmod sets a fixture mode, including the deliberately insecure ones under test.
+func chmod(t *testing.T, p string, m os.FileMode) {
+	t.Helper()
+	if err := os.Chmod(p, m); err != nil {
+		t.Fatal(err)
 	}
 }

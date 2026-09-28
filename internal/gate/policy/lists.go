@@ -59,7 +59,7 @@ var builtinOps = []string{"systemctl", "journalctl", "git"}
 var containerCLIs = []string{"docker", "podman", "ctr", "nerdctl", "kubectl"}
 
 // hardDenied returns the group that denies a base name, if any.
-func hardDenied(base string) (int, string, bool) {
+func hardDenied(base string) (group int, name string, denied bool) {
 	for _, g := range hardDeny {
 		for _, pat := range g.bins {
 			if ok, _ := path.Match(pat, base); ok {

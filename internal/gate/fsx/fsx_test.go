@@ -40,7 +40,7 @@ func newEnv(t *testing.T) *env {
 		secrets: filepath.Join(d, "read", "secrets"),
 	}
 	for _, p := range []string{e.write, e.outside, e.secrets} {
-		must(t, os.MkdirAll(p, 0o755))
+		must(t, os.MkdirAll(p, 0o750))
 	}
 	put(t, filepath.Join(e.read, "hello.txt"), "hello\nworld\n")
 	put(t, filepath.Join(e.write, "app.yaml"), "key: value\n")
@@ -50,7 +50,7 @@ func newEnv(t *testing.T) *env {
 	must(t, err)
 	prot, err := pathx.NewMatcher([]string{"**/.ssh", e.write + "/locked"})
 	must(t, err)
-	e.fs = New(Config{
+	e.fs = New(&Config{
 		ReadRoots:  []string{e.read},
 		WriteRoots: []string{e.write},
 		Deny:       deny,
@@ -69,8 +69,8 @@ func must(t *testing.T, err error) {
 
 func put(t *testing.T, p, s string) {
 	t.Helper()
-	must(t, os.MkdirAll(filepath.Dir(p), 0o755))
-	must(t, os.WriteFile(p, []byte(s), 0o644))
+	must(t, os.MkdirAll(filepath.Dir(p), 0o750))
+	must(t, os.WriteFile(p, []byte(s), 0o600))
 }
 
 func wantCode(t *testing.T, err error, code string) {
@@ -129,7 +129,7 @@ func TestSymlinks(t *testing.T) {
 	must(t, os.Symlink(filepath.Join(e.read, "hello.txt"), filepath.Join(e.read, "t2")))
 	must(t, os.Symlink(filepath.Join(e.outside, "passwd"), filepath.Join(e.read, "t3")))
 	for _, n := range []string{"t1", "t2", "t3"} {
-		_, err := e.fs.ReadFile(filepath.Join(e.read, n), ReadOptions{MaxBytes: 10})
+		_, err = e.fs.ReadFile(filepath.Join(e.read, n), ReadOptions{MaxBytes: 10})
 		wantCode(t, err, protocol.CodePathDenied)
 	}
 	// Stat reports a final symlink without following it.
@@ -148,7 +148,7 @@ func TestSymlinks(t *testing.T) {
 	// A relative intermediate symlink that stays inside the root and is not
 	// denied is followed.
 	must(t, os.Symlink("config", filepath.Join(e.read, "cfg")))
-	if _, err := e.fs.ReadFile(filepath.Join(e.read, "cfg", "app.yaml"), ReadOptions{MaxBytes: 10}); err != nil {
+	if _, err = e.fs.ReadFile(filepath.Join(e.read, "cfg", "app.yaml"), ReadOptions{MaxBytes: 10}); err != nil {
 		t.Fatalf("in-root intermediate symlink: %v", err)
 	}
 	// os.Root refuses absolute symlink targets even when they point back
@@ -164,10 +164,10 @@ func TestSwapRace(t *testing.T) {
 	e := newEnv(t)
 	sub := filepath.Join(e.write, "sub")
 	stash := filepath.Join(e.write, "sub.real")
-	must(t, os.MkdirAll(sub, 0o755))
+	must(t, os.MkdirAll(sub, 0o750))
 	put(t, filepath.Join(sub, "f"), "INSIDE")
 	outDir := filepath.Join(e.d, "outside-dir")
-	must(t, os.MkdirAll(outDir, 0o755))
+	must(t, os.MkdirAll(outDir, 0o750))
 	put(t, filepath.Join(outDir, "f"), "OUTSIDE")
 	link := filepath.Join(e.write, "sub.link")
 	must(t, os.Symlink(outDir, link))
@@ -208,7 +208,7 @@ func TestSwapRace(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("outside directory was written: %v", entries)
 	}
-	if b, _ := os.ReadFile(filepath.Join(outDir, "f")); string(b) != "OUTSIDE" {
+	if b, _ := os.ReadFile(filepath.Join(outDir, "f")); string(b) != "OUTSIDE" { //nolint:gosec // G304: test fixture path
 		t.Fatal("outside file changed")
 	}
 	t.Logf("%d successful reads, %d successful writes under the swap", reads, writes)
@@ -241,14 +241,14 @@ func TestWriteRules(t *testing.T) {
 	// Outside write roots (a read root, outside, a denied path, protected paths).
 	for _, q := range []string{filepath.Join(e.read, "x"), filepath.Join(e.outside, "x"), filepath.Join(e.write, "a.key"),
 		filepath.Join(e.write, ".ssh", "authorized_keys"), filepath.Join(e.write, "locked")} {
-		must(t, os.MkdirAll(filepath.Join(e.write, ".ssh"), 0o755))
-		_, err := e.fs.WriteFile(q, []byte("x"), WriteOptions{Create: true})
+		must(t, os.MkdirAll(filepath.Join(e.write, ".ssh"), 0o750))
+		_, err = e.fs.WriteFile(q, []byte("x"), WriteOptions{Create: true})
 		wantCode(t, err, protocol.CodePathDenied)
 	}
 	// Mode rules.
 	for _, m := range []os.FileMode{0o4755, 0o2755, 0o1755, 0o646, 0o777} {
 		m := m
-		_, err := e.fs.WriteFile(filepath.Join(e.write, "m"), []byte("x"), WriteOptions{Create: true, Mode: &m})
+		_, err = e.fs.WriteFile(filepath.Join(e.write, "m"), []byte("x"), WriteOptions{Create: true, Mode: &m})
 		wantCode(t, err, protocol.CodePolicyDenied)
 	}
 	// An existing setuid file is not rewritten with its bits preserved.
@@ -352,7 +352,7 @@ func TestListAndStat(t *testing.T) {
 	wantCode(t, err, protocol.CodeNotADirectory)
 	st, err := e.fs.Stat(filepath.Join(e.read, "hello.txt"))
 	must(t, err)
-	if st.Type != "file" || st.Size != 12 || st.Mode != "0644" {
+	if st.Type != "file" || st.Size != 12 || st.Mode != "0600" {
 		t.Fatalf("stat %+v", st)
 	}
 	_, err = e.fs.Stat(filepath.Join(e.secrets, "token"))
@@ -427,7 +427,7 @@ func TestMkdirCopyMoveChmod(t *testing.T) {
 
 	mv, err := e.fs.Move(filepath.Join(e.write, "hello.copy"), filepath.Join(e.write, "x", "moved"), false)
 	must(t, err)
-	if _, err := os.Stat(filepath.Join(e.write, "x", "moved")); err != nil || mv.Type != "file" {
+	if _, err = os.Stat(filepath.Join(e.write, "x", "moved")); err != nil || mv.Type != "file" {
 		t.Fatalf("move %+v %v", mv, err)
 	}
 	_, err = e.fs.Move(filepath.Join(e.read, "hello.txt"), filepath.Join(e.write, "h"), false)
@@ -436,7 +436,7 @@ func TestMkdirCopyMoveChmod(t *testing.T) {
 	put(t, filepath.Join(e.write, "b"), "b")
 	_, err = e.fs.Move(filepath.Join(e.write, "a"), filepath.Join(e.write, "b"), false)
 	wantCode(t, err, protocol.CodeExists)
-	if _, err := e.fs.Move(filepath.Join(e.write, "a"), filepath.Join(e.write, "b"), true); err != nil {
+	if _, err = e.fs.Move(filepath.Join(e.write, "a"), filepath.Join(e.write, "b"), true); err != nil {
 		t.Fatal(err)
 	}
 	// A directory containing a denied entry cannot be moved (its contents
@@ -445,9 +445,9 @@ func TestMkdirCopyMoveChmod(t *testing.T) {
 	_, err = e.fs.Move(filepath.Join(e.write, "tree"), filepath.Join(e.write, "tree2"), false)
 	wantCode(t, err, protocol.CodePathDenied)
 
-	ch, err := e.fs.Chmod(filepath.Join(e.write, "b"), 0o600)
+	ch, err := e.fs.Chmod(filepath.Join(e.write, "b"), 0o640)
 	must(t, err)
-	if fi, _ := os.Stat(filepath.Join(e.write, "b")); fi.Mode().Perm() != 0o600 || ch.OldMode != "0644" {
+	if fi, _ := os.Stat(filepath.Join(e.write, "b")); fi.Mode().Perm() != 0o640 || ch.OldMode != "0600" {
 		t.Fatalf("chmod %+v", ch)
 	}
 	_, err = e.fs.Chmod(filepath.Join(e.write, "b"), 0o4755)
@@ -464,7 +464,7 @@ func TestDelete(t *testing.T) {
 	if pv.Entries != 1 || pv.Bytes != 5 || pv.Deleted {
 		t.Fatalf("preview %+v", pv)
 	}
-	if _, err := os.Stat(filepath.Join(e.write, "f")); err != nil {
+	if _, err = os.Stat(filepath.Join(e.write, "f")); err != nil {
 		t.Fatal("preview deleted")
 	}
 	d, err := e.fs.Delete(filepath.Join(e.write, "f"), false)
@@ -484,7 +484,7 @@ func TestDelete(t *testing.T) {
 	}
 	_, err = e.fs.Delete(filepath.Join(e.write, "tree"), true)
 	must(t, err)
-	if _, err := os.Stat(filepath.Join(e.write, "tree")); !os.IsNotExist(err) {
+	if _, err = os.Stat(filepath.Join(e.write, "tree")); !os.IsNotExist(err) {
 		t.Fatal("tree still exists")
 	}
 	// Bounded.
@@ -505,7 +505,7 @@ func TestDelete(t *testing.T) {
 	put(t, filepath.Join(e.write, "home", ".ssh", "authorized_keys"), "k")
 	_, err = e.fs.Delete(filepath.Join(e.write, "home"), true)
 	wantCode(t, err, protocol.CodePathDenied)
-	if _, err := os.Stat(filepath.Join(e.write, "home", ".ssh", "authorized_keys")); err != nil {
+	if _, err = os.Stat(filepath.Join(e.write, "home", ".ssh", "authorized_keys")); err != nil {
 		t.Fatal("protected entry removed")
 	}
 	// Inner symlinks are removed, never followed.

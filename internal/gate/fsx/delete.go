@@ -19,7 +19,7 @@ const previewFirst = 50
 // as verified sub-roots and never through symlinks, and depth is bounded.
 // Each directory is read completely before its entries are visited, so a
 // visitor may remove entries.
-func (f *FS) walkTree(l *loc, dir *os.Root, logical, real string, depth int, visit func(lp string, fi fs.FileInfo) error) error {
+func (f *FS) walkTree(l *loc, dir *os.Root, logical, dirReal string, depth int, visit func(lp string, fi fs.FileInfo) error) error {
 	if depth > maxTreeDepth {
 		return errf(protocol.CodeTooLarge, "tree is deeper than %d levels", maxTreeDepth)
 	}
@@ -29,7 +29,7 @@ func (f *FS) walkTree(l *loc, dir *os.Root, logical, real string, depth int, vis
 	}
 	for _, en := range ents {
 		name := en.Name()
-		lp, rp := join(logical, name), join(real, name)
+		lp, rp := join(logical, name), join(dirReal, name)
 		if e := f.checkPath(lp, true); e != nil {
 			return e
 		}
@@ -64,7 +64,7 @@ func readAll(dir *os.Root, limit int) ([]fs.DirEntry, error) {
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	var out []fs.DirEntry
 	for len(out) < limit {
 		ents, err := d.ReadDir(min(readDirChunk, limit-len(out)))
@@ -114,7 +114,7 @@ func (f *FS) deleteOp(p string, recursive, apply bool) (DeleteResult, error) {
 			res.Bytes = fi.Size()
 		}
 		if apply {
-			if err := l.parent.Remove(l.base); err != nil {
+			if err = l.parent.Remove(l.base); err != nil {
 				return res, mapErr(err)
 			}
 			res.Deleted = true
@@ -126,7 +126,7 @@ func (f *FS) deleteOp(p string, recursive, apply bool) (DeleteResult, error) {
 	if err != nil {
 		return res, err
 	}
-	defer sub.Close()
+	defer func() { _ = sub.Close() }()
 	limit := f.cfg.Limits.MaxDeleteEntries
 	err = f.walkTree(l, sub, p, subReal, 1, func(lp string, info fs.FileInfo) error {
 		if !recursive {
@@ -164,7 +164,7 @@ func (f *FS) deleteOp(p string, recursive, apply bool) (DeleteResult, error) {
 // removeTree empties dir bottom-up, re-checking every entry and bounding the
 // count again (the tree may have changed since the preview walk). Symlinks
 // are unlinked, never followed.
-func (f *FS) removeTree(l *loc, dir *os.Root, logical, real string, depth int, removed *int) error {
+func (f *FS) removeTree(l *loc, dir *os.Root, logical, dirReal string, depth int, removed *int) error {
 	if depth > maxTreeDepth {
 		return errf(protocol.CodeTooLarge, "tree is deeper than %d levels", maxTreeDepth)
 	}
@@ -174,7 +174,7 @@ func (f *FS) removeTree(l *loc, dir *os.Root, logical, real string, depth int, r
 	}
 	for _, en := range ents {
 		name := en.Name()
-		lp, rp := join(logical, name), join(real, name)
+		lp, rp := join(logical, name), join(dirReal, name)
 		if e := f.checkPath(lp, true); e != nil {
 			return e
 		}

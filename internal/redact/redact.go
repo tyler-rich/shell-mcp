@@ -16,8 +16,8 @@ var (
 	// A private-key block, up to its END line or, when the END line is
 	// missing (for example after truncation), to the end of the input.
 	// (?s) lets . cross line breaks, so LF and CRLF input behave alike.
-	pemBlock = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|\z)`)
-	pemHead  = regexp.MustCompile(`-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----`)
+	pemBlock = regexp.MustCompile(`(?s)-{5}BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-{5}.*?(?:-{5}END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-{5}|\z)`)
+	pemHead  = regexp.MustCompile(`-{5}BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-{5}`)
 	// The value of an Authorization or Proxy-Authorization header, to the end
 	// of the line (a CR ends it too).
 	authHeader = regexp.MustCompile(`(?i)\b((?:proxy-)?authorization[ \t]*:[ \t]*)[^\r\n]*`)

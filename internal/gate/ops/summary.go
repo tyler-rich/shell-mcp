@@ -27,7 +27,7 @@ type privSummary struct {
 	MaxTier string `json:"max_tier"`
 }
 
-func (s *server) hello(raw jsontext.Value) (any, []string, error) {
+func (s *server) hello(raw jsontext.Value) (data any, warns []string, failure error) {
 	var a noArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
@@ -156,7 +156,7 @@ func PolicySummary(p *policy.Policy) Summary {
 	return s
 }
 
-func (s *server) policySummary(raw jsontext.Value) (any, []string, error) {
+func (s *server) policySummary(raw jsontext.Value) (data any, warns []string, failure error) {
 	var a noArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err

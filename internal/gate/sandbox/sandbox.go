@@ -281,20 +281,20 @@ func Apply(p *policy.Policy) (Report, error) {
 		return r, err
 	}
 	if err := llsys.AllThreadsPrctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
-		return r, fmt.Errorf("%w: prctl(PR_SET_NO_NEW_PRIVS): %v", ErrUnavailable, err)
+		return r, fmt.Errorf("%w: prctl(PR_SET_NO_NEW_PRIVS): %w", ErrUnavailable, err)
 	}
 	if abi >= 1 {
 		cfg, rules, err := build(p, abi)
 		if err != nil {
-			return r, fmt.Errorf("%w: %v", ErrUnavailable, err)
+			return r, fmt.Errorf("%w: %w", ErrUnavailable, err)
 		}
 		if err := cfg.Restrict(rules...); err != nil {
-			return r, fmt.Errorf("%w: %v", ErrUnavailable, err)
+			return r, fmt.Errorf("%w: %w", ErrUnavailable, err)
 		}
 		r.Applied = true
 	}
 	if err := allThreadsNoNewPrivs(); err != nil {
-		return r, fmt.Errorf("%w: %v", ErrUnavailable, err)
+		return r, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	r.NoNewPrivs = true
 	return r, nil

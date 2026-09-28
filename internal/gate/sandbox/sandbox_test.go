@@ -208,7 +208,7 @@ type applierOut struct {
 }
 
 // layout: <d>/allowed/ok.txt (a read root), <d>/outside/secret.txt (no root).
-func layout(t *testing.T, mode string, extra string) (policyFile, allowed, outside string) {
+func layout(t *testing.T, mode, extra string) (policyFile, allowed, outside string) {
 	t.Helper()
 	d, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -224,7 +224,7 @@ func layout(t *testing.T, mode string, extra string) (policyFile, allowed, outsi
 
 func runApplier(t *testing.T, args ...string) applierOut {
 	t.Helper()
-	cmd := exec.Command(applier(t), args...) //nolint:gosec // test program built by this test
+	cmd := exec.CommandContext(t.Context(), applier(t), args...) //nolint:gosec // G204: test program built by this test
 	b, err := cmd.Output()
 	var out applierOut
 	if jerr := json.Unmarshal(b, &out); jerr != nil {
@@ -303,9 +303,9 @@ func TestBestEffortReportsGaps(t *testing.T) {
 	}
 }
 
-func listen(t *testing.T) (int, func()) {
+func listen(t *testing.T) (port int, stop func()) {
 	t.Helper()
-	l, err := net.Listen("tcp4", "127.0.0.1:0")
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +345,7 @@ func TestApplyNetwork(t *testing.T) {
 // TestApplySignalScope (ABI 6+, CI): no signals to processes outside the domain.
 func TestApplySignalScope(t *testing.T) {
 	needABI(t, sandbox.ABIScope)
-	victim := exec.Command(gatetest.BuildProbe(t, t.TempDir(), "probe", "/nonexistent"), "sleep", "30s") //nolint:gosec // test child
+	victim := exec.CommandContext(t.Context(), gatetest.BuildProbe(t, t.TempDir(), "probe", "/nonexistent"), "sleep", "30s") //nolint:gosec // G204: test child
 	if err := victim.Start(); err != nil {
 		t.Fatal(err)
 	}

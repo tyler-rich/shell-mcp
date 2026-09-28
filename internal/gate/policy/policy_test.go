@@ -38,21 +38,23 @@ func newFixture(t *testing.T) *fixture {
 		gatetest.Mkdir(t, p, 0o755)
 	}
 	gatetest.WriteFile(t, f.gate, "invented gate binary", 0o755)
-	f.exe("example-tool")
+	f.exe(t, "example-tool")
 	f.opts = policy.LoadOptions{Trust: gatetest.Trust(), GateExecutable: f.gate, ServiceHome: f.home}
 	return f
 }
 
 // exe creates an executable fixture named name in f.bin (never executed).
-func (f *fixture) exe(name string) string {
-	p := filepath.Join(f.bin, name)
-	if err := os.WriteFile(p, []byte("invented binary\n"), 0o755); err != nil {
-		panic(err)
+func (f *fixture) exe(t *testing.T, name string) {
+	t.Helper()
+	gatetest.WriteFile(t, filepath.Join(f.bin, name), "invented binary\n", 0o755)
+}
+
+// chmod sets a fixture mode, including the deliberately insecure ones under test.
+func chmod(t *testing.T, p string, m os.FileMode) {
+	t.Helper()
+	if err := os.Chmod(p, m); err != nil {
+		t.Fatal(err)
 	}
-	if err := os.Chmod(p, 0o755); err != nil {
-		panic(err)
-	}
-	return p
 }
 
 func (f *fixture) expand(y string) string {
@@ -365,7 +367,7 @@ func TestHardDeny(t *testing.T) {
 		"systemctl", "journalctl", "git"}
 	for _, n := range names {
 		t.Run(n, func(t *testing.T) {
-			f.exe(n)
+			f.exe(t, n)
 			f.mustFail(t, cmdPolicy("  - id: a\n    path: {BIN}/"+n+"\n    tier: read\n    templates: [[a]]\n"), "")
 		})
 	}
@@ -384,7 +386,7 @@ func TestHardDeny(t *testing.T) {
 func TestContainerCLIsNeedAcknowledgement(t *testing.T) {
 	f := newFixture(t)
 	for _, n := range []string{"docker", "podman", "ctr", "nerdctl", "kubectl"} {
-		f.exe(n)
+		f.exe(t, n)
 		f.mustFail(t, cmdPolicy("  - id: a\n    path: {BIN}/"+n+"\n    tier: read\n    templates: [[ps]]\n"), "root_equivalent")
 		f.mustLoad(t, cmdPolicy("  - id: a\n    path: {BIN}/"+n+"\n    tier: read\n    root_equivalent: true\n    templates: [[ps]]\n"))
 	}
@@ -395,28 +397,16 @@ func TestCommandOwnership(t *testing.T) {
 	y := cmdPolicy("  - id: a\n    path: {BIN}/example-tool\n    tier: read\n    templates: [[a]]\n")
 	tool := filepath.Join(f.bin, "example-tool")
 
-	if err := os.Chmod(tool, 0o775); err != nil {
-		t.Fatal(err)
-	}
+	chmod(t, tool, 0o775)
 	f.mustFail(t, y, "writable")
-	if err := os.Chmod(tool, 0o757); err != nil {
-		t.Fatal(err)
-	}
+	chmod(t, tool, 0o757)
 	f.mustFail(t, y, "writable")
-	if err := os.Chmod(tool, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	chmod(t, tool, 0o644)
 	f.mustFail(t, y, "executable")
-	if err := os.Chmod(tool, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(f.bin, 0o775); err != nil {
-		t.Fatal(err)
-	}
+	chmod(t, tool, 0o755)
+	chmod(t, f.bin, 0o775)
 	f.mustFail(t, y, "writable")
-	if err := os.Chmod(f.bin, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	chmod(t, f.bin, 0o755)
 	f.mustLoad(t, y)
 	// Under production trust, a binary owned by the test uid is refused.
 	if os.Getuid() != 0 {
@@ -434,24 +424,16 @@ func TestLoadOwnership(t *testing.T) {
 	if _, err := policy.Load(p, f.opts); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(p, 0o664); err != nil {
-		t.Fatal(err)
-	}
+	chmod(t, p, 0o664)
 	if _, err := policy.Load(p, f.opts); err == nil {
 		t.Fatal("group-writable policy accepted")
 	}
-	if err := os.Chmod(p, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(f.etc, 0o777); err != nil {
-		t.Fatal(err)
-	}
+	chmod(t, p, 0o644)
+	chmod(t, f.etc, 0o777)
 	if _, err := policy.Load(p, f.opts); err == nil {
 		t.Fatal("world-writable parent accepted")
 	}
-	if err := os.Chmod(f.etc, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	chmod(t, f.etc, 0o755)
 	// A symlinked policy is judged by its target's chain.
 	evil := filepath.Join(f.dir, "evil")
 	gatetest.Mkdir(t, evil, 0o777)

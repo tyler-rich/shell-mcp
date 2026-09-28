@@ -115,7 +115,7 @@ func serve(args []string, stdin io.Reader, stdout io.Writer, mk optionsFunc) int
 	if err != nil {
 		return fail("gate cannot determine its own identity")
 	}
-	return ops.Serve(o, stdin, stdout)
+	return ops.Serve(&o, stdin, stdout)
 }
 
 // checkPolicy runs the install checks and the policy validation as the
@@ -156,11 +156,11 @@ func checkPolicy(args []string, stdout, stderr io.Writer) int {
 	case id.UID == 0:
 		pr("NOTE install: running as root, so the uid and group checks describe root, not the service account;")
 		pr("     run check-policy as the service account to check its identity and home directory")
-		if _, err := policy.CheckChain(policy.RootTrust(), exe); err != nil {
+		if _, err = policy.CheckChain(policy.RootTrust(), exe); err != nil {
 			failf("install: gate binary: %v", err)
 		}
 	default:
-		if err := install.Check(install.Env{Identity: id, Trust: policy.RootTrust(), Executable: exe}); err != nil {
+		if err = install.Check(&install.Env{Identity: id, Trust: policy.RootTrust(), Executable: exe}); err != nil {
 			failf("install: %v", err)
 		} else {
 			pr("ok   install: uid, groups and gate binary")

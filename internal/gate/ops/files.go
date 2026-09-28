@@ -90,7 +90,7 @@ func parseMode(s string) (*os.FileMode, error) {
 	return &m, nil
 }
 
-func (s *server) listDir(raw jsontext.Value) (any, []string, error) {
+func (s *server) listDir(raw jsontext.Value) (data any, warns []string, failure error) {
 	var a listArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
@@ -102,7 +102,7 @@ func (s *server) listDir(raw jsontext.Value) (any, []string, error) {
 	return r, nil, err
 }
 
-func (s *server) stat(raw jsontext.Value) (any, []string, error) {
+func (s *server) stat(raw jsontext.Value) (data any, warns []string, failure error) {
 	var a pathArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
@@ -111,7 +111,7 @@ func (s *server) stat(raw jsontext.Value) (any, []string, error) {
 	return r, nil, err
 }
 
-func (s *server) readFile(raw jsontext.Value) (any, []string, error) {
+func (s *server) readFile(raw jsontext.Value) (data any, warns []string, failure error) {
 	var a readArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
@@ -128,7 +128,7 @@ func (s *server) readFile(raw jsontext.Value) (any, []string, error) {
 	return r, warnings, nil
 }
 
-func (s *server) find(raw jsontext.Value) (any, []string, error) {
+func (s *server) find(raw jsontext.Value) (data any, warns []string, failure error) {
 	var a findArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
@@ -137,7 +137,7 @@ func (s *server) find(raw jsontext.Value) (any, []string, error) {
 	return r, nil, err
 }
 
-func (s *server) writeFile(raw jsontext.Value) (any, []string, error) {
+func (s *server) writeFile(raw jsontext.Value) (data any, warns []string, failure error) {
 	var a writeArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
@@ -162,7 +162,7 @@ func (s *server) writeFile(raw jsontext.Value) (any, []string, error) {
 	return r, nil, err
 }
 
-func (s *server) mkdir(raw jsontext.Value) (any, []string, error) {
+func (s *server) mkdir(raw jsontext.Value) (data any, warns []string, failure error) {
 	var a mkdirArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
@@ -175,7 +175,7 @@ func (s *server) mkdir(raw jsontext.Value) (any, []string, error) {
 	return r, nil, err
 }
 
-func (s *server) copy(raw jsontext.Value) (any, []string, error) {
+func (s *server) copy(raw jsontext.Value) (data any, warns []string, failure error) {
 	var a srcDstArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
@@ -184,7 +184,7 @@ func (s *server) copy(raw jsontext.Value) (any, []string, error) {
 	return r, nil, err
 }
 
-func (s *server) move(raw jsontext.Value) (any, []string, error) {
+func (s *server) move(raw jsontext.Value) (data any, warns []string, failure error) {
 	var a srcDstArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
@@ -193,7 +193,7 @@ func (s *server) move(raw jsontext.Value) (any, []string, error) {
 	return r, nil, err
 }
 
-func (s *server) chmod(raw jsontext.Value) (any, []string, error) {
+func (s *server) chmod(raw jsontext.Value) (data any, warns []string, failure error) {
 	var a chmodArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
@@ -209,7 +209,7 @@ func (s *server) chmod(raw jsontext.Value) (any, []string, error) {
 	return r, nil, err
 }
 
-func (s *server) delete(raw jsontext.Value) (any, []string, error) {
+func (s *server) delete(raw jsontext.Value) (data any, warns []string, failure error) {
 	var a deleteArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
@@ -218,7 +218,7 @@ func (s *server) delete(raw jsontext.Value) (any, []string, error) {
 	return r, nil, err
 }
 
-func (s *server) deletePreview(raw jsontext.Value) (any, []string, error) {
+func (s *server) deletePreview(raw jsontext.Value) (data any, warns []string, failure error) {
 	var a deleteArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err

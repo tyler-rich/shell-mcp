@@ -38,6 +38,7 @@ func lookup(gid uint32) (string, error) {
 	return "", fmt.Errorf("unknown gid %d", gid)
 }
 
+//nolint:gosec // G101: the remote credential below is invented; the test proves it is redacted
 const basePolicy = `version: 1
 max_tier: {TIER}
 sandbox:
@@ -76,7 +77,7 @@ redact:
     templates: [["write", "{path:write}"]]
 `
 
-func newFixture(t *testing.T, tier, priv string) *fixture {
+func newFixture(t *testing.T, tier string) *fixture {
 	t.Helper()
 	d := gatetest.SecureDir(t)
 	f := &fixture{t: t, dir: d,
@@ -90,7 +91,7 @@ func newFixture(t *testing.T, tier, priv string) *fixture {
 	gatetest.WriteFile(t, filepath.Join(f.read, "hello.txt"), "hello\nAuthorization: Bearer abc.def\n", 0o644)
 	gatetest.WriteFile(t, filepath.Join(f.secrets, "token"), "TOPSECRET", 0o644)
 	f.probe = gatetest.BuildProbe(t, f.bin, "probe", "/nonexistent")
-	f.writePolicy(tier, priv)
+	f.writePolicy(tier, "")
 	f.opts = ops.Options{
 		Version: "test", PolicyPath: f.policyFile, Principal: "readonly-key",
 		Identity:    install.Identity{UID: 60123, GIDs: []uint32{60123}, GroupName: lookup},
@@ -149,7 +150,7 @@ func (f *fixture) serveRaw(in string) (response, *orderReader) {
 	f.t.Helper()
 	r := &orderReader{r: strings.NewReader(in), f: f}
 	var out bytes.Buffer
-	if code := ops.Serve(f.opts, r, &out); code != 0 {
+	if code := ops.Serve(&f.opts, r, &out); code != 0 {
 		f.t.Fatalf("exit %d, output %q", code, out.String())
 	}
 	if strings.Count(out.String(), "\n") != 1 || !strings.HasSuffix(out.String(), "\n") {
@@ -169,7 +170,7 @@ func (f *fixture) call(op string, args any) response {
 	return resp
 }
 
-func (f *fixture) ok(op string, args any, into any) response {
+func (f *fixture) ok(op string, args, into any) response {
 	f.t.Helper()
 	r := f.call(op, args)
 	if !r.OK {
@@ -183,7 +184,7 @@ func (f *fixture) ok(op string, args any, into any) response {
 	return r
 }
 
-func (f *fixture) fail(op string, args any, code string) response {
+func (f *fixture) fail(op string, args any, code string) {
 	f.t.Helper()
 	r := f.call(op, args)
 	if r.OK || r.Error == nil || r.Error.Code != code {
@@ -192,13 +193,12 @@ func (f *fixture) fail(op string, args any, code string) response {
 	if r.Error.Message == "" || strings.Contains(r.Error.Message, "\n") {
 		f.t.Fatalf("message must be one non-empty line: %q", r.Error.Message)
 	}
-	return r
 }
 
 type m = map[string]any
 
 func TestHelloAndGateInfo(t *testing.T) {
-	f := newFixture(t, "destructive", "")
+	f := newFixture(t, "destructive")
 	var hello struct {
 		Protocol     int            `json:"protocol"`
 		Principal    string         `json:"principal"`
@@ -231,7 +231,7 @@ func TestHelloAndGateInfo(t *testing.T) {
 }
 
 func TestSandboxBeforeRequest(t *testing.T) {
-	f := newFixture(t, "read", "")
+	f := newFixture(t, "read")
 	_, rd := f.serveRaw(`{"v":1,"id":"a","op":"hello"}` + "\n")
 	if !rd.read || rd.readFirst || f.sandboxCalls != 1 {
 		t.Fatalf("request read before the sandbox (read=%v readFirst=%v calls=%d)", rd.read, rd.readFirst, f.sandboxCalls)
@@ -248,14 +248,14 @@ func TestSandboxBeforeRequest(t *testing.T) {
 func TestInstallFailuresNeverReadRequest(t *testing.T) {
 	cases := map[string]func(f *fixture){
 		"root":          func(f *fixture) { f.opts.Identity.UID = 0 },
-		"trusted uid":   func(f *fixture) { f.opts.Identity.UID = uint32(os.Getuid()) },
+		"trusted uid":   func(f *fixture) { f.opts.Identity.UID = install.ID(os.Getuid()) },
 		"docker group":  func(f *fixture) { f.opts.Identity.GIDs = []uint32{60123, 999} },
 		"bad principal": func(f *fixture) { f.opts.Principal = "has space" },
 		"ssh command": func(f *fixture) {
 			s := "ls"
 			f.opts.SSHOriginalCommand = &s
 		},
-		"insecure policy": func(f *fixture) { _ = os.Chmod(f.policyFile, 0o666) },
+		"insecure policy": func(f *fixture) { _ = os.Chmod(f.policyFile, 0o666) }, //nolint:gosec // G302: deliberately insecure mode under test
 		"invalid policy": func(f *fixture) {
 			gatetest.WriteFile(f.t, f.policyFile, "version: 1\nmax_tier: read\nsudo: true\n", 0o644)
 		},
@@ -263,7 +263,7 @@ func TestInstallFailuresNeverReadRequest(t *testing.T) {
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
-			f := newFixture(t, "read", "")
+			f := newFixture(t, "read")
 			mutate(f)
 			resp, rd := f.serveRaw(`{"v":1,"id":"a","op":"hello"}` + "\n")
 			if resp.OK || resp.Error.Code != "install_insecure" || rd.read || f.sandboxCalls != 0 {
@@ -275,13 +275,13 @@ func TestInstallFailuresNeverReadRequest(t *testing.T) {
 		})
 	}
 	// The helper socket group and systemd-journal are allowed.
-	f := newFixture(t, "read", "")
+	f := newFixture(t, "read")
 	f.opts.Identity.GIDs = []uint32{60123, 60124, 101}
 	f.ok("hello", m{}, nil)
 }
 
 func TestDecodeErrors(t *testing.T) {
-	f := newFixture(t, "read", "")
+	f := newFixture(t, "read")
 	for in, code := range map[string]string{
 		`{"v":1,"id":"a","op":"hello","op":"write_file"}` + "\n":            "bad_request",
 		`{"v":1,"id":"a","op":"hello","x":1}` + "\n":                        "bad_request",
@@ -298,7 +298,7 @@ func TestDecodeErrors(t *testing.T) {
 }
 
 func TestTiersAndUnknownOps(t *testing.T) {
-	f := newFixture(t, "read", "")
+	f := newFixture(t, "read")
 	f.fail("write_file", m{"path": filepath.Join(f.write, "x"), "content_b64": ""}, "tier_denied")
 	f.fail("delete", m{"path": filepath.Join(f.write, "x")}, "tier_denied")
 	f.fail("mkdir", m{"path": filepath.Join(f.write, "x")}, "tier_denied")
@@ -313,7 +313,7 @@ func TestTiersAndUnknownOps(t *testing.T) {
 }
 
 func TestPrivileged(t *testing.T) {
-	f := newFixture(t, "operator", "")
+	f := newFixture(t, "operator")
 	f.fail("priv_read_file", m{"path": "/etc/example-app/x"}, "privileged_disabled")
 	f.writePolicy("operator", "privileged:\n  enabled: true\n  socket: /run/shell-mcp/privd.sock\n  max_tier: read\n")
 	f.fail("priv_write_file", m{}, "tier_denied")
@@ -323,7 +323,7 @@ func TestPrivileged(t *testing.T) {
 }
 
 func TestFileOps(t *testing.T) {
-	f := newFixture(t, "destructive", "")
+	f := newFixture(t, "destructive")
 	var rd struct {
 		Content string `json:"content"`
 		SHA256  string `json:"sha256"`
@@ -383,7 +383,7 @@ func TestFileOps(t *testing.T) {
 }
 
 func TestReadBackFault(t *testing.T) {
-	f := newFixture(t, "operator", "")
+	f := newFixture(t, "operator")
 	f.opts.InjectReadBackFault = func(b []byte) []byte { return append(bytes.Clone(b), '!') }
 	f.fail("write_file", m{"path": filepath.Join(f.write, "v.txt"), "content_b64": base64.StdEncoding.EncodeToString([]byte("x"))}, "verify_failed")
 }
@@ -399,7 +399,7 @@ type execData struct {
 }
 
 func TestExec(t *testing.T) {
-	f := newFixture(t, "operator", "")
+	f := newFixture(t, "operator")
 	var d execData
 	f.ok("exec", m{"command_id": "probe-echo", "args": []string{"echo", "hello world"}}, &d)
 	if d.Stdout != "hello world\n" || d.ExitCode == nil || *d.ExitCode != 0 || d.Signal != nil || d.Argv[0] != f.probe {
@@ -437,7 +437,7 @@ func TestExec(t *testing.T) {
 }
 
 func TestExecTimeout(t *testing.T) {
-	f := newFixture(t, "read", "")
+	f := newFixture(t, "read")
 	resp, _ := f.serveRaw(`{"v":1,"id":"a","op":"exec","args":{"command_id":"probe-io","args":["sleep","5s"]},"timeout_ms":300}` + "\n")
 	var d execData
 	if !resp.OK || json.Unmarshal(resp.Data, &d) != nil || !d.TimedOut || d.Signal == nil {
@@ -446,7 +446,7 @@ func TestExecTimeout(t *testing.T) {
 }
 
 func TestPolicySummary(t *testing.T) {
-	f := newFixture(t, "read", "")
+	f := newFixture(t, "read")
 	var s struct {
 		MaxTier  string `json:"max_tier"`
 		Commands []struct {

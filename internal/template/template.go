@@ -106,7 +106,7 @@ func parseToken(s string) (Token, error) {
 	if strings.IndexByte(s, 0) >= 0 {
 		return Token{}, errors.New("contains NUL")
 	}
-	if !(strings.HasPrefix(s, "{") && strings.HasSuffix(s, "}")) {
+	if !strings.HasPrefix(s, "{") || !strings.HasSuffix(s, "}") {
 		return Token{Kind: Literal, Literal: s, raw: s}, nil
 	}
 	// Any {…} token must be a known placeholder: a literal that looks like

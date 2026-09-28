@@ -104,9 +104,9 @@ type server struct {
 // sandbox, then (only then) read one request, dispatch, and write one
 // response. It returns the process exit code: 0 whenever a response was
 // written, 1 if it could not be.
-func Serve(o Options, stdin io.Reader, stdout io.Writer) int {
+func Serve(o *Options, stdin io.Reader, stdout io.Writer) int {
 	start := time.Now()
-	s := &server{o: o, gate: &protocol.GateInfo{Version: o.Version, Principal: o.Principal}}
+	s := &server{o: *o, gate: &protocol.GateInfo{Version: o.Version, Principal: o.Principal}}
 	resp := s.run(stdin)
 	resp.V = protocol.Version
 	s.gate.DurationMS = time.Since(start).Milliseconds()
@@ -140,7 +140,7 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 		s.gate.Principal = ""
 		return Failure("", protocol.CodeInstallInsecure, "gate --principal label is malformed")
 	}
-	if err := install.Check(install.Env{Identity: o.Identity, Trust: o.Trust, Executable: o.Executable, SSHOriginalCommand: o.SSHOriginalCommand}); err != nil {
+	if err := install.Check(&install.Env{Identity: o.Identity, Trust: o.Trust, Executable: o.Executable, SSHOriginalCommand: o.SSHOriginalCommand}); err != nil {
 		msg := "gate installation is insecure"
 		var ie *install.Error
 		if errors.As(err, &ie) {
@@ -167,7 +167,7 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 			rep.KernelABI, sandbox.RequiredMinABI))
 	}
 	s.report = rep
-	s.fs = fsx.New(fsx.Config{
+	s.fs = fsx.New(&fsx.Config{
 		ReadRoots:  p.Paths.Read,
 		WriteRoots: p.Paths.Write,
 		Deny:       p.Paths.Deny,

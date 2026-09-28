@@ -54,7 +54,7 @@ type FS struct {
 }
 
 // New returns an FS for cfg.
-func New(cfg Config) *FS { return &FS{cfg: cfg} }
+func New(cfg *Config) *FS { return &FS{cfg: *cfg} }
 
 // Error is an fsx failure with a gate error code (internal/protocol).
 type Error struct {
