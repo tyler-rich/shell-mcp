@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
@@ -254,7 +256,7 @@ func runApplier(t *testing.T, args ...string) applierOut {
 func TestApplyFilesystemAllThreads(t *testing.T) {
 	needABI(t, 1)
 	pf, allowed, outside := layout(t, "best-effort", "")
-	out := runApplier(t, "-policy", pf, "-threads", "6", "-read", outside, "-allowed", allowed, "-mptcp", "-bind")
+	out := runApplier(t, "-policy", pf, "-threads", "6", "-read", outside, "-allowed", allowed, "-bind")
 	if out.Error != "" {
 		t.Fatalf("apply: %s", out.Error)
 	}
@@ -284,8 +286,8 @@ func TestApplyFilesystemAllThreads(t *testing.T) {
 	// MPTCP is unavailable (seccomp), so a default Go listener falls back to
 	// plain TCP: it binds where Landlock cannot govern TCP (ABI < 4) and is
 	// denied where it can.
-	if out.Probes["mptcp"] != "EPROTONOSUPPORT" || out.Report.MPTCP != "blocked by seccomp" {
-		t.Fatalf("mptcp: %v %q", out.Probes, out.Report.MPTCP)
+	if out.Report.MPTCP != "blocked by seccomp" {
+		t.Fatalf("mptcp report %q", out.Report.MPTCP)
 	}
 	wantBind := "BOUND"
 	if out.Report.Enforced.Net {
@@ -389,5 +391,34 @@ func TestApplySignalScope(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if err := syscall.Kill(victim.Process.Pid, 0); err != nil {
 		t.Fatalf("victim is gone: %v", err)
+	}
+}
+
+// requireMPTCPEnv: CI sets it so the MPTCP test fails, never skips, when
+// the control case cannot open an MPTCP socket on the runner's kernel.
+const requireMPTCPEnv = "SHELL_MCP_REQUIRE_MPTCP"
+
+// TestApplyMPTCPBlocked is two-sided. Control: this (unsandboxed) test
+// process opens an MPTCP socket on this kernel. Filtered: the applier makes
+// the identical socket(2) call after Apply and gets EPROTONOSUPPORT. Without
+// the control the filtered result would prove nothing on a kernel that has
+// no MPTCP.
+func TestApplyMPTCPBlocked(t *testing.T) {
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM, unix.IPPROTO_MPTCP)
+	if err != nil {
+		msg := "control: this kernel does not open an MPTCP socket without the filter (" + err.Error() + "); the filter cannot be proven here"
+		if os.Getenv(requireMPTCPEnv) != "" {
+			t.Fatal(msg)
+		}
+		t.Skip(msg + "; runs in CI")
+	}
+	_ = unix.Close(fd)
+	pf, _, _ := layout(t, "best-effort", "")
+	out := runApplier(t, "-policy", pf, "-mptcp")
+	if out.Error != "" || out.Report.MPTCP != "blocked by seccomp" {
+		t.Fatalf("apply: %+v", out)
+	}
+	if out.Probes["mptcp"] != "EPROTONOSUPPORT" {
+		t.Fatalf("filtered: MPTCP socket after Apply: %q", out.Probes["mptcp"])
 	}
 }

@@ -416,10 +416,29 @@ func TestIntegrationSandboxFilesystem(t *testing.T) {
 	if d := g.exec([]string{"nnp"}, nil); strings.TrimSpace(d.Stdout) != "NoNewPrivs: 1" {
 		t.Fatalf("child no_new_privs: %q", d.Stdout)
 	}
-	// Landlock cannot govern MPTCP; the seccomp filter makes it unavailable
-	// to every child.
+}
+
+// requireMPTCPEnv: CI sets it so the MPTCP tests fail, never skip, when the
+// control case cannot open an MPTCP socket on the runner's kernel.
+const requireMPTCPEnv = "SHELL_MCP_REQUIRE_MPTCP"
+
+// TestIntegrationSandboxMPTCP is two-sided. Control: the probe binary, run
+// directly (no gate, no filter), opens an MPTCP socket on this kernel.
+// Filtered: the same binary and subcommand, run by the gate as a declared
+// command, gets EPROTONOSUPPORT. Without the control the filtered result
+// would prove nothing on a kernel that has no MPTCP.
+func TestIntegrationSandboxMPTCP(t *testing.T) {
+	g := newGate(t)
+	out, err := exec.CommandContext(t.Context(), g.probe, "mptcp").Output() //nolint:gosec // G204: test child built by this test
+	if control := strings.TrimSpace(string(out)); err != nil || control != "OPENED" {
+		msg := fmt.Sprintf("control: this kernel does not open an MPTCP socket without the filter (%q, %v); the filter cannot be proven here", control, err)
+		if os.Getenv(requireMPTCPEnv) != "" {
+			t.Fatal(msg)
+		}
+		t.Skip(msg + "; runs in CI")
+	}
 	if d := g.exec([]string{"mptcp"}, nil); strings.TrimSpace(d.Stdout) != "EPROTONOSUPPORT" {
-		t.Fatalf("child MPTCP socket: %q", d.Stdout)
+		t.Fatalf("filtered: a declared child opened an MPTCP socket: %q", d.Stdout)
 	}
 }
 

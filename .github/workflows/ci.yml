@@ -62,13 +62,16 @@ jobs:
         env:
           SHELL_MCP_REQUIRE_SECURE_TMP: "1"
           SHELL_MCP_REQUIRE_LANDLOCK_ABI: "7"
+          # The runner's kernel supports MPTCP: the MPTCP tests' control case
+          # (a socket opened without the filter) must succeed here, or fail.
+          SHELL_MCP_REQUIRE_MPTCP: "1"
         run: |
           go test -race -count=1 -v ./... 2>&1 | tee /tmp/go-test.log
           test "${PIPESTATUS[0]}" -eq 0
       - name: sandbox tests that ran on this runner
         if: always()
         run: |
-          grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|Integration(Sandbox|Swap)|RequiredRefused|BestEffort)' /tmp/go-test.log | tee -a "$GITHUB_STEP_SUMMARY" || true
+          grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|Integration(Sandbox|Swap|ExecLimits)|RequiredRefused|BestEffort)' /tmp/go-test.log | tee -a "$GITHUB_STEP_SUMMARY" || true
       - name: govulncheck
         run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
       - name: cross-build (linux/amd64, linux/arm64)

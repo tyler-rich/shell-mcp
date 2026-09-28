@@ -50,6 +50,8 @@ common=(
 	# The gate refuses fixtures whose parent directories are group/other-writable,
 	# so tests need a private TMPDIR (the default /tmp is world-writable); with
 	# SHELL_MCP_REQUIRE_SECURE_TMP set they fail rather than skip without one.
+	# (The MPTCP tests skip here: Docker Desktop's kernel has no MPTCP, so
+	# their control case cannot run; CI requires them.)
 	-e TMPDIR=/cache/tmp -e SHELL_MCP_REQUIRE_SECURE_TMP=1
 	-v "$cache_volume:/cache" -v "$repo:/src:ro" -w /src
 )
