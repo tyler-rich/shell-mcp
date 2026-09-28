@@ -41,12 +41,18 @@ fi
 cache_volume="shell-mcp-ci-cache"
 docker volume create "$cache_volume" >/dev/null
 docker run --rm -u 0:0 -v "$cache_volume:/cache" "$go_image" \
-	sh -c "mkdir -p /cache/build /cache/mod /cache/lint && chown -R $run_as /cache" >/dev/null
+	sh -c "mkdir -p /cache/build /cache/mod /cache/lint /cache/tmp && chown -R $run_as /cache && chmod 0700 /cache/tmp" >/dev/null
 
 common=(
 	--rm -u "$run_as"
 	-e HOME=/tmp -e GOCACHE=/cache/build -e GOMODCACHE=/cache/mod
 	-e GOLANGCI_LINT_CACHE=/cache/lint -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local
+	# The gate refuses fixtures whose parent directories are group/other-writable,
+	# so tests need a private TMPDIR (the default /tmp is world-writable); with
+	# SHELL_MCP_REQUIRE_SECURE_TMP set they fail rather than skip without one.
+	# (The MPTCP tests skip here: Docker Desktop's kernel has no MPTCP, so
+	# their control case cannot run; CI requires them.)
+	-e TMPDIR=/cache/tmp -e SHELL_MCP_REQUIRE_SECURE_TMP=1
 	-v "$cache_volume:/cache" -v "$repo:/src:ro" -w /src
 )
 in_go() { docker run "${common[@]}" "$go_image" "$@"; }
@@ -103,7 +109,9 @@ gofmt_check() {
 cross_build() { # cross_build <goarch>
 	in_go sh -c "set -e; for c in shell-mcp shell-mcp-gate shell-mcp-privd; do
 		CGO_ENABLED=0 GOOS=linux GOARCH=$1 go build -trimpath -ldflags '-s -w' -o /tmp/\$c ./cmd/\$c
-		echo \"built \$c linux/$1\"
+		# The gate relies on CGO_ENABLED=0 (psx then uses syscall.AllThreadsSyscall).
+		go version -m /tmp/\$c | grep -q 'CGO_ENABLED=0' || { echo \"\$c was built with cgo\" >&2; exit 1; }
+		echo \"built \$c linux/$1 (CGO_ENABLED=0)\"
 	done"
 }
 

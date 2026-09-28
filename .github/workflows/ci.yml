@@ -35,6 +35,15 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      # The gate refuses fixtures whose parent directories are group/other-
+      # writable, and the default /tmp is world-writable: give the tests a
+      # private TMPDIR under $HOME.
+      - name: private TMPDIR
+        run: |
+          d="$HOME/.shell-mcp-tmp"
+          mkdir -p "$d" && chmod 0700 "$d"
+          ls -ld / /home "$HOME" "$d"
+          echo "TMPDIR=$d" >> "$GITHUB_ENV"
       - name: gofmt
         run: |
           out="$(gofmt -l .)"
@@ -45,8 +54,24 @@ jobs:
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
+      # SHELL_MCP_REQUIRE_SECURE_TMP: tests fail (never skip) without a
+      # trustworthy TMPDIR. SHELL_MCP_REQUIRE_LANDLOCK_ABI: this runner exposes
+      # Landlock ABI 7, so the network and scope sandbox tests (ABI 4/6) must
+      # run here and fail rather than skip if the kernel ever cannot run them.
       - name: go test -race
-        run: go test -race -count=1 ./...
+        env:
+          SHELL_MCP_REQUIRE_SECURE_TMP: "1"
+          SHELL_MCP_REQUIRE_LANDLOCK_ABI: "7"
+          # The runner's kernel supports MPTCP: the MPTCP tests' control case
+          # (a socket opened without the filter) must succeed here, or fail.
+          SHELL_MCP_REQUIRE_MPTCP: "1"
+        run: |
+          go test -race -count=1 -v ./... 2>&1 | tee /tmp/go-test.log
+          test "${PIPESTATUS[0]}" -eq 0
+      - name: sandbox tests that ran on this runner
+        if: always()
+        run: |
+          grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|Integration(Sandbox|Swap|ExecLimits)|RequiredRefused|BestEffort)' /tmp/go-test.log | tee -a "$GITHUB_STEP_SUMMARY" || true
       - name: govulncheck
         run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
       - name: cross-build (linux/amd64, linux/arm64)
@@ -54,7 +79,9 @@ jobs:
           for arch in amd64 arm64; do
             for c in shell-mcp shell-mcp-gate shell-mcp-privd; do
               CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags '-s -w' -o "/tmp/$c-$arch" "./cmd/$c"
-              echo "built $c linux/$arch"
+              # The gate relies on CGO_ENABLED=0 (psx then uses syscall.AllThreadsSyscall).
+              go version -m "/tmp/$c-$arch" | grep -q 'CGO_ENABLED=0' || { echo "$c was built with cgo" >&2; exit 1; }
+              echo "built $c linux/$arch (CGO_ENABLED=0)"
             done
           done
 
