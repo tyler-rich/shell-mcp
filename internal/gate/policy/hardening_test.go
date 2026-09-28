@@ -111,7 +111,7 @@ func TestGTFOBinsWarnings(t *testing.T) {
 		}
 	}
 	if len(hit) != 1 || !strings.Contains(hit[0], "commands[backup]") || !strings.Contains(hit[0], "command execution") ||
-		!strings.Contains(hit[0], "file read") || !strings.Contains(hit[0], "https://gtfobins.github.io/gtfobins/tar/") {
+		!strings.Contains(hit[0], "file read") || !strings.Contains(hit[0], "https://gtfobins.org/gtfobins/tar/") {
 		t.Fatalf("warnings %q", p.Warnings)
 	}
 	for _, n := range []string{"tar", "find", "openssl"} {
