@@ -63,7 +63,7 @@ redact:
     tier: read
     description: "Echo arguments"
     templates:
-      - ["echo", "{regex:^[A-Za-z0-9 =.-]+$}"]
+      - ["echo", "{regex:^[A-Za-z0-9 =._-]+$}"]
       - ["echo", "path", "{path:read}"]
       - ["echo", "unit", "{unit}"]
   - id: probe-io
