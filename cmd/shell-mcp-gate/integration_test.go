@@ -72,10 +72,10 @@ func harness(t *testing.T) string {
 
 // gate is an invented target layout under a secure temp dir.
 type gate struct {
-	t                                                   *testing.T
-	dir, read, write, secrets, bin, home, outside, pol  string
-	probe                                               string
-	env                                                 []string
+	t                                                  *testing.T
+	dir, read, write, secrets, bin, home, outside, pol string
+	probe                                              string
+	env                                                []string
 }
 
 const integrationPolicy = `version: 1
@@ -283,12 +283,16 @@ func TestIntegrationSwapRace(t *testing.T) {
 			time.Sleep(time.Millisecond)
 			_ = os.Rename(sub, link)
 			_ = os.Rename(stash, sub)
+			time.Sleep(time.Millisecond)
 		}
 	}()
 	deadline := time.Now().Add(3 * time.Second)
-	n := 0
+	n, oks := 0, 0
 	for time.Now().Before(deadline) {
 		r := g.call("read_file", m{"path": filepath.Join(sub, "f")})
+		if r.OK {
+			oks++
+		}
 		if r.OK && strings.Contains(string(r.Data), "OUTSIDE") {
 			stop.Store(true)
 			wg.Wait()
@@ -303,7 +307,10 @@ func TestIntegrationSwapRace(t *testing.T) {
 	if len(ents) != 1 {
 		t.Fatalf("outside directory was written: %v", ents)
 	}
-	t.Logf("%d request pairs under the swap", n)
+	t.Logf("%d request pairs under the swap, %d successful reads", n, oks)
+	if oks == 0 {
+		t.Fatal("race test is vacuous: no read succeeded")
+	}
 }
 
 func TestIntegrationTemplates(t *testing.T) {
