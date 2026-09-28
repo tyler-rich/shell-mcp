@@ -306,7 +306,9 @@ func (v *validator) paths(p *Policy, raw *rawPaths, files []string, opts LoadOpt
 	extra := []string{opts.GateExecutable, opts.ServiceHome}
 	extra = append(extra, files...)
 	for _, e := range extra {
-		if e == "" {
+		// A home of "/" (common for system accounts) would make every
+		// path protected; "/" can never be a write root anyway.
+		if e == "" || e == "/" {
 			continue
 		}
 		g, err := pathx.LiteralGlob(e)
