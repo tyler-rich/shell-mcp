@@ -100,7 +100,12 @@ func TestConfigAllowlist(t *testing.T) {
 		"core.hookspath", "core.sshcommand", "core.pager", "core.editor", "core.worktree", "core.attributesfile", "include.path",
 		"includeif.gitdir:/x/.path", "url.https://x/.insteadof", "http.sslverify", "http.proxy", "credential.helper",
 		"remote.upstream.url", "remote.origin.pushurl", "remote.origin.uploadpack", "extensions.worktreeconfig", "gpg.program",
-		"log.showsignature", "branch..merge", "branch.main.rebase", "alias.st", "protocol.file.allow", "safe.directory", "submodule.x.update"} {
+		"log.showsignature", "branch..merge", "branch..rebase", "alias.st", "protocol.file.allow", "safe.directory", "submodule.x.update",
+		// Near misses of the data-only keys: same families, but able to name
+		// a program, key material, another remote or a detached process.
+		"user.signingkey", "gpg.ssh.program", "pull.twohead", "pull.octopus", "fetch.recursesubmodules", "remote.origin.proxy",
+		"remote.origin.receivepack", "remote.origin.vcs", "branch.main.pushremote", "gc.autodetach", "gc.rerereresolved", "maintenance.auto",
+		"init.templatedir", "core.gitproxy", "filter.lfs.process", "lfs.url"} {
 		kv, err := ParseConfig([]byte(key + "\nx\x00"))
 		if err != nil {
 			t.Fatal(err)
@@ -112,6 +117,40 @@ func TestConfigAllowlist(t *testing.T) {
 	for _, bad := range []string{"no-terminator", "\nvalue\x00", "a.b\nv\x00c"} {
 		if _, err := ParseConfig([]byte(bad)); err == nil {
 			t.Errorf("ParseConfig(%q) accepted", bad)
+		}
+	}
+}
+
+// TestConfigAllowlistDataKeys: keys git reads only as data for the gate's
+// fixed commands are accepted (verified against git 2.47.3 and 2.55.0,
+// POLICY §7).
+func TestConfigAllowlistDataKeys(t *testing.T) {
+	for _, key := range []string{"user.name", "user.email", "core.autocrlf", "core.eol", "core.safecrlf", "core.ignorecase",
+		"pull.rebase", "pull.ff", "init.defaultbranch", "branch.main.rebase", "branch.Feature/X.rebase", "fetch.prune",
+		"remote.origin.prune", "remote.origin.tagopt", "color.ui", "color.status", "color.diff", "color.branch", "color.pager",
+		"color.diff.meta", "color.status.untracked", "color.decorate.branch", "color.advice", "color.advice.hint",
+		"advice.detachedhead", "advice.statushints", "gc.auto"} {
+		kvs, err := ParseConfig([]byte(key + "\nx\x00"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bad, ok := CheckConfig(kvs); !ok {
+			t.Errorf("%s refused (%s)", key, bad)
+		}
+	}
+}
+
+// TestRefusalHint: the refusal says how to remove the key or its section.
+func TestRefusalHint(t *testing.T) {
+	for key, want := range map[string]string{
+		"filter.lfs.process":       "git config --remove-section filter.lfs",
+		"diff.x.textconv":          "git config --remove-section diff.x",
+		"core.askpass":             "git config --unset-all core.askpass",
+		"url.https://h/.insteadof": "git config --remove-section url.https://h/",
+		"include.path":             "git config --unset-all include.path",
+	} {
+		if got := RemovalHint(key); got != want {
+			t.Errorf("RemovalHint(%q) = %q, want %q", key, got, want)
 		}
 	}
 }

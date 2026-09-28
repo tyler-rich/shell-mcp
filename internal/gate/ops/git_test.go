@@ -254,6 +254,89 @@ func TestGitConfigAllowlist(t *testing.T) {
 	g.ok("git_status", m{"repo": g.repo}, nil)
 }
 
+// dataKeys are repository-local keys git uses only as data for the gate's
+// fixed commands (POLICY §7), with values that would matter if the gate's
+// own flags did not override them: an interactive rebase, a non-ff merge,
+// forced colors.
+var dataKeys = [][2]string{
+	{"user.name", "Example Dev"}, {"user.email", "dev@example.test"}, {"core.autocrlf", "input"}, {"core.eol", "lf"},
+	{"core.safecrlf", "warn"}, {"core.ignorecase", "false"}, {"pull.rebase", "interactive"}, {"pull.ff", "false"},
+	{"init.defaultBranch", "trunk"}, {"branch.main.rebase", "interactive"}, {"fetch.prune", "true"},
+	{"remote.origin.prune", "true"}, {"remote.origin.tagOpt", "--no-tags"}, {"color.ui", "always"},
+	{"color.status", "always"}, {"color.diff", "always"}, {"color.branch", "always"}, {"color.pager", "true"},
+	{"color.diff.meta", "blue bold"}, {"advice.detachedHead", "false"}, {"advice.statusHints", "false"}, {"gc.auto", "0"},
+}
+
+// TestGitDataKeysAllowed: a repository carrying every data-only key still
+// works with every git op, including a pull and a discard, and the
+// output still parses (forced colors do not leak into what the gate reads).
+func TestGitDataKeysAllowed(t *testing.T) {
+	g := newGitFixture(t, "destructive")
+	for _, kv := range dataKeys {
+		gatetest.Git(t, g.repo, "config", kv[0], kv[1])
+	}
+	gatetest.WriteFile(t, filepath.Join(g.repo, "app.conf"), "port=9090\n", 0o644)
+	var st struct {
+		Branch  string `json:"branch"`
+		Entries []struct {
+			Path string `json:"path"`
+		} `json:"entries"`
+	}
+	g.ok("git_status", m{"repo": g.repo}, &st)
+	if st.Branch != "main" || len(st.Entries) != 1 || st.Entries[0].Path != "app.conf" {
+		t.Fatalf("status %+v", st)
+	}
+	var diff struct {
+		Diff string `json:"diff"`
+	}
+	g.ok("git_diff", m{"repo": g.repo}, &diff)
+	if !strings.Contains(diff.Diff, "+port=9090") || strings.Contains(diff.Diff, "\x1b[") {
+		t.Fatalf("diff %q", diff.Diff)
+	}
+	g.ok("git_log", m{"repo": g.repo}, nil)
+	var pv struct {
+		Reset []string `json:"reset"`
+	}
+	g.ok("git_discard_preview", m{"repo": g.repo}, &pv)
+	if !slices.Equal(pv.Reset, []string{"app.conf"}) {
+		t.Fatalf("preview %+v", pv)
+	}
+	g.ok("git_discard", m{"repo": g.repo}, nil)
+	gatetest.Push(t, g.work, "extra.conf", "x\n", "upstream change")
+	var d pullData
+	g.ok("git_pull", m{"repo": g.repo}, &d)
+	if !d.Updated || d.ChangedFiles != 1 || d.NewHead != g.head(t) {
+		t.Fatalf("pull with pull.rebase=interactive and pull.ff=false in the repo config: %+v", d)
+	}
+}
+
+// TestGitLFSRefusedActionably: a Git LFS repository (filter.lfs.*) is
+// refused with a message that names the key, says how to remove it and
+// that LFS is not supported; any other key outside the list still is.
+func TestGitLFSRefusedActionably(t *testing.T) {
+	g := newGitFixture(t, "read")
+	for _, kv := range [][2]string{{"filter.lfs.clean", "git-lfs clean -- %f"}, {"filter.lfs.smudge", "git-lfs smudge -- %f"},
+		{"filter.lfs.process", "git-lfs filter-process"}, {"filter.lfs.required", "true"}} {
+		gatetest.Git(t, g.repo, "config", kv[0], kv[1])
+	}
+	r := g.call("git_status", m{"repo": g.repo})
+	if r.OK || r.Error.Code != "policy_denied" {
+		t.Fatalf("LFS repo: %+v", r.Error)
+	}
+	for _, want := range []string{"filter.lfs.clean", "git config --remove-section filter.lfs", "Git LFS", "not supported"} {
+		if !strings.Contains(r.Error.Message, want) {
+			t.Errorf("message %q lacks %q", r.Error.Message, want)
+		}
+	}
+	gatetest.Git(t, g.repo, "config", "--remove-section", "filter.lfs")
+	g.ok("git_status", m{"repo": g.repo}, nil)
+	gatetest.Git(t, g.repo, "config", "core.editor", "vi")
+	r = g.call("git_status", m{"repo": g.repo})
+	if r.OK || r.Error.Code != "policy_denied" || !strings.Contains(r.Error.Message, "git config --unset-all core.editor") {
+		t.Fatalf("core.editor: %+v", r.Error)
+	}
+}
+
 type pullData struct {
 	OldHead      string `json:"old_head"`
 	NewHead      string `json:"new_head"`

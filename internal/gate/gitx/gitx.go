@@ -313,3 +313,6 @@ func Value(kvs []KV, key string) (string, bool) {
 	}
 	return v, ok
 }
+
+// RemovalHint is not implemented yet.
+func RemovalHint(_ string) string { return "" }
