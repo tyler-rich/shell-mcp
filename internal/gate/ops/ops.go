@@ -80,7 +80,8 @@ func ProductionOptions(version, policyPath, principal string) (Options, error) {
 		Version: version, PolicyPath: policyPath, Principal: principal,
 		Identity: id, Trust: policy.RootTrust(), Executable: exe,
 		ServiceHome: ServiceHome(), ApplySandbox: sandbox.Apply,
-		Audit: audit.NewSyslog(audit.DevLog),
+		Audit:     audit.NewSyslog(audit.DevLog),
+		Systemctl: SystemctlPath, Journalctl: JournalctlPath, Git: GitPath,
 	}
 	if v, ok := os.LookupEnv("SSH_ORIGINAL_COMMAND"); ok {
 		o.SSHOriginalCommand = &v

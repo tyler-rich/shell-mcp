@@ -159,14 +159,14 @@ func TestJournal(t *testing.T) {
 		Truncated bool   `json:"truncated"`
 		Stderr    string `json:"stderr"`
 	}
-	r := f.ok("journal", m{"unit": "example-app.service", "lines": 5, "since": "-15m", "until": "2026-09-27T12:00:00Z", "priority": "err"}, &d)
+	r := f.ok("journal", m{"unit": "example-app.service", "lines": 5, "since": "-15m", "until": "2099-01-01T00:00:00Z", "priority": "err"}, &d)
 	got := argv()
 	if len(got) != 1 || len(got[0]) != 13 {
 		t.Fatalf("argv %q", got)
 	}
 	a := got[0]
 	if !slices.Equal(a[:5], []string{"--no-pager", "-o", "short-iso", "-n", "5"}) || a[5] != "--since" || !epochArg.MatchString(a[6]) ||
-		!slices.Equal(a[7:], []string{"--until", "@1790510400", "-p", "err", "-u", "example-app.service"}) {
+		!slices.Equal(a[7:], []string{"--until", "@4070908800", "-p", "err", "-u", "example-app.service"}) {
 		t.Fatalf("argv %q", a)
 	}
 	if strings.Count(d.Output, "\n") != 5 || strings.Contains(d.Output, "abc123") || d.Unit != "example-app.service" {

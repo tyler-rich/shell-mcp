@@ -142,7 +142,7 @@ func FuzzJournalTime(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if !strings.HasPrefix(got, "@") || strings.ContainsAny(got[1:], "-+ ;") || len(got) > 12 {
+		if !strings.HasPrefix(got, "@") || strings.ContainsAny(got[1:], "-+ ;") || len(got) > 13 { // "@" + at most 12 digits (year 9999)
 			t.Fatalf("%q -> %q", s, got)
 		}
 	})
