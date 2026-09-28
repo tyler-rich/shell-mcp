@@ -1,0 +1,71 @@
+# Example gate policy: operator (reversible changes).
+#
+# Placeholders only. Install as root at /etc/shell-mcp/operator.yaml
+# (root:root 0644) for a separate SSH key; the server using that key runs
+# with SHELL_MCP_PROFILE=operator. Grant the service account write access to
+# the write roots with ACLs (setfacl), and install the polkit rule from
+#   shell-mcp-gate polkit --policy /etc/shell-mcp/operator.yaml --user svc-shell
+# as /etc/polkit-1/rules.d/60-shell-mcp.rules. There is no sudo anywhere.
+
+version: 1
+
+# operator = service lifecycle, writes inside write roots with read-back,
+# fast-forward git pulls. Nothing destructive.
+max_tier: operator
+
+sandbox:
+  landlock: required
+  system_read_exec: []
+  # git_pull connects to the remote over HTTPS; nothing else may connect.
+  tcp_connect_ports: [443]
+
+limits:
+  default_timeout_s: 30
+  max_timeout_s: 300
+  max_output_bytes: 1048576
+  max_write_bytes: 1048576
+
+paths:
+  read: [/srv/app, /etc/example-app, /var/log/example-app]
+  # Write roots are implicitly readable. They may not be, contain or sit
+  # inside a protected path (/etc/ssh, /etc/systemd, /usr, cron, the policy
+  # directory, the service account's home, ...).
+  write: [/srv/app/config, /srv/app/deploy]
+  deny: ["/srv/app/secrets/**", "**/*.key"]
+
+services:
+  status: ["example-*.service"]
+  control:
+    # Exact unit names only (no globs): they become the polkit rule.
+    units: ["example-app.service"]
+    verbs: [restart, reload]
+
+journal:
+  units: ["example-*.service"]
+  max_lines: 2000
+
+git:
+  # git_pull refuses a dirty tree, a remote other than this one, and
+  # anything but a fast-forward. https:// only.
+  repos:
+    - path: /srv/app/deploy
+      remote: https://git.example.test/org/deploy.git
+
+redact:
+  patterns: ['(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*\S+']
+
+commands:
+  - id: apt-upgradable
+    path: /usr/bin/apt
+    tier: read
+    description: "Packages with available upgrades"
+    templates:
+      - ["list", "--upgradable"]
+  - id: app-disk-usage
+    path: /usr/bin/du
+    tier: read
+    description: "Disk usage of an application directory"
+    templates:
+      # {path:read} is resolved under a read root and checked against the
+      # deny list; the resolved path is what du receives.
+      - ["-s", "-h", "{path:read}"]

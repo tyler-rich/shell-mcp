@@ -1,0 +1,68 @@
+# Example gate policy: admin (destructive operations and root forwarding).
+#
+# Placeholders only. Install as root at /etc/shell-mcp/admin.yaml
+# (root:root 0644) for its own SSH key; the server using that key runs with
+# SHELL_MCP_PROFILE=admin, and every destructive or privileged operation
+# needs a human approval collected by the MCP client (elicitation).
+# Root actions are not done here: they are forwarded to the privileged
+# helper, which applies its own policy (docs/PRIVILEGED.md).
+
+version: 1
+
+# destructive = delete paths, discard git working-tree changes, and
+# destructive policy commands.
+max_tier: destructive
+
+sandbox:
+  landlock: required
+  system_read_exec: []
+  tcp_connect_ports: [443]
+
+limits:
+  max_timeout_s: 600
+  max_delete_entries: 1000
+
+paths:
+  read: [/srv/app, /etc/example-app, /var/log/example-app]
+  write: [/srv/app/config, /srv/app/deploy, /srv/app/cache]
+  deny: ["/srv/app/secrets/**", "**/*.key"]
+
+services:
+  status: ["example-*.service"]
+  control:
+    units: ["example-app.service", "example-worker.service"]
+    verbs: [start, stop, restart, reload]
+
+journal:
+  units: ["*"]      # every unit; the account still needs systemd-journal
+  max_lines: 5000
+
+git:
+  repos:
+    - path: /srv/app/deploy
+      remote: https://git.example.test/org/deploy.git
+
+# Forwarding of priv_* operations to the privileged helper. The helper's
+# own policy decides what root may do; this only enables asking it, and
+# caps the tier. The sockets are always under /run/shell-mcp/.
+privileged:
+  enabled: true
+  socket: /run/shell-mcp/privd.sock
+  max_tier: operator
+
+redact:
+  patterns: ['(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*\S+']
+
+commands:
+  - id: apt-upgradable
+    path: /usr/bin/apt
+    tier: read
+    description: "Packages with available upgrades"
+    templates:
+      - ["list", "--upgradable"]
+  - id: cache-usage
+    path: /usr/bin/du
+    tier: read
+    description: "Disk usage of the application cache"
+    templates:
+      - ["-s", "-h", "{path:read}"]
