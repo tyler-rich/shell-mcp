@@ -30,15 +30,18 @@ import (
 type threadResult struct {
 	TID        int    `json:"tid"`
 	NoNewPrivs string `json:"no_new_privs"`
+	Seccomp    string `json:"seccomp"`
+	Filters    string `json:"seccomp_filters"`
 	Read       string `json:"read"`
 }
 
 type output struct {
-	CGO     string            `json:"cgo"`
-	Report  sandbox.Report    `json:"report"`
-	Error   string            `json:"error,omitempty"`
-	Threads []threadResult    `json:"threads"`
-	Probes  map[string]string `json:"probes"`
+	FiltersBefore string            `json:"seccomp_filters_before"`
+	CGO           string            `json:"cgo"`
+	Report        sandbox.Report    `json:"report"`
+	Error         string            `json:"error,omitempty"`
+	Threads       []threadResult    `json:"threads"`
+	Probes        map[string]string `json:"probes"`
 }
 
 func main() {
@@ -49,6 +52,7 @@ func main() {
 	connect := flag.Int("connect", 0, "TCP port to connect to on 127.0.0.1")
 	bind := flag.Bool("bind", false, "try a TCP bind")
 	signalPID := flag.Int("signal", 0, "pid to send SIGTERM")
+	mptcp := flag.Bool("mptcp", false, "try a raw socket(AF_INET, SOCK_STREAM, IPPROTO_MPTCP)")
 	flag.Parse()
 
 	out := output{Probes: map[string]string{}, CGO: "unknown"}
@@ -79,7 +83,7 @@ func main() {
 			runtime.LockOSThread()
 			close(ready)
 			r := <-ch
-			res := threadResult{TID: unix.Gettid(), NoNewPrivs: statusField("NoNewPrivs")}
+			res := threadResult{TID: unix.Gettid(), NoNewPrivs: statusField("NoNewPrivs"), Seccomp: statusField("Seccomp"), Filters: statusField("Seccomp_filters")}
 			if *readPath != "" {
 				_, err := os.ReadFile(*readPath)
 				res.Read = result(err, "READ")
@@ -91,6 +95,7 @@ func main() {
 		workers = append(workers, ch)
 	}
 
+	out.FiltersBefore = statusField("Seccomp_filters")
 	out.Report, err = sandbox.Apply(p)
 	if err != nil {
 		out.Error = err.Error()
@@ -123,6 +128,13 @@ func main() {
 			_ = l.Close()
 		}
 		out.Probes["bind"] = result(err, "BOUND")
+	}
+	if *mptcp {
+		fd, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM, unix.IPPROTO_MPTCP)
+		if err == nil {
+			_ = unix.Close(fd)
+		}
+		out.Probes["mptcp"] = result(err, "OPENED")
 	}
 	if *signalPID != 0 {
 		out.Probes["signal"] = result(syscall.Kill(*signalPID, syscall.SIGTERM), "SIGNALLED")

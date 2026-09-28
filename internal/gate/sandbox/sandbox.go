@@ -81,6 +81,9 @@ type Report struct {
 	UnixSocketControl string      `json:"unix_socket_control"`
 	TCPConnectPorts   []uint16    `json:"tcp_connect_ports"`
 	ExtraFiles        []string    `json:"extra_files"`
+	// MPTCP says how Multipath TCP sockets are handled: Landlock cannot
+	// govern them, so a seccomp filter makes them unavailable.
+	MPTCP string `json:"mptcp"`
 }
 
 // Journal directories granted read when the policy configures journal.

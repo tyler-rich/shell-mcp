@@ -36,7 +36,11 @@ func needABI(t *testing.T, n int) {
 	if req, _ := strconv.Atoi(os.Getenv(requireABIEnv)); req >= n {
 		t.Fatalf("%s=%d but the kernel's Landlock ABI is %d; this test needs ABI %d", requireABIEnv, req, k, n)
 	}
-	t.Skipf("needs Landlock ABI %d (kernel has %d); runs in CI (ABI 7)", n, k)
+	where := "runs in CI (ABI 7)"
+	if n > 7 {
+		where = "no current runner has it (CI has ABI 7)"
+	}
+	t.Skipf("needs Landlock ABI %d (kernel has %d); %s", n, k, where)
 }
 
 var (
@@ -96,6 +100,7 @@ commands:
     templates:
       - ["read-outside"]
       - ["nnp"]
+      - ["mptcp"]
       - ["echo", "{regex:^[a-z0-9 -]+$}"]
       - ["echo", "{path:read}"]
       - ["connect", "{int:1-65535}"]
@@ -411,6 +416,11 @@ func TestIntegrationSandboxFilesystem(t *testing.T) {
 	if d := g.exec([]string{"nnp"}, nil); strings.TrimSpace(d.Stdout) != "NoNewPrivs: 1" {
 		t.Fatalf("child no_new_privs: %q", d.Stdout)
 	}
+	// Landlock cannot govern MPTCP; the seccomp filter makes it unavailable
+	// to every child.
+	if d := g.exec([]string{"mptcp"}, nil); strings.TrimSpace(d.Stdout) != "EPROTONOSUPPORT" {
+		t.Fatalf("child MPTCP socket: %q", d.Stdout)
+	}
 }
 
 // Sandbox, refusal and degradation: runs on kernels below ABI 4 (local).
@@ -433,6 +443,9 @@ func TestIntegrationSandboxRefusalAndDegradation(t *testing.T) {
 	want := "net,unix_socket,scope"
 	if k < sandbox.ABIFSFull {
 		want = "fs," + want
+	}
+	if h.Sandbox.MPTCP != "blocked by seccomp" {
+		t.Fatalf("hello mptcp %q", h.Sandbox.MPTCP)
 	}
 	if got := strings.Join(h.Sandbox.NotEnforced, ","); got != want || h.Sandbox.RequiredMinABI != 4 || !h.Sandbox.Applied {
 		t.Fatalf("hello sandbox %+v", h.Sandbox)

@@ -87,6 +87,12 @@ func main() {
 			_ = l.Close()
 		}
 		report(err, "BOUND")
+	case "mptcp":
+		fd, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM, unix.IPPROTO_MPTCP)
+		if err == nil {
+			_ = unix.Close(fd)
+		}
+		report(err, "OPENED")
 	case "signal":
 		pid, _ := strconv.Atoi(args[0])
 		report(syscall.Kill(pid, syscall.SIGTERM), "SIGNALLED")

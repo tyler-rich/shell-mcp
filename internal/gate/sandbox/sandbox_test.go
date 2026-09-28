@@ -35,7 +35,11 @@ func needABI(t *testing.T, n int) {
 	if req, _ := strconv.Atoi(os.Getenv(RequireABIEnv)); req >= n {
 		t.Fatalf("%s=%d but the kernel's Landlock ABI is %d; this test needs ABI %d", RequireABIEnv, req, k, n)
 	}
-	t.Skipf("needs Landlock ABI %d (kernel has %d); runs in CI (ABI 7)", n, k)
+	where := "runs in CI (ABI 7)"
+	if n > 7 {
+		where = "no current runner has it (CI has ABI 7)"
+	}
+	t.Skipf("needs Landlock ABI %d (kernel has %d); %s", n, k, where)
 }
 
 func parse(t *testing.T, y string) *policy.Policy {
@@ -124,7 +128,8 @@ func TestPlan(t *testing.T) {
 		{2, sandbox.Enforcement{}, []string{"fs", "net", "unix_socket", "scope"}},
 		{3, sandbox.Enforcement{FS: true}, []string{"net", "unix_socket", "scope"}},
 		{5, sandbox.Enforcement{FS: true, Net: true}, []string{"unix_socket", "scope"}},
-		{7, sandbox.Enforcement{FS: true, Net: true, Scope: true}, []string{"unix_socket"}},
+		{7, sandbox.Enforcement{FS: true, Net: true}, []string{"unix_socket", "scope"}}, // scoping needs one domain: TSYNC, ABI 8
+		{8, sandbox.Enforcement{FS: true, Net: true, Scope: true}, []string{"unix_socket"}},
 		{9, sandbox.Enforcement{FS: true, Net: true, Scope: true, UnixSocket: true}, []string{}},
 		{12, sandbox.Enforcement{FS: true, Net: true, Scope: true, UnixSocket: true}, []string{}},
 	}
@@ -151,6 +156,9 @@ func TestPlan(t *testing.T) {
 	r, _ := sandbox.Plan(best, 7)
 	if !slices.Equal(r.ExtraFiles, []string{"/dev/null (read, write, truncate)", "/dev/urandom (read)"}) {
 		t.Fatalf("extra files %v", r.ExtraFiles)
+	}
+	if r.MPTCP != "blocked by seccomp" {
+		t.Fatalf("mptcp %q", r.MPTCP)
 	}
 }
 
@@ -196,15 +204,18 @@ func applier(t *testing.T) string {
 type threadResult struct {
 	TID        int    `json:"tid"`
 	NoNewPrivs string `json:"no_new_privs"`
+	Seccomp    string `json:"seccomp"`
+	Filters    string `json:"seccomp_filters"`
 	Read       string `json:"read"`
 }
 
 type applierOut struct {
-	CGO     string            `json:"cgo"`
-	Report  sandbox.Report    `json:"report"`
-	Error   string            `json:"error"`
-	Threads []threadResult    `json:"threads"`
-	Probes  map[string]string `json:"probes"`
+	FiltersBefore string            `json:"seccomp_filters_before"`
+	CGO           string            `json:"cgo"`
+	Report        sandbox.Report    `json:"report"`
+	Error         string            `json:"error"`
+	Threads       []threadResult    `json:"threads"`
+	Probes        map[string]string `json:"probes"`
 }
 
 // layout: <d>/allowed/ok.txt (a read root), <d>/outside/secret.txt (no root).
@@ -243,7 +254,7 @@ func runApplier(t *testing.T, args ...string) applierOut {
 func TestApplyFilesystemAllThreads(t *testing.T) {
 	needABI(t, 1)
 	pf, allowed, outside := layout(t, "best-effort", "")
-	out := runApplier(t, "-policy", pf, "-threads", "6", "-read", outside, "-allowed", allowed)
+	out := runApplier(t, "-policy", pf, "-threads", "6", "-read", outside, "-allowed", allowed, "-mptcp", "-bind")
 	if out.Error != "" {
 		t.Fatalf("apply: %s", out.Error)
 	}
@@ -256,7 +267,11 @@ func TestApplyFilesystemAllThreads(t *testing.T) {
 	tids := map[int]bool{}
 	for _, th := range out.Threads {
 		tids[th.TID] = true
-		if th.NoNewPrivs != "1" || th.Read != "EACCES" {
+		before, _ := strconv.Atoi(out.FiltersBefore)
+		if after, err := strconv.Atoi(th.Filters); err != nil || after != before+1 {
+			t.Fatalf("thread %d: seccomp filters %q after, %q before; want exactly one more", th.TID, th.Filters, out.FiltersBefore)
+		}
+		if th.NoNewPrivs != "1" || th.Read != "EACCES" || th.Seccomp != "2" {
 			t.Fatalf("thread %+v", th)
 		}
 	}
@@ -265,6 +280,19 @@ func TestApplyFilesystemAllThreads(t *testing.T) {
 	}
 	if out.Probes["read"] != "EACCES" || out.Probes["allowed"] != "READ" {
 		t.Fatalf("probes %v", out.Probes)
+	}
+	// MPTCP is unavailable (seccomp), so a default Go listener falls back to
+	// plain TCP: it binds where Landlock cannot govern TCP (ABI < 4) and is
+	// denied where it can.
+	if out.Probes["mptcp"] != "EPROTONOSUPPORT" || out.Report.MPTCP != "blocked by seccomp" {
+		t.Fatalf("mptcp: %v %q", out.Probes, out.Report.MPTCP)
+	}
+	wantBind := "BOUND"
+	if out.Report.Enforced.Net {
+		wantBind = "EACCES"
+	}
+	if out.Probes["bind"] != wantBind {
+		t.Fatalf("default listener: %q, want %q", out.Probes["bind"], wantBind)
 	}
 }
 
