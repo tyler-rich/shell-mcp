@@ -36,6 +36,20 @@ func main() {
 		os.Exit(systemctl(args))
 	case "journalctl":
 		os.Exit(journalctl(args))
+	case "git":
+		// Log the exact environment as a second line, then fail: tests
+		// assert what the gate passes to git, not what git does.
+		if logPath != "" {
+			if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o600); err == nil { //nolint:gosec // G304: test log path baked in by the test
+				env := os.Environ()
+				slices.Sort(env)
+				b, _ := json.Marshal(env)
+				_, _ = f.Write(append(b, '\n'))
+				_ = f.Close()
+			}
+		}
+		fmt.Fprintln(os.Stderr, "fakesys: git stand-in")
+		os.Exit(1)
 	}
 	fmt.Fprintln(os.Stderr, "fakesys: unknown name")
 	os.Exit(2)

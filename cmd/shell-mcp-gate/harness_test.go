@@ -83,6 +83,7 @@ func harnessOptions(version, policyPath, principal string) (ops.Options, error) 
 	if v := os.Getenv("HARNESS_GIT"); v != "" {
 		o.Git = v
 	}
+	o.TestGitCAFile = os.Getenv("HARNESS_GIT_CA")
 	if os.Getenv("HARNESS_FAULT") == "readback" {
 		o.InjectReadBackFault = func(b []byte) []byte { return append(bytes.Clone(b), '!') }
 	}

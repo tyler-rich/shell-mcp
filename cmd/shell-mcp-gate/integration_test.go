@@ -604,3 +604,78 @@ func TestIntegrationServiceOps(t *testing.T) {
 	g.want(g.call("service_list", m{}, env...), "")
 	g.want(g.call("journal", m{"unit": "example-app.service", "lines": 3}, env...), "")
 }
+
+const gitIntegrationPolicy = `version: 1
+max_tier: operator
+sandbox:
+  landlock: {MODE}
+  tcp_connect_ports: [{PORTS}]
+paths:
+  read: [{R}]
+  write: [{W}]
+git:
+  repos:
+    - path: {W}/deploy
+      remote: {REMOTE}
+`
+
+// gitSetup serves deploy.git over HTTPS, clones it into the write root and
+// pushes one more commit upstream, so that a pull has work to do.
+func (g *gate) gitSetup(t *testing.T) (srv *gatetest.GitServer, repo string, env []string) {
+	t.Helper()
+	srv = gatetest.NewGitServer(t)
+	work := srv.Seed(t, "deploy.git", map[string]string{"app.conf": "a\n"})
+	repo = filepath.Join(g.write, "deploy")
+	srv.Clone(t, "deploy.git", repo)
+	ca := filepath.Join(g.read, "git-ca.pem")
+	srv.WriteCA(t, ca)
+	gatetest.Push(t, work, "b.conf", "b\n", "second")
+	return srv, repo, []string{"HARNESS_GIT_CA=" + ca, "HARNESS_GIT=" + gatetest.GitBin}
+}
+
+func (g *gate) gitPolicy(mode, ports, remote string) {
+	g.rawPolicy(strings.NewReplacer("{MODE}", mode, "{PORTS}", ports, "{REMOTE}", remote).Replace(gitIntegrationPolicy))
+}
+
+// TestIntegrationGitPull: git_pull inside the real sandbox, with the
+// server's port listed in tcp_connect_ports, fast-forwards the repo.
+func TestIntegrationGitPull(t *testing.T) {
+	g := newGate(t)
+	srv, repo, env := g.gitSetup(t)
+	g.gitPolicy(defaultMode(), srv.Port(), srv.RepoURL("deploy.git"))
+	var d struct {
+		Updated      bool `json:"updated"`
+		ChangedFiles int  `json:"changed_files"`
+	}
+	r := g.want(g.call("git_pull", m{"repo": repo}, env...), "")
+	if json.Unmarshal(r.Data, &d) != nil || !d.Updated || d.ChangedFiles != 1 {
+		t.Fatalf("pull %s", r.Data)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "b.conf")); err != nil {
+		t.Fatal("pulled file missing")
+	}
+}
+
+// TestIntegrationGitPullUnlistedPort is two-sided (Landlock ABI 4+, CI):
+// with the server's port missing from tcp_connect_ports the kernel refuses
+// git's connect and the pull fails with HEAD unchanged; the same pull with
+// the port listed succeeds.
+func TestIntegrationGitPullUnlistedPort(t *testing.T) {
+	needABI(t, sandbox.ABINet)
+	g := newGate(t)
+	srv, repo, env := g.gitSetup(t)
+	other, stop := listen(t)
+	defer stop()
+	head := func() string { return strings.TrimSpace(gatetest.Git(t, repo, "rev-parse", "HEAD")) }
+	before := head()
+	g.gitPolicy("required", strconv.Itoa(other), srv.RepoURL("deploy.git"))
+	r := g.call("git_pull", m{"repo": repo}, env...)
+	if r.OK || r.Error == nil || r.Error.Code != "exec_failed" || head() != before {
+		t.Fatalf("pull to an unlisted port: ok=%v err=%+v", r.OK, r.Error)
+	}
+	g.gitPolicy("required", srv.Port(), srv.RepoURL("deploy.git"))
+	g.want(g.call("git_pull", m{"repo": repo}, env...), "")
+	if head() == before {
+		t.Fatal("control: the pull with the port listed did not move HEAD")
+	}
+}

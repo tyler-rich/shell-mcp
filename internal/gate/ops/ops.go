@@ -54,6 +54,10 @@ type Options struct {
 	Systemctl  string
 	Journalctl string
 	Git        string
+	// TestGitCAFile, when set, is passed to git as http.sslCAInfo so that
+	// tests can pull from their own HTTPS server. Tests only; production
+	// never sets it and never relaxes TLS verification.
+	TestGitCAFile string
 
 	// SSHConnection is SSH_CONNECTION (nil when unset), for the audit line.
 	SSHConnection *string
@@ -263,3 +267,9 @@ func (s *server) timeout() time.Duration {
 	}
 	return d
 }
+
+// GitArgs is not implemented yet.
+func GitArgs(_, _ string, _ ...string) []string { return nil }
+
+// GitEnv is not implemented yet.
+func GitEnv(_, _ string) []string { return nil }
