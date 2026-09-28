@@ -136,7 +136,8 @@ Before reading the request, the gate sets `no_new_privs` and applies a Landlock 
 |---|---|
 | read + execute | `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/etc` (read only), plus `sandbox.system_read_exec` |
 | read | `paths.read` roots; `/proc` (for native system ops); journal directories when `journal` is configured |
-| read + write | `paths.write` roots |
+| read + write | `paths.write` roots (no execute) |
+| single files | `/dev/null` (read, write, truncate) and `/dev/urandom` (read) — these two files only, never `/dev` itself, no ioctl; many declared binaries open them |
 | unix socket connect | the system D-Bus socket when `services.control` is configured; the helper socket(s) when `privileged.enabled`. On kernels whose Landlock ABI does not govern pathname Unix-socket connects, file permissions and the helper's peer-UID check are the controls — `hello` reports which applies. |
 | TCP connect | only `sandbox.tcp_connect_ports`; no TCP bind at all |
 | IPC scope | signals and abstract Unix sockets limited to the gate's own domain where the kernel ABI supports it |
