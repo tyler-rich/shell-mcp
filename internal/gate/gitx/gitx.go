@@ -8,6 +8,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -240,10 +242,12 @@ func ParseClean(b []byte) (remove, skipped []string, err error) {
 }
 
 // KV is one configuration entry, as `git config --list -z` prints it:
-// section and variable names lowercased, subsections verbatim.
+// section and variable names lowercased, subsections verbatim. HasValue
+// is false for a key written without "=" (git's implicit true).
 type KV struct {
-	Key   string
-	Value string
+	Key      string
+	Value    string
+	HasValue bool
 }
 
 // ParseConfig parses `git config --list -z`: "key\nvalue\0" entries, or
@@ -257,48 +261,196 @@ func ParseConfig(b []byte) ([]KV, error) {
 	}
 	var out []KV
 	for _, e := range bytes.Split(b[:len(b)-1], []byte{0}) {
-		k, v, _ := bytes.Cut(e, []byte{'\n'})
+		k, v, has := bytes.Cut(e, []byte{'\n'})
 		if len(k) == 0 || !utf8.Valid(k) {
 			return nil, bad("config key")
 		}
 		if len(out) == maxRecords {
 			return nil, bad("config: too many entries")
 		}
-		out = append(out, KV{Key: string(k), Value: string(v)})
+		out = append(out, KV{Key: string(k), Value: string(v), HasValue: has})
 	}
 	return out, nil
 }
 
-// allowedKeys are the repository-local keys the gate accepts: the inert
-// ones `git init` and `git clone` write. Everything else — filters,
-// textconv and external diff drivers, url.*.insteadOf, include and
-// includeIf, core.askPass, core.worktree, http.*, credential.*, other
-// remotes, extensions — is refused, because repository-local configuration
-// can make git run commands or talk to another host.
-var allowedKeys = map[string]bool{
-	"core.repositoryformatversion": true, "core.filemode": true, "core.bare": true, "core.logallrefupdates": true,
-	"core.ignorecase": true, "core.precomposeunicode": true, "core.symlinks": true,
-	"remote.origin.url": true, "remote.origin.fetch": true,
+// The repository-local configuration the gate accepts (POLICY §7): keys
+// that git uses only as data for the gate's fixed commands, each with the
+// values git itself accepts for it. Verified against git 2.47.3 and 2.55.0
+// (documentation and source). None of these keys can name a program, a
+// path git executes or reads configuration from, a URL, a proxy,
+// credentials, an include, a filter, a hook, an editor, a pager, a signing
+// program, or another git directory or work tree. Everything else —
+// filters (so Git LFS), textconv and external diff drivers, url.*.insteadOf,
+// include and includeIf, core.askPass/editor/pager/worktree, http.*,
+// credential.*, gpg.*, other remotes, extensions, maintenance.*, gc.* other
+// than gc.auto — is refused. Values are checked because a malformed value
+// can crash git (a valueless remote.<name>.tagOpt segfaults) or make it die
+// part-way through an operation (gc.auto after a fast-forward in 2.55).
+
+// valueRule checks one entry's value.
+type valueRule func(kv *KV) bool
+
+func isBool(kv *KV) bool {
+	if !kv.HasValue {
+		return true // "key" alone is true
+	}
+	switch strings.ToLower(kv.Value) {
+	case "", "true", "false", "yes", "no", "on", "off":
+		return true
+	}
+	_, err := strconv.Atoi(kv.Value)
+	return err == nil
 }
 
-// CheckConfig returns the first key outside the allowlist, or ok.
-// branch.<name>.remote and branch.<name>.merge are allowed for any
-// non-empty branch name.
-func CheckConfig(kvs []KV) (badKey string, ok bool) {
-	for _, kv := range kvs {
-		k := kv.Key
-		if allowedKeys[k] {
+func boolOr(words ...string) valueRule {
+	return func(kv *KV) bool {
+		return isBool(kv) || (kv.HasValue && slices.Contains(words, strings.ToLower(kv.Value)))
+	}
+}
+
+func oneOf(words ...string) valueRule {
+	return func(kv *KV) bool { return kv.HasValue && slices.Contains(words, kv.Value) }
+}
+
+func hasValue(kv *KV) bool { return kv.HasValue }
+
+func isInt(kv *KV) bool {
+	_, err := strconv.Atoi(kv.Value)
+	return kv.HasValue && err == nil
+}
+
+// gcAutoRE is git_config_int's syntax: a decimal with an optional k/m/g
+// unit.
+var gcAutoRE = regexp.MustCompile(`^-?\d{1,18}[kKmMgG]?$`)
+
+func isGCAuto(kv *KV) bool { return kv.HasValue && gcAutoRE.MatchString(kv.Value) }
+
+// colorBool is git_config_colorbool: never, always, auto or a boolean.
+func colorBool(kv *KV) bool { return boolOr("never", "always", "auto")(kv) }
+
+// colorWords are the names and attributes git's color_parse accepts.
+var colorWords = map[string]bool{
+	"normal": true, "default": true, "reset": true,
+	"black": true, "red": true, "green": true, "yellow": true, "blue": true, "magenta": true, "cyan": true, "white": true,
+	"bold": true, "dim": true, "ul": true, "blink": true, "reverse": true, "italic": true, "strike": true,
+}
+
+var hexColorRE = regexp.MustCompile(`^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$`)
+
+// colorSpec is a conservative subset of git's color_parse: at most eight
+// whitespace-separated words, each a color name (optionally "bright"), a
+// 0..255 number, #rgb/#rrggbb, or an attribute (optionally "no"/"no-").
+func colorSpec(kv *KV) bool {
+	if !kv.HasValue {
+		return false // color_parse needs a value
+	}
+	words := strings.Fields(strings.ToLower(kv.Value))
+	if len(words) > 8 {
+		return false
+	}
+	for _, w := range words {
+		if n, err := strconv.Atoi(w); err == nil {
+			if n < -1 || n > 255 {
+				return false
+			}
 			continue
 		}
-		if rest, found := strings.CutPrefix(k, "branch."); found {
-			if name, found := strings.CutSuffix(rest, ".remote"); found && name != "" {
-				continue
-			}
-			if name, found := strings.CutSuffix(rest, ".merge"); found && name != "" {
-				continue
-			}
+		base := strings.TrimPrefix(w, "bright")
+		attr := strings.TrimPrefix(strings.TrimPrefix(w, "no-"), "no")
+		if !colorWords[w] && !colorWords[base] && !colorWords[attr] && !hexColorRE.MatchString(w) {
+			return false
 		}
-		return k, false
+	}
+	return true
+}
+
+// exactRules are keys allowed by exact name.
+var exactRules = map[string]valueRule{
+	// Written by git init/clone.
+	"core.repositoryformatversion": isInt,
+	"core.filemode":                isBool,
+	"core.bare":                    isBool,
+	"core.logallrefupdates":        boolOr("always"),
+	"core.ignorecase":              isBool,
+	"core.precomposeunicode":       isBool,
+	"core.symlinks":                isBool,
+	"remote.origin.url":            hasValue,
+	"remote.origin.fetch":          hasValue,
+	// Identity: used only as the reflog ident; the gate never commits.
+	"user.name":  hasValue,
+	"user.email": hasValue,
+	// Line endings: built-in conversions of file content, no program.
+	"core.autocrlf": boolOr("input"),
+	"core.eol":      oneOf("lf", "crlf", "native"),
+	"core.safecrlf": boolOr("warn"),
+	// Pull strategy: the gate's `pull --ff-only --no-rebase` overrides both
+	// (git never reads them for that command line).
+	"pull.rebase": boolOr("merges", "m", "interactive", "i"),
+	"pull.ff":     boolOr("only"),
+	// Read only by init/clone and `remote show`.
+	"init.defaultbranch": hasValue,
+	// Pruning deletes stale remote-tracking refs only.
+	"fetch.prune":         isBool,
+	"remote.origin.prune": isBool,
+	// Only these two strings do anything; a valueless tagOpt crashes git.
+	"remote.origin.tagopt": oneOf("--tags", "--no-tags"),
+	// Auto-gc threshold (a number); gc.autoDetach and maintenance.* stay out.
+	"gc.auto": isGCAuto,
+}
+
+// ruleFor returns the rule for key, or nil when the key is not allowed.
+func ruleFor(key string) valueRule {
+	if r, ok := exactRules[key]; ok {
+		return r
+	}
+	first, last := strings.IndexByte(key, '.'), strings.LastIndexByte(key, '.')
+	if first < 0 {
+		return nil
+	}
+	section, sub, name := key[:first], "", key[last+1:]
+	if last > first {
+		sub = key[first+1 : last]
+	}
+	switch section {
+	case "branch":
+		// branch.<name>.remote/merge/rebase; rebase is overridden like
+		// pull.rebase.
+		if sub == "" {
+			return nil
+		}
+		switch name {
+		case "remote", "merge":
+			return hasValue
+		case "rebase":
+			return boolOr("merges", "m", "interactive", "i")
+		}
+	case "advice":
+		// Every advice.* key is a boolean hint switch (output on stderr).
+		if sub == "" {
+			return isBool
+		}
+	case "color":
+		// color.<cmd> is a color boolean, color.<cmd>.<slot> a color.
+		// color.blame.* is left out: blame is never run and
+		// highlightRecent is a list of colors and dates.
+		switch {
+		case sub == "" && name != "blame":
+			return colorBool
+		case sub != "" && sub != "blame" && !strings.Contains(sub, "."):
+			return colorSpec
+		}
+	}
+	return nil
+}
+
+// CheckConfig returns the first key that is not allowed or whose value git
+// would not accept, or ok.
+func CheckConfig(kvs []KV) (badKey string, ok bool) {
+	for i := range kvs {
+		r := ruleFor(kvs[i].Key)
+		if r == nil || !r(&kvs[i]) {
+			return kvs[i].Key, false
+		}
 	}
 	return "", true
 }

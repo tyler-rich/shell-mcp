@@ -125,17 +125,19 @@ func TestConfigAllowlist(t *testing.T) {
 // fixed commands are accepted (verified against git 2.47.3 and 2.55.0,
 // POLICY §7).
 func TestConfigAllowlistDataKeys(t *testing.T) {
-	for _, key := range []string{"user.name", "user.email", "core.autocrlf", "core.eol", "core.safecrlf", "core.ignorecase",
-		"pull.rebase", "pull.ff", "init.defaultbranch", "branch.main.rebase", "branch.Feature/X.rebase", "fetch.prune",
-		"remote.origin.prune", "remote.origin.tagopt", "color.ui", "color.status", "color.diff", "color.branch", "color.pager",
-		"color.diff.meta", "color.status.untracked", "color.decorate.branch", "color.advice", "color.advice.hint",
-		"advice.detachedhead", "advice.statushints", "gc.auto"} {
-		kvs, err := ParseConfig([]byte(key + "\nx\x00"))
+	for key, value := range map[string]string{"user.name": "Example Dev", "user.email": "dev@example.test", "core.autocrlf": "input",
+		"core.eol": "lf", "core.safecrlf": "warn", "core.ignorecase": "false", "pull.rebase": "interactive", "pull.ff": "only",
+		"init.defaultbranch": "trunk", "branch.main.rebase": "true", "branch.Feature/X.rebase": "merges", "fetch.prune": "true",
+		"remote.origin.prune": "false", "remote.origin.tagopt": "--no-tags", "color.ui": "always", "color.status": "auto",
+		"color.diff": "never", "color.branch": "true", "color.pager": "false", "color.diff.meta": "blue bold",
+		"color.status.untracked": "red", "color.decorate.branch": "brightgreen", "color.advice": "true",
+		"color.advice.hint": "yellow nodim", "advice.detachedhead": "false", "advice.statushints": "no", "gc.auto": "0"} {
+		kvs, err := ParseConfig([]byte(key + "\n" + value + "\x00"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if bad, ok := CheckConfig(kvs); !ok {
-			t.Errorf("%s refused (%s)", key, bad)
+			t.Errorf("%s=%s refused (%s)", key, value, bad)
 		}
 	}
 }
@@ -174,7 +176,7 @@ func TestConfigAllowlistValues(t *testing.T) {
 
 // TestRefusalHint: the refusal says how to remove the key or its section.
 func TestRefusalHint(t *testing.T) {
-	for key, want := range map[string]string{
+	for key, want := range map[string]string{ //nolint:gosec // G101: git config key names and commands, not credentials
 		"filter.lfs.process":       "git config --remove-section filter.lfs",
 		"diff.x.textconv":          "git config --remove-section diff.x",
 		"core.askpass":             "git config --unset-all core.askpass",
