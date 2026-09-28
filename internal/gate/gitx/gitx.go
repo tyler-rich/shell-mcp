@@ -314,5 +314,14 @@ func Value(kvs []KV, key string) (string, bool) {
 	return v, ok
 }
 
-// RemovalHint is not implemented yet.
-func RemovalHint(_ string) string { return "" }
+// RemovalHint returns the git command an operator runs in the repository
+// to remove a refused key: the whole "section.subsection" for a key with a
+// subsection (a filter, diff or merge driver, a url rewrite, another
+// remote), otherwise every value of the key.
+func RemovalHint(key string) string {
+	first, last := strings.IndexByte(key, '.'), strings.LastIndexByte(key, '.')
+	if first > 0 && last > first {
+		return "git config --remove-section " + key[:last]
+	}
+	return "git config --unset-all " + key
+}

@@ -140,6 +140,38 @@ func TestConfigAllowlistDataKeys(t *testing.T) {
 	}
 }
 
+// TestConfigAllowlistValues: an allowed key with a value git would crash
+// or die on (verified on 2.55.0: a valueless remote.<name>.tagOpt
+// segfaults; a bad color, boolean or gc.auto is fatal, the last after a
+// fast-forward has already happened) is refused too, naming the key.
+func TestConfigAllowlistValues(t *testing.T) {
+	good := "user.name\nExample\x00core.autocrlf\ninput\x00core.eol\nlf\x00core.safecrlf\nwarn\x00pull.rebase\ninteractive\x00" +
+		"pull.ff\nonly\x00branch.main.rebase\nmerges\x00remote.origin.tagopt\n--no-tags\x00gc.auto\n6700\x00gc.auto\n1k\x00" +
+		"color.ui\nauto\x00color.diff\nalways\x00color.pager\x00color.diff.meta\nbrightblue bold\x00color.status.added\n#00ff00 ul\x00" +
+		"color.advice.hint\n214 nodim\x00advice.detachedhead\nfalse\x00advice.statushints\x00fetch.prune\nyes\x00core.ignorecase\n0\x00"
+	kvs, err := ParseConfig([]byte(good))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bad, ok := CheckConfig(kvs); !ok {
+		t.Fatalf("valid values refused at %s", bad)
+	}
+	for _, in := range []string{"remote.origin.tagopt\x00", "remote.origin.tagopt\n--tagz\x00", "gc.auto\nlots\x00", "gc.auto\x00",
+		"user.name\x00", "user.email\x00", "color.ui\nbogus\x00", "color.diff.meta\nbogus\x00", "color.diff.meta\x00",
+		"advice.detachedhead\nmaybe\x00", "core.autocrlf\nsometimes\x00", "core.eol\nmac\x00", "core.safecrlf\nloud\x00",
+		"fetch.prune\nperhaps\x00", "remote.origin.prune\nx\x00", "pull.ff\nnever\x00", "pull.rebase\nsideways\x00",
+		"color.blame.highlightrecent\nblue,12 month ago,white\x00", "color.blame.repeatedlines\nblue\x00", "advice.a.b\ntrue\x00",
+		"init.defaultbranch\x00"} {
+		kv, err := ParseConfig([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bad, ok := CheckConfig(kv); ok || bad != kv[0].Key {
+			t.Errorf("%q: ok=%v bad=%q", in, ok, bad)
+		}
+	}
+}
+
 // TestRefusalHint: the refusal says how to remove the key or its section.
 func TestRefusalHint(t *testing.T) {
 	for key, want := range map[string]string{
