@@ -588,3 +588,19 @@ func TestIntegrationSystemOps(t *testing.T) {
 		}
 	}
 }
+
+// TestIntegrationServiceOps runs service_status, service_list and journal
+// inside the real sandbox against the fake systemctl/journalctl (declared
+// through the harness, never through the policy): the built-in ops start
+// their binaries from the read+execute directories only.
+func TestIntegrationServiceOps(t *testing.T) {
+	g := newGate(t)
+	sc := gatetest.BuildFakeSys(t, g.bin, "systemctl", "")
+	jc := gatetest.BuildFakeSys(t, g.bin, "journalctl", "")
+	g.rawPolicy("version: 1\nmax_tier: read\nsandbox:\n  landlock: " + defaultMode() + "\n  system_read_exec: [{BIN}]\n" +
+		"services:\n  status: [\"example-*.service\"]\njournal:\n  units: [\"example-*.service\"]\n")
+	env := []string{"HARNESS_SYSTEMCTL=" + sc, "HARNESS_JOURNALCTL=" + jc}
+	g.want(g.call("service_status", m{"unit": "example-app.service"}, env...), "")
+	g.want(g.call("service_list", m{}, env...), "")
+	g.want(g.call("journal", m{"unit": "example-app.service", "lines": 3}, env...), "")
+}

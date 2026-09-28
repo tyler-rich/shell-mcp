@@ -145,3 +145,11 @@ func Mkdir(t testing.TB, path string, mode os.FileMode) {
 		t.Fatal(err)
 	}
 }
+
+// BuildFakeSys builds the fake systemctl/journalctl (testdata/fakesys) as
+// dir/name; name selects the behaviour. Each run appends its argv as a JSON
+// line to logPath ("" disables the log).
+func BuildFakeSys(t testing.TB, dir, name, logPath string) string {
+	t.Helper()
+	return Build(t, "internal/gate/gatetest/testdata/fakesys", dir, name, nil, "-ldflags", "-X main.logPath="+logPath)
+}

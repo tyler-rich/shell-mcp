@@ -47,6 +47,14 @@ type Options struct {
 	// InjectReadBackFault is passed to fsx; tests only.
 	InjectReadBackFault func([]byte) []byte
 
+	// Systemctl, Journalctl and Git are the absolute paths of the binaries
+	// the built-in service, journal and git operations run. Production uses
+	// the fixed system paths; tests inject fakes. Each is ownership-checked
+	// with Trust before it runs.
+	Systemctl  string
+	Journalctl string
+	Git        string
+
 	// SSHConnection is SSH_CONNECTION (nil when unset), for the audit line.
 	SSHConnection *string
 	// Audit receives one record per request; nil disables auditing.
