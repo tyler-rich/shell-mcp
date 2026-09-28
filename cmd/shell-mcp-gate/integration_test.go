@@ -356,7 +356,7 @@ func TestIntegrationTiersAndDecoding(t *testing.T) {
 	g.want(g.serve(`{"v":1,"id":"a","op":"hello"}`+strings.Repeat(" ", protocol.MaxRequestBytes)+"\n"), "too_large")
 	g.want(g.serve(`{"v":1,"id":"a","op":"hello","op":"write_file"}`+"\n"), "bad_request")
 	g.want(g.serve(`{"v":1,"id":"a","op":"hello","unknown":true}`+"\n"), "bad_request")
-	g.want(g.serve(`{"v":1,"id":"a","op":"sysinfo"}`+"\n"), "unknown_op")
+	g.want(g.serve(`{"v":1,"id":"a","op":"made_up"}`+"\n"), "unknown_op")
 }
 
 func TestIntegrationIdentity(t *testing.T) {
@@ -574,5 +574,17 @@ func TestCGOBuiltGateRefuses(t *testing.T) {
 	g.want(&r, "install_insecure")
 	if !strings.Contains(r.Error.Message, "cgo") {
 		t.Fatalf("message %q", r.Error.Message)
+	}
+}
+
+// TestIntegrationSystemOps runs the native system ops inside the real
+// sandbox: they read /proc and /etc (granted read-only) and nothing else.
+func TestIntegrationSystemOps(t *testing.T) {
+	g := newGate(t)
+	for _, op := range []string{"sysinfo", "disk", "processes"} {
+		r := g.want(g.call(op, m{}), "")
+		if len(r.Data) < 20 {
+			t.Fatalf("%s: %s", op, r.Data)
+		}
 	}
 }
