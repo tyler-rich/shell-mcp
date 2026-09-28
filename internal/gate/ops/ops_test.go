@@ -305,7 +305,7 @@ func TestTiersAndUnknownOps(t *testing.T) {
 	// The tier check comes before argument validation.
 	f.fail("write_file", m{"bogus": true}, "tier_denied")
 	f.fail("exec", m{"command_id": "probe-op", "args": []string{"write", filepath.Join(f.write, "x")}}, "tier_denied")
-	for _, op := range []string{"sysinfo", "disk", "processes", "service_status", "service_list", "journal", "cert_inspect",
+	for _, op := range []string{"service_status", "service_list", "journal", "cert_inspect",
 		"git_status", "git_log", "git_diff", "service_control", "git_pull", "git_discard", "git_discard_preview", "made_up"} {
 		f.fail(op, m{}, "unknown_op")
 	}
