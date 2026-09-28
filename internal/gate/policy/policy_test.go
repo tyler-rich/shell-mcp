@@ -496,6 +496,18 @@ func TestCheckChain(t *testing.T) {
 	}
 }
 
+// A service account whose home is "/" must not make "/" protected (every
+// write root would be "inside" it); the home joins the protected set only
+// when it is a real directory below "/".
+func TestServiceHomeSlash(t *testing.T) {
+	f := newFixture(t)
+	f.opts.ServiceHome = "/"
+	p := f.mustLoad(t, minimal+"paths:\n  write: [{W}]\n")
+	if p.ServiceHome != "/" || p.Paths.Protected.Covers(f.write) {
+		t.Fatalf("home / protected everything: %+v", p.ServiceHome)
+	}
+}
+
 func TestParseTier(t *testing.T) {
 	for s, want := range map[string]policy.Tier{"read": policy.TierRead, "operator": policy.TierOperator, "destructive": policy.TierDestructive} {
 		if got, err := policy.ParseTier(s); err != nil || got != want || got.String() != s {
