@@ -56,12 +56,13 @@ func TestAuditLines(t *testing.T) {
 		}
 	}
 	f.ok("read_file", m{"path": filepath.Join(f.write, "a.txt")}, nil)
-	f.ok("exec", m{"command_id": "probe-io", "args": []string{"stdin"}, "stdin_b64": b64}, nil)
+	stdin := base64.StdEncoding.EncodeToString([]byte("STDIN-CANARY")) // within the fixture's 16-byte stdin limit
+	f.ok("exec", m{"command_id": "probe-io", "args": []string{"stdin"}, "stdin_b64": stdin}, nil)
 	f.ok("exec", m{"command_id": "probe-echo", "args": []string{"echo", "ARG-CANARY"}}, nil)
 	f.fail("write_file", m{"path": filepath.Join(f.read, "x"), "content_b64": b64}, "path_denied")
 	lines := []string{line, next(), next(), next(), next()}
 	for i, l := range lines {
-		for _, leak := range []string{content, b64, "ARG-CANARY"} {
+		for _, leak := range []string{content, b64, "ARG-CANARY", "STDIN-CANARY", stdin} {
 			if strings.Contains(l, leak) {
 				t.Errorf("line %d leaks %q: %q", i, leak, l)
 			}

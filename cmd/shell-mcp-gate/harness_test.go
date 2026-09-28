@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/audit"
 	"github.com/tyler-rich/shell-mcp/internal/gate/install"
 	"github.com/tyler-rich/shell-mcp/internal/gate/ops"
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
@@ -65,6 +66,7 @@ func harnessOptions(version, policyPath, principal string) (ops.Options, error) 
 		Executable:   exe,
 		ServiceHome:  os.Getenv("HARNESS_HOME"),
 		ApplySandbox: sandbox.Apply,
+		Audit:        audit.NewSyslog(audit.DevLog),
 	}
 	if v, ok := os.LookupEnv("SSH_ORIGINAL_COMMAND"); ok {
 		o.SSHOriginalCommand = &v
