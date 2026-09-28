@@ -33,7 +33,13 @@ const (
 	// ABINet governs TCP bind and connect.
 	ABINet = 4
 	// ABIScope scopes signals and abstract Unix sockets to the domain.
-	ABIScope = 6
+	// Scoping arrived in ABI 6, but below ABI 8 go-landlock restricts each
+	// thread separately (psx), which gives every thread its own domain: with
+	// scoping on, the gate could not signal a child started from another
+	// thread (seen on CI at ABI 7: exec timeouts could not kill). Scoping is
+	// therefore handled only from ABI 8, where LANDLOCK_RESTRICT_SELF_TSYNC
+	// gives the whole process one domain.
+	ABIScope = 8
 	// ABIUnixSocket governs connect(2)/sendmsg(2) on pathname Unix sockets
 	// (LANDLOCK_ACCESS_FS_RESOLVE_UNIX).
 	ABIUnixSocket = 9
@@ -157,6 +163,7 @@ func Plan(p *policy.Policy, abi int) (Report, error) {
 		RequiredMinABI:  RequiredMinABI,
 		TCPConnectPorts: append([]uint16{}, p.Sandbox.TCPConnectPorts...),
 		ExtraFiles:      []string{"/dev/null (read, write, truncate)", "/dev/urandom (read)"},
+		MPTCP:           MPTCPStatus,
 		Enforced: Enforcement{
 			FS:         eff >= ABIFSFull,
 			Net:        eff >= ABINet,
@@ -296,15 +303,23 @@ func Apply(p *policy.Policy) (Report, error) {
 		}
 		r.Applied = true
 	}
-	if err := allThreadsNoNewPrivs(); err != nil {
+	// Landlock cannot govern MPTCP; make it unavailable (seccomp.go).
+	if err := applySeccomp(); err != nil {
+		if p.Sandbox.Landlock == policy.LandlockRequired {
+			return r, fmt.Errorf("%w: %w", ErrUnavailable, err)
+		}
+		r.MPTCP = "not blocked: seccomp is unavailable"
+	}
+	if err := allThreadsNoNewPrivs(r.MPTCP == MPTCPStatus); err != nil {
 		return r, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	r.NoNewPrivs = true
 	return r, nil
 }
 
-// allThreadsNoNewPrivs checks /proc/self/task/*/status.
-func allThreadsNoNewPrivs() error {
+// allThreadsNoNewPrivs checks /proc/self/task/*/status: NoNewPrivs is 1,
+// and (when the MPTCP filter was installed) Seccomp is 2 (filter mode).
+func allThreadsNoNewPrivs(wantSeccomp bool) error {
 	tasks, err := os.ReadDir("/proc/self/task")
 	if err != nil {
 		return fmt.Errorf("cannot list threads: %w", err)
@@ -317,15 +332,21 @@ func allThreadsNoNewPrivs() error {
 		if err != nil {
 			continue // thread exited
 		}
-		ok := false
+		nnp, filtered := false, false
 		for _, line := range strings.Split(string(b), "\n") {
-			if k, v, found := strings.Cut(line, ":"); found && k == "NoNewPrivs" {
-				ok = strings.TrimSpace(v) == "1"
-				break
+			k, v, found := strings.Cut(line, ":")
+			switch {
+			case found && k == "NoNewPrivs":
+				nnp = strings.TrimSpace(v) == "1"
+			case found && k == "Seccomp":
+				filtered = strings.TrimSpace(v) == "2"
 			}
 		}
-		if !ok {
+		if !nnp {
 			return fmt.Errorf("thread %s does not have NoNewPrivs set", t.Name())
+		}
+		if wantSeccomp && !filtered {
+			return fmt.Errorf("thread %s has no seccomp filter", t.Name())
 		}
 	}
 	return nil

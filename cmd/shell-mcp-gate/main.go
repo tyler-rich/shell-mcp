@@ -190,6 +190,7 @@ func checkPolicy(args []string, stdout, stderr io.Writer) int {
 		pr("     sandbox: mode %s, kernel Landlock ABI %d (effective %d), required needs %d", rep.Mode, abi, rep.EffectiveABI, rep.RequiredMinABI)
 		pr("     sandbox: enforced fs=%v net=%v unix_socket=%v scope=%v; unix sockets: %s",
 			rep.Enforced.FS, rep.Enforced.Net, rep.Enforced.UnixSocket, rep.Enforced.Scope, rep.UnixSocketControl)
+		pr("     sandbox: MPTCP %s (Landlock does not govern MPTCP sockets)", rep.MPTCP)
 		if perr != nil {
 			failf("sandbox: %v", perr)
 		} else if len(rep.NotEnforced) > 0 {
