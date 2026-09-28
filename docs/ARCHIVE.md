@@ -117,7 +117,7 @@ Entry format:
 - **Manual bump:** the golangci-lint image digest in `ci-local.sh`, alongside its version.
 **Versions:** unchanged from the scaffold entry. CI runner tools: Docker 28.0.4, systemd 257.13 (in the probe image).
 
-### 2026-09-27 — Gate security core: protocol v1, strict policy, Landlock sandbox, confinement, templates, exec engine (PR #TBD, branch sec/gate-core)
+### 2026-09-27 — Gate security core: protocol v1, strict policy, Landlock sandbox, confinement, templates, exec engine (PR #3, branch sec/gate-core)
 **Decision:** Implement the gate's security boundary per the S1 prompt, POLICY.md and ARCHITECTURE §4. `shell-mcp-gate serve` runs install checks → strict policy load → `RLIMIT_CORE=0` → Landlock + `no_new_privs` on every thread → only then reads one request → tier check → op → redaction → one JSON response. Ops in this session: `hello`, `policy`, `list_dir`, `stat`, `read_file`, `find`, `write_file`, `mkdir`, `copy`, `move`, `chmod`, `delete`, `delete_preview`, `exec`. `priv_*`: `privileged_disabled`, then `tier_denied` against `privileged.max_tier`, then `unknown_op` until S1c. S1b ops answer `unknown_op`. `check-policy` reports install, policy and the sandbox plan for this kernel without applying it. `polkit` stays a stub. New packages: `internal/pathx` (shared path rules and glob matcher) and `internal/gate/install` (install checks); `internal/gate/gatetest` is test support imported only by tests.
 **Why:** S1 scope (plan §5). Every validator, check, confinement rule, cap and refusal had its test committed first and shown failing (the `test(...)` commits on the branch, listed in the PR body).
 **Clarifications agreed with the maintainer during the session:**
