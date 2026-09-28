@@ -5,6 +5,7 @@ package sandbox
 import (
 	"errors"
 	"fmt"
+	"math"
 	"runtime"
 	"unsafe"
 
@@ -38,6 +39,12 @@ const (
 	offArch        = 4   // seccomp_data.arch
 	offArg0        = 16  // low 32 bits of args[0] (little endian)
 	offArg2        = 32  // low 32 bits of args[2]
+)
+
+// Return values: errno is in the low 16 bits of SECCOMP_RET_ERRNO.
+const (
+	retEPERM   = unix.SECCOMP_RET_ERRNO | uint32(unix.EPERM)
+	retNoProto = unix.SECCOMP_RET_ERRNO | uint32(unix.EPROTONOSUPPORT)
 )
 
 // MPTCPStatus is how hello reports MPTCP handling.
@@ -78,10 +85,11 @@ func assemble(src []insn) []unix.SockFilter {
 			return 0
 		}
 		target, ok := pos[label]
-		if !ok || target <= from || target-from-1 > 255 {
+		d := target - from - 1
+		if !ok || d < 0 || d > math.MaxUint8 {
 			panic("seccomp: bad jump to " + label) // a programming error, caught by TestMPTCPFilter
 		}
-		return uint8(target - from - 1)
+		return uint8(d)
 	}
 	out := make([]unix.SockFilter, len(src))
 	for i, in := range src {
@@ -94,14 +102,13 @@ func assemble(src []insn) []unix.SockFilter {
 
 // mptcpFilter returns the seccomp program described above.
 func mptcpFilter() []unix.SockFilter {
-	errno := func(e unix.Errno) uint32 { return unix.SECCOMP_RET_ERRNO | uint32(e) }
 	return assemble([]insn{
 		{op: ld(offArch)},
 		{op: jeq(unix.AUDIT_ARCH_X86_64), jt: "x86_64"},
 		{op: jeq(unix.AUDIT_ARCH_AARCH64), jt: "aarch64"},
 		{op: jeq(unix.AUDIT_ARCH_I386), jt: "i386"},
 		{op: jeq(unix.AUDIT_ARCH_ARM), jt: "arm"},
-		{op: ret(errno(unix.EPERM))}, // an architecture these kernels cannot produce
+		{op: ret(retEPERM)}, // an architecture these kernels cannot produce
 
 		{label: "x86_64", op: ld(offNR)},
 		{op: jset(x32SyscallBit), jt: "deny"},
@@ -126,8 +133,8 @@ func mptcpFilter() []unix.SockFilter {
 		{op: jeq(unix.IPPROTO_MPTCP), jt: "noproto", jf: "allow"},
 
 		{label: "allow", op: ret(unix.SECCOMP_RET_ALLOW)},
-		{label: "deny", op: ret(errno(unix.EPERM))},
-		{label: "noproto", op: ret(errno(unix.EPROTONOSUPPORT))},
+		{label: "deny", op: ret(retEPERM)},
+		{label: "noproto", op: ret(retNoProto)},
 	})
 }
 
@@ -139,7 +146,11 @@ var errSeccomp = errors.New("seccomp filter could not be installed")
 // CGO_ENABLED=0). no_new_privs must already be set. Children inherit it.
 func applySeccomp() error {
 	f := mptcpFilter()
-	prog := unix.SockFprog{Len: uint16(len(f)), Filter: &f[0]}
+	n := len(f)
+	if n == 0 || n > math.MaxUint16 {
+		return fmt.Errorf("%w: program has %d instructions", errSeccomp, n)
+	}
+	prog := unix.SockFprog{Len: uint16(n), Filter: &f[0]}
 	err := llsys.AllThreadsPrctl(unix.PR_SET_SECCOMP, unix.SECCOMP_MODE_FILTER,
 		uintptr(unsafe.Pointer(&prog)), 0, 0) //nolint:gosec // G103: prctl(PR_SET_SECCOMP) takes a pointer to the sock_fprog; both are kept alive below
 	runtime.KeepAlive(&prog)
