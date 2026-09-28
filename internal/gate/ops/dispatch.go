@@ -40,7 +40,7 @@ type opSpec struct {
 // opOrder is the order ops are listed in by hello.
 var opOrder = []string{
 	protocol.OpHello, protocol.OpPolicy, protocol.OpSysinfo, protocol.OpDisk, protocol.OpProcesses,
-	protocol.OpListDir, protocol.OpStat, protocol.OpReadFile, protocol.OpFind, protocol.OpDeletePreview, protocol.OpWriteFile, protocol.OpMkdir, protocol.OpCopy,
+	protocol.OpListDir, protocol.OpStat, protocol.OpReadFile, protocol.OpFind, protocol.OpCertInspect, protocol.OpDeletePreview, protocol.OpWriteFile, protocol.OpMkdir, protocol.OpCopy,
 	protocol.OpMove, protocol.OpChmod, protocol.OpDelete,
 }
 
@@ -56,6 +56,7 @@ func opTable() map[string]opSpec {
 		protocol.OpStat:          {policy.TierRead, (*server).stat},
 		protocol.OpReadFile:      {policy.TierRead, (*server).readFile},
 		protocol.OpFind:          {policy.TierRead, (*server).find},
+		protocol.OpCertInspect:   {policy.TierRead, (*server).certInspect},
 		protocol.OpDeletePreview: {policy.TierRead, (*server).deletePreview},
 		protocol.OpWriteFile:     {policy.TierOperator, (*server).writeFile},
 		protocol.OpMkdir:         {policy.TierOperator, (*server).mkdir},
