@@ -83,7 +83,8 @@ func TestCheckPolicyWarnsGTFOBins(t *testing.T) {
 	gatetest.WriteFile(t, p, "version: 1\nmax_tier: read\nsandbox:\n  landlock: best-effort\n  system_read_exec: ["+filepath.Join(d, "bin")+
 		"]\ncommands:\n  - id: list-archive\n    path: "+filepath.Join(d, "bin", "tar")+"\n    tier: read\n    templates: [[\"-tf\", \"{path:read}\"]]\n", 0o644)
 	var out, errb bytes.Buffer
-	checkPolicyWith([]string{"--policy", p}, &out, &errb, gatetest.Trust())
+	gatetest.Mkdir(t, filepath.Join(d, "home"), 0o755)
+	checkPolicyWith([]string{"--policy", p}, &out, &errb, gatetest.Trust(), filepath.Join(d, "home"))
 	if !strings.Contains(out.String(), "WARN commands[list-archive]") || !strings.Contains(out.String(), "GTFOBins") ||
 		!strings.Contains(out.String(), "command execution") {
 		t.Fatalf("check-policy:\n%s", out.String())

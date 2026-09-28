@@ -36,7 +36,7 @@ func TestRuleEscapedUnit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(got, `"example\x2dapp.service": ["start"]`) {
+	if !strings.Contains(got, `"example\\x2dapp.service": ["start"]`) {
 		t.Fatalf("escaping:\n%s", got)
 	}
 }
