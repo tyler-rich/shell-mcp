@@ -141,6 +141,9 @@ func mptcpFilter() []unix.SockFilter {
 // errSeccomp wraps a failure to install the filter.
 var errSeccomp = errors.New("seccomp filter could not be installed")
 
+// ErrSeccomp is not wired up yet.
+var ErrSeccomp = errors.New("not wired")
+
 // applySeccomp installs the filter on every thread with the same all-thread
 // mechanism as no_new_privs (psx: syscall.AllThreadsSyscall with
 // CGO_ENABLED=0). no_new_privs must already be set. Children inherit it.

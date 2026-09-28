@@ -18,6 +18,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/audit"
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/install"
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
@@ -45,6 +46,11 @@ type Options struct {
 	ApplySandbox func(*policy.Policy) (sandbox.Report, error)
 	// InjectReadBackFault is passed to fsx; tests only.
 	InjectReadBackFault func([]byte) []byte
+
+	// SSHConnection is SSH_CONNECTION (nil when unset), for the audit line.
+	SSHConnection *string
+	// Audit receives one record per request; nil disables auditing.
+	Audit audit.Sink
 }
 
 // ProductionOptions describes the running process: its real identity, its

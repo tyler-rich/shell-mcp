@@ -123,6 +123,15 @@ func serve(args []string, stdin io.Reader, stdout io.Writer, mk optionsFunc) int
 // kernel without applying it. Findings go to stdout; the exit code is 1 if
 // anything would make serve refuse.
 func checkPolicy(args []string, stdout, stderr io.Writer) int {
+	return checkPolicyWith(args, stdout, stderr, policy.RootTrust())
+}
+
+// polkitWith is not implemented yet.
+func polkitWith(_ []string, _, _ io.Writer, _ policy.Trust) int { return 2 }
+
+// checkPolicyWith is checkPolicy with the trust set as a parameter; only
+// tests pass anything but policy.RootTrust().
+func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust) int {
 	fs := flag.NewFlagSet("check-policy", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	policyPath := fs.String("policy", "", "")
@@ -168,7 +177,7 @@ func checkPolicy(args []string, stdout, stderr io.Writer) int {
 	}
 	pr("     service home used for the protected set: %q", home)
 
-	p, err := policy.Load(*policyPath, policy.LoadOptions{Trust: policy.RootTrust(), GateExecutable: exe, ServiceHome: home})
+	p, err := policy.Load(*policyPath, policy.LoadOptions{Trust: trust, GateExecutable: exe, ServiceHome: home})
 	if err != nil {
 		for _, line := range strings.Split(err.Error(), "\n") {
 			failf("%s", line)

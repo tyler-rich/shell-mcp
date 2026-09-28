@@ -194,4 +194,8 @@ type LoadOptions struct {
 	// ServiceHome is the service account's home directory; it joins the
 	// protected set and is HOME for commands.
 	ServiceHome string
+	// SystemBinDirs are the directories the binary identity check scans
+	// for hard-denied binaries; nil means DefaultSystemBinDirs. Tests set
+	// their own; production never does.
+	SystemBinDirs []string
 }

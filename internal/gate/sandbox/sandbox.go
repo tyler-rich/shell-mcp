@@ -63,6 +63,7 @@ type Rules struct {
 	DevNull        string   // read + write + truncate, the single file
 	DevURandom     string   // read, the single file
 	UnixSocketDirs []string // connect to pathname sockets beneath (ABI >= 9)
+	SyslogSocket   string   // the audit socket; its real directory is granted
 	TCPConnect     []uint16
 }
 
@@ -124,6 +125,9 @@ func Compute(p *policy.Policy) Rules {
 	r.TCPConnect = append([]uint16(nil), p.Sandbox.TCPConnectPorts...)
 	return r
 }
+
+// SocketDir is not implemented yet.
+func SocketDir(_ string) (string, bool) { return "", false }
 
 // rawKernelABI is landlock_create_ruleset(NULL, 0, VERSION), 0 if unavailable.
 func rawKernelABI() int {
