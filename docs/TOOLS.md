@@ -18,16 +18,16 @@ Common optional inputs on tools that run a process: `timeout_seconds` (1..`SHELL
 | `shell_get_policy` | `hello` + `policy` | `target` | Gate version, principal, `max_tier`, roots, limits, service/journal patterns, repos, command ids with templates and tiers. Call this first; it is the source of truth for what a target allows. | S2 |
 | `shell_get_system_info` | `sysinfo` | `target` | OS release, kernel, uptime, load, memory, CPU count. | S3 |
 | `shell_get_disk_usage` | `disk` | `target`, `include_pseudo=false` | Per mount: fs type, size, used, avail, inodes. | S3 |
-| `shell_list_processes` | `processes` | `target`, `user?`, `name_contains?`, `sort_by=rss\|cpu\|pid`, `limit=100 (1..1000)` | Command lines redacted and truncated to 512 chars. | S3 |
+| `shell_list_processes` | `processes` | `target`, `user?`, `name_contains?`, `sort_by=rss\|cpu\|pid`, `limit=100 (1..1000)` | Command lines redacted (values after secret-looking flags, URL userinfo, redaction patterns) and truncated to 512 chars. The walk is bounded by the policy's `max_processes`; a `hidepid` mount is reported. | S3 |
 | `shell_get_service_status` | `service_status` | `target`, `unit` | Active/sub state, load state, main PID, since, memory, restarts, unit file state. | S3 |
-| `shell_list_services` | `service_list` | `target`, `failed_only=false`, `name_contains?`, `limit=200` | | S3 |
-| `shell_get_journal` | `journal` | `target`, `unit`, `lines=200 (1..max_lines)`, `since?`, `until?` (RFC 3339 or `-15m`-style relative), `priority?` (`emerg`…`debug`) | Output redacted; truncation flagged. | S3 |
+| `shell_list_services` | `service_list` | `target`, `failed_only=false`, `name_contains?`, `limit=200 (1..5000)` | Only units matching the policy's `services.status`. | S3 |
+| `shell_get_journal` | `journal` | `target`, `unit`, `lines=200 (1..max_lines)`, `since?`, `until?` (RFC 3339 with a zone, or relative `-N` + `s\|m\|h\|d\|w`, at most ten years), `priority?` (`emerg`…`debug`) | Output redacted; truncation flagged. The unit is an exact name, never a glob. | S3 |
 | `shell_list_directory` | `list_dir` | `target`, `path`, `include_hidden=false`, `limit=500 (1..5000)` | Name, type, size, mode, owner, group, mtime; symlink targets reported, not followed. | S3 |
 | `shell_stat_path` | `stat` | `target`, `path` | | S3 |
 | `shell_read_file` | `read_file` | `target`, `path`, `offset=0`, `max_bytes=65536 (1..max_read_bytes)`, `tail_lines?` (1..5000; mutually exclusive with `offset`) | UTF-8 text returned as text; binary returned as `binary: true` with size and SHA-256 only. | S3 |
 | `shell_find_files` | `find` | `target`, `root`, `name_glob?`, `type?` (`file\|dir\|symlink`), `max_depth=4`, `limit=200`, `modified_within?` | Native bounded walk; never the `find` binary. | S3 |
-| `shell_inspect_certificate` | `cert_inspect` | `target`, `path` | Every certificate in the file: subject, issuer, SANs, not-before/after, days remaining, key type/size, SHA-256. | S3 |
-| `shell_get_git_status` | `git_status` | `target`, `repo` | Branch, upstream, ahead/behind, porcelain v2 summary. | S3 |
+| `shell_inspect_certificate` | `cert_inspect` | `target`, `path` | Every certificate in the file (PEM or DER): subject, issuer, SANs, not-before/after, days remaining, key type/size, SHA-256. A file containing a private key is refused and nothing of it is returned. | S3 |
+| `shell_get_git_status` | `git_status` | `target`, `repo` | Branch, upstream, ahead/behind, porcelain v2 summary. Every git tool refuses a repository whose `.git/config` holds anything beyond the inert keys `git clone` writes (POLICY §7). | S3 |
 | `shell_get_git_log` | `git_log` | `target`, `repo`, `limit=20 (1..200)` | Hash, author name, date, subject (no bodies). | S3 |
 | `shell_get_git_diff` | `git_diff` | `target`, `repo`, `staged=false`, `max_output_bytes` | Working-tree diff; redacted; capped. | S3 |
 | `shell_run_read_command` | `exec` | `target`, `command_id`, `args: list[str] (≤ 64)`, `cwd?`, `timeout_seconds?` | Only commands whose policy tier is `read`. No `stdin`. | S3 |
