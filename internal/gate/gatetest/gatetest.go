@@ -45,6 +45,36 @@ func SecureDir(t testing.TB) string {
 	return real
 }
 
+// RequireSecure applies SecureDir's rule to an existing directory: skip,
+// or fail under RequireSecureEnv, when its chain is not trustworthy.
+func RequireSecure(t testing.TB, dir string) {
+	t.Helper()
+	if _, err := policy.CheckChain(Trust(), dir); err != nil {
+		msg := "directory chain is not trustworthy for gate ownership checks (" + err.Error() + "); set TMPDIR as scripts/ci-local.sh and CI do"
+		if os.Getenv(RequireSecureEnv) != "" {
+			t.Fatal(msg)
+		}
+		t.Skip(msg)
+	}
+}
+
+// BuildTest compiles the test binary of a package of this module (go test
+// -c) with CGO_ENABLED=0 unless env overrides it.
+func BuildTest(t testing.TB, pkg, dir, name string, env []string) string {
+	t.Helper()
+	out := filepath.Join(dir, name)
+	cmd := exec.Command("go", "test", "-c", "-trimpath", "-o", out, "./"+pkg) //nolint:gosec // test helper: module-relative package
+	cmd.Dir = moduleRoot(t)
+	cmd.Env = append(append(os.Environ(), "CGO_ENABLED=0"), env...)
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go test -c %s: %v\n%s", pkg, err, b)
+	}
+	if err := os.Chmod(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
 // WriteFile writes a file (creating parents) with the given mode.
 func WriteFile(t testing.TB, path string, data string, mode os.FileMode) {
 	t.Helper()

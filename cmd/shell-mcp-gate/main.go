@@ -1,3 +1,5 @@
+//go:build linux
+
 // Command shell-mcp-gate is the SSH forced command on each target. It enforces the host's root-owned gate policy; the implementation arrives in Session 1.
 package main
 
@@ -6,6 +8,8 @@ import (
 	"io"
 	"os"
 	"runtime"
+
+	"github.com/tyler-rich/shell-mcp/internal/gate/ops"
 )
 
 // Set with -ldflags "-X main.version=… -X main.commit=…".
@@ -23,9 +27,15 @@ commands:
   version       print version information
 `
 
-func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
+func main() { os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr)) }
 
-func run(args []string, stdout, stderr io.Writer) int {
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	return runWith(args, stdin, stdout, stderr, ops.ProductionOptions)
+}
+
+type optionsFunc func(version, policyPath, principal string) (ops.Options, error)
+
+func runWith(args []string, _ io.Reader, stdout, stderr io.Writer, _ optionsFunc) int {
 	if len(args) == 0 {
 		_, _ = io.WriteString(stderr, usage)
 		return 2
