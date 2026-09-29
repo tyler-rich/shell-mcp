@@ -8,11 +8,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
 	"github.com/tyler-rich/shell-mcp/internal/gate/ops"
+	"github.com/tyler-rich/shell-mcp/internal/gate/procfs"
 )
 
 // Git tests run the real git binary (ops.GitPath, root-owned in the test
@@ -167,7 +172,8 @@ func TestGitEnvironment(t *testing.T) {
 	}
 	want := []string{"-C", g.repo, "--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
 		"-c", "core.pager=cat", "-c", "core.sshCommand=/bin/false", "-c", "credential.helper=", "-c", "protocol.file.allow=never",
-		"-c", "protocol.ext.allow=never", "-c", "safe.directory=" + g.repo, "config", "--local", "--no-includes", "--list", "-z"}
+		"-c", "protocol.ext.allow=never", "-c", "safe.directory=" + g.repo, "-c", "maintenance.auto=false", "-c", "gc.auto=0",
+		"-c", "gc.autoDetach=false", "-c", "core.ignorecase=false", "config", "--local", "--no-includes", "--list", "-z"}
 	if !slices.Equal(argv, want) {
 		t.Fatalf("argv\n got %q\nwant %q", argv, want)
 	}
@@ -334,6 +340,140 @@ func TestGitLFSRefusedActionably(t *testing.T) {
 	r = g.call("git_status", m{"repo": g.repo})
 	if r.OK || r.Error.Code != "policy_denied" || !strings.Contains(r.Error.Message, "git config --unset-all core.editor") {
 		t.Fatalf("core.editor: %+v", r.Error)
+	}
+}
+
+// maintenanceFlags are the POLICY §7 flags that keep git from starting
+// (detached) maintenance and pin case sensitivity.
+var maintenanceFlags = []string{"maintenance.auto=false", "gc.auto=0", "gc.autoDetach=false", "core.ignorecase=false"}
+
+// withGitDefaults returns the gate's argv without maintenanceFlags: git's
+// defaults for maintenance and whatever core.ignorecase the repo sets.
+func withGitDefaults(args []string) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-c" && i+1 < len(args) && slices.Contains(maintenanceFlags, args[i+1]) {
+			i++
+			continue
+		}
+		out = append(out, args[i])
+	}
+	return out
+}
+
+// runGit runs git with argv and the gate's environment and returns stdout.
+func runGit(t *testing.T, g *gitFixture, argv []string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), ops.GitPath, argv...) //nolint:gosec // G204: the gate's own argv, fixed git
+	cmd.Env = ops.GitEnv(g.home, g.repo)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", argv, err)
+	}
+	return string(out)
+}
+
+// orphanGits lists git processes, alive or zombie, whose parent is this
+// test process. With PR_SET_CHILD_SUBREAPER set, a daemonized descendant
+// (fork, parent exits, setsid) is reparented here instead of to init, and
+// stays visible as a zombie until reaped: Go reaps only its own children.
+func orphanGits(t *testing.T) []int {
+	t.Helper()
+	ents, err := os.ReadDir("/proc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pids []int
+	for _, e := range ents {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		b, err := os.ReadFile("/proc/" + e.Name() + "/stat") //nolint:gosec // G304: a numeric /proc entry
+		if err != nil {
+			continue
+		}
+		st, err := procfs.ParsePIDStat(b)
+		if err == nil && st.PPID == os.Getpid() && st.Comm == "git" {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+// reap kills and reaps the given orphans.
+func reap(pids []int) {
+	for _, p := range pids {
+		_ = unix.Kill(p, unix.SIGKILL)
+		var ws unix.WaitStatus
+		_, _ = unix.Wait4(p, &ws, 0, nil)
+	}
+}
+
+// TestGitPullLeavesNoDetachedProcess is two-sided. Control: a pull run with
+// the gate's argv minus the maintenance flags (git's defaults) leaves a
+// daemonized `git maintenance` process behind, outside the caller's
+// process group. Gated: after git_pull responds, no git process remains.
+func TestGitPullLeavesNoDetachedProcess(t *testing.T) {
+	g := newGitFixture(t, "operator")
+	if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0) }()
+	reap(orphanGits(t))
+
+	gatetest.Push(t, g.work, "one.conf", "1\n", "one")
+	runGit(t, g, withGitDefaults(ops.GitArgs(g.repo, g.opts.TestGitCAFile, "pull", "--ff-only", "--no-rebase", "--no-recurse-submodules")))
+	var orphans []int
+	for deadline := time.Now().Add(3 * time.Second); len(orphans) == 0 && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		orphans = orphanGits(t)
+	}
+	reap(orphans)
+	if len(orphans) == 0 {
+		t.Fatal("control: git's defaults left no detached process after a pull; the gated check below would prove nothing")
+	}
+	t.Logf("control: %d detached git process(es) outlived the pull", len(orphans))
+
+	gatetest.Push(t, g.work, "two.conf", "2\n", "two")
+	var d pullData
+	g.ok("git_pull", m{"repo": g.repo}, &d)
+	if !d.Updated {
+		t.Fatalf("pull %+v", d)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if left := orphanGits(t); len(left) > 0 {
+		reap(left)
+		t.Fatalf("git_pull left %d git process(es) running after the response", len(left))
+	}
+}
+
+// TestGitIgnoreCasePinned is two-sided. Control: with core.ignorecase=true
+// in the repo's config, git hides an untracked APP.CONF next to the
+// tracked app.conf. Gated: git_status lists it and git_discard_preview
+// would remove it — the repository is treated as case-sensitive.
+func TestGitIgnoreCasePinned(t *testing.T) {
+	g := newGitFixture(t, "read")
+	gatetest.Git(t, g.repo, "config", "core.ignorecase", "true")
+	gatetest.WriteFile(t, filepath.Join(g.repo, "APP.CONF"), "x\n", 0o644)
+	if out := runGit(t, g, withGitDefaults(ops.GitArgs(g.repo, "", "status", "--porcelain=v2", "-z"))); strings.Contains(out, "APP.CONF") {
+		t.Fatalf("control: git with core.ignorecase=true listed APP.CONF (%q); the check below would prove nothing", out)
+	}
+	var st struct {
+		Entries []struct {
+			Kind string `json:"kind"`
+			Path string `json:"path"`
+		} `json:"entries"`
+	}
+	g.ok("git_status", m{"repo": g.repo}, &st)
+	if len(st.Entries) != 1 || st.Entries[0].Kind != "untracked" || st.Entries[0].Path != "APP.CONF" {
+		t.Fatalf("status under the gate %+v", st)
+	}
+	var pv struct {
+		Remove []string `json:"remove"`
+	}
+	g.ok("git_discard_preview", m{"repo": g.repo}, &pv)
+	if !slices.Equal(pv.Remove, []string{"APP.CONF"}) {
+		t.Fatalf("preview %+v", pv)
 	}
 }
 
