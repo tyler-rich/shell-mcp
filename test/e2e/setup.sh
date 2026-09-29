@@ -44,6 +44,14 @@ passwd -l svc-shell >/dev/null
 passwd -l svc-other >/dev/null
 
 # --- Binaries (root:root 0755) ----------------------------------------------
+# The gate and the helper refuse binaries whose directories are group- or
+# other-writable (SECURITY §5, D-016). Some CI images ship /usr/local/bin
+# world-writable (0777); make the install directories what a target must
+# have. This changes only this disposable machine.
+for d in /usr/local /usr/local/bin; do
+	chown root:root "$d"
+	chmod go-w "$d"
+done
 install -o root -g root -m 0755 "$bin/shell-mcp-gate" /usr/local/bin/shell-mcp-gate
 install -o root -g root -m 0755 -d /usr/local/libexec
 install -o root -g root -m 0755 "$bin/shell-mcp-privd" /usr/local/libexec/shell-mcp-privd
