@@ -56,6 +56,8 @@ const validPolicy = `version: 1
 client_uid: 60123
 socket_group: svc-shell-priv
 max_tier: operator
+sandbox:
+  landlock: best-effort
 paths:
   read: [{D}/srv/app]
   write: [{D}/etc/example-app]
@@ -126,11 +128,16 @@ func TestUnits(t *testing.T) {
 func TestCheckPolicy(t *testing.T) {
 	env, p := testEnv(t, validPolicy)
 	var so, se bytes.Buffer
-	if code := checkPolicyWith([]string{"--policy", p}, &so, &se, env); code != 0 {
+	// go test binaries are built with cgo for -race; serve would refuse those.
+	wantCode := 0
+	if builtWithCGO() {
+		wantCode = 1
+	}
+	if code := checkPolicyWith([]string{"--policy", p}, &so, &se, env); code != wantCode {
 		t.Fatalf("exit %d: %s %s", code, so.String(), se.String())
 	}
 	for _, want := range []string{"policy sha256:", "client_uid: 60123", "socket_group: svc-shell-priv", "max_tier: operator",
-		"persistence", "drop-ins for example-app only", "CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER", "landlock", "OK"} {
+		"persistence", "drop-ins for example-app only", "CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER", "landlock best-effort"} {
 		if !strings.Contains(so.String(), want) {
 			t.Errorf("report lacks %q:\n%s", want, so.String())
 		}
@@ -145,7 +152,7 @@ func TestCheckPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	so.Reset()
-	if code := checkPolicyWith([]string{"--policy", p}, &so, &se, env); code != 0 || !strings.Contains(so.String(), "0600") {
+	if code := checkPolicyWith([]string{"--policy", p}, &so, &se, env); code != wantCode || !strings.Contains(so.String(), "0600") {
 		t.Fatalf("readable policy not flagged: %s", so.String())
 	}
 }
