@@ -127,8 +127,8 @@ type rawCommand struct {
 type validator struct {
 	errs     []error
 	warnings []string
-	// denied is the identity check's scan, made once per load.
-	denied []*deniedFile
+	// scan is the identity check's scan, made once per load.
+	scan *IdentityScan
 }
 
 func (v *validator) fail(field, format string, args ...any) {

@@ -5,6 +5,7 @@ package policy
 import (
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -86,47 +87,86 @@ func scanDenied(dirs []string) []*deniedFile {
 	return out
 }
 
-// identity compares the resolved command binary with every denied file.
-func (v *validator) identity(field, resolved string, fi os.FileInfo, opts *LoadOptions) bool {
-	if v.denied == nil {
-		dirs := opts.SystemBinDirs
-		if dirs == nil {
-			dirs = DefaultSystemBinDirs
-		}
-		v.denied = scanDenied(dirs)
-		if v.denied == nil {
-			v.denied = []*deniedFile{}
+// IdentityScan is the binary identity check's scan of the system binary
+// directories, made lazily once per policy load and shared by every
+// command of that load.
+type IdentityScan struct {
+	dirs   []string
+	denied []*deniedFile
+}
+
+// NewIdentityScan returns a scan of dirs (nil means DefaultSystemBinDirs).
+func NewIdentityScan(dirs []string) *IdentityScan {
+	if dirs == nil {
+		dirs = DefaultSystemBinDirs
+	}
+	return &IdentityScan{dirs: dirs}
+}
+
+// DeniedMatch is the hard-denied file a command binary is identical to.
+type DeniedMatch struct {
+	Name, Path string
+	Group      int
+	GroupName  string
+}
+
+// Match compares the resolved command binary (fi from os.Stat) with every
+// hard-denied file. It returns nil when nothing matches, and an error when
+// a comparison is impossible (the check fails closed). Error messages name
+// local paths and are for check-policy.
+func (s *IdentityScan) Match(resolved string, fi os.FileInfo) (*DeniedMatch, error) {
+	if s.denied == nil {
+		s.denied = scanDenied(s.dirs)
+		if s.denied == nil {
+			s.denied = []*deniedFile{}
 		}
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
-		v.fail(field+".path", "%s has no inode information", resolved)
-		return false
+		return nil, fmt.Errorf("%s has no inode information", resolved)
 	}
 	var sum *[32]byte
-	for _, d := range v.denied {
+	for _, d := range s.denied {
 		same := d.dev == st.Dev && d.ino == st.Ino
 		if !same && d.size == fi.Size() {
 			var err error
 			if sum == nil {
 				if sum, err = fileSum(resolved, fi.Size()); err != nil {
-					v.fail(field+".path", "%s cannot be compared with hard-denied binaries: %v", resolved, errReason(err))
-					return false
+					return nil, fmt.Errorf("%s cannot be compared with hard-denied binaries: %v", resolved, errReason(err))
 				}
 			}
 			if d.sum == nil {
 				if d.sum, err = fileSum(d.path, d.size); err != nil {
-					v.fail(field+".path", "%s cannot be compared with hard-denied %q (%s): %v", resolved, d.name, d.path, errReason(err))
-					return false
+					return nil, fmt.Errorf("%s cannot be compared with hard-denied %q (%s): %v", resolved, d.name, d.path, errReason(err))
 				}
 			}
 			same = *sum == *d.sum
 		}
 		if same {
 			g, gname, _ := hardDenied(d.name)
-			v.fail(field+".path", "%s is a hard link to, or a copy of, the hard-denied %q (%s; group %d: %s)", resolved, d.name, d.path, g, gname)
-			return false
+			return &DeniedMatch{Name: d.name, Path: d.path, Group: g, GroupName: gname}, nil
 		}
+	}
+	return nil, nil
+}
+
+// identity compares the resolved command binary with every denied file.
+func (v *validator) identity(field, resolved string, fi os.FileInfo, opts *LoadOptions) bool {
+	if v.scan == nil {
+		v.scan = NewIdentityScan(opts.SystemBinDirs)
+	}
+	m, err := v.scan.Match(resolved, fi)
+	if err != nil {
+		v.fail(field+".path", "%v", err)
+		return false
+	}
+	if m != nil {
+		v.fail(field+".path", "%s is a hard link to, or a copy of, the hard-denied %q (%s; group %d: %s)", resolved, m.Name, m.Path, m.Group, m.GroupName)
+		return false
 	}
 	return true
 }
+
+// CheckFile checks an already-opened or stat'ed file: regular, owned by a
+// trusted uid, not group/other-writable.
+func CheckFile(t Trust, p string, fi os.FileInfo) error { return checkFile(t, p, fi) }
