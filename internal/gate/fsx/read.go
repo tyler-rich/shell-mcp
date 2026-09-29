@@ -386,3 +386,44 @@ func (f *FS) ResolveDir(p string) (string, error) {
 	}
 	return rp, nil
 }
+
+// ReadRaw returns the whole content of the regular file p under a read or
+// write root; a file larger than limit is too_large. It applies no
+// private-key or text rule: the caller must (cert_inspect refuses private
+// keys itself and returns only what it parsed, never the bytes).
+func (f *FS) ReadRaw(p string, limit int) ([]byte, error) {
+	if limit < 1 || limit > f.cfg.Limits.MaxReadBytes {
+		return nil, errf(protocol.CodeBadRequest, "read limit must be 1..%d", f.cfg.Limits.MaxReadBytes)
+	}
+	l, err := f.locate(p, false)
+	if err != nil {
+		return nil, err
+	}
+	defer l.close()
+	file, err := f.openTarget(l)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	fi, err := file.Stat()
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	if fi.IsDir() {
+		return nil, errf(protocol.CodeIsADirectory, "is a directory")
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, errf(protocol.CodeBadRequest, "not a regular file")
+	}
+	if fi.Size() > int64(limit) {
+		return nil, errf(protocol.CodeTooLarge, "file exceeds %d bytes", limit)
+	}
+	b, err := io.ReadAll(io.LimitReader(file, int64(limit)+1))
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	if len(b) > limit {
+		return nil, errf(protocol.CodeTooLarge, "file exceeds %d bytes", limit)
+	}
+	return b, nil
+}

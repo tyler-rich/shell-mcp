@@ -556,3 +556,35 @@ func TestParseMode(t *testing.T) {
 		}
 	}
 }
+
+// TestAbsoluteSymlinkMessage: os.Root refuses a directory symlink with an
+// absolute target even when it points inside the root; the refusal says so
+// (without naming any path) so the caller can retry with the resolved path.
+// Other escapes keep the generic message.
+func TestAbsoluteSymlinkMessage(t *testing.T) {
+	e := newEnv(t)
+	must(t, os.Symlink(e.write, filepath.Join(e.read, "cfgabs")))
+	for name, op := range map[string]func() error{
+		"read_file": func() error {
+			_, err := e.fs.ReadFile(filepath.Join(e.read, "cfgabs", "app.yaml"), ReadOptions{MaxBytes: 10})
+			return err
+		},
+		"stat":     func() error { _, err := e.fs.Stat(filepath.Join(e.read, "cfgabs", "app.yaml")); return err },
+		"list_dir": func() error { _, err := e.fs.ListDir(filepath.Join(e.read, "cfgabs", "sub"), false, 10); return err },
+	} {
+		err := op()
+		wantCode(t, err, protocol.CodePathDenied)
+		if !strings.Contains(err.Error(), "absolute target") || !strings.Contains(err.Error(), "resolved path") {
+			t.Errorf("%s: %v", name, err)
+		}
+		if strings.Contains(err.Error(), e.d) {
+			t.Errorf("%s: message names a local path: %v", name, err)
+		}
+	}
+	must(t, os.Symlink("../../outside", filepath.Join(e.read, "relesc")))
+	_, err := e.fs.ReadFile(filepath.Join(e.read, "relesc", "passwd"), ReadOptions{MaxBytes: 10})
+	wantCode(t, err, protocol.CodePathDenied)
+	if strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("relative escape reported as absolute: %v", err)
+	}
+}

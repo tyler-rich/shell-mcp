@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -22,6 +23,7 @@ import (
 	llsys "github.com/landlock-lsm/go-landlock/landlock/syscall"
 	"golang.org/x/sys/unix"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/audit"
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
 )
 
@@ -63,6 +65,7 @@ type Rules struct {
 	DevNull        string   // read + write + truncate, the single file
 	DevURandom     string   // read, the single file
 	UnixSocketDirs []string // connect to pathname sockets beneath (ABI >= 9)
+	SyslogSocket   string   // the audit socket; its real directory is granted
 	TCPConnect     []uint16
 }
 
@@ -96,7 +99,9 @@ type Report struct {
 var journalDirs = []string{"/var/log/journal", "/run/log/journal"}
 
 // dbusSocketDir holds the system bus socket, granted (ABI >= 9) when the
-// policy configures services.control.
+// policy configures any service feature: services.status (service_status,
+// service_list, and {unit} placeholders) or services.control. systemctl
+// reaches systemd through the system bus.
 const dbusSocketDir = "/run/dbus"
 
 // Compute derives the ruleset from the policy (POLICY §4a). Pathname Unix
@@ -111,9 +116,10 @@ func Compute(p *policy.Policy) Rules {
 		r.ReadOnly = append(r.ReadOnly, journalDirs...)
 	}
 	r.ReadWrite = append([]string(nil), p.Paths.Write...)
-	if len(p.Services.ControlUnits) > 0 {
+	if len(p.Services.Status) > 0 || len(p.Services.ControlUnits) > 0 {
 		r.UnixSocketDirs = append(r.UnixSocketDirs, dbusSocketDir)
 	}
+	r.SyslogSocket = audit.DevLog
 	if p.Privileged.Enabled {
 		for _, s := range []string{p.Privileged.Socket, p.Privileged.BroadSocket} {
 			if d := path.Dir(s); s != "" && !slices.Contains(r.UnixSocketDirs, d) {
@@ -123,6 +129,23 @@ func Compute(p *policy.Policy) Rules {
 	}
 	r.TCPConnect = append([]uint16(nil), p.Sandbox.TCPConnectPorts...)
 	return r
+}
+
+// SocketDir returns the directory that really holds the Unix socket at p
+// (after following symlinks: /dev/log is a symlink into journald's
+// directory on systemd hosts), or false when p is missing or not a socket.
+// Landlock checks the resolved socket, so the grant is on that directory,
+// following the directory form used for every socket grant.
+func SocketDir(p string) (string, bool) {
+	rp, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return "", false
+	}
+	fi, err := os.Lstat(rp)
+	if err != nil || fi.Mode()&os.ModeSocket == 0 {
+		return "", false
+	}
+	return filepath.Dir(rp), true
 }
 
 // rawKernelABI is landlock_create_ruleset(NULL, 0, VERSION), 0 if unavailable.
@@ -267,6 +290,9 @@ func build(p *policy.Policy, abi int) (landlock.Config, []landlock.Rule, error) 
 	add(rightsDevNull, r.DevNull)
 	add(rightsURandom, r.DevURandom)
 	add(rightsUnixSock, r.UnixSocketDirs...)
+	if d, ok := SocketDir(r.SyslogSocket); ok {
+		add(rightsUnixSock, d) // the audit line (ABI >= 9 governs it)
+	}
 	if abi >= ABINet {
 		for _, port := range r.TCPConnect {
 			rules = append(rules, landlock.ConnectTCP(port))

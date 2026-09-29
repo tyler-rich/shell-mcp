@@ -204,7 +204,11 @@ func (f *FS) locate(p string, write bool) (*loc, error) {
 	}
 	l.base = path.Base(l.rel)
 	if l.parent, err = top.OpenRoot(path.Dir(l.rel)); err != nil {
+		e := absoluteSymlink(top, path.Dir(l.rel))
 		l.close()
+		if e != nil {
+			return nil, e
+		}
 		return nil, mapErr(err)
 	}
 	if l.parentReal, err = realPathOfRoot(l.parent); err != nil {
@@ -220,6 +224,38 @@ func (f *FS) locate(p string, write bool) (*loc, error) {
 		return nil, e
 	}
 	return l, nil
+}
+
+// absoluteSymlink explains a refused directory path: os.Root refuses a
+// symlink with an absolute target even when it points back inside the
+// root (real configurations use them). It walks rel's components inside
+// top and, if one is such a symlink, returns a path_denied error that says
+// so — without naming any path — so the caller can resolve it and retry.
+func absoluteSymlink(top *os.Root, rel string) *Error {
+	cur := ""
+	for _, c := range strings.Split(rel, "/") {
+		if cur == "" {
+			cur = c
+		} else {
+			cur += "/" + c
+		}
+		fi, err := top.Lstat(cur)
+		if err != nil {
+			return nil
+		}
+		if fi.Mode()&fs.ModeSymlink == 0 {
+			continue
+		}
+		t, err := top.Readlink(cur)
+		if err != nil {
+			return nil
+		}
+		if strings.HasPrefix(t, "/") {
+			return errf(protocol.CodePathDenied, "a directory in the path is a symlink with an absolute target, which is refused even when "+
+				"it points inside the root; stat the symlink to see its target and retry with the resolved path")
+		}
+	}
+	return nil
 }
 
 // lstat describes the target without following it.

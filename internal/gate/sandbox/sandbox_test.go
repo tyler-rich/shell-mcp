@@ -46,7 +46,7 @@ func needABI(t *testing.T, n int) {
 
 func parse(t *testing.T, y string) *policy.Policy {
 	t.Helper()
-	p, err := policy.Parse([]byte(y), "/nonexistent/policy.yaml", policy.LoadOptions{
+	p, err := policy.Parse([]byte(y), "/nonexistent/policy.yaml", &policy.LoadOptions{
 		Trust: policy.RootTrust(), GateExecutable: "/nonexistent/shell-mcp-gate", ServiceHome: "/nonexistent/home",
 	})
 	if err != nil {
@@ -420,5 +420,65 @@ func TestApplyMPTCPBlocked(t *testing.T) {
 	}
 	if out.Probes["mptcp"] != "EPROTONOSUPPORT" {
 		t.Fatalf("filtered: MPTCP socket after Apply: %q", out.Probes["mptcp"])
+	}
+}
+
+// TestComputeServiceAndSyslogGrants: the system D-Bus socket directory is
+// granted when any service feature is configured (services.status, which
+// also enables service_list, or services.control) and never otherwise; the
+// syslog socket is always granted, for the audit line.
+func TestComputeServiceAndSyslogGrants(t *testing.T) {
+	cases := []struct {
+		name string
+		y    string
+		bus  bool
+	}{
+		{"nothing", "version: 1\nmax_tier: read\n", false},
+		{"journal only", "version: 1\nmax_tier: read\njournal:\n  units: [\"*\"]\n", false},
+		{"status", "version: 1\nmax_tier: read\nservices:\n  status: [\"example-*.service\"]\n", true},
+		{"control", "version: 1\nmax_tier: operator\nservices:\n  control:\n    units: [example-app.service]\n    verbs: [restart]\n", true},
+	}
+	for _, c := range cases {
+		r := sandbox.Compute(parse(t, c.y))
+		if got := slices.Contains(r.UnixSocketDirs, "/run/dbus"); got != c.bus {
+			t.Errorf("%s: D-Bus granted=%v, want %v (%v)", c.name, got, c.bus, r.UnixSocketDirs)
+		}
+		if r.SyslogSocket != "/dev/log" {
+			t.Errorf("%s: syslog socket %q", c.name, r.SyslogSocket)
+		}
+	}
+}
+
+// TestSocketDir: the syslog grant is the directory that really holds the
+// socket (/dev/log is a symlink into /run/systemd/journal on systemd
+// hosts); a missing path or a non-socket grants nothing.
+func TestSocketDir(t *testing.T) {
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sock := filepath.Join(d, "journal", "dev-log")
+	gatetest.Mkdir(t, filepath.Dir(sock), 0o755)
+	l, err := (&net.ListenConfig{}).ListenPacket(t.Context(), "unixgram", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Close() }()
+	gatetest.Mkdir(t, filepath.Join(d, "dev"), 0o755)
+	link := filepath.Join(d, "dev", "log")
+	if err := os.Symlink(sock, link); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := sandbox.SocketDir(link); !ok || got != filepath.Dir(sock) {
+		t.Fatalf("SocketDir(link) = %q %v", got, ok)
+	}
+	if got, ok := sandbox.SocketDir(sock); !ok || got != filepath.Dir(sock) {
+		t.Fatalf("SocketDir(real) = %q %v", got, ok)
+	}
+	gatetest.WriteFile(t, filepath.Join(d, "plain"), "x", 0o644)
+	for _, p := range []string{filepath.Join(d, "missing"), filepath.Join(d, "plain"), d} {
+		if got, ok := sandbox.SocketDir(p); ok {
+			t.Fatalf("SocketDir(%s) = %q", p, got)
+		}
 	}
 }

@@ -138,8 +138,8 @@ func mptcpFilter() []unix.SockFilter {
 	})
 }
 
-// errSeccomp wraps a failure to install the filter.
-var errSeccomp = errors.New("seccomp filter could not be installed")
+// ErrSeccomp wraps a failure to install the filter.
+var ErrSeccomp = errors.New("seccomp filter could not be installed")
 
 // applySeccomp installs the filter on every thread with the same all-thread
 // mechanism as no_new_privs (psx: syscall.AllThreadsSyscall with
@@ -148,7 +148,7 @@ func applySeccomp() error {
 	f := mptcpFilter()
 	n := len(f)
 	if n == 0 || n > math.MaxUint16 {
-		return fmt.Errorf("%w: program has %d instructions", errSeccomp, n)
+		return fmt.Errorf("%w: program has %d instructions", ErrSeccomp, n)
 	}
 	prog := unix.SockFprog{Len: uint16(n), Filter: &f[0]}
 	err := llsys.AllThreadsPrctl(unix.PR_SET_SECCOMP, unix.SECCOMP_MODE_FILTER,
@@ -156,7 +156,7 @@ func applySeccomp() error {
 	runtime.KeepAlive(&prog)
 	runtime.KeepAlive(f)
 	if err != nil {
-		return fmt.Errorf("%w: %w", errSeccomp, err)
+		return fmt.Errorf("%w: %w", ErrSeccomp, err)
 	}
 	return nil
 }

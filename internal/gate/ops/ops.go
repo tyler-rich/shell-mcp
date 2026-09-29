@@ -18,6 +18,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/audit"
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/install"
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
@@ -45,6 +46,23 @@ type Options struct {
 	ApplySandbox func(*policy.Policy) (sandbox.Report, error)
 	// InjectReadBackFault is passed to fsx; tests only.
 	InjectReadBackFault func([]byte) []byte
+
+	// Systemctl, Journalctl and Git are the absolute paths of the binaries
+	// the built-in service, journal and git operations run. Production uses
+	// the fixed system paths; tests inject fakes. Each is ownership-checked
+	// with Trust before it runs.
+	Systemctl  string
+	Journalctl string
+	Git        string
+	// TestGitCAFile, when set, is passed to git as http.sslCAInfo so that
+	// tests can pull from their own HTTPS server. Tests only; production
+	// never sets it and never relaxes TLS verification.
+	TestGitCAFile string
+
+	// SSHConnection is SSH_CONNECTION (nil when unset), for the audit line.
+	SSHConnection *string
+	// Audit receives one record per request; nil disables auditing.
+	Audit audit.Sink
 }
 
 // ProductionOptions describes the running process: its real identity, its
@@ -66,9 +84,14 @@ func ProductionOptions(version, policyPath, principal string) (Options, error) {
 		Version: version, PolicyPath: policyPath, Principal: principal,
 		Identity: id, Trust: policy.RootTrust(), Executable: exe,
 		ServiceHome: ServiceHome(), ApplySandbox: sandbox.Apply,
+		Audit:     audit.NewSyslog(audit.DevLog),
+		Systemctl: SystemctlPath, Journalctl: JournalctlPath, Git: GitPath,
 	}
 	if v, ok := os.LookupEnv("SSH_ORIGINAL_COMMAND"); ok {
 		o.SSHOriginalCommand = &v
+	}
+	if v, ok := os.LookupEnv("SSH_CONNECTION"); ok {
+		o.SSHConnection = &v
 	}
 	return o, nil
 }
@@ -102,8 +125,8 @@ type server struct {
 
 // Serve runs the gate for one request: install checks, policy load,
 // sandbox, then (only then) read one request, dispatch, and write one
-// response. It returns the process exit code: 0 whenever a response was
-// written, 1 if it could not be.
+// response, then one audit line. It returns the process exit code: 0
+// whenever a response was written, 1 if it could not be.
 func Serve(o *Options, stdin io.Reader, stdout io.Writer) int {
 	start := time.Now()
 	s := &server{o: *o, gate: &protocol.GateInfo{Version: o.Version, Principal: o.Principal}}
@@ -111,7 +134,45 @@ func Serve(o *Options, stdin io.Reader, stdout io.Writer) int {
 	resp.V = protocol.Version
 	s.gate.DurationMS = time.Since(start).Milliseconds()
 	resp.Gate = s.gate
-	return WriteResponse(stdout, resp)
+	code := WriteResponse(stdout, resp)
+	s.audit(resp, time.Since(start))
+	return code
+}
+
+// audit sends the request's audit record: principal, client address, op,
+// sanitized arguments (never content), outcome and duration.
+func (s *server) audit(resp *protocol.Response, d time.Duration) {
+	if s.o.Audit == nil {
+		return
+	}
+	r := &audit.Record{Principal: s.gate.Principal, Client: audit.Client(s.o.SSHConnection),
+		Outcome: "ok", DurationMS: d.Milliseconds(), Args: map[string]any{}}
+	if s.req != nil {
+		r.Op, r.Args = s.req.Op, audit.SanitizeArgs(s.req.Op, s.req.Args)
+	}
+	if resp.Error != nil {
+		r.Outcome = resp.Error.Code
+	}
+	s.o.Audit.Log(r)
+}
+
+// sandboxRefusal is the sandbox_unavailable message: what the kernel has,
+// what the policy needs under landlock: required, and the alternative.
+func sandboxRefusal(rep *sandbox.Report, err error) string {
+	switch {
+	case errors.Is(err, sandbox.ErrSeccomp):
+		return "the seccomp filter that blocks MPTCP sockets (which Landlock cannot govern) could not be installed under landlock: required; " +
+			"set sandbox.landlock: best-effort to serve without it, or run shell-mcp-gate check-policy on the host"
+	case rep.KernelABI == 0:
+		return fmt.Sprintf("this kernel has no Landlock (ABI 0) and the policy needs ABI %d under landlock: required; "+
+			"enable the landlock LSM, or set sandbox.landlock: best-effort to serve without kernel enforcement", sandbox.RequiredMinABI)
+	case rep.KernelABI < sandbox.RequiredMinABI:
+		return fmt.Sprintf("kernel Landlock ABI %d; this policy needs ABI %d under landlock: required; "+
+			"use a newer kernel, or set sandbox.landlock: best-effort to serve with reduced enforcement (check-policy lists what is not enforced)",
+			rep.KernelABI, sandbox.RequiredMinABI)
+	}
+	return fmt.Sprintf("Landlock sandbox could not be applied (kernel ABI %d) under landlock: required; "+
+		"run shell-mcp-gate check-policy on the host (sandbox.landlock: best-effort serves with reduced enforcement)", rep.KernelABI)
 }
 
 // WriteResponse writes resp; a response over 4 MiB is replaced by a
@@ -148,7 +209,7 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 		}
 		return Failure("", protocol.CodeInstallInsecure, msg)
 	}
-	p, err := policy.Load(o.PolicyPath, policy.LoadOptions{Trust: o.Trust, GateExecutable: o.Executable, ServiceHome: o.ServiceHome})
+	p, err := policy.Load(o.PolicyPath, &policy.LoadOptions{Trust: o.Trust, GateExecutable: o.Executable, ServiceHome: o.ServiceHome})
 	if err != nil {
 		return Failure("", protocol.CodeInstallInsecure, "gate policy is missing, insecure or invalid (run shell-mcp-gate check-policy on the host)")
 	}
@@ -162,9 +223,7 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 	// D-019: the sandbox is in place before any untrusted byte is read.
 	rep, err := o.ApplySandbox(p)
 	if err != nil {
-		return Failure("", protocol.CodeSandboxUnavailable, fmt.Sprintf(
-			"Landlock sandbox could not be applied (kernel ABI %d; this policy needs %d with landlock: required); run shell-mcp-gate check-policy on the host",
-			rep.KernelABI, sandbox.RequiredMinABI))
+		return Failure("", protocol.CodeSandboxUnavailable, sandboxRefusal(&rep, err))
 	}
 	s.report = rep
 	s.fs = fsx.New(&fsx.Config{

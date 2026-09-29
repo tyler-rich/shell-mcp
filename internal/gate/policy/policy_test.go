@@ -72,7 +72,7 @@ func (f *fixture) put(t *testing.T, y string) string {
 
 func (f *fixture) load(t *testing.T, y string) (*policy.Policy, error) {
 	t.Helper()
-	return policy.Load(f.put(t, y), f.opts)
+	return policy.Load(f.put(t, y), &f.opts)
 }
 
 func (f *fixture) mustLoad(t *testing.T, y string) *policy.Policy {
@@ -279,6 +279,8 @@ func TestRoots(t *testing.T) {
 		"write policy dir": "paths:\n  write: [{ETC}]\n",
 		"write in .ssh":    "paths:\n  write: [{R}/.ssh]\n",
 		"write under .ssh": "paths:\n  write: [{R}/.ssh/keys]\n",
+		"write in .git":    "paths:\n  write: [{R}/deploy/.git]\n",
+		"write under .git": "paths:\n  write: [{R}/deploy/.git/hooks]\n",
 		"write boot":       "paths:\n  write: [/boot/efi]\n",
 		"bad deny glob":    "paths:\n  deny: [\"relative/**\"]\n",
 		"bad deny glob [":  "paths:\n  deny: [\"/srv/[ab]\"]\n",
@@ -411,7 +413,7 @@ func TestCommandOwnership(t *testing.T) {
 	// Under production trust, a binary owned by the test uid is refused.
 	if os.Getuid() != 0 {
 		p := f.put(t, y)
-		_, err := policy.Parse([]byte(f.expand(y)), p, policy.LoadOptions{Trust: policy.RootTrust(), GateExecutable: f.gate, ServiceHome: f.home})
+		_, err := policy.Parse([]byte(f.expand(y)), p, &policy.LoadOptions{Trust: policy.RootTrust(), GateExecutable: f.gate, ServiceHome: f.home})
 		if err == nil || !strings.Contains(err.Error(), "owned") {
 			t.Fatalf("root trust accepted a non-root binary: %v", err)
 		}
@@ -421,16 +423,16 @@ func TestCommandOwnership(t *testing.T) {
 func TestLoadOwnership(t *testing.T) {
 	f := newFixture(t)
 	p := f.put(t, minimal)
-	if _, err := policy.Load(p, f.opts); err != nil {
+	if _, err := policy.Load(p, &f.opts); err != nil {
 		t.Fatal(err)
 	}
 	chmod(t, p, 0o664)
-	if _, err := policy.Load(p, f.opts); err == nil {
+	if _, err := policy.Load(p, &f.opts); err == nil {
 		t.Fatal("group-writable policy accepted")
 	}
 	chmod(t, p, 0o644)
 	chmod(t, f.etc, 0o777)
-	if _, err := policy.Load(p, f.opts); err == nil {
+	if _, err := policy.Load(p, &f.opts); err == nil {
 		t.Fatal("world-writable parent accepted")
 	}
 	chmod(t, f.etc, 0o755)
@@ -442,22 +444,22 @@ func TestLoadOwnership(t *testing.T) {
 	if err := os.Symlink(filepath.Join(evil, "p.yaml"), link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := policy.Load(link, f.opts); err == nil {
+	if _, err := policy.Load(link, &f.opts); err == nil {
 		t.Fatal("policy in a world-writable directory accepted through a symlink")
 	}
 	// Too large.
 	gatetest.WriteFile(t, p, minimal+"#"+strings.Repeat("x", policy.MaxPolicyBytes), 0o644)
-	if _, err := policy.Load(p, f.opts); err == nil {
+	if _, err := policy.Load(p, &f.opts); err == nil {
 		t.Fatal("oversize policy accepted")
 	}
 	// Not a regular file.
-	if _, err := policy.Load(f.etc, f.opts); err == nil {
+	if _, err := policy.Load(f.etc, &f.opts); err == nil {
 		t.Fatal("directory accepted as policy")
 	}
 	// Production trust refuses a policy owned by the test uid.
 	if os.Getuid() != 0 {
 		gatetest.WriteFile(t, p, minimal, 0o644)
-		_, err := policy.Load(p, policy.LoadOptions{Trust: policy.RootTrust(), GateExecutable: f.gate, ServiceHome: f.home})
+		_, err := policy.Load(p, &policy.LoadOptions{Trust: policy.RootTrust(), GateExecutable: f.gate, ServiceHome: f.home})
 		var oe *policy.OwnershipError
 		if !errors.As(err, &oe) {
 			t.Fatalf("root trust: %v", err)

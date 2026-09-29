@@ -68,10 +68,14 @@ jobs:
         run: |
           go test -race -count=1 -v ./... 2>&1 | tee /tmp/go-test.log
           test "${PIPESTATUS[0]}" -eq 0
+      # Kernel-dependent tests, listed so that a skip is visible. On this
+      # runner the ABI 4+ ones (network rules, including the git_pull
+      # unlisted-port test) must PASS: SHELL_MCP_REQUIRE_LANDLOCK_ABI makes
+      # them fail rather than skip.
       - name: sandbox tests that ran on this runner
         if: always()
         run: |
-          grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|Integration(Sandbox|Swap|ExecLimits)|RequiredRefused|BestEffort)' /tmp/go-test.log | tee -a "$GITHUB_STEP_SUMMARY" || true
+          grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|Integration(Sandbox|Swap|ExecLimits|GitPull|ServiceOps|SystemOps)|RequiredRefused|BestEffort)' /tmp/go-test.log | tee -a "$GITHUB_STEP_SUMMARY" || true
       - name: govulncheck
         run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
       - name: cross-build (linux/amd64, linux/arm64)

@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -125,6 +127,8 @@ type rawCommand struct {
 type validator struct {
 	errs     []error
 	warnings []string
+	// denied is the identity check's scan, made once per load.
+	denied []*deniedFile
 }
 
 func (v *validator) fail(field, format string, args ...any) {
@@ -156,7 +160,7 @@ func decodeStrict(data []byte, out *rawPolicy) error {
 	return nil
 }
 
-func parse(data []byte, files []string, opts LoadOptions) (*Policy, error) {
+func parse(data []byte, files []string, opts *LoadOptions) (*Policy, error) {
 	var raw rawPolicy
 	if err := decodeStrict(data, &raw); err != nil {
 		return nil, &Error{"", err.Error()}
@@ -185,6 +189,7 @@ func parse(data []byte, files []string, opts LoadOptions) (*Policy, error) {
 	v.services(p, raw.Services)
 	v.journal(p, raw.Journal)
 	v.git(p, raw.Git)
+	v.gitPorts(p)
 	v.privileged(p, raw.Privileged)
 	v.redact(p, raw.Redact)
 	v.commands(p, raw.Commands, opts)
@@ -293,7 +298,7 @@ func checkRoot(p string) error {
 	return nil
 }
 
-func (v *validator) paths(p *Policy, raw *rawPaths, files []string, opts LoadOptions) {
+func (v *validator) paths(p *Policy, raw *rawPaths, files []string, opts *LoadOptions) {
 	if raw == nil {
 		raw = &rawPaths{}
 	}
@@ -496,6 +501,9 @@ func (v *validator) git(p *Policy, raw *rawGit) {
 			strings.IndexFunc(r.Remote, func(c rune) bool { return c <= ' ' || c == 0x7f }) >= 0:
 			v.fail(field+".remote", "must be at most %d characters, not start with '-', and contain no spaces or control characters", maxRemoteLength)
 			continue
+		case !httpsRemote(r.Remote):
+			v.fail(field+".remote", "must be an https:// URL with a host (ssh remotes cannot work: the gate sets core.sshCommand=/bin/false and ssh is hard-denied; file:// is disabled by protocol.file.allow=never)")
+			continue
 		}
 		for _, e := range p.Git.Repos {
 			if e.Path == r.Path {
@@ -503,6 +511,40 @@ func (v *validator) git(p *Policy, raw *rawGit) {
 			}
 		}
 		p.Git.Repos = append(p.Git.Repos, Repo(r))
+	}
+}
+
+// httpsRemote reports whether r is an https:// URL with a host and no
+// query or fragment (POLICY §1, §7).
+func httpsRemote(r string) bool {
+	if !strings.HasPrefix(r, "https://") {
+		return false
+	}
+	u, err := url.Parse(r)
+	return err == nil && u.Scheme == "https" && u.Opaque == "" && u.Hostname() != "" &&
+		u.RawQuery == "" && u.Fragment == "" && !u.ForceQuery
+}
+
+// remotePort is the TCP port an https remote connects to.
+func remotePort(r string) uint16 {
+	u, err := url.Parse(r)
+	if err != nil || u.Port() == "" {
+		return 443
+	}
+	n, err := strconv.ParseUint(u.Port(), 10, 16)
+	if err != nil {
+		return 0
+	}
+	return uint16(n)
+}
+
+// gitPorts warns when a repo's remote port is not a sandbox TCP port:
+// git_pull could never connect.
+func (v *validator) gitPorts(p *Policy) {
+	for i, r := range p.Git.Repos {
+		if port := remotePort(r.Remote); !slices.Contains(p.Sandbox.TCPConnectPorts, port) {
+			v.warn("git.repos[%d].remote uses TCP port %d, which sandbox.tcp_connect_ports does not list; git_pull cannot connect", i, port)
+		}
 	}
 }
 
@@ -575,7 +617,7 @@ func (v *validator) redact(p *Policy, raw *rawRedact) {
 
 var commandIDRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
-func (v *validator) commands(p *Policy, raw []rawCommand, opts LoadOptions) {
+func (v *validator) commands(p *Policy, raw []rawCommand, opts *LoadOptions) {
 	if len(raw) > maxCommands {
 		v.fail("commands", "has more than %d commands", maxCommands)
 	}
@@ -640,7 +682,7 @@ func (v *validator) commands(p *Policy, raw []rawCommand, opts LoadOptions) {
 // resolveCommand resolves the binary, applies the hard-deny list to the
 // base name as written and as resolved, requires root_equivalent for
 // container CLIs, and checks ownership of the binary and its directories.
-func (v *validator) resolveCommand(field string, rc *rawCommand, opts LoadOptions) (resolved string, ok bool) {
+func (v *validator) resolveCommand(field string, rc *rawCommand, opts *LoadOptions) (resolved string, ok bool) {
 	if err := pathx.CheckClean(rc.Path); err != nil {
 		v.fail(field+".path", "%v", err)
 		return "", false
@@ -680,6 +722,16 @@ func (v *validator) resolveCommand(field string, rc *rawCommand, opts LoadOption
 	if fi.Mode().Perm()&0o111 == 0 {
 		v.fail(field+".path", "%s is not executable", resolved)
 		return "", false
+	}
+	if !v.identity(field, resolved, fi, opts) {
+		return "", false
+	}
+	for _, base := range []string{filepath.Base(rc.Path), filepath.Base(resolved)} {
+		if cats := EscapeTechniques(base); cats != nil {
+			v.warn("%s: %s has documented escape techniques (GTFOBins: %s); review its templates and never pass {path:write} to it (%s)",
+				field, base, strings.Join(cats, ", "), gtfobinsURL(base))
+			break
+		}
 	}
 	return resolved, true
 }

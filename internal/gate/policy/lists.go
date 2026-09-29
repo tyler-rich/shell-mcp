@@ -1,6 +1,9 @@
 package policy
 
-import "path"
+import (
+	"path"
+	"strings"
+)
 
 // builtinDeny is the built-in read deny list (POLICY §3); policy `deny`
 // patterns are added to it and cannot remove any of these.
@@ -14,8 +17,9 @@ var builtinDeny = []string{
 // builtinProtected is the built-in protected set (POLICY §3). The gate
 // binary, the service user's home and the policy file itself are added at
 // load time. Nothing covered by it is ever writable, and a write root equal
-// to, inside, or containing an entry is a policy error. For "**/.ssh",
-// "containing" cannot be decided statically, so it is enforced per request.
+// to, inside, or containing an entry is a policy error. For "**/.ssh" and
+// "**/.git", "containing" cannot be decided statically, so it is enforced
+// per request (a write root may contain a repository; never its .git).
 var builtinProtected = []string{
 	"/etc/shell-mcp", "/etc/ssh", "/etc/sudoers", "/etc/sudoers.d", "/etc/pam.d",
 	"/etc/security", "/etc/systemd", "/usr/lib/systemd", "/lib/systemd", "/run/systemd",
@@ -23,6 +27,10 @@ var builtinProtected = []string{
 	"/etc/ld.so.conf", "/etc/ld.so.conf.d", "/etc/ld.so.preload", "/etc/passwd",
 	"/etc/group", "/etc/shadow*", "/etc/gshadow*", "/etc/fstab", "/boot", "/usr", "/bin",
 	"/sbin", "/lib", "/lib64", "/root", "**/.ssh",
+	// Every .git directory (POLICY §3): its config, hooks and attributes can
+	// make git run commands or fetch from another host. The gate's git ops
+	// write there through git itself, never through fsx.
+	"**/.git",
 }
 
 // forbiddenRoots may not be roots or contain roots' paths (POLICY §3).
@@ -58,21 +66,59 @@ var builtinOps = []string{"systemctl", "journalctl", "git"}
 // containerCLIs need `root_equivalent: true` (POLICY §4).
 var containerCLIs = []string{"docker", "podman", "ctr", "nerdctl", "kubectl"}
 
-// hardDenied returns the group that denies a base name, if any.
+// hardDenied returns the group that denies a base name, if any. It runs for
+// every entry of the system binary directories (the identity check), so
+// literal names are looked up in a map and only the few globs are matched.
 func hardDenied(base string) (group int, name string, denied bool) {
-	for _, g := range hardDeny {
-		for _, pat := range g.bins {
-			if ok, _ := path.Match(pat, base); ok {
-				return g.group, g.name, true
-			}
+	if i, ok := hardDenyLiteral[base]; ok {
+		return hardDeny[i].group, hardDeny[i].name, true
+	}
+	for _, g := range hardDenyGlobs {
+		if ok, _ := path.Match(g.pattern, base); ok {
+			return hardDeny[g.index].group, hardDeny[g.index].name, true
 		}
 	}
 	return 0, "", false
 }
 
+// hardDenyLiteral and hardDenyGlobs index hardDeny (read-only after init).
+var hardDenyLiteral, hardDenyGlobs = indexHardDeny()
+
+type denyGlob struct {
+	pattern string
+	index   int
+}
+
+func indexHardDeny() (map[string]int, []denyGlob) {
+	lit := map[string]int{}
+	var globs []denyGlob
+	for i, g := range hardDeny {
+		for _, b := range g.bins {
+			if strings.ContainsAny(b, "*?[") {
+				globs = append(globs, denyGlob{b, i})
+			} else if _, dup := lit[b]; !dup {
+				lit[b] = i
+			}
+		}
+	}
+	return lit, globs
+}
+
 // defaultReadExec are the system directories the sandbox grants read and
 // execute on (POLICY §4a), before sandbox.system_read_exec.
 var defaultReadExec = []string{"/usr", "/bin", "/sbin", "/lib", "/lib64"}
+
+// DefaultSystemBinDirs are the directories the binary identity check scans.
+var DefaultSystemBinDirs = []string{"/usr/bin", "/usr/sbin", "/bin", "/sbin", "/usr/local/bin", "/usr/local/sbin"}
+
+// deniedFile is a file under a system binary directory with a hard-denied
+// name (after following symlinks).
+type deniedFile struct {
+	name, path string
+	dev, ino   uint64
+	size       int64
+	sum        *[32]byte // computed on demand
+}
 
 // DefaultReadExec returns the sandbox's built-in read+execute directories.
 func DefaultReadExec() []string { return append([]string(nil), defaultReadExec...) }

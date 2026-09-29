@@ -39,27 +39,44 @@ type opSpec struct {
 
 // opOrder is the order ops are listed in by hello.
 var opOrder = []string{
-	protocol.OpHello, protocol.OpPolicy, protocol.OpListDir, protocol.OpStat, protocol.OpReadFile,
-	protocol.OpFind, protocol.OpDeletePreview, protocol.OpWriteFile, protocol.OpMkdir, protocol.OpCopy,
-	protocol.OpMove, protocol.OpChmod, protocol.OpDelete,
+	protocol.OpHello, protocol.OpPolicy, protocol.OpSysinfo, protocol.OpDisk, protocol.OpProcesses,
+	protocol.OpServiceStatus, protocol.OpServiceList, protocol.OpJournal,
+	protocol.OpGitStatus, protocol.OpGitLog, protocol.OpGitDiff, protocol.OpGitDiscardPreview,
+	protocol.OpListDir, protocol.OpStat, protocol.OpReadFile, protocol.OpFind, protocol.OpCertInspect, protocol.OpDeletePreview,
+	protocol.OpServiceControl, protocol.OpGitPull, protocol.OpWriteFile, protocol.OpMkdir, protocol.OpCopy,
+	protocol.OpMove, protocol.OpChmod, protocol.OpDelete, protocol.OpGitDiscard,
 }
 
 // ops implemented in this version, with their tiers (ARCHITECTURE §4.3).
 func opTable() map[string]opSpec {
 	return map[string]opSpec{
-		protocol.OpHello:         {policy.TierRead, (*server).hello},
-		protocol.OpPolicy:        {policy.TierRead, (*server).policySummary},
-		protocol.OpListDir:       {policy.TierRead, (*server).listDir},
-		protocol.OpStat:          {policy.TierRead, (*server).stat},
-		protocol.OpReadFile:      {policy.TierRead, (*server).readFile},
-		protocol.OpFind:          {policy.TierRead, (*server).find},
-		protocol.OpDeletePreview: {policy.TierRead, (*server).deletePreview},
-		protocol.OpWriteFile:     {policy.TierOperator, (*server).writeFile},
-		protocol.OpMkdir:         {policy.TierOperator, (*server).mkdir},
-		protocol.OpCopy:          {policy.TierOperator, (*server).copy},
-		protocol.OpMove:          {policy.TierOperator, (*server).move},
-		protocol.OpChmod:         {policy.TierOperator, (*server).chmod},
-		protocol.OpDelete:        {policy.TierDestructive, (*server).delete},
+		protocol.OpHello:             {policy.TierRead, (*server).hello},
+		protocol.OpPolicy:            {policy.TierRead, (*server).policySummary},
+		protocol.OpSysinfo:           {policy.TierRead, (*server).sysinfo},
+		protocol.OpDisk:              {policy.TierRead, (*server).disk},
+		protocol.OpProcesses:         {policy.TierRead, (*server).processes},
+		protocol.OpServiceStatus:     {policy.TierRead, (*server).serviceStatus},
+		protocol.OpServiceList:       {policy.TierRead, (*server).serviceList},
+		protocol.OpJournal:           {policy.TierRead, (*server).journal},
+		protocol.OpServiceControl:    {policy.TierOperator, (*server).serviceControl},
+		protocol.OpGitStatus:         {policy.TierRead, (*server).gitStatus},
+		protocol.OpGitLog:            {policy.TierRead, (*server).gitLog},
+		protocol.OpGitDiff:           {policy.TierRead, (*server).gitDiff},
+		protocol.OpGitDiscardPreview: {policy.TierRead, (*server).gitDiscardPreview},
+		protocol.OpGitPull:           {policy.TierOperator, (*server).gitPull},
+		protocol.OpGitDiscard:        {policy.TierDestructive, (*server).gitDiscard},
+		protocol.OpListDir:           {policy.TierRead, (*server).listDir},
+		protocol.OpStat:              {policy.TierRead, (*server).stat},
+		protocol.OpReadFile:          {policy.TierRead, (*server).readFile},
+		protocol.OpFind:              {policy.TierRead, (*server).find},
+		protocol.OpCertInspect:       {policy.TierRead, (*server).certInspect},
+		protocol.OpDeletePreview:     {policy.TierRead, (*server).deletePreview},
+		protocol.OpWriteFile:         {policy.TierOperator, (*server).writeFile},
+		protocol.OpMkdir:             {policy.TierOperator, (*server).mkdir},
+		protocol.OpCopy:              {policy.TierOperator, (*server).copy},
+		protocol.OpMove:              {policy.TierOperator, (*server).move},
+		protocol.OpChmod:             {policy.TierOperator, (*server).chmod},
+		protocol.OpDelete:            {policy.TierDestructive, (*server).delete},
 	}
 }
 

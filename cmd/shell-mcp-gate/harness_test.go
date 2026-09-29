@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/audit"
 	"github.com/tyler-rich/shell-mcp/internal/gate/install"
 	"github.com/tyler-rich/shell-mcp/internal/gate/ops"
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
@@ -65,10 +66,24 @@ func harnessOptions(version, policyPath, principal string) (ops.Options, error) 
 		Executable:   exe,
 		ServiceHome:  os.Getenv("HARNESS_HOME"),
 		ApplySandbox: sandbox.Apply,
+		Audit:        audit.NewSyslog(audit.DevLog),
 	}
 	if v, ok := os.LookupEnv("SSH_ORIGINAL_COMMAND"); ok {
 		o.SSHOriginalCommand = &v
 	}
+	// Built-in binaries: fakes injected by the integration tests, else the
+	// production paths.
+	o.Systemctl, o.Journalctl, o.Git = ops.SystemctlPath, ops.JournalctlPath, ops.GitPath
+	if v := os.Getenv("HARNESS_SYSTEMCTL"); v != "" {
+		o.Systemctl = v
+	}
+	if v := os.Getenv("HARNESS_JOURNALCTL"); v != "" {
+		o.Journalctl = v
+	}
+	if v := os.Getenv("HARNESS_GIT"); v != "" {
+		o.Git = v
+	}
+	o.TestGitCAFile = os.Getenv("HARNESS_GIT_CA")
 	if os.Getenv("HARNESS_FAULT") == "readback" {
 		o.InjectReadBackFault = func(b []byte) []byte { return append(bytes.Clone(b), '!') }
 	}

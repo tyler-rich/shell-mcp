@@ -157,3 +157,221 @@ Entry format:
 - **Maintainer decisions:** UDP at ABI 10; Unix-socket rules by directory vs file once an ABI 9 runner exists.
 - **Groups** resolve from `/etc/group` only (pure Go); NSS-only groups fail closed.
 **Versions:** Go 1.27.1. Direct: `github.com/landlock-lsm/go-landlock` v0.10.1 (new), `github.com/modelcontextprotocol/go-sdk` v1.8.0, `go.yaml.in/yaml/v3` v3.0.5, `golang.org/x/crypto` v0.57.0, `golang.org/x/sys` v0.48.0. Indirect: `kernel.org/pub/linux/libs/security/libcap/psx` v1.2.78 (new), `github.com/google/jsonschema-go` v0.4.3, `github.com/segmentio/asm` v1.2.1, `github.com/segmentio/encoding` v0.5.4, `github.com/yosida95/uritemplate/v3` v3.0.2, `golang.org/x/oauth2` v0.37.0, `golang.org/x/sync` v0.23.0, `golang.org/x/time` v0.16.0. Tools unchanged (golangci-lint v2.14.0, govulncheck v1.8.0); actionlint (latest via `go run`) for the workflow.
+
+### 2026-09-27 — Gate operations: system, services, journal, git, certificates; polkit generator; audit; policy hardening (PR #4, branch feat/gate-ops)
+**Decision:** Implement the remaining gate operations per the S1b prompt, POLICY.md and ARCHITECTURE §4.3, all through the S1 machinery (fsx, execx, the policy-driven sandbox):
+- **Native system ops:** `sysinfo`, `disk` and `processes` read a fixed list of host files through the new `fsx.ReadSystemFile` (os-release, `/proc/{uptime,loadavg,meminfo,stat,self/mountinfo}`, `/proc/<pid>/{stat,status,cmdline}`), never a request path. `disk` runs `statfs(2)` with a 2 s bound per mount. `processes` walks at most `limits.max_processes` pids and redacts command lines: values after secret-looking flags, `-p value`/`-pvalue`, URL userinfo, then the redaction patterns, then a 512-character cut. It also reports `hidepid`. The parsers live in `internal/gate/procfs`.
+- **systemd:** `service_status`, `service_list`, `journal` (read) and `service_control` (operator) run fixed argv via execx. Validation and parsers live in `internal/gate/systemd`.
+- **Git:** `git_status`, `git_log`, `git_diff`, `git_discard_preview` (read), `git_pull` (operator) and `git_discard` (destructive). Parsers and the configuration allowlist live in `internal/gate/gitx`.
+- **Certificates:** `cert_inspect` parses PEM or DER natively (`internal/gate/certs`, read through the new `fsx.ReadRaw`).
+- **polkit:** the `polkit --policy <file> --user <name>` generator (`internal/gate/polkit`).
+- **Audit:** a syslog audit line per request (`internal/gate/audit`).
+- **Policy hardening:** a binary identity check, https-only git remotes, and GTFOBins WARN lines in `check-policy`.
+- **Refusals and examples:** actionable `sandbox_unavailable` and absolute-symlink refusals, and three example gate policies.
+
+**Why:** S1b scope (plan §5). Every op, validation rule, grant, refusal message and the identity check had its test committed first and shown failing (the `test(gate): …(failing)` commits, listed with their output in the PR body).
+
+**Clarifications agreed with the maintainer during the session:**
+- **POLICY §7 was not enough.** Verified on git 2.47.3 with exactly the §7 flags:
+  - `git diff` ran a `diff.<drv>.textconv` and a `filter.<drv>.clean` command from `.git/config`, both through `sh`.
+  - `url.<B>.insteadOf=<A>` made `git pull` fetch from B while `remote.origin.url` still named A.
+  - `git_pull` and `git_discard` need the repo inside a write root, so an operator-tier caller could plant that configuration with `write_file`.
+
+  The maintainer chose:
+  1. **Allowlist the repository-local configuration.** Before every git op the gate reads it with `git config --local --no-includes --list -z`, which runs nothing, and refuses (`policy_denied`, naming the key) unless every key is `core.{repositoryformatversion,filemode,bare,logallrefupdates,ignorecase,precomposeunicode,symlinks}`, `remote.origin.{url,fetch}` or `branch.<name>.{remote,merge}`. `include.*` and `includeIf.*` are therefore refused.
+  2. **Add `--no-ext-diff --no-textconv`** to diff and log.
+  3. **Check the URL git will actually use.** `git_pull` compares `ls-remote --get-url origin` with the policy remote as well as `remote.origin.url`.
+  4. **Put `**/.git` in the built-in protected set** (POLICY §3). fsx then refuses every write, mkdir, copy, move, chmod, delete and `{path:write}` under a `.git` component, and a recursive delete or move of a tree containing one; a write root may not be, or be inside, a `.git`.
+  5. **Pin the repository.** Every git run gets `GIT_DIR=<repo>/.git` and `GIT_WORK_TREE=<repo>`. `<repo>/.git` must be a real directory inside the root; a gitfile, a symlink or a `commondir` is refused.
+  6. **Remove other configuration sources.** `GIT_CONFIG_GLOBAL=/dev/null` is set alongside `GIT_CONFIG_NOSYSTEM=1`. execx inherits no variable, so no `GIT_CONFIG_COUNT/KEY/VALUE` or askpass variable can arrive; a test asserts git's exact argv and environment.
+  7. **Two-sided tests.** Control runs of git with the gate's own argv and environment execute the textconv and clean-filter markers and follow the insteadOf redirect to a second HTTPS server; the gated ops refuse, the markers do not appear, and nothing is fetched from the redirect target. A `write_file` to `.git/config` is refused while a sibling file in the same write root is written.
+
+  POLICY §3 and §7 are updated to match.
+- **`services.status` enables `service_list`.** The prompt asked for the D-Bus grant "whenever `services.status`, `services.control` or `service_list` use is configured". `service_list` has no key of its own: it is available when `services.status` is non-empty and lists only matching units. The `/run/dbus` grant therefore applies whenever `services.status` or `services.control.units` is non-empty. POLICY §4a and the sandbox changed together; `TestComputeServiceAndSyslogGrants` covers nothing, journal only, status and control.
+
+**Verified at the source** (research recorded here; URLs in the PR discussion):
+- **Versions.** The current Ubuntu LTS is 26.04 "Resolute" (April 2026).
+
+  | | Debian 13 | Ubuntu 26.04 | Ubuntu 24.04 (for reference) |
+  |---|---|---|---|
+  | systemd | 257.13 | 259.5 | 255.4 |
+  | polkitd | 126 | 127 | 124 |
+  | git | 2.47.3 | 2.53.0 | 2.43 |
+
+  git in the local `golang:1.27.1-trixie` image is 2.47.3; the CI runner's git is whatever `ubuntu-latest` ships.
+- **`systemctl list-units -o json`.** Not in the man pages (which document `-o` for `status` only), but implemented identically at v257.13 and v259.5: `-o json` forces `--plain` and no legend; `table_print_json` emits one array whose keys are the lowercased headers `unit`, `load`, `active`, `sub`, `description`, plus `job` only when a job is pending. The gate uses it and parses strictly for the required fields, ignoring unknown members so a future column does not break the op. There is no `--json=` option in systemctl.
+- **`systemctl show -p`** prints `KEY=VALUE` per existing property (unknown properties are silently omitted) and exits 0 with `LoadState=not-found` for a missing unit. An all-digit argument is a job id; unit names must carry a type suffix, so the gate never passes one.
+- **polkit denial.** A rule returning NO gives `AccessDenied`, printed as "Access denied", exit 4 (`EXIT_NOPERMISSION`). A challenge under `--no-ask-password` gives `InteractiveAuthorizationRequired`, exit 1, with "Interactive authentication required." (257) or "…requires interactive authentication…" (259). Both map to `not_authorized`. systemd loads the unit before the polkit check, so a nonexistent unit is also a denial for an unprivileged caller.
+- **polkit details.** `org.freedesktop.systemd1.manage-units` with details `unit` (the unit id) and `verb` (`start`, `stop`, `reload`, `restart`; `try-restart` and `reload-or-…` otherwise); NEWS v226. polkit 126 and 127 both use Duktape; the rules-file API is as in polkit(8).
+- **journalctl.**
+  - `-u` accepts globs, and a glob that matches nothing exits 1, so the gate passes exact names only.
+  - No matching entries exit 0 with "-- No entries --".
+  - Partial access prints a "Hint: … not seeing messages" notice with exit 0; the gate returns it as a warning. No accessible files exit 1 ("No journal files were opened…"); the gate returns `exec_failed` and names systemd-journal.
+  - `@<epoch>` is accepted by `--since`/`--until` (systemd.time(7)). The gate converts RFC 3339 and `-N<s|m|h|d|w>` into it, so nothing from the request reaches journalctl verbatim.
+- **git** (2.47.3, and the 2.53 docs):
+  - Every POLICY §7 flag exists.
+  - `-c safe.directory` is honoured (the command scope is protected configuration).
+  - An empty `credential.helper` resets the helper list.
+  - `core.hooksPath=/dev/null` disables hooks on 2.47.3: a `post-checkout` hook ran without the flag and not with it. 2.53 documents this.
+  - `clean` messages are translatable, so they are parsed under `LC_ALL=C.UTF-8`.
+  - The porcelain v2 `-z`, `config --list -z` and `clean -n` formats were checked on 2.47.3.
+- **`git http-backend`** needs `GIT_PROJECT_ROOT` and `GIT_HTTP_EXPORT_ALL`; `net/http/cgi` supplies `PATH_INFO` and friends.
+- **Go `log/syslog`** tries `/dev/log`, `/var/run/syslog` and `/var/run/log` (unixgram, then unix), reconnects and retries, and its writes have no deadline, so it can block on a full journald queue. The gate therefore has its own sender: one `unixgram` dial to `/dev/log` with a 250 ms timeout, one write with a 250 ms deadline, and errors ignored. It writes RFC 3164 local format, facility authpriv, info on success and notice otherwise. `TestSyslogNeverBlocks` fills a real socket queue to EAGAIN and proves the write returns.
+- **proc(5).** In `stat`, comm ends at the last `)`. mountinfo carries a `-` separator and octal-escaped fields. `hidepid` values `0`/`off` do not hide. `/proc/<pid>/stat` times are in USER_HZ, 100 on amd64 and arm64; Go has no `sysconf` without cgo.
+
+**Grants:**
+- **D-Bus:** `/run/dbus` (directory form) when `services.status` or `services.control.units` is non-empty.
+- **`/dev/log`:** the directory that really holds the socket, found by resolving `/dev/log` (`sandbox.SocketDir`; `/run/systemd/journal` on systemd hosts). It is always granted, for the audit line. It uses the directory form, the same as S1's socket grants, because no runner has ABI 9 to test file-level rules.
+- **Where these are enforced:** both grants take effect only at Landlock ABI 9+. Below it (local ABI 3, CI ABI 7), Unix-socket connects are not governed and file permissions are the control, as `hello` reports.
+- **Journal directories:** unchanged, read-only when `journal` is configured.
+
+**https-only git remotes:** the loader rejects any remote that is not an `https://` URL with a host (no query or fragment), with a one-line reason. `check-policy` warns when the remote's port is not in `tcp_connect_ports`.
+
+**How git_pull was tested:**
+- **Test server:** `net/http/httptest` TLS in front of `git http-backend` through `net/http/cgi` (`gatetest.GitServer`). The server certificate reaches git only as `-c http.sslCAInfo=<file>` through the test-only `Options.TestGitCAFile`; production never sets it and never relaxes TLS.
+- **Unit cases** run the real git: fast-forward, already up to date, dirty tree, non-fast-forward (HEAD unchanged), foreign `remote.origin.url`, the insteadOf redirect (two-sided), a repo only in a read root, and read tier.
+- **Under the real sandbox:** `TestIntegrationGitPull` runs with the port listed (locally with best-effort at ABI 3, on CI required at ABI 7). `TestIntegrationGitPullUnlistedPort` is two-sided and needs ABI 4, forced on CI by `SHELL_MCP_REQUIRE_LANDLOCK_ABI`: with the port missing, git's connect is refused and HEAD does not move; with it listed, the pull lands.
+
+**Identity-check design:**
+- At policy load, the resolved command binary is compared with every file under `/usr/bin`, `/usr/sbin`, `/bin`, `/sbin`, `/usr/local/bin` and `/usr/local/sbin` whose name is hard-denied. Symlinks are followed (so `sh → dash` counts as `dash`), and each real directory is scanned once per load.
+- **Comparison:** device + inode first; SHA-256 only for same-size candidates, hashed on demand. A candidate that cannot be compared (unreadable, or larger than 1 GiB) fails closed.
+- **Speed:** `hardDenied` now looks literal names up in a map and matches only the few glob patterns, because it runs for every directory entry.
+- **Testing:** `LoadOptions.SystemBinDirs` lets tests use their own directory; production uses the defaults. A hard link and a copy (including a copy of a binary reached only through a denied symlink) are rejected, naming the denied binary; an unrelated binary and a same-size look-alike are accepted.
+- **Consequence:** multi-call binaries that a denied name links to (for example the one binary behind the firewall tools, or behind `systemctl` and `shutdown`) are refused under every name, which is intended.
+- `LoadOptions` crossed gocritic's 80-byte `hugeParam` threshold, so `policy.Load`/`Parse` take `*LoadOptions` (and `polkit.Rule` takes `*Spec`).
+
+**GTFOBins list — source and licensing:**
+- GTFOBins' content is GPL-3.0 and this repository is Apache-2.0, so nothing was copied or generated from GTFOBins' text or data files.
+- The list is the project's own (`internal/gate/policy/gtfobins.go`): 87 binary names a gate policy might plausibly declare, each with our own four coarse categories (command execution, file read, file write, SUID abuse), written from each binary's documented behaviour. Hard-denied binaries and the built-in operations are left out, because the loader refuses them anyway.
+- The names were checked for presence against the public index; only presence was compared, and all 87 have entries. Three category sets were spot-checked (`chmod`, `sed`, `cp`), reading only section headings.
+- The site moved to gtfobins.org (github.io redirects), so each WARN links `https://gtfobins.org/gtfobins/<name>/`. A link is a reference, not a copy.
+
+**UDP and NSS:**
+- UDP stays unrestricted in v1 (POLICY §4a): Landlock governs it only from ABI 10, which the target kernels lack, and restricting it would deny DNS to every command and to `git_pull`.
+- Supplementary groups resolve from `/etc/group` only (static binary, no NSS); a group known only through NSS fails closed with `install_insecure` (SECURITY §5).
+
+**Actionable refusals:**
+- `sandbox_unavailable` states the kernel's ABI, or that it has no Landlock, the minimum under `required` (4), and `best-effort` as the alternative.
+- A seccomp (MPTCP filter) install failure says so, with the same alternative; `sandbox.ErrSeccomp` is exported for this.
+- A `path_denied` caused by a directory symlink with an absolute target now says so, without naming a path. fsx walks the refused path's components inside the root to find it.
+
+**What S1c's runner-host job must prove against real systemd, journald and polkit** (here only fakes stand in for the binaries' command-line contract):
+1. **service_status:** real `systemctl show -p <list> -- <unit>` output parses (timestamps, `MemoryCurrent` as a number or `[not set]`, `NRestarts`), and a missing unit gives `LoadState=not-found`. It must run as the unprivileged service user inside the gate's Landlock + seccomp domain, reaching systemd over `/run/dbus/system_bus_socket`.
+2. **service_list:** real `list-units --output=json` output parses, including a unit with a pending job (the `job` key), and only `services.status` units are returned.
+3. **journal:**
+   - As the service user with systemd-journal: lines come back and `--since @<epoch>` / `--until` / `-p err` / `-u <exact unit>` work.
+   - Without the group: the "not seeing messages" warning, or `exec_failed` naming systemd-journal when no file can be opened.
+4. **polkit and service_control:** install the output of `shell-mcp-gate polkit` in `/etc/polkit-1/rules.d/`. An allowed unit × verb succeeds, and the status is re-read. Each of these is `not_authorized` (exit 1 or 4, never `exec_failed`): a verb outside the rule, a unit outside the rule, a missing rule, and a rule returning NO. The polkit `unit` detail must equal the name the gate passes (alias behaviour is unverified).
+5. **Audit:** one line per request reaches journald through `/dev/log` with identifier `shell-mcp-gate`, facility authpriv and a JSON body with no content. `sandbox.SocketDir("/dev/log")` resolves to `/run/systemd/journal`.
+6. **Refusals:** the gate refuses service and journal ops before exec when the policy lacks the section.
+
+**Fuzzing (60 s each, golang container, no crashers):** `FuzzOSRelease` (procfs) 70,944,503; `FuzzMountinfo` (procfs) 68,648,705; `FuzzPIDStat` (procfs) 63,981,443; `FuzzProcMisc` (procfs) 54,143,221; `FuzzCmdline` (procfs) 10,722,074; `FuzzSystemFile` (fsx) 40,010,327; `FuzzInspect` (certs) 18,968,124; `FuzzParseShow` (systemd) 9,482,677; `FuzzParseListUnits` (systemd) 42,116,039; `FuzzJournalTime` (systemd) 51,111,263; `FuzzParseStatus` (gitx) 82,162,310; `FuzzParseClean` (gitx) 80,577,546; `FuzzConfig` (gitx) 74,576,443; `FuzzLogAndUnquote` (gitx) 79,404,798.
+
+**Other choices made in the session:**
+- **Built-in binary paths** are fixed at `/usr/bin/{systemctl,journalctl,git}` and checked like command binaries (trusted-owner chain, regular, executable, not group/other-writable) before each run; tests inject fakes via `Options.Systemctl/Journalctl/Git`.
+- **Codes:**
+  - Service and journal ops refuse `policy_denied` when their section is empty.
+  - Unparsable or unexpected systemctl output is `exec_failed`.
+  - A repo without `.git` is `not_found`.
+  - A git subcommand whose output exceeds `max_output_bytes` is `too_large`.
+- **Git timeouts:** all git runs of one request share the request's single timeout.
+- **git_discard** returns the preview taken just before it runs, plus `clean_after`. Ignored files are kept, and nested repositories are skipped and listed.
+- **`cert_inspect`** checks the whole file for keys, not the first 64 KiB, before parsing anything. It refuses PEM of any `… PRIVATE KEY` type and DER PKCS#8, PKCS#1 or SEC 1 keys, returns `path_denied` "file contains a private key", and echoes nothing. It accepts at most 256 certificates, and at most 256 names per SAN list.
+- **Test hooks:** `check-policy` and `polkit` have test-only entry points (`checkPolicyWith`, `polkitWith`) taking the trust set (and the service home). Production passes `policy.RootTrust()`.
+- **RLIMIT_NPROC observation:** the S1 per-child `RLIMIT_NPROC` is "current tasks of the uid + 256", counted across the whole kernel. While the fuzzer ran in a second container under the same uid, probe children in the test run failed to start threads. In production, heavy concurrent use by the service account could do the same; systemd's per-user `TasksMax` remains the real bound (S5 TARGET-SETUP).
+
+**Alternatives rejected:**
+- `log/syslog` (no write deadline; retries).
+- Pre-connecting the syslog socket before the sandbox instead of a grant (the prompt asked for the grant).
+- A denylist of dangerous git keys (fragile; allowlist chosen).
+- Overriding repo filters with per-name `-c` flags (names are unknowable in advance).
+- Parsing systemctl's plain list output (the JSON is implemented on both target versions).
+- Passing `since`/`until` to journalctl verbatim.
+- Copying or deriving the GTFOBins list from its data files (licence).
+
+**Deferred / follow-ups:**
+- **S1c:** the runner-host proofs above; `priv_*` forwarding.
+- **ABI 9 socket rules:** proving the D-Bus and syslog directory grants under ABI 9 needs a runner with it (none exists).
+- **Server tools (S3/S4):** tool descriptions and schemas for the new ops.
+
+**Versions:**
+- **Go and modules:** Go 1.27.1 (newest stable per go.dev). `go get -u` changed nothing. Direct: `github.com/landlock-lsm/go-landlock` v0.10.1, `github.com/modelcontextprotocol/go-sdk` v1.8.0, `go.yaml.in/yaml/v3` v3.0.5, `golang.org/x/crypto` v0.57.0, `golang.org/x/sys` v0.48.0. Indirect: unchanged from the S1 entry.
+- **Dependencies added:** none. The new code uses only the standard library (`crypto/x509`, `encoding/pem`, `net/http/httptest`, `net/http/cgi`) and existing modules.
+- **Tools:** golangci-lint v2.14.0, govulncheck v1.8.0 (both newest; deps-current passes). Target components verified: systemd 257.13 and 259.5, polkit 126 and 127, git 2.47.3 and 2.53.0.
+
+### 2026-09-28 — Git config allowlist widened to data-only keys, with value checks and actionable refusals (PR #4, branch feat/gate-ops)
+**Decision:** The maintainer asked, before the PR was ready, for a less strict repository-config allowlist. POLICY §7 now accepts these keys, but only with the values git itself accepts:
+- **Identity:** `user.name`, `user.email`
+- **Line endings:** `core.autocrlf`, `core.eol`, `core.safecrlf` (`core.ignorecase` was already allowed)
+- **Pull strategy:** `pull.rebase`, `pull.ff`, `branch.<name>.rebase`
+- **Defaults:** `init.defaultBranch`
+- **Pruning and tags:** `fetch.prune`, `remote.origin.prune`, `remote.origin.tagOpt`
+- **Colors:** `color.*` (except `color.blame.*`)
+- **Hints:** `advice.*`
+- **Auto-gc threshold:** `gc.auto`
+
+The accepted values, with the reasoning per key family, are in the POLICY §7 table. Anything else is still refused. The `policy_denied` message names the key and gives the command that removes it, run in the repository: `git config --remove-section <section.subsection>` for a key under a subsection, otherwise `git config --unset-all <key>`. The message also says that Git LFS repositories are not supported in v1, because LFS works through filter programs.
+
+**Why:** Refusing everything beyond what `git init`/`git clone` write would reject ordinary repositories, for example one with an identity, line-ending settings or forced colours, for no security gain. Each added key was verified against the git 2.47.3 and 2.55.0 documentation and source. 2.55.0 is the git version in the CI image, as seen in the CI log. Behaviour was also tested on 2.55:
+- **No accepted value names anything.** None can name a program, a path git executes or reads config from, a URL, a proxy, credentials, an include, a filter, a hook, an editor, a pager, a signing program, or another git directory or work tree.
+- **pull.rebase / branch.<name>.rebase / pull.ff:** `builtin/pull.c` never reads them for `pull --ff-only --no-rebase`, because the command line sets the options first. `pull.rebase=interactive` with `pull.ff=false` pulls as a fast-forward, with no editor (`TestGitDataKeysAllowed`, real git).
+- **color.\*:** every key is a colour boolean or a colour, except `color.blame.highlightRecent` (colours and dates). It is excluded along with the rest of `color.blame.*`, because blame never runs. With `color.ui=always` and every `color.*` set to `always`, none of the output the gate parses carries escape codes. Only `pull`'s diffstat on stdout is coloured, and the gate does not parse it.
+- **advice.\*:** all booleans; hints go to stderr.
+- **user.\*:** used only as the reflog identity, since the gate never commits.
+- **gc.auto:** a number.
+
+**Value checks (new):** a malformed value is refused because it is a denial of service against the op:
+- A valueless `remote.<name>.tagOpt` segfaults git (`strcmp` on NULL in `remote.c`, reproduced on 2.55, same code in 2.47). It must be exactly `--tags` or `--no-tags`.
+- A non-numeric `gc.auto` makes 2.55's merge exit 128 *after* the fast-forward, because 2.55 reads it when deciding on auto-maintenance.
+- Invalid booleans or colours, and a valueless `user.*`, are fatal to every command.
+
+`gitx.KV` now records whether a key had a value. The colour check is a conservative subset of git's `color_parse`.
+
+**Tests (committed failing first):**
+- `93bc302`: `TestConfigAllowlistDataKeys`, `TestRefusalHint`, `TestGitDataKeysAllowed`, and `TestGitLFSRefusedActionably` (`filter.lfs.clean`/`smudge`/`process`/`required` refused with the actionable message; after `--remove-section filter.lfs` the repo is accepted; `core.editor` is still refused with its `--unset-all` hint).
+- `346a7b9`: `TestConfigAllowlistValues`.
+- **Still refused:** near misses in the same families, namely `user.signingkey`, `gpg.ssh.program`, `pull.twohead`, `pull.octopus`, `fetch.recursesubmodules`, `remote.origin.proxy`, `remote.origin.receivepack`, `remote.origin.vcs`, `branch.<name>.pushremote`, `gc.autodetach`, `maintenance.auto`, `init.templatedir`, `core.gitproxy`, `filter.lfs.process` and `lfs.url`.
+- **Fuzzing:** `FuzzConfig` re-run for 60 s after the change: 60,129,833 execs, no crashers.
+
+**Alternatives rejected:**
+- Allowing `color.blame.*`: blame never runs, and `highlightRecent` is not a plain colour.
+- Accepting any value for the new keys: this enables the crash and die-mid-operation cases above.
+- Pinning `core.ignorecase` with `-c`: it was already allowed, and pinning would change the §7 flag list. Flagged to the maintainer below.
+
+**Deferred / follow-ups (for the maintainer):**
+- **Auto-maintenance detaches.** Found during this verification, not caused by the allowlist change. With git's defaults (`maintenance.auto` true, `gc.autoDetach` true), `git pull` starts `git maintenance run --auto --detach` after fetch and after merge. `daemonize()` forks, the parent exits, and the child calls `setsid()`, so the maintenance process leaves the gate's process group. The gate's group kill then cannot reach it, and it outlives the request. It stays in the gate's Landlock + no_new_privs domain and cgroup, and `core.hooksPath=/dev/null` reaches it, so `pre-auto-gc` does not run. Adding `-c maintenance.auto=false` to the §7 flags stops it on both 2.47 and 2.55 (verified). That is a change to the POLICY §7 flag list, so it needs the maintainer's decision.
+- **core.ignorecase** changes which files git treats as tracked or ignored (so what `clean` removes) but cannot run anything. Pinning it with `-c core.ignorecase=false` is the same kind of flag-list decision.
+
+**Versions:** unchanged from the entry above. git verified: 2.47.3 (Debian 13, local image) and 2.55.0 (CI image).
+
+### 2026-09-29 — git never starts automatic maintenance and treats repositories as case-sensitive (PR #4, branch feat/gate-ops)
+**Decision:** The maintainer approved adding `-c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false -c core.ignorecase=false` to every git invocation (POLICY §7). `gc.auto` and `core.ignorecase` stay on the repository-config allowlist, so repositories that set them are not refused, but these flags always override them.
+
+**Why:**
+- **Auto-maintenance outlives the request.** With git's defaults, `fetch` and `merge` each end a pull with `run_auto_maintenance`, which starts `git maintenance run --auto --detach`. That process calls `daemonize()`: `fork`, the parent exits, then `setsid`. It leaves the gate's process group, so execx's group kill cannot reach it, and it outlives the request. It stays in the gate's Landlock, no_new_privs and seccomp domain.
+- **`core.ignorecase=true` hides files.** In a repository on a case-sensitive filesystem it hides untracked files that differ only in case from tracked ones, from `status` and from `clean`, so `git_discard_preview` would under-report.
+
+**Verified at the source** (git v2.47.3 and v2.55.0; the source at both tags, plus behaviour on 2.47.3 locally and 2.55.0 in CI):
+- **Precedence.** `do_git_config_sequence` reads system, global, local and worktree configuration, then the command line last (`git_config_from_parameters`); lookups are "last one wins". `git -c` values are exported in `GIT_CONFIG_PARAMETERS`, inherited by children (`prep_childenv`), and kept even for other repositories (`prepare_other_repo_env` / `sanitize_repo_env`). So they reach pull's `fetch` and `merge` children and any maintenance child.
+- **`maintenance.auto=false`.** `prepare_auto_maintenance` returns 0 and `run_auto_maintenance` starts no child (run-command.c at both tags). In 2.55 it also takes precedence over the new `gc.auto` fallback.
+- **`gc.auto=0`.** `need_to_gc` returns 0 before any daemonize ("Setting gc.auto to 0 or negative can disable the automatic gc"); this also disables `gc.autoPackLimit`. It is redundant with `maintenance.auto=false`, kept as defence in depth.
+- **`gc.autoDetach=false`.** Stops `gc --auto` from daemonizing, and is the fallback for `maintenance.autoDetach`. It is also redundant while no maintenance child starts.
+- **`core.ignorecase=false`.** Read per config entry, so the command-line value replaces a repo-local `true`. It governs name hashing, untracked detection in status and clean (`dir_add_name`/`index_file_exists`) and checkout (`unpack-trees.c`). The docs warn that git "relies on the proper configuration of this variable for your operating and file system": forcing false is right for the case-sensitive Linux filesystems the gate targets, and would misjudge a case-folding filesystem (casefold directories, CIFS). That is recorded here as a limitation.
+- **`maintenance run --detach` daemonizes before checking whether any task is due** (2.47.3 `maintenance_run_tasks`; 2.55.0 after the foreground tasks), which is why every default pull leaves a detached process.
+
+**Tests (committed failing first, `test(gate): git_pull leaves no detached maintenance process; …`):**
+- **`TestGitPullLeavesNoDetachedProcess` (two-sided).** The test process makes itself a child subreaper (`PR_SET_CHILD_SUBREAPER`), so a daemonized descendant is reparented to it and stays visible, even as a zombie, because Go reaps only its own children.
+  - Control: the gate's argv without the four flags leaves 2 detached git processes after a pull (after fetch and after merge; each has session id = pid).
+  - Gated: after `git_pull` responds, none remains.
+  - Without the flags, the gated run also left 2; that is the failing evidence.
+  - Test setup git (`gatetest.Git`) and the test server's bare repositories (whose `receive-pack` does not see the pusher's `-c`) now disable auto-maintenance, so only the pull under test can leave processes.
+- **`TestGitIgnoreCasePinned` (two-sided).** With `core.ignorecase=true` in the repo, the control (the gate's argv without the flags) hides an untracked `APP.CONF` next to the tracked `app.conf`. Under the gate, `git_status` lists it and `git_discard_preview` would remove it.
+- **`TestGitEnvironment`** asserts the new argv.
+
+**Alternatives considered:** the verifier also suggested `-c maintenance.autoDetach=false`, `-c fetch.writeCommitGraph=false` and `-c credential.helper=`. None is needed:
+- `credential.helper=` is already in the flag list.
+- `maintenance.autoDetach` and `fetch.writeCommitGraph` cannot come from system or global configuration (both disabled), and neither is on the repository allowlist, so no source can set them.
+
+**Deferred / follow-ups:** none. The case-folding filesystem limitation is recorded above.
+
+**Versions:** unchanged. git verified: 2.47.3 (local image), 2.55.0 (CI image).

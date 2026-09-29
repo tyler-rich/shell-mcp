@@ -60,7 +60,8 @@ Python remains viable for the server alone, but one language for all three binar
 | `internal/gate/fsx` | Root selection (longest matching root), `os.Root` operations, `/proc/self/fd/N` real-path re-check, O_NOFOLLOW final component, deny matching, bounded reads, atomic writes with read-back, mode/owner preservation, setuid/setgid refusal. |
 | `internal/gate/execx` | Template matching, argv construction, scrubbed env, `SysProcAttr{Setpgid, Pdeathsig}`, rlimits, output capture with per-stream caps, timeout SIGTERM→SIGKILL on the process group, exit-code/signal reporting. |
 | `internal/gate/ops` | One file per op (§4.3). Each op declares its tier; the dispatcher refuses ops above `max_tier` before doing anything else. |
-| `internal/gate/audit` | One syslog line per request: principal, client address (`SSH_CONNECTION`), op, sanitized args, outcome, duration. Never content. |
+| `internal/gate/audit` | One syslog line per request (authpriv; info on success, notice on refusal): principal, client address (`SSH_CONNECTION`), op, sanitized args (paths, units, ids, flags; an argument list only as its count), outcome, duration, as one JSON object. Never content, stdin, output or environment. One datagram to `/dev/log` with a 250 ms dial and write deadline: a missing socket or full queue never blocks the request. |
+| `internal/gate/procfs`, `systemd`, `gitx`, `certs` | Bounded, fuzzed parsers for `/proc` and os-release, systemctl/journalctl arguments and output, git output and repository configuration, and certificates. |
 | `internal/gate/sandbox` | Compute the Landlock ruleset from the policy (system read/execute paths, read roots, write roots, allowed TCP connect ports, IPC scoping) and apply it with `no_new_privs` to all threads before the request is read; report the effective ABI level. |
 | `internal/template` | The argv-template engine shared by the gate and the helper (POLICY §4). |
 | `internal/gate/polkit` | Generate the polkit rule for `services.control` (exact units × verbs, `subject.user` match, no wildcards); refuse if any unit name is not exact. |
@@ -131,18 +132,18 @@ Gate error codes: `protocol_mismatch`, `bad_request`, `unknown_op`, `tier_denied
 |---|---|---|
 | `hello` | read | Gate version, protocol, principal, policy hash, `max_tier`, op list. |
 | `policy` | read | Effective policy summary: roots, limits, services, repos, command ids with templates and tiers. Never raw file bytes. |
-| `sysinfo` | read | Native: `/etc/os-release`, `uname(2)`, `/proc/uptime`, `/proc/loadavg`, `/proc/meminfo`, CPU count. |
-| `disk` | read | Native: `/proc/self/mountinfo` + `statfs(2)`; pseudo filesystems filtered. |
-| `processes` | read | Native `/proc` walk: pid, ppid, user, state, rss, cpu time, start time, comm, redacted/truncated cmdline. Bounded count. |
-| `service_status` | read | `systemctl show --no-pager -p <fixed property list> -- <unit>`; unit must match `services.status`. |
-| `service_list` | read | `systemctl list-units --no-pager --plain --output=json --type=service [--state=failed]` (verify flag support at source). |
-| `journal` | read | `journalctl --no-pager -o short-iso -n <N> [--since <ts>] [--until <ts>] [-p <prio>] -u <unit>`; unit must match `journal.units`; N ≤ `journal.max_lines`. |
+| `sysinfo` | read | Native: `/etc/os-release`, `uname(2)`, `/proc/uptime`, `/proc/loadavg`, `/proc/meminfo`, CPU count (`/proc/stat`). |
+| `disk` | read | Native: `/proc/self/mountinfo` + `statfs(2)` (2 s per mount, so a hung network mount is reported, not waited on); pseudo filesystems filtered unless `include_pseudo`. |
+| `processes` | read | Native `/proc` walk bounded by `limits.max_processes`: pid, ppid, user, state, rss, cpu time, start time, comm, cmdline with values after secret-looking flags (`--password`, `--token`, `--secret`, `-p` …) and URL userinfo redacted, then the redaction patterns, then cut to 512 characters. Reports `hidepid` on `/proc` (the list is then partial). |
+| `service_status` | read | `systemctl show --no-pager -p <fixed property list> -- <unit>`; exact unit name matching `services.status`; `KEY=VALUE` output parsed strictly (unrequested or repeated keys are `exec_failed`). |
+| `service_list` | read | `systemctl list-units --no-pager --plain --output=json --type=service [--state=failed]`; only units matching `services.status`. `-o json` for `list-units` is not in the man pages but is implemented in systemd 257 and 259 (verified at the source; keys `unit`, `load`, `active`, `sub`, `description`, and `job` only when a job is pending). |
+| `journal` | read | `journalctl --no-pager -o short-iso -n <N> [--since @<t>] [--until @<t>] [-p <prio>] -u <unit>`; exact unit name (journalctl would expand a glob) matching `journal.units`; N ≤ `journal.max_lines`; `since`/`until` accepted as RFC 3339 or `-N<s\|m\|h\|d\|w>` (≤ 10 years) and passed only as epoch seconds computed by the gate. |
 | `list_dir`, `stat`, `read_file`, `find` | read | Native via `fsx` within `paths.read` (write roots are implicitly readable). `find` = bounded walk (depth, results, name glob, type) — never the `find` binary. |
 | `cert_inspect` | read | Native: parse PEM/DER certificates from a file within read roots; subject, issuer, SANs, validity, key type, SHA-256 fingerprint. Refuses files containing private keys. |
-| `git_status`, `git_log`, `git_diff` | read | `git` with fixed hardening flags (POLICY §7) on a repo listed in `git.repos`. |
-| `service_control` | operator | `systemctl --no-ask-password <verb> -- <unit>` as the service user; `verb ∈ services.control.verbs`; unit ∈ `services.control.units`; authorized by the generated polkit rule; no sudo. |
+| `git_status`, `git_log`, `git_diff` | read | `git` with fixed hardening flags and environment (POLICY §7) on a repo listed in `git.repos`, after the repository-local configuration passes the allowlist. |
+| `service_control` | operator | `systemctl --no-ask-password <verb> -- <unit>` as the service user; `verb ∈ services.control.verbs`; unit ∈ `services.control.units`; authorized by the generated polkit rule; no sudo. A polkit denial (exit 4, or exit 1 "interactive authentication required") is `not_authorized`; the unit's status is re-read after the action. |
 | `write_file`, `mkdir`, `copy`, `move`, `chmod` | operator | Native via `fsx` within `paths.write`; atomic; read-back verified. |
-| `git_pull` | operator | `git pull --ff-only --no-rebase` with hardening flags; remote must equal the repo's configured remote URL. |
+| `git_pull` | operator | `git pull --ff-only --no-rebase --no-recurse-submodules` with hardening flags; the repo must be inside a write root; `remote.origin.url` and the URL git would use must equal the policy's (https) remote; refused on uncommitted tracked changes or a non-fast-forward. |
 | `delete` | destructive | Native; files and empty dirs, or recursive with `recursive: true` bounded by `limits.max_delete_entries`; preview variant `delete_preview` is read tier. |
 | `git_discard` | destructive | `git reset --hard` + `git clean -fd` (hardened); preview variant `git_discard_preview` is read tier. |
 | `exec` | per command | Policy command by `id` + argv matched against its templates; tier from the command entry. |

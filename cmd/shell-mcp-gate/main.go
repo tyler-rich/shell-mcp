@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
@@ -20,6 +21,7 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/install"
 	"github.com/tyler-rich/shell-mcp/internal/gate/ops"
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
+	"github.com/tyler-rich/shell-mcp/internal/gate/polkit"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
 )
@@ -37,7 +39,8 @@ commands:
                 serve one request (the SSH forced command)
   check-policy --policy <file>
                 check the install, the policy and the sandbox on this host
-  polkit        generate the polkit rule for a policy (Session 1b)
+  polkit --policy <file> --user <name>
+                print the polkit rule for the policy's services.control
   version       print version information
 `
 
@@ -63,8 +66,7 @@ func runWith(args []string, stdin io.Reader, stdout, stderr io.Writer, mk option
 	case "check-policy":
 		return checkPolicy(args[1:], stdout, stderr)
 	case "polkit":
-		_, _ = io.WriteString(stderr, "shell-mcp-gate: polkit arrives in Session 1b\n")
-		return 2
+		return polkitWith(args[1:], stdout, stderr, policy.RootTrust())
 	case "version":
 		_, _ = fmt.Fprintf(stdout, "shell-mcp-gate %s (commit %s, %s)\n", version, commit, runtime.Version())
 		return 0
@@ -123,6 +125,60 @@ func serve(args []string, stdin io.Reader, stdout io.Writer, mk optionsFunc) int
 // kernel without applying it. Findings go to stdout; the exit code is 1 if
 // anything would make serve refuse.
 func checkPolicy(args []string, stdout, stderr io.Writer) int {
+	return checkPolicyWith(args, stdout, stderr, policy.RootTrust(), ops.ServiceHome())
+}
+
+// polkitWith prints the polkit rule (POLICY §4b) for the policy's
+// services.control units and verbs, for the service account --user. The
+// policy is loaded and validated exactly as serve would, with the account's
+// home directory in the protected set. Only tests pass a trust set other
+// than policy.RootTrust().
+func polkitWith(args []string, stdout, stderr io.Writer, trust policy.Trust) int {
+	fs := flag.NewFlagSet("polkit", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	policyPath := fs.String("policy", "", "")
+	userName := fs.String("user", "", "")
+	if err := fs.Parse(args); err != nil || *policyPath == "" || *userName == "" || fs.NArg() != 0 {
+		_, _ = io.WriteString(stderr, "usage: shell-mcp-gate polkit --policy <file> --user <name>\n")
+		return 2
+	}
+	fail := func(format string, a ...any) int {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-gate polkit: "+format+"\n", a...)
+		return 1
+	}
+	u, err := user.Lookup(*userName)
+	if err != nil {
+		return fail("user %q is not in the user database; create the service account first", *userName)
+	}
+	if u.Uid == "0" {
+		return fail("user %q is root; the rule is for the gate's service account", *userName)
+	}
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	if err != nil {
+		return fail("cannot resolve own path: %v", err)
+	}
+	p, err := policy.Load(*policyPath, &policy.LoadOptions{Trust: trust, GateExecutable: exe, ServiceHome: u.HomeDir})
+	if err != nil {
+		for _, line := range strings.Split(err.Error(), "\n") {
+			_, _ = fmt.Fprintf(stderr, "shell-mcp-gate polkit: %s\n", line)
+		}
+		return 1
+	}
+	rule, err := polkit.Rule(&polkit.Spec{User: *userName, Units: p.Services.ControlUnits, Verbs: p.Services.ControlVerbs, PolicySHA256: p.SHA256})
+	if err != nil {
+		return fail("%v", err)
+	}
+	_, _ = io.WriteString(stdout, rule)
+	return 0
+}
+
+// checkPolicyWith is checkPolicy with the trust set and the service home as
+// parameters; only tests pass anything but policy.RootTrust() and
+// ops.ServiceHome().
+func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust, home string) int {
 	fs := flag.NewFlagSet("check-policy", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	policyPath := fs.String("policy", "", "")
@@ -148,7 +204,6 @@ func checkPolicy(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		failf("binary: cannot resolve own path: %v", err)
 	}
-	home := ops.ServiceHome()
 	id, err := install.Current()
 	switch {
 	case err != nil:
@@ -168,7 +223,7 @@ func checkPolicy(args []string, stdout, stderr io.Writer) int {
 	}
 	pr("     service home used for the protected set: %q", home)
 
-	p, err := policy.Load(*policyPath, policy.LoadOptions{Trust: policy.RootTrust(), GateExecutable: exe, ServiceHome: home})
+	p, err := policy.Load(*policyPath, &policy.LoadOptions{Trust: trust, GateExecutable: exe, ServiceHome: home})
 	if err != nil {
 		for _, line := range strings.Split(err.Error(), "\n") {
 			failf("%s", line)
