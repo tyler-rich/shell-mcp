@@ -378,7 +378,9 @@ func (v *validator) paths(p *Policy, raw *rawPaths) {
 	if len(raw.Read)+len(raw.Write)+len(raw.Persistence) > maxRoots {
 		v.fail("paths", "has more than %d roots", maxRoots)
 	}
-	seen := map[string]bool{}
+	// Duplicates are checked per list: read roots among themselves, and write
+	// and persistence roots together (a root may be both read and write).
+	seenRead, seen := map[string]bool{}, map[string]bool{}
 	for i, r := range raw.Read {
 		field := fmt.Sprintf("paths.read[%d]", i)
 		if err := gpolicy.CheckRoot(r); err != nil {
@@ -389,11 +391,11 @@ func (v *validator) paths(p *Policy, raw *rawPaths) {
 			v.fail(field, "%s is, or is inside, a path on the never list (PRIVILEGED §5.3 list A)", r)
 			continue
 		}
-		if seen[r] {
+		if seenRead[r] {
 			v.fail(field, "duplicate root %s", r)
 			continue
 		}
-		seen[r] = true
+		seenRead[r] = true
 		p.Paths.Read = append(p.Paths.Read, r)
 	}
 	for i, r := range raw.Write {
