@@ -222,8 +222,12 @@ git -C <repo> --no-pager --no-optional-locks \
     -c core.fsmonitor=false -c core.hooksPath=/dev/null -c core.pager=cat \
     -c core.sshCommand=/bin/false -c credential.helper= \
     -c protocol.file.allow=never -c protocol.ext.allow=never \
-    -c safe.directory=<repo> <subcommand> …
+    -c safe.directory=<repo> \
+    -c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false \
+    -c core.ignorecase=false <subcommand> …
 ```
+
+The last line keeps git from starting automatic maintenance or gc, and pins case sensitivity. With git's defaults, a pull ends by running `git maintenance run --auto --detach` (after the fetch and again after the merge). That process daemonizes (`fork`, the parent exits, `setsid`): it leaves the gate's process group, so the gate's group kill cannot reach it, and it outlives the request (still inside the gate's Landlock + `no_new_privs` domain). `core.ignorecase=true` in a repo on a case-sensitive filesystem would hide untracked files that differ only in case from tracked ones, from `status` and from `clean` (so `git_discard_preview` would under-report). Command-line `-c` values override the repository's own configuration and are passed to git's child processes. Both are tested two-sided: git's defaults leave detached processes after a pull while `git_pull` leaves none; `core.ignorecase=true` hides an untracked file while `git_status` lists it.
 
 with exactly this environment: the gate's fixed variables (§4) plus `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_DIR=<repo>/.git` and `GIT_WORK_TREE=<repo>`. Nothing else reaches git — the gate inherits no variable, so no `GIT_CONFIG_COUNT`/`KEY`/`VALUE`, no `GIT_ASKPASS` — and the only configuration git reads is the command line above and the repository's own `.git/config`.
 
@@ -231,7 +235,7 @@ with exactly this environment: the gate's fixed variables (§4) plus `GIT_CONFIG
 
 | Key family | Keys and accepted values | Why it is inert here |
 |---|---|---|
-| Written by `git init`/`clone` | `core.repositoryformatversion` (integer); `core.filemode`, `core.bare`, `core.ignorecase`, `core.precomposeunicode`, `core.symlinks` (boolean); `core.logallrefupdates` (boolean or `always`); `remote.origin.url`, `remote.origin.fetch`; `branch.<name>.remote`, `branch.<name>.merge` | Repository layout and the origin the policy already pins (`git_pull` also checks the URL). |
+| Written by `git init`/`clone` | `core.repositoryformatversion` (integer); `core.filemode`, `core.bare`, `core.ignorecase` (always overridden by `-c core.ignorecase=false`), `core.precomposeunicode`, `core.symlinks` (boolean); `core.logallrefupdates` (boolean or `always`); `remote.origin.url`, `remote.origin.fetch`; `branch.<name>.remote`, `branch.<name>.merge` | Repository layout and the origin the policy already pins (`git_pull` also checks the URL). |
 | Identity | `user.name`, `user.email` (a value) | The gate never commits; git uses them only as the reflog identity. |
 | Line endings | `core.autocrlf` (boolean or `input`), `core.eol` (`lf`, `crlf`, `native`), `core.safecrlf` (boolean or `warn`) | Built-in conversions of file content; no program. |
 | Pull strategy | `pull.rebase`, `branch.<name>.rebase` (boolean, `merges`, `interactive`, `m`, `i`); `pull.ff` (boolean or `only`) | Never read for the gate's `pull --ff-only --no-rebase`: the command line wins (`builtin/pull.c`), so even `interactive` starts no editor (tested). |
@@ -239,7 +243,7 @@ with exactly this environment: the gate's fixed variables (§4) plus `GIT_CONFIG
 | Pruning and tags | `fetch.prune`, `remote.origin.prune` (boolean); `remote.origin.tagOpt` (exactly `--tags` or `--no-tags`) | They delete stale remote-tracking refs, or choose which tags to fetch, from the pinned origin. |
 | Colors | `color.<command>` (`never`, `always`, `auto` or boolean); `color.<command>.<slot>` (a color: names, `bright…`, 0–255, `#rgb`/`#rrggbb`, attributes with optional `no`/`no-`). `color.blame.*` is excluded. | Colors only. Even with `always`, none of the output the gate parses carries escape codes (the porcelain and name-only printers never color; tested). `color.blame.highlightRecent` is a list of colors and dates, and blame never runs. |
 | Hints | `advice.<name>` (boolean) | Toggles hint messages on stderr. |
-| Auto-gc threshold | `gc.auto` (integer, optional `k`/`m`/`g`) | A number. `gc.autoDetach`, `gc.*` otherwise and `maintenance.*` stay out. |
+| Auto-gc threshold | `gc.auto` (integer, optional `k`/`m`/`g`) | A number, and always overridden by `-c gc.auto=0`; it stays on the list so that repositories that set it are not refused. `gc.autoDetach`, `gc.*` otherwise and `maintenance.*` stay out. |
 
 Everything else is refused with `policy_denied`. That includes `filter.*` (so **Git LFS repositories are not supported in v1**: LFS works through filter programs), `diff.*`, `merge.*`, `url.*`, `include.*` and `includeIf.*`, `core.askPass`/`editor`/`pager`/`worktree`/`hooksPath`/`fsmonitor`/`sshCommand`/`gitProxy`, `http.*`, `credential.*`, `gpg.*`, `user.signingKey`, other remotes, `remote.origin.pushurl`/`proxy`/`uploadpack`/`receivepack`, `extensions.*` and `submodule.*`. The refusal names the key and the command that removes it, run in the repository on the host: `git config --remove-section <section.subsection>` for a key under a subsection (a whole driver, url rewrite or remote), otherwise `git config --unset-all <key>`. Because `.git` is never writable through the file operations (§3), a caller cannot plant such configuration through the gate.
 

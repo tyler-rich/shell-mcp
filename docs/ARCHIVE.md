@@ -343,3 +343,35 @@ The accepted values, with the reasoning per key family, are in the POLICY §7 ta
 - **core.ignorecase** changes which files git treats as tracked or ignored (so what `clean` removes) but cannot run anything. Pinning it with `-c core.ignorecase=false` is the same kind of flag-list decision.
 
 **Versions:** unchanged from the entry above. git verified: 2.47.3 (Debian 13, local image) and 2.55.0 (CI image).
+
+### 2026-09-29 — git never starts automatic maintenance and treats repositories as case-sensitive (PR #4, branch feat/gate-ops)
+**Decision:** The maintainer approved adding `-c maintenance.auto=false -c gc.auto=0 -c gc.autoDetach=false -c core.ignorecase=false` to every git invocation (POLICY §7). `gc.auto` and `core.ignorecase` stay on the repository-config allowlist, so repositories that set them are not refused, but these flags always override them.
+
+**Why:**
+- **Auto-maintenance outlives the request.** With git's defaults, `fetch` and `merge` each end a pull with `run_auto_maintenance`, which starts `git maintenance run --auto --detach`. That process calls `daemonize()`: `fork`, the parent exits, then `setsid`. It leaves the gate's process group, so execx's group kill cannot reach it, and it outlives the request. It stays in the gate's Landlock, no_new_privs and seccomp domain.
+- **`core.ignorecase=true` hides files.** In a repository on a case-sensitive filesystem it hides untracked files that differ only in case from tracked ones, from `status` and from `clean`, so `git_discard_preview` would under-report.
+
+**Verified at the source** (git v2.47.3 and v2.55.0; the source at both tags, plus behaviour on 2.47.3 locally and 2.55.0 in CI):
+- **Precedence.** `do_git_config_sequence` reads system, global, local and worktree configuration, then the command line last (`git_config_from_parameters`); lookups are "last one wins". `git -c` values are exported in `GIT_CONFIG_PARAMETERS`, inherited by children (`prep_childenv`), and kept even for other repositories (`prepare_other_repo_env` / `sanitize_repo_env`). So they reach pull's `fetch` and `merge` children and any maintenance child.
+- **`maintenance.auto=false`.** `prepare_auto_maintenance` returns 0 and `run_auto_maintenance` starts no child (run-command.c at both tags). In 2.55 it also takes precedence over the new `gc.auto` fallback.
+- **`gc.auto=0`.** `need_to_gc` returns 0 before any daemonize ("Setting gc.auto to 0 or negative can disable the automatic gc"); this also disables `gc.autoPackLimit`. It is redundant with `maintenance.auto=false`, kept as defence in depth.
+- **`gc.autoDetach=false`.** Stops `gc --auto` from daemonizing, and is the fallback for `maintenance.autoDetach`. It is also redundant while no maintenance child starts.
+- **`core.ignorecase=false`.** Read per config entry, so the command-line value replaces a repo-local `true`. It governs name hashing, untracked detection in status and clean (`dir_add_name`/`index_file_exists`) and checkout (`unpack-trees.c`). The docs warn that git "relies on the proper configuration of this variable for your operating and file system": forcing false is right for the case-sensitive Linux filesystems the gate targets, and would misjudge a case-folding filesystem (casefold directories, CIFS). That is recorded here as a limitation.
+- **`maintenance run --detach` daemonizes before checking whether any task is due** (2.47.3 `maintenance_run_tasks`; 2.55.0 after the foreground tasks), which is why every default pull leaves a detached process.
+
+**Tests (committed failing first, `test(gate): git_pull leaves no detached maintenance process; …`):**
+- **`TestGitPullLeavesNoDetachedProcess` (two-sided).** The test process makes itself a child subreaper (`PR_SET_CHILD_SUBREAPER`), so a daemonized descendant is reparented to it and stays visible, even as a zombie, because Go reaps only its own children.
+  - Control: the gate's argv without the four flags leaves 2 detached git processes after a pull (after fetch and after merge; each has session id = pid).
+  - Gated: after `git_pull` responds, none remains.
+  - Without the flags, the gated run also left 2; that is the failing evidence.
+  - Test setup git (`gatetest.Git`) and the test server's bare repositories (whose `receive-pack` does not see the pusher's `-c`) now disable auto-maintenance, so only the pull under test can leave processes.
+- **`TestGitIgnoreCasePinned` (two-sided).** With `core.ignorecase=true` in the repo, the control (the gate's argv without the flags) hides an untracked `APP.CONF` next to the tracked `app.conf`. Under the gate, `git_status` lists it and `git_discard_preview` would remove it.
+- **`TestGitEnvironment`** asserts the new argv.
+
+**Alternatives considered:** the verifier also suggested `-c maintenance.autoDetach=false`, `-c fetch.writeCommitGraph=false` and `-c credential.helper=`. None is needed:
+- `credential.helper=` is already in the flag list.
+- `maintenance.autoDetach` and `fetch.writeCommitGraph` cannot come from system or global configuration (both disabled), and neither is on the repository allowlist, so no source can set them.
+
+**Deferred / follow-ups:** none. The case-folding filesystem limitation is recorded above.
+
+**Versions:** unchanged. git verified: 2.47.3 (local image), 2.55.0 (CI image).
