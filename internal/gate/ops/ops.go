@@ -95,6 +95,7 @@ func ProductionOptions(version, policyPath, principal string) (Options, error) {
 		ServiceHome: ServiceHome(), ApplySandbox: sandbox.Apply,
 		Audit:     audit.NewSyslog(audit.DevLog),
 		Systemctl: SystemctlPath, Journalctl: JournalctlPath, Git: GitPath,
+		DialHelper: DialHelper,
 	}
 	if v, ok := os.LookupEnv("SSH_ORIGINAL_COMMAND"); ok {
 		o.SSHOriginalCommand = &v

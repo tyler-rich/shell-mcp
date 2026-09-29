@@ -49,3 +49,25 @@ func FuzzDecodeRequest(f *testing.F) {
 		}
 	})
 }
+
+// FuzzDecodeResponse: decoding never panics, and an accepted response is
+// consistent: ok xor error, a closed-set code, a one-line bounded message,
+// and a valid id unless it is a failure answered before any request.
+func FuzzDecodeResponse(f *testing.F) {
+	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000003","ok":true,"data":{"x":1},"warnings":[]}` + "\n"))
+	f.Add([]byte(`{"v":1,"id":"","ok":false,"error":{"code":"sandbox_unavailable","message":"m"},"warnings":[]}` + "\n"))
+	f.Add([]byte(`{"v":1,"id":"x","ok":true}`))
+	f.Add([]byte(""))
+	f.Fuzz(func(t *testing.T, b []byte) {
+		r, err := DecodeResponse(bytes.NewReader(b))
+		if err != nil {
+			return
+		}
+		if r.OK == (r.Error != nil) || (r.ID != "" || r.OK) && !validID(r.ID) {
+			t.Fatalf("inconsistent response accepted: %+v", r)
+		}
+		if r.Error != nil && (len(r.Error.Message) > maxMessageBytes || bytes.ContainsAny([]byte(r.Error.Message), "\r\n")) {
+			t.Fatalf("message accepted: %q", r.Error.Message)
+		}
+	})
+}

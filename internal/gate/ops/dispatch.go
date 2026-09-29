@@ -99,7 +99,10 @@ func (s *server) dispatch() *protocol.Response {
 	op := s.req.Op
 	switch {
 	case strings.HasPrefix(op, "priv_"):
-		return s.errResp(s.priv(op))
+		if err := s.priv(op); err != nil {
+			return s.errResp(err)
+		}
+		return s.forward()
 	case op == protocol.OpExec:
 		data, warnings, err := s.exec(s.req.Args)
 		return s.result(data, warnings, err)
@@ -116,7 +119,10 @@ func (s *server) dispatch() *protocol.Response {
 	return s.result(data, warnings, err)
 }
 
-// priv gates privileged forwarding; the forwarding itself arrives in S1c.
+// priv checks privileged forwarding at the gate before anything is sent:
+// a known op, forwarding enabled, and the op's tier within both
+// privileged.max_tier and max_tier. The helper re-checks everything
+// against its own policy.
 func (s *server) priv(op string) error {
 	tier, known := privTiers[op]
 	switch {
@@ -127,7 +133,7 @@ func (s *server) priv(op string) error {
 	case tier > s.p.Privileged.MaxTier || tier > s.p.MaxTier:
 		return errf(protocol.CodeTierDenied, "operation tier %s exceeds the policy's privileged.max_tier %s", tier, s.p.Privileged.MaxTier)
 	}
-	return errf(protocol.CodeUnknownOp, "privileged forwarding is not implemented in this gate version")
+	return nil
 }
 
 func (s *server) result(data any, warnings []string, err error) *protocol.Response {

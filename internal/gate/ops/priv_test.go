@@ -147,7 +147,9 @@ func TestForwardErrors(t *testing.T) {
 			f := newFixture(t, "destructive")
 			startHelper(t, f, c.answer)
 			start := time.Now()
-			r := f.call("priv_stat", m{"path": "/etc/example-app"})
+			// A 300 ms request timeout: the gate gives up at 300 ms plus the
+			// 200 ms grace, long before the silent helper closes.
+			r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"priv_stat","args":{"path":"/etc/example-app"},"timeout_ms":300}`+"\n")
 			if r.OK || r.Error == nil || r.Error.Code != c.code {
 				t.Fatalf("got %+v, want %s", r.Error, c.code)
 			}

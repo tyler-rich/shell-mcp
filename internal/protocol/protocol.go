@@ -8,7 +8,10 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
+	"slices"
+	"strings"
 )
 
 // Version is the wire protocol version. A request with any other "v" is
@@ -336,5 +339,46 @@ func Marshal(v any) (jsontext.Value, error) {
 // connection without sending anything (the privileged helper's refusal).
 var ErrNoResponse = errors.New("the peer closed the connection without a response")
 
-// DecodeResponse reads exactly one response line strictly.
-func DecodeResponse(r io.Reader) (*Response, error) { return nil, errors.New("not implemented") }
+// maxMessageBytes bounds an error message in a decoded response.
+const maxMessageBytes = 1024
+
+// DecodeResponse reads exactly one newline-terminated response (at most
+// MaxResponseBytes) and decodes it strictly: unknown fields, duplicate
+// keys, trailing data, another version, an error code outside the closed
+// set, a multi-line or oversized message, and an inconsistent ok/error pair
+// are errors. The id must be a valid request id, except on a failure
+// answered before the request was read (it is then empty). A peer that
+// closes without sending anything gives ErrNoResponse.
+func DecodeResponse(r io.Reader) (*Response, error) {
+	data, err := readLine(r, MaxResponseBytes+1)
+	switch {
+	case err != nil:
+		// Wrapped, so a caller can tell a deadline from a broken peer.
+		return nil, fmt.Errorf("response could not be read: %w", err)
+	case len(data) == 0:
+		return nil, ErrNoResponse
+	case len(data) > MaxResponseBytes:
+		return nil, &DecodeError{CodeTooLarge, "response exceeds 4 MiB"}
+	}
+	var resp Response
+	if err := json.Unmarshal(data, &resp, json.RejectUnknownMembers(true)); err != nil {
+		return nil, &DecodeError{CodeBadRequest, "response is not one strict JSON object with known fields"}
+	}
+	switch {
+	case resp.V != Version:
+		return nil, &DecodeError{CodeProtocolMismatch, "unsupported protocol version"}
+	case resp.OK && resp.Error != nil, !resp.OK && resp.Error == nil:
+		return nil, &DecodeError{CodeBadRequest, "response has an inconsistent ok and error"}
+	case resp.OK && !validID(resp.ID), resp.ID != "" && !validID(resp.ID):
+		return nil, &DecodeError{CodeBadRequest, "response id is malformed"}
+	}
+	if e := resp.Error; e != nil {
+		if !slices.Contains(Codes, e.Code) {
+			return nil, &DecodeError{CodeBadRequest, "response error code is not in the closed set"}
+		}
+		if len(e.Message) > maxMessageBytes || strings.ContainsAny(e.Message, "\r\n") {
+			return nil, &DecodeError{CodeBadRequest, "response error message is not one bounded line"}
+		}
+	}
+	return &resp, nil
+}
