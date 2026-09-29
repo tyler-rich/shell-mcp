@@ -39,6 +39,9 @@ func Rules(p *policy.Policy, backupDir string) sandbox.Rules {
 // through the gate's sandbox (no_new_privs on every thread, Landlock at the
 // kernel's exact ABI, the MPTCP seccomp filter, per-thread verification).
 func ApplyLandlock(p *policy.Policy, backupDir string) (sandbox.Report, error) {
+	if BypassBuild {
+		return sandbox.Report{Mode: "bypassed (e2e test build)"}, nil
+	}
 	r := Rules(p, backupDir)
 	return sandbox.ApplyRules(p.Landlock, &r)
 }

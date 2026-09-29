@@ -74,6 +74,9 @@ func (s *server) dispatch() *protocol.Response {
 	}
 	spec, ok := opTable()[op]
 	if !ok {
+		spec, ok = extraOps[op]
+	}
+	if !ok {
 		return s.errResp(errf(protocol.CodeUnknownOp, "operation is not available in this helper version"))
 	}
 	// Tier first, before any other processing.

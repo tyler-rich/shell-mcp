@@ -93,6 +93,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return checkPolicyWith(args[1:], stdout, stderr, env)
 	case "version":
 		_, _ = fmt.Fprintf(stdout, "shell-mcp-privd %s (commit %s, %s)\n", version, commit, runtime.Version())
+		if ops.BypassBuild {
+			_, _ = io.WriteString(stdout, "WARNING: end-to-end test build with the helper's own checks bypassed; never deploy it\n")
+		}
 		return 0
 	case "-h", "--help", "help":
 		_, _ = io.WriteString(stdout, usage)
@@ -209,6 +212,10 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 	if builtWithCGO() {
 		failures++
 		pr("FAIL binary: built with cgo; serve refuses (rebuild with CGO_ENABLED=0)")
+	}
+	if ops.BypassBuild {
+		failures++
+		pr("FAIL binary: this is the end-to-end test build, with the helper's own checks bypassed; never deploy it")
 	}
 	p, err := env.load(*policyPath)
 	if err != nil {
