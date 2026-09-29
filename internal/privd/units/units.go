@@ -201,7 +201,8 @@ func check(p *policy.Policy) error {
 		return errors.New("packages arrive in S1d (broad unit)")
 	}
 	want := slices.Clone(policy.BaseCapabilities)
-	for _, c := range p.Commands {
+	for i := range p.Commands {
+		c := &p.Commands[i]
 		if c.Unit != policy.UnitCore {
 			return fmt.Errorf("command %s: broad-unit commands arrive in S1d", c.ID)
 		}

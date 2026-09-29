@@ -128,9 +128,9 @@ func (f *FS) deleteOp(p string, recursive, apply bool) (DeleteResult, error) {
 				if !fi.Mode().IsRegular() {
 					return res, errf(protocol.CodeBackupFailed, "only regular files and directories can be backed up; nothing was deleted")
 				}
-				backedUp, err := f.backupFile(l)
-				if err != nil {
-					return res, err
+				backedUp, berr := f.backupFile(l)
+				if berr != nil {
+					return res, berr
 				}
 				if e := unchangedSince(l.parent, l.base, backedUp); e != nil {
 					return res, e

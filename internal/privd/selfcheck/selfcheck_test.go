@@ -109,7 +109,7 @@ func TestStdin(t *testing.T) {
 	defer func() { _ = unix.Close(dg[0]); _ = unix.Close(dg[1]) }()
 	check(t, selfcheck.Stdin(dg[0]), "stdin")
 
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestBinary(t *testing.T) {
 	exe := filepath.Join(d, "shell-mcp-privd")
 	gatetest.WriteFile(t, exe, "invented helper binary", 0o755)
 	check(t, selfcheck.Binary(gatetest.Trust(), exe), "")
-	if err := os.Chmod(exe, 0o775); err != nil {
+	if err := os.Chmod(exe, 0o775); err != nil { //nolint:gosec // G302: a deliberately insecure or test fixture mode
 		t.Fatal(err)
 	}
 	check(t, selfcheck.Binary(gatetest.Trust(), exe), "binary")

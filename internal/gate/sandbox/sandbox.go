@@ -178,12 +178,13 @@ func KernelABI() int {
 // With `landlock: required` and abi < RequiredMinABI it returns
 // ErrUnavailable. Plan changes nothing.
 func Plan(p *policy.Policy, abi int) (Report, error) {
-	return PlanRules(p.Sandbox.Landlock, Compute(p), abi)
+	rules := Compute(p)
+	return PlanRules(p.Sandbox.Landlock, &rules, abi)
 }
 
 // PlanRules is Plan for a ruleset computed elsewhere (the privileged
 // helper computes its own from the privileged policy).
-func PlanRules(mode policy.LandlockMode, rules Rules, abi int) (Report, error) {
+func PlanRules(mode policy.LandlockMode, rules *Rules, abi int) (Report, error) {
 	eff := min(abi, ABIHighest)
 	r := Report{
 		Mode:            string(mode),
@@ -325,7 +326,7 @@ func Apply(p *policy.Policy) (Report, error) {
 // mechanism, MPTCP filter and verification.
 func ApplyRules(mode policy.LandlockMode, rules *Rules) (Report, error) {
 	abi := KernelABI()
-	r, err := PlanRules(mode, *rules, abi)
+	r, err := PlanRules(mode, rules, abi)
 	r.KernelABI = rawKernelABI()
 	if err != nil {
 		return r, err

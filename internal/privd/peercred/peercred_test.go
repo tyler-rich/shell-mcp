@@ -12,38 +12,44 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/privd/peercred"
 )
 
-func pair(t *testing.T, typ int) (int, int) {
+// connected returns one end of a connected AF_UNIX stream socket pair; the
+// other end stays open until the test ends.
+func connected(t *testing.T) int {
 	t.Helper()
-	fds, err := unix.Socketpair(unix.AF_UNIX, typ|unix.SOCK_CLOEXEC, 0)
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = unix.Close(fds[0]); _ = unix.Close(fds[1]) })
-	return fds[0], fds[1]
+	return fds[0]
+}
+
+// self is the test process's uid, gid and pid as SO_PEERCRED reports them.
+func self() peercred.Cred {
+	return peercred.Cred{PID: int32(os.Getpid()), UID: uint32(os.Getuid()), GID: uint32(os.Getgid())} //nolint:gosec // G115: Linux ids and pids fit
 }
 
 func TestPeerIsTheConnectingProcess(t *testing.T) {
-	a, _ := pair(t, unix.SOCK_STREAM)
-	c, err := peercred.Peer(a)
+	c, err := peercred.Peer(connected(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.UID != uint32(os.Getuid()) || c.GID != uint32(os.Getgid()) || c.PID != int32(os.Getpid()) {
-		t.Fatalf("cred %+v, want uid %d gid %d pid %d", c, os.Getuid(), os.Getgid(), os.Getpid())
+	if c != self() {
+		t.Fatalf("cred %+v, want %+v", c, self())
 	}
 }
 
 func TestAuthenticate(t *testing.T) {
-	a, _ := pair(t, unix.SOCK_STREAM)
-	uid := uint32(os.Getuid())
-	if c, err := peercred.Authenticate(a, uid); err != nil || c.UID != uid {
+	fd := connected(t)
+	uid := self().UID
+	if c, err := peercred.Authenticate(fd, uid); err != nil || c.UID != uid {
 		t.Fatalf("right uid refused: %+v %v", c, err)
 	}
 	for _, other := range []uint32{uid + 1, 0, 4294967295} {
 		if other == uid {
 			continue
 		}
-		c, err := peercred.Authenticate(a, other)
+		c, err := peercred.Authenticate(fd, other)
 		if !errors.Is(err, peercred.ErrWrongPeer) {
 			t.Fatalf("want uid %d: err %v", other, err)
 		}
@@ -59,7 +65,7 @@ func TestNotASocket(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = r.Close(); _ = w.Close() }()
-	if _, err := peercred.Authenticate(int(r.Fd()), uint32(os.Getuid())); err == nil || errors.Is(err, peercred.ErrWrongPeer) {
+	if _, err := peercred.Authenticate(int(r.Fd()), self().UID); err == nil || errors.Is(err, peercred.ErrWrongPeer) {
 		t.Fatalf("pipe: %v", err)
 	}
 }

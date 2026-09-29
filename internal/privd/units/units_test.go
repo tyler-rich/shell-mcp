@@ -206,7 +206,9 @@ func TestRefusesWhatTheCoreUnitCannotHold(t *testing.T) {
 		"dash-leading policy": func(p *policy.Policy) { p.File = "/etc/shell-mcp/-x.yaml" },
 		"percent in policy":   func(p *policy.Policy) { p.File = "/etc/shell-mcp/%n.yaml" },
 		"odd socket group":    func(p *policy.Policy) { p.SocketGroup = "svc shell" },
-		"persistence space":   func(p *policy.Policy) { p.Paths.Persistence = []policy.Persistence{{Path: "/etc/cron.d/a b", Acknowledge: "x"}} },
+		"persistence space": func(p *policy.Policy) {
+			p.Paths.Persistence = []policy.Persistence{{Path: "/etc/cron.d/a b", Acknowledge: "x"}}
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := examplePolicy()

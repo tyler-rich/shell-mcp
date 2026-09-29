@@ -491,12 +491,12 @@ func TestCommandBinaryChecks(t *testing.T) {
 	f.mustFail(t, withCommand(cmd("x", "{BIN}/missing", "")), "cannot be resolved")
 	f.mustFail(t, withCommand(cmd("x", "bin/example-tool", "")), "commands")
 	w := f.exe(t, "writable", "x\n")
-	if err := os.Chmod(w, 0o775); err != nil {
+	if err := os.Chmod(w, 0o775); err != nil { //nolint:gosec // G302: a deliberately insecure or test fixture mode
 		t.Fatal(err)
 	}
 	f.mustFail(t, withCommand(cmd("x", w, "")), "writable")
 	n := f.exe(t, "noexec", "x\n")
-	if err := os.Chmod(n, 0o644); err != nil {
+	if err := os.Chmod(n, 0o644); err != nil { //nolint:gosec // G302: a deliberately insecure or test fixture mode
 		t.Fatal(err)
 	}
 	f.mustFail(t, withCommand(cmd("x", n, "")), "executable")
@@ -554,20 +554,20 @@ func TestBroadAndPackagesArriveInS1d(t *testing.T) {
 func TestOwnershipOfPolicyFile(t *testing.T) {
 	f := newFixture(t)
 	p := f.put(t, head)
-	if err := os.Chmod(p, 0o620); err != nil {
+	if err := os.Chmod(p, 0o620); err != nil { //nolint:gosec // G302: a deliberately insecure or test fixture mode
 		t.Fatal(err)
 	}
 	if _, err := policy.Load(p, &f.opts); err == nil || !strings.Contains(err.Error(), "writable") {
 		t.Fatalf("group-writable policy: %v", err)
 	}
 	p = f.put(t, head)
-	if err := os.Chmod(f.etc, 0o775); err != nil {
+	if err := os.Chmod(f.etc, 0o775); err != nil { //nolint:gosec // G302: a deliberately insecure or test fixture mode
 		t.Fatal(err)
 	}
 	if _, err := policy.Load(p, &f.opts); err == nil || !strings.Contains(err.Error(), "writable") {
 		t.Fatalf("group-writable directory: %v", err)
 	}
-	if err := os.Chmod(f.etc, 0o755); err != nil {
+	if err := os.Chmod(f.etc, 0o755); err != nil { //nolint:gosec // G302: a deliberately insecure or test fixture mode
 		t.Fatal(err)
 	}
 	link := filepath.Join(f.etc, "link.yaml")

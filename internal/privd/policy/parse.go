@@ -122,7 +122,7 @@ type validator struct {
 	warnings []string
 	findings []Finding
 	never    *pathx.Matcher // list A plus this host's additions
-	anchors  []pathx.Glob    // this host's additions: the helper binary and the policy file
+	anchors  []pathx.Glob   // this host's additions: the helper binary and the policy file
 	gateProt *pathx.Matcher // the gate's protected set (POLICY §3)
 	scan     *gpolicy.IdentityScan
 }
@@ -225,9 +225,9 @@ func (v *validator) matchers(files []string) error {
 		if e == "" || pathx.CheckClean(e) != nil {
 			continue
 		}
-		g, err := pathx.LiteralGlob(e)
-		if err != nil {
-			return &Error{"", "internal: trust anchor: " + err.Error()}
+		g, gerr := pathx.LiteralGlob(e)
+		if gerr != nil {
+			return &Error{"", "internal: trust anchor: " + gerr.Error()}
 		}
 		never.Add(g)
 		v.anchors = append(v.anchors, g)
@@ -291,23 +291,23 @@ func (v *validator) limits(p *Policy, raw *rawLimits) {
 		raw = &rawLimits{}
 	}
 	l := &p.Limits
-	set := func(dst *int, src *int, name string, def, lo, hi int) {
+	set := func(dst *int, src *int, name string, def, hi int) {
 		*dst = def
 		if src == nil {
 			return
 		}
-		if *src < lo || *src > hi {
-			v.fail("limits."+name, "%d is not in %d..%d", *src, lo, hi)
+		if *src < 1 || *src > hi {
+			v.fail("limits."+name, "%d is not in 1..%d", *src, hi)
 			return
 		}
 		*dst = *src
 	}
-	set(&l.MaxReadBytes, raw.MaxReadBytes, "max_read_bytes", 1<<20, 1, 4<<20)
-	set(&l.MaxWriteBytes, raw.MaxWriteBytes, "max_write_bytes", 1<<20, 1, 1<<20)
-	set(&l.MaxOutputBytes, raw.MaxOutputBytes, "max_output_bytes", 1<<20, 1, 4<<20)
-	set(&l.MaxTimeoutS, raw.MaxTimeoutS, "max_timeout_s", 900, 1, MaxTimeoutCeiling)
-	set(&l.DefaultTimeoutS, raw.DefaultTimeoutS, "default_timeout_s", 60, 1, MaxTimeoutCeiling)
-	set(&l.MaxDeleteEntries, raw.MaxDeleteEntries, "max_delete_entries", 1000, 1, 10000)
+	set(&l.MaxReadBytes, raw.MaxReadBytes, "max_read_bytes", 1<<20, 4<<20)
+	set(&l.MaxWriteBytes, raw.MaxWriteBytes, "max_write_bytes", 1<<20, 1<<20)
+	set(&l.MaxOutputBytes, raw.MaxOutputBytes, "max_output_bytes", 1<<20, 4<<20)
+	set(&l.MaxTimeoutS, raw.MaxTimeoutS, "max_timeout_s", 900, MaxTimeoutCeiling)
+	set(&l.DefaultTimeoutS, raw.DefaultTimeoutS, "default_timeout_s", 60, MaxTimeoutCeiling)
+	set(&l.MaxDeleteEntries, raw.MaxDeleteEntries, "max_delete_entries", 1000, 10000)
 	if l.DefaultTimeoutS > l.MaxTimeoutS {
 		if raw.DefaultTimeoutS == nil {
 			l.DefaultTimeoutS = l.MaxTimeoutS
@@ -356,9 +356,9 @@ func (v *validator) paths(p *Policy, raw *rawPaths) {
 		v.fail("paths.deny", "has more than %d patterns", maxPatterns)
 	}
 	for i, d := range raw.Deny {
-		g, err := pathx.CompileGlob(d)
-		if err != nil {
-			v.fail(fmt.Sprintf("paths.deny[%d]", i), "%v", err)
+		g, gerr := pathx.CompileGlob(d)
+		if gerr != nil {
+			v.fail(fmt.Sprintf("paths.deny[%d]", i), "%v", gerr)
 			continue
 		}
 		deny.Add(g)
@@ -427,7 +427,7 @@ func (v *validator) paths(p *Policy, raw *rawPaths) {
 		if !persistence {
 			v.warn("%s: %s is not a persistence area; list it under paths.write", field, e.Path)
 		}
-		p.Paths.Persistence = append(p.Paths.Persistence, Persistence{Path: e.Path, Acknowledge: e.Acknowledge})
+		p.Paths.Persistence = append(p.Paths.Persistence, Persistence(e))
 		v.find("persistence", e.Path, "acknowledge: %s", e.Acknowledge)
 	}
 	for _, r := range p.Paths.Read {
@@ -520,7 +520,8 @@ func (v *validator) commands(p *Policy, raw []rawCommand) {
 	if len(raw) > maxCommands {
 		v.fail("commands", "has more than %d commands", maxCommands)
 	}
-	for i, rc := range raw {
+	for i := range raw {
+		rc := &raw[i]
 		field := fmt.Sprintf("commands[%d]", i)
 		if !commandIDRE.MatchString(rc.ID) {
 			v.fail(field+".id", "%q does not match [a-z0-9][a-z0-9-]{0,62}", rc.ID)
@@ -531,7 +532,7 @@ func (v *validator) commands(p *Policy, raw []rawCommand) {
 			v.fail(field, "duplicate command id")
 			continue
 		}
-		c, ok := v.command(field, &rc, p.MaxTier)
+		c, ok := v.command(field, rc, p.MaxTier)
 		if !ok {
 			continue
 		}
@@ -667,8 +668,8 @@ func (v *validator) resolve(field string, rc *rawCommand) (resolved string, list
 		v.fail(field+".path", "%s: %v", resolved, gpolicy.ErrReason(err))
 		return "", 0, false
 	}
-	if err := gpolicy.CheckFile(v.opts.Trust, resolved, fi); err != nil {
-		v.fail(field+".path", "%v", err)
+	if ferr := gpolicy.CheckFile(v.opts.Trust, resolved, fi); ferr != nil {
+		v.fail(field+".path", "%v", ferr)
 		return "", 0, false
 	}
 	if fi.Mode().Perm()&0o111 == 0 {
@@ -718,7 +719,8 @@ func (v *validator) commandCapabilities(field string, rc *rawCommand, c *Command
 // every capability a core-unit command adds, ordered by number.
 func (v *validator) capabilities(p *Policy) {
 	set := append([]string(nil), BaseCapabilities...)
-	for _, c := range p.Commands {
+	for i := range p.Commands {
+		c := &p.Commands[i]
 		if c.Unit != UnitCore {
 			continue
 		}

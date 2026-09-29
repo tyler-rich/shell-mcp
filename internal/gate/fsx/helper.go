@@ -75,7 +75,7 @@ type fileKey struct{ dev, ino uint64 }
 
 func keyOf(fi fs.FileInfo) fileKey {
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-		return fileKey{st.Dev, st.Ino} //nolint:unconvert // Dev is uint64 on amd64 and arm64 but not on every GOARCH
+		return fileKey{st.Dev, st.Ino}
 	}
 	return fileKey{}
 }

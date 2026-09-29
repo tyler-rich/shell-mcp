@@ -15,7 +15,7 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
 )
 
-var backupIDRE = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$`)
+var backupIDRE = regexp.MustCompile(`^\d{8}T\d{6}Z-[0-9a-f]{16}$`)
 
 type backupMeta struct {
 	V       int    `json:"v"`
@@ -93,7 +93,7 @@ func TestBackupFailureChangesNothing(t *testing.T) {
 	p := func(f *fixture) string { return filepath.Join(f.write, "app.conf") }
 	for name, breakStore := range map[string]func(f *fixture){
 		"missing store":        func(f *fixture) { _ = os.Remove(f.backups) },
-		"group-readable store": func(f *fixture) { _ = os.Chmod(f.backups, 0o750) },
+		"group-readable store": func(f *fixture) { _ = os.Chmod(f.backups, 0o750) }, //nolint:gosec // G302: a deliberately insecure or test fixture mode
 		"store is a file": func(f *fixture) {
 			_ = os.Remove(f.backups)
 			gatetest.WriteFile(t, f.backups, "x", 0o600)

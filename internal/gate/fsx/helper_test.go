@@ -21,12 +21,12 @@ import (
 // every overwrite, move-over and delete. The gate never sets any of them
 // (its tests run with a nil hook and no owner).
 
-func ids(t *testing.T) (uint32, uint32) {
+func ids(t *testing.T) (uid, gid uint32) {
 	t.Helper()
 	return uint32(os.Getuid()), uint32(os.Getgid()) //nolint:gosec // G115: test process ids fit
 }
 
-func ownerOf(t *testing.T, p string) (uint32, uint32) {
+func ownerOf(t *testing.T, p string) (uid, gid uint32) {
 	t.Helper()
 	fi, err := os.Lstat(p)
 	must(t, err)
@@ -117,7 +117,7 @@ func TestChown(t *testing.T) {
 	wantCode(t, err, protocol.CodePathDenied)
 	sgid := filepath.Join(e.write, "sgid")
 	put(t, sgid, "x")
-	must(t, os.Chmod(sgid, 0o2750))
+	must(t, os.Chmod(sgid, 0o2750)) //nolint:gosec // G302: a deliberately insecure or test fixture mode
 	if fi, _ := os.Stat(sgid); fi.Mode()&fs.ModeSetgid != 0 {
 		_, err = e.fs.Chown(sgid, Owner{GID: &gid})
 		wantCode(t, err, protocol.CodePolicyDenied)
@@ -131,8 +131,8 @@ func TestChown(t *testing.T) {
 
 // recorder is a backup hook that copies what it is given.
 type recorder struct {
-	calls []string            // "file:<path>" or "tree:<path>"
-	files map[string]string   // path (or path/rel) -> content
+	calls []string          // "file:<path>" or "tree:<path>"
+	files map[string]string // path (or path/rel) -> content
 	infos map[string]fs.FileMode
 	fail  error
 	after func() // runs after the copy, before returning (to race the op)

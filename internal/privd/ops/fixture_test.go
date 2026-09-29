@@ -51,9 +51,6 @@ func statusFor(uid, nnp, capBnd string) string {
 
 type opt func(*fixture, *string)
 
-// policyTail appends YAML to the fixture's policy.
-func policyTail(y string) opt { return func(_ *fixture, s *string) { *s += y } }
-
 func maxTier(t string) opt {
 	return func(_ *fixture, s *string) { *s = strings.Replace(*s, "max_tier: destructive", "max_tier: "+t, 1) }
 }
@@ -213,7 +210,7 @@ func (f *fixture) serveRaw(in string) (out string, code int) {
 	if _, err := unix.Write(fds[1], []byte(in)); err != nil {
 		f.t.Fatal(err)
 	}
-	conn := os.NewFile(uintptr(fds[0]), "conn") //nolint:gosec // G115: a socket fd
+	conn := os.NewFile(uintptr(fds[0]), "conn")
 	o := f.opts
 	o.Conn = conn
 	code = ops.Serve(&o)
@@ -277,13 +274,12 @@ func (f *fixture) ok(op string, args, into any) response {
 	return r
 }
 
-func (f *fixture) fail(op string, args any, code string) response {
+func (f *fixture) fail(op string, args any, code string) {
 	f.t.Helper()
 	r := f.serve(op, args)
 	if r.OK || r.Error == nil || r.Error.Code != code {
 		f.t.Fatalf("%s %v: got ok=%v error %+v, want %s", op, args, r.OK, r.Error, code)
 	}
-	return r
 }
 
 // auditLines returns the audit lines written so far.

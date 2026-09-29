@@ -23,19 +23,19 @@ func TestRefusalsCloseWithoutResponse(t *testing.T) {
 		setup func(f *fixture)
 		check string
 	}{
-		"not root":          {func(f *fixture) { f.status = statusFor("60123", "1", "000000000000000f") }, "uid"},
-		"no NoNewPrivs":     {func(f *fixture) { f.status = statusFor("0", "0", "000000000000000f") }, "no_new_privs"},
+		"not root":           {func(f *fixture) { f.status = statusFor("60123", "1", "000000000000000f") }, "uid"},
+		"no NoNewPrivs":      {func(f *fixture) { f.status = statusFor("0", "0", "000000000000000f") }, "no_new_privs"},
 		"broad bounding set": {func(f *fixture) { f.status = statusFor("0", "1", "000001ffffffffff") }, "capabilities"},
 		"unreadable status": {func(f *fixture) {
 			f.opts.ReadStatus = func() ([]byte, error) { return nil, errors.New("no proc") }
 		}, "uid"},
 		"insecure binary": {func(f *fixture) {
-			if err := os.Chmod(f.opts.Executable, 0o775); err != nil {
+			if err := os.Chmod(f.opts.Executable, 0o775); err != nil { //nolint:gosec // G302: a deliberately insecure or test fixture mode
 				t.Fatal(err)
 			}
 		}, "binary"},
 		"insecure policy": {func(f *fixture) {
-			if err := os.Chmod(f.policyPath, 0o620); err != nil {
+			if err := os.Chmod(f.policyPath, 0o620); err != nil { //nolint:gosec // G302: a deliberately insecure or test fixture mode
 				t.Fatal(err)
 			}
 		}, "policy"},
@@ -54,7 +54,7 @@ func TestRefusalsCloseWithoutResponse(t *testing.T) {
 			_ = fh.Close()
 		}, "policy_hash"},
 		"no hash in the unit": {func(f *fixture) { f.opts.ExpectedSHA256 = "" }, "policy_hash"},
-		"wrong peer uid":      {func(f *fixture) {}, "peer_uid"},
+		"wrong peer uid":      {func(*fixture) {}, "peer_uid"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var f *fixture

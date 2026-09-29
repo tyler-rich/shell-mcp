@@ -23,8 +23,8 @@ import (
 	"syscall"
 	"time"
 
-	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
+	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/pathx"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
 )
@@ -50,7 +50,7 @@ const (
 	metaVersion     = 1
 )
 
-var backupIDRE = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$`)
+var backupIDRE = regexp.MustCompile(`^\d{8}T\d{6}Z-[0-9a-f]{16}$`)
 
 // meta is one backup's metadata file.
 type meta struct {
@@ -103,7 +103,7 @@ func unixMode(fi fs.FileInfo) uint32 {
 	return bits
 }
 
-func ownerIDs(fi fs.FileInfo) (uint32, uint32) {
+func ownerIDs(fi fs.FileInfo) (uid, gid uint32) {
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
 		return st.Uid, st.Gid
 	}
@@ -275,8 +275,8 @@ func writeTree(w io.Writer, src *fsx.BackupSource) (int, error) {
 			return err
 		}
 		defer func() { _ = f.Close() }()
-		if err := tw.WriteHeader(hdr); err != nil {
-			return err
+		if werr := tw.WriteHeader(hdr); werr != nil {
+			return werr
 		}
 		c, err := io.Copy(tw, io.LimitReader(f, fi.Size()+1))
 		if err != nil {
@@ -353,7 +353,8 @@ func readMeta(root *os.Root, id string) (*meta, error) {
 func (st *store) prune(root *os.Root, p string) {
 	all, _ := st.metas(root)
 	kept := 0
-	for _, m := range all {
+	for i := range all {
+		m := &all[i]
 		if m.Path != p {
 			continue
 		}
@@ -422,7 +423,8 @@ func (s *server) listBackups(raw jsontext.Value) (data any, warns []string, fail
 	defer func() { _ = root.Close() }()
 	all, truncated := s.store.metas(root)
 	out.Truncated = truncated
-	for _, m := range all {
+	for i := range all {
+		m := &all[i]
 		if a.Path != "" && m.Path != a.Path {
 			continue
 		}
@@ -486,9 +488,9 @@ func (s *server) restoreBackup(raw jsontext.Value) (data any, warns []string, fa
 	owner := &fsx.Owner{UID: &uid, GID: &gid}
 	res := restoreData{ID: m.ID, Path: m.Path, Kind: m.Kind}
 	if m.Kind == fsx.BackupFile {
-		r, err := s.restoreFS.WriteFile(m.Path, content, fsx.WriteOptions{Mode: &fm, Create: true, Owner: owner})
-		if err != nil {
-			return nil, nil, err
+		r, werr := s.restoreFS.WriteFile(m.Path, content, fsx.WriteOptions{Mode: &fm, Create: true, Owner: owner})
+		if werr != nil {
+			return nil, nil, werr
 		}
 		res.SHA256, res.Verified, res.BackupIDs = r.SHA256, r.Verified, s.ids()
 		return res, nil, nil
@@ -554,7 +556,7 @@ func (s *server) restoreTree(m *meta, data []byte, rootMode os.FileMode, owner *
 		}
 		target := m.Path + "/" + name
 		mode := os.FileMode(uint32(hdr.Mode) & 0o7777) //nolint:gosec // G115: a tar mode written by this helper
-		uid, gid := uint32(hdr.Uid), uint32(hdr.Gid) //nolint:gosec // G115: ids written by this helper
+		uid, gid := uint32(hdr.Uid), uint32(hdr.Gid)   //nolint:gosec // G115: ids written by this helper
 		o := &fsx.Owner{UID: &uid, GID: &gid}
 		switch hdr.Typeflag {
 		case tar.TypeDir:

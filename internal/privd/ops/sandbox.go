@@ -27,8 +27,8 @@ var helperReadFiles = []string{"/proc/self", "/etc/passwd", "/etc/group", "/etc/
 func Rules(p *policy.Policy, backupDir string) sandbox.Rules {
 	r := sandbox.Rules{DevNull: "/dev/null", DevURandom: "/dev/urandom"}
 	r.ReadExec = gpolicy.DefaultReadExec()
-	for _, c := range p.Commands {
-		r.ReadExec = append(r.ReadExec, c.Resolved)
+	for i := range p.Commands {
+		r.ReadExec = append(r.ReadExec, p.Commands[i].Resolved)
 	}
 	r.ReadOnly = append(append([]string(nil), helperReadFiles...), p.Paths.Read...)
 	r.ReadWrite = append(p.Paths.WriteRoots(), backupDir)

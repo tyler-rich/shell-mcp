@@ -21,8 +21,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
+	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/privd/peercred"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
@@ -157,18 +157,18 @@ func (s *server) checks() error {
 	if err != nil {
 		return &selfcheck.Error{Check: selfcheck.CheckUID, Detail: "cannot parse /proc/self/status: " + err.Error()}
 	}
-	if err := selfcheck.Process(&st); err != nil {
-		return err
+	if e := selfcheck.Process(&st); e != nil {
+		return e
 	}
 	if o.Conn == nil {
 		return &selfcheck.Error{Check: selfcheck.CheckStdin, Detail: "no connection"}
 	}
-	fd := int(o.Conn.Fd()) //nolint:gosec // G115: a file descriptor fits in int
-	if err := selfcheck.Stdin(fd); err != nil {
-		return err
+	fd := int(o.Conn.Fd())
+	if e := selfcheck.Stdin(fd); e != nil {
+		return e
 	}
-	if err := selfcheck.Binary(o.Trust, o.Executable); err != nil {
-		return err
+	if e := selfcheck.Binary(o.Trust, o.Executable); e != nil {
+		return e
 	}
 	lo := &policy.LoadOptions{Trust: o.Trust, HelperExecutable: o.Executable, SystemBinDirs: o.SystemBinDirs}
 	o.Lookups(lo)
@@ -176,11 +176,11 @@ func (s *server) checks() error {
 	if err != nil {
 		return &selfcheck.Error{Check: selfcheck.CheckPolicy, Detail: err.Error()}
 	}
-	if err := selfcheck.Hash(p.SHA256, o.ExpectedSHA256); err != nil {
-		return err
+	if e := selfcheck.Hash(p.SHA256, o.ExpectedSHA256); e != nil {
+		return e
 	}
-	if err := selfcheck.Capabilities(&st, p.Capabilities); err != nil {
-		return err
+	if e := selfcheck.Capabilities(&st, p.Capabilities); e != nil {
+		return e
 	}
 	cred, err := peercred.Authenticate(fd, p.ClientUID)
 	s.cred = cred

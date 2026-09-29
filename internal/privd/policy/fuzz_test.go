@@ -31,7 +31,8 @@ func FuzzParse(f *testing.F) {
 				t.Fatalf("write root %s is protected", w)
 			}
 		}
-		for _, c := range p.Commands {
+		for i := range p.Commands {
+			c := &p.Commands[i]
 			if c.Unit != policy.UnitCore || c.ListB != 0 && c.Acknowledge == "" {
 				t.Fatalf("command %+v", c)
 			}
