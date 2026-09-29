@@ -130,6 +130,9 @@ type WriteOptions struct {
 	ExpectedSHA256 string
 	// Owner, when set, is the new file's owner (the helper only).
 	Owner *Owner
+	// DefaultMode, when non-zero, replaces 0640 as a new file's mode when
+	// Mode is not given (the helper caps it by its mode mask).
+	DefaultMode os.FileMode
 }
 
 // WriteResult is write_file's (and copy's) result.

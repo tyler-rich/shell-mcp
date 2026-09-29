@@ -46,7 +46,14 @@ func (f *FS) WriteFile(p string, content []byte, o WriteOptions) (WriteResult, e
 	if l.parent == nil {
 		return WriteResult{}, errf(protocol.CodeIsADirectory, "is a directory")
 	}
-	return f.writeAtomic(l, content, &atomicOpts{mode: o.Mode, newMode: defaultFileMode, create: o.Create, overwrite: true, expected: o.ExpectedSHA256, owner: o.Owner})
+	newMode := os.FileMode(defaultFileMode)
+	if o.DefaultMode != 0 {
+		if e := checkMode(o.DefaultMode); e != nil {
+			return WriteResult{}, e
+		}
+		newMode = o.DefaultMode
+	}
+	return f.writeAtomic(l, content, &atomicOpts{mode: o.Mode, newMode: newMode, create: o.Create, overwrite: true, expected: o.ExpectedSHA256, owner: o.Owner})
 }
 
 func isSHA256Hex(s string) bool {

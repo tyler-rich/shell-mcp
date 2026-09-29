@@ -135,7 +135,12 @@ func TestSandboxRefusal(t *testing.T) {
 	f.opts.ApplySandbox = func(*policy.Policy, string) (sandbox.Report, error) {
 		return sandbox.Report{}, sandbox.ErrUnavailable
 	}
-	f.fail("priv_stat", m{"path": f.read}, "sandbox_unavailable")
+	// The request is never read, so the response has no id.
+	out, code := f.serveRaw(request("priv_stat", m{"path": f.read}))
+	var r response
+	if err := json.Unmarshal([]byte(out), &r); err != nil || code != 0 || r.ID != "" || r.Error == nil || r.Error.Code != "sandbox_unavailable" {
+		t.Fatalf("exit %d response %q", code, out)
+	}
 }
 
 func TestRequestErrors(t *testing.T) {
