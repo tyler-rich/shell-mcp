@@ -326,6 +326,10 @@ func TestRootRules(t *testing.T) {
 		f.mustFail(t, withPaths(fmt.Sprintf("  persistence:\n    - path: %q\n      acknowledge: x\n", r)), "paths.persistence")
 	}
 	f.mustFail(t, withPaths("  write: [/srv/app, /srv/app]\n"), "duplicate")
+	f.mustFail(t, withPaths("  read: [/srv/app, /srv/app]\n"), "duplicate")
+	// A root may be both read and write (PRIVILEGED §4's example lists
+	// /etc/example-app under both); write roots are readable anyway.
+	f.mustLoad(t, withPaths("  read: [/srv/app]\n  write: [/srv/app]\n"))
 	f.mustFail(t, withPaths("  write: [/srv/app]\n  persistence:\n    - path: /srv/app\n      acknowledge: x\n"), "duplicate")
 }
 
