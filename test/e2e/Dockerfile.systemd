@@ -1,0 +1,10 @@
+# Local end-to-end image: Debian 13 with systemd, D-Bus, journald and
+# polkit, for test/e2e/local.sh only (the CI job uses the runner VM's own
+# systemd). Built from this repository on a digest-pinned base; nothing is
+# pulled at run time.
+FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends systemd systemd-sysv dbus polkitd \
+ && rm -rf /var/lib/apt/lists/*
+STOPSIGNAL SIGRTMIN+3
+CMD ["/lib/systemd/systemd"]
