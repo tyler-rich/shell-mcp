@@ -250,3 +250,43 @@ func TestIDBytes(t *testing.T) {
 		t.Fatalf("IDBytes = %d, want 36", IDBytes)
 	}
 }
+
+const respID = "0b5c0000-0000-4000-8000-000000000003"
+
+func TestDecodeResponse(t *testing.T) {
+	ok := `{"v":1,"id":"` + respID + `","ok":true,"data":{"x":1},"warnings":["w"],"gate":{"version":"dev","principal":"p","duration_ms":1}}` + "\n"
+	r, err := DecodeResponse(strings.NewReader(ok))
+	if err != nil || !r.OK || r.ID != respID || string(r.Data) != `{"x":1}` || len(r.Warnings) != 1 {
+		t.Fatalf("%+v %v", r, err)
+	}
+	fail := `{"v":1,"id":"","ok":false,"error":{"code":"sandbox_unavailable","message":"m"},"warnings":[]}` + "\n"
+	if r, err := DecodeResponse(strings.NewReader(fail)); err != nil || r.OK || r.Error.Code != CodeSandboxUnavailable {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if _, err := DecodeResponse(strings.NewReader("")); !errors.Is(err, ErrNoResponse) {
+		t.Fatalf("empty: %v", err)
+	}
+	for name, in := range map[string]string{
+		"not json":           "nope\n",
+		"unknown field":      `{"v":1,"id":"` + respID + `","ok":true,"warnings":[],"extra":1}` + "\n",
+		"duplicate key":      `{"v":1,"v":1,"id":"` + respID + `","ok":true,"warnings":[]}` + "\n",
+		"wrong version":      `{"v":2,"id":"` + respID + `","ok":true,"warnings":[]}` + "\n",
+		"ok with error":      `{"v":1,"id":"` + respID + `","ok":true,"error":{"code":"internal","message":"m"},"warnings":[]}` + "\n",
+		"failure no error":   `{"v":1,"id":"` + respID + `","ok":false,"warnings":[]}` + "\n",
+		"unknown code":       `{"v":1,"id":"` + respID + `","ok":false,"error":{"code":"root_now","message":"m"},"warnings":[]}` + "\n",
+		"bad id":             `{"v":1,"id":"x","ok":true,"warnings":[]}` + "\n",
+		"ok without id":      `{"v":1,"id":"","ok":true,"warnings":[]}` + "\n",
+		"two values":         `{"v":1,"id":"` + respID + `","ok":true,"warnings":[]} {}` + "\n",
+		"too large":          `{"v":1,"id":"` + respID + `","ok":true,"warnings":["` + strings.Repeat("a", MaxResponseBytes) + `"]}` + "\n",
+		"multi-line message": `{"v":1,"id":"` + respID + `","ok":false,"error":{"code":"internal","message":"a\nb"},"warnings":[]}` + "\n",
+	} {
+		if _, err := DecodeResponse(strings.NewReader(in)); err == nil || errors.Is(err, ErrNoResponse) {
+			t.Errorf("%s: accepted (%v)", name, err)
+		}
+	}
+	// Bounded: an endless peer is not read past the limit.
+	e := &endless{}
+	if _, err := DecodeResponse(e); err == nil || e.n > MaxResponseBytes+64<<10 {
+		t.Fatalf("endless: %v after %d bytes", err, e.n)
+	}
+}

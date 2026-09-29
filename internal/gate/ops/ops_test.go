@@ -321,7 +321,8 @@ func TestPrivileged(t *testing.T) {
 	f.writePolicy("operator", "privileged:\n  enabled: true\n  socket: /run/shell-mcp/privd.sock\n  max_tier: read\n")
 	f.fail("priv_write_file", m{}, "tier_denied")
 	f.fail("priv_delete", m{}, "tier_denied")
-	f.fail("priv_read_file", m{"path": "/etc/example-app/x"}, "unknown_op")
+	// Forwarding is on, but nothing answers here (TestForward* use a fake helper).
+	f.fail("priv_read_file", m{"path": "/etc/example-app/x"}, "helper_unavailable")
 	f.fail("priv_not_an_op", m{}, "unknown_op")
 }
 

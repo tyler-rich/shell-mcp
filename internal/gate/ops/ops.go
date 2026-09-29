@@ -6,9 +6,11 @@
 package ops
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -63,6 +65,13 @@ type Options struct {
 	SSHConnection *string
 	// Audit receives one record per request; nil disables auditing.
 	Audit audit.Sink
+
+	// DialHelper connects to the privileged helper's socket (production:
+	// a Unix stream dial). Tests connect to their own helper.
+	DialHelper func(ctx context.Context, socket string) (net.Conn, error)
+	// HelperGrace is added to the request's timeout for the helper's answer
+	// (0 means DefaultHelperGrace).
+	HelperGrace time.Duration
 }
 
 // ProductionOptions describes the running process: its real identity, its
@@ -267,3 +276,7 @@ func (s *server) timeout() time.Duration {
 	}
 	return d
 }
+
+// DefaultHelperGrace is how long past the request's timeout the gate waits
+// for the privileged helper's answer (instance start-up, backups).
+const DefaultHelperGrace = 15 * time.Second

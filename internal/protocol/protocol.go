@@ -331,3 +331,10 @@ func Marshal(v any) (jsontext.Value, error) {
 	out, err := json.Marshal(v, marshalOpts)
 	return jsontext.Value(out), err
 }
+
+// ErrNoResponse is returned by DecodeResponse when the peer closed the
+// connection without sending anything (the privileged helper's refusal).
+var ErrNoResponse = errors.New("the peer closed the connection without a response")
+
+// DecodeResponse reads exactly one response line strictly.
+func DecodeResponse(r io.Reader) (*Response, error) { return nil, errors.New("not implemented") }
