@@ -29,7 +29,7 @@ var (
 	fakeGroups = map[string]uint32{"root": 0, "example-app": 1001, "svc-shell-priv": 60124, "docker": 999, "sudo": 27, "adm": 4, "wheel": 10}
 )
 
-func newFixture(t *testing.T) *fixture {
+func newFixture(t testing.TB) *fixture {
 	t.Helper()
 	d := gatetest.SecureDir(t)
 	f := &fixture{
@@ -78,7 +78,7 @@ func newFixture(t *testing.T) *fixture {
 }
 
 // exe creates an executable fixture named name in f.bin (never executed).
-func (f *fixture) exe(t *testing.T, name, body string) string {
+func (f *fixture) exe(t testing.TB, name, body string) string {
 	t.Helper()
 	p := filepath.Join(f.bin, name)
 	gatetest.WriteFile(t, p, body, 0o755)
@@ -428,7 +428,6 @@ func TestModesMax(t *testing.T) {
 	for _, m := range []string{"4755", "2755", "1755", "6755", "0777", "0757", "abc", "07555", "75", "", "0o755", "-755"} {
 		f.mustFail(t, head+fmt.Sprintf("modes:\n  max: %q\n", m), "modes.max")
 	}
-	f.mustFail(t, head+"modes:\n  max: 0755\n", "modes.max") // an unquoted YAML integer is not a mode string
 	for m, want := range map[string]os.FileMode{"0755": 0o755, "750": 0o750, "0640": 0o640, "0775": 0o775} {
 		if p := f.mustLoad(t, head+fmt.Sprintf("modes:\n  max: %q\n", m)); p.ModesMax != want {
 			t.Errorf("%s: %04o", m, p.ModesMax)

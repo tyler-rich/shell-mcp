@@ -17,8 +17,8 @@ func FuzzParse(f *testing.F) {
 	f.Add([]byte(head + "modes:\n  max: \"0750\"\nowners:\n  users: [root]\n"))
 	f.Add([]byte(head + "sandbox:\n  landlock: best-effort\nbackups:\n  keep: 0\n"))
 	f.Add([]byte("version: 1\n---\n"))
+	fx := newFixture(f)
 	f.Fuzz(func(t *testing.T, data []byte) {
-		fx := newFixture(t)
 		p, err := policy.Parse(data, "/etc/shell-mcp/privileged.yaml", &fx.opts)
 		if err != nil {
 			return
