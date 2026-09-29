@@ -46,6 +46,9 @@ type Config struct {
 	// after a write before they are compared. Tests only; production code
 	// never sets it.
 	InjectReadBackFault func([]byte) []byte
+	// Backup, when non-nil, is called before every overwrite, move-over and
+	// delete; its error aborts the operation. The gate never sets it.
+	Backup BackupFunc
 }
 
 // FS performs confined operations.
@@ -125,6 +128,8 @@ type WriteOptions struct {
 	Mode           *os.FileMode
 	Create         bool
 	ExpectedSHA256 string
+	// Owner, when set, is the new file's owner (the helper only).
+	Owner *Owner
 }
 
 // WriteResult is write_file's (and copy's) result.
