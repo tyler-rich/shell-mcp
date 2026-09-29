@@ -194,3 +194,50 @@ func TestCodesClosedSet(t *testing.T) {
 		t.Fatalf("PrivOps has %d entries", len(PrivOps))
 	}
 }
+
+// The request id is written into the gate's and the helper's audit lines,
+// which join on it, so only its documented format is accepted: a UUID v4
+// in lowercase canonical form (8-4-4-4-12 hex digits, version 4, variant
+// 10xx), exactly IDBytes long.
+func TestDecodeRequestIDIsUUIDv4(t *testing.T) {
+	for _, id := range []string{
+		"0b5c0000-0000-4000-8000-000000000000",
+		"f47ac10b-58cc-4372-a567-0e02b2c3d479",
+		"00000000-0000-4000-b000-000000000000",
+		"ffffffff-ffff-4fff-9fff-ffffffffffff",
+	} {
+		in := `{"v":1,"id":"` + id + `","op":"hello"}` + "\n"
+		req, err := DecodeRequest(strings.NewReader(in))
+		if err != nil || req.ID != id {
+			t.Errorf("valid id %q: %v", id, err)
+		}
+	}
+	for name, id := range map[string]string{
+		"short label":        "a",
+		"uppercase":          "F47AC10B-58CC-4372-A567-0E02B2C3D479",
+		"version 1":          "f47ac10b-58cc-1372-a567-0e02b2c3d479",
+		"version 5":          "f47ac10b-58cc-5372-a567-0e02b2c3d479",
+		"variant 0xxx":       "f47ac10b-58cc-4372-7567-0e02b2c3d479",
+		"variant 110x":       "f47ac10b-58cc-4372-c567-0e02b2c3d479",
+		"no hyphens":         "f47ac10b58cc4372a5670e02b2c3d479",
+		"braces":             "{f47ac10b-58cc-4372-a567-0e02b2c3d479}",
+		"urn prefix":         "urn:uuid:f47ac10b-58cc-4372-a567-0e02b2c3d479",
+		"trailing char":      "f47ac10b-58cc-4372-a567-0e02b2c3d4790",
+		"one short":          "f47ac10b-58cc-4372-a567-0e02b2c3d47",
+		"hyphen misplaced":   "f47ac10b5-8cc-4372-a567-0e02b2c3d479",
+		"non-hex":            "g47ac10b-58cc-4372-a567-0e02b2c3d479",
+		"newline":            "f47ac10b-58cc-4372-a567-0e02b2c3d47\n",
+		"empty":              "",
+		"label with dots":    "req.1",
+		"64-char label":      strings.Repeat("a", 64),
+		"all-zero nil uuid":  "00000000-0000-0000-0000-000000000000",
+		"space inside":       "f47ac10b-58cc-4372-a567 0e02b2c3d479",
+		"trailing space pad": "f47ac10b-58cc-4372-a567-0e02b2c3d47 ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := `{"v":1,"id":"` + id + `","op":"hello"}` + "\n"
+			if de := decodeErr(t, in); de.Code != CodeBadRequest {
+				t.Fatalf("code %q, want %q", de.Code, CodeBadRequest)
+			}
+		})
+	}}
