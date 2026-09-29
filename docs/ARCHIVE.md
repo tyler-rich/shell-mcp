@@ -375,3 +375,201 @@ The accepted values, with the reasoning per key family, are in the POLICY §7 ta
 **Deferred / follow-ups:** none. The case-folding filesystem limitation is recorded above.
 
 **Versions:** unchanged. git verified: 2.47.3 (local image), 2.55.0 (CI image).
+
+### 2026-09-29 — Privileged helper core: policy, units, self-checks, operations, backups; gate forwarding; runner-host e2e (PR #PRNUM, branch sec/privd-core)
+**Decision:** Implement `shell-mcp-privd` per PRIVILEGED.md for the core unit, the gate's forwarding of `priv_*`, and the first CI job that runs the real stack on a VM's own systemd:
+- **Privileged policy** (`internal/privd/policy`): strict YAML and full §4 validation.
+  - Identity: `client_uid` (never 0); `socket_group` (local, not in the D-020 deny list, not gid 0); `max_tier`; `sandbox.landlock`; limits with ceilings.
+  - Paths: roots follow the POLICY §3 rules. The never list (list A) is refused wherever it appears. `.git` is never writable. Gate-protected paths are allowed only as acknowledged persistence roots.
+  - Owners are resolved locally; `modes.max` and `backups.keep` are checked.
+  - Commands resolve and are checked as the gate's. Hard-deny groups 1–10 are never allowed; groups 11–13 need `acknowledge`. Both checks apply by name and by identity.
+  - Capabilities are checked per unit. `unit: broad` and `packages.enabled` are validated, then refused until S1d.
+  - The SHA-256 is taken over the file bytes.
+- **Units** (`internal/privd/units`, `shell-mcp-privd units`): the socket and templated service unit implementing §2/§5.1, pinned to the policy hash; golden files and a per-directive test.
+- **Self-checks and authentication** (`internal/privd/selfcheck`, `internal/privd/peercred`): §7 in order; `SO_PEERCRED`.
+- **Operations and backups** (`internal/privd/ops`):
+  - the serve pipeline and every core-unit op of §6;
+  - the backup store;
+  - root exec through the gate's template and exec engines;
+  - Landlock from the privileged policy;
+  - the journald audit line.
+  
+  `priv_pkg_*` answer `unknown_op` until S1d.
+- **Gate forwarding** (`internal/gate/ops/priv.go`) and strict response decoding (`protocol.DecodeResponse`).
+- **CLI**: `serve`, `check-policy`, `units`, `version`.
+- **e2e**: `test/e2e` (setup script, suite, local runner) and the `e2e-host` CI job, part of the required `ci` aggregate.
+
+**Why:** S1c scope (plan §5). Every validation rule, self-check, peer-credential case, operation, backup behaviour, forwarding error and generated directive had its test committed first and shown failing. These are the `test(...)…(failing)` commits, listed with their output in the PR body.
+
+**Maintainer decisions during the session:**
+- **Principal in the helper's audit (PRIVILEGED §8).**
+  - The v1 request has no principal, and the gate forwards it unchanged. So the helper's line carries the **request id**, with the peer uid and pid.
+  - The gate's audit line, which carries the principal, now carries the id too; the two lines join on it.
+  - The protocol decoder now accepts the id only as a lowercase canonical UUID v4 (36 characters, version 4, variant 10xx), because it is written into both audit logs. Tested by `TestDecodeRequestIDIsUUIDv4`; test fixtures moved from short labels to UUIDs.
+  - §8 reworded.
+- **Landlock key.**
+  - The privileged policy uses `sandbox: {landlock: required|best-effort}` (default required), mirroring the gate policy.
+  - The per-command key is renamed from `sandbox: core|broad` to **`unit: core|broad`**, so `sandbox` means the same in both files. The old per-command key is now an unknown-key error.
+  - Updated: PRIVILEGED §4, §5.2 and §7, and plan.md (D-021 wording, S1d row).
+- **Capabilities that do nothing in the core unit.**
+  - Refused on core-unit commands, with a one-line reason: `CAP_SYS_TIME` (`ProtectClock=yes` drops it and filters `@clock`), `CAP_NET_ADMIN` and `CAP_NET_BIND_SERVICE` (`PrivateNetwork=yes`, `RestrictAddressFamilies=AF_UNIX`).
+  - Every §5.1 directive stays unchanged. The syscall filter is adjusted only for `CAP_SYS_BOOT`, which keeps `@reboot`.
+  - `CAP_KILL` and `CAP_SYS_ADMIN` (with `root_equivalent`) are accepted and reach the unit.
+  - PRIVILEGED §4 now has a capability-by-unit table.
+- **Local e2e.**
+  - On Docker Desktop (cgroupfs driver), the approved recipe (`--cgroupns=private` plus a read-write bind of `/sys/fs/cgroup`) leaves the container's PID 1 at `0::/../../init.scope`. That is outside its own cgroup namespace, at the Docker VM's cgroup root.
+  - journald then exits ("Failed to acquire cgroup root path", errno 49). So does every unit logging to the journal, including the helper (`StandardError=journal`), and polkitd (217/USER).
+  - The maintainer kept the recipe unchanged. `test/e2e/local.sh` runs what works there (units verify, security rating, socket permissions) and says why.
+  - The **runner-host job is the authoritative helper e2e**, with every helper test required.
+  - Only the S1b groups could have moved to S1c-2; none did.
+
+**systemd directives, verified at the source.** Sources: the man pages of systemd 257 (Debian trixie) and 259 (Ubuntu resolute), and the source at v257/v259.
+- **Socket** (`systemd.socket(5)`, identical in 257 and 259):
+  - `ListenStream=` (path form).
+  - `Accept=yes`: a template `name@.service` must exist.
+  - `SocketUser=`/`SocketGroup=`: apply to the socket node only.
+  - `SocketMode=`: default 0666.
+  - `DirectoryMode=`: default 0755. It applies to parent directories systemd creates. PID 1 creates them via `mkdir_parents_label()` in `socket_address_listen()`, so they are `root:root`; `socket_chown()` chowns only the socket path.
+  - `MaxConnections=`: default 64; extra connections are refused.
+- **Service** (`systemd.exec(5)`, `systemd.service(5)`, `systemd.resource-control(5)`, `systemd.unit(5)`):
+  - Plain: `User=`, `ExecStart=`, `StandardError=journal`, `SyslogIdentifier=`, `Environment=`, `NoNewPrivileges=`, `CapabilityBoundingSet=`, `ProtectSystem=strict`, `ProtectHome=read-only`, `PrivateTmp=`, `ProtectKernelTunables=`, `ProtectControlGroups=`, `RestrictNamespaces=`, `RestrictRealtime=`, `RestrictSUIDSGID=`, `LockPersonality=`, `MemoryDenyWriteExecute=`, `SystemCallArchitectures=native`, `UMask=`, `RuntimeMaxSec=`, `TasksMax=`, `MemoryMax=`, `CollectMode=inactive-or-failed`.
+  - `StandardInput=socket`/`StandardOutput=socket`: socket-activated services only, with `Accept=yes`.
+  - `ReadWritePaths=` and `InaccessiblePaths=`: no globs; single files are allowed. A `-` prefix ignores a missing path. Without it, namespace setup fails and the unit does not start (checked for `InaccessiblePaths=` in v257 `namespace.c`).
+  - `PrivateDevices=`: drops CAP_MKNOD and CAP_SYS_RAWIO, filters `@raw-io`.
+  - `PrivateNetwork=`: only `lo`.
+  - `RestrictAddressFamilies=AF_UNIX`: applies to `socket(2)` only. Sockets passed in are unaffected; other families get `EAFNOSUPPORT`.
+  - `IPAddressDeny=any`: not applied to sockets passed in.
+  - `ProtectKernelModules=`: drops CAP_SYS_MODULE. `ProtectKernelLogs=`: drops CAP_SYSLOG.
+  - `ProtectClock=`: drops CAP_SYS_TIME and CAP_WAKE_ALARM, filters `@clock`, implies `DeviceAllow=char-rtc r`.
+  - `ProtectHostname=`: boolean in 257; 259 also accepts `private`.
+  - `SystemCallFilter=`: the first line sets the default action; later lines add or remove. `@system-service` is the same in 257 and 259 and contains none of `@clock @reboot @mount @module @swap @raw-io @debug @obsolete`. `kill(2)` is in `@process`.
+  - 257 vs 259, only two differences touch these units: `ProtectHostname=private` exists only in 259 (not used), and the `Accept=yes` instance name format changed (259 adds the socket cookie), which nothing parses.
+- **`systemd-analyze security`**: exposure runs 0.0–10.0, higher is worse. Labels come from thresholds (OK is below 5.0). Templates are analysed with the instance `test_instance`.
+- **`systemd-analyze verify`**: requires the `ExecStart=` binary to exist; `--man=no` skips Documentation checks.
+- **`unix(7)`**: `SO_PEERCRED` gives the credentials of the peer "in effect at the time of the call to connect(2)". On the connection systemd accepted and passed as stdin, those are the gate's.
+- **`proc_pid_status(5)`**: `CapBnd` is a hex mask, `NoNewPrivs` is 0/1, `Uid` is four decimal ids.
+
+**Socket directory:** `DirectoryMode=0711`.
+- systemd creates `/run/shell-mcp` as root:root, and `SocketGroup=` does not reach it, so group-based access to the directory is impossible.
+- The gate needs only search permission to reach the socket by name. 0711 gives that without allowing a listing. The socket itself is `root:<socket group> 0660`.
+- The gate's Landlock grant (ABI 9+) stays exactly `/run/shell-mcp` (existing test).
+
+**Landlock inside the helper (core unit):**
+- It is computed from the privileged policy and applied through the gate's sandbox package. `sandbox.ApplyRules` sets no_new_privs on every thread, applies Landlock at the kernel's exact ABI, installs the MPTCP seccomp filter and verifies each thread.
+- It is applied after the peer check and before a byte is read.
+- Grants:
+  - read+execute on `/usr /bin /sbin /lib /lib64` and each declared command's binary;
+  - read on the read roots, `/etc/passwd`, `/etc/group`, `/etc/ld.so.cache` and the helper's own `/proc/<pid>` (a `/proc/self` rule resolves when created; the verification reads `/proc/self/task`);
+  - read+write, never execute, on the write and persistence roots and the backup store;
+  - `/dev/null` and `/dev/urandom`.
+- There is no socket grant, no syslog socket (the audit goes to stderr) and no TCP port. So from ABI 4, every TCP bind and connect is denied.
+- Commands that need other files must declare read roots.
+
+**Backups:**
+- **Store.** `/var/lib/shell-mcp/backups`, root:root 0700, required at install. It is checked on every use: trusted owner chain, a directory, no group/other bits.
+- **Files per backup.** `<id>.meta.json`, plus `<id>.data` (a file) or `<id>.tar` (a PAX tar of directories and regular files with modes and owners). Ids are `YYYYMMDDTHHMMSSZ-<16 hex>`.
+- **Writing.** Both files are 0600, written to temporary names and fsynced, then renamed data first, then the directory is fsynced.
+- **Metadata.** Kind, original path, uid, gid, mode, size, SHA-256, creation time plus a nanosecond sequence (ordering within a second), op and request id.
+- **Retention.** `backups.keep` per original path, pruned after each backup. A pruning failure never fails the operation.
+- **Limits.** 64 MiB per backup (larger → `backup_failed`, nothing changed); 20 000 names scanned.
+- **The fsx hook.** fsx gained a backup hook, called through verified descriptors before every overwrite, copy-over, move-over and delete:
+  - a failed backup changes nothing;
+  - a file replaced or rewritten (inode, size, mtime) while it was backed up is not destroyed;
+  - a recursive delete stops before removing any entry the backup walk did not see;
+  - trees with symlinks or special files are not deleted.
+- **Restore.** It checks the data's SHA-256, then:
+  - restores a file with its recorded owner and mode, backing up the current version first through the same hook;
+  - restores a tree only where nothing exists now.
+  
+  Restoring a setuid/setgid file is refused by fsx.
+
+**Other choices made in the session:**
+- **Refusal order.**
+  - The order is: uid 0 and NoNewPrivs → stdin a connected AF_UNIX stream socket → binary chain → policy load → hash (constant-time) → bounding set ⊆ the unit's → SO_PEERCRED.
+  - Until the peer passes, a refusal writes nothing and logs one `<4>` line naming the check; the gate reports `helper_refused`.
+  - After that, everything is a response. A Landlock refusal comes before the request is read, so it has no id; the gate passes it through.
+- **Forwarding.**
+  - The request is re-encoded from the decoded fields; the `args` bytes are unchanged.
+  - Deadlines: 5 s to connect; for the response, the request's timeout plus 15 s (`DefaultHelperGrace`).
+  - Errors: unreachable or malformed → `helper_unavailable`; EOF without a byte → `helper_refused`; deadline → `timeout`; a helper error passes through.
+  - The envelope keeps the gate's own `gate` block.
+  - `priv_exec` is still tier-checked as read at the gate, which cannot know the helper's command tiers. The helper checks the command's tier.
+- **List A as paths.**
+  - Identity and access files: `/etc/passwd*`, `/etc/group*`, shadow files, `/etc/subuid*`, `/etc/subgid*`, sudoers, PAM, `/etc/security`, `/etc/ssh`, `/root/.ssh`, `/home/*/.ssh`, `**/.ssh`, `**/authorized_keys*`, and both polkit directories.
+  - This project's trust anchors: `/etc/shell-mcp`, `/run/shell-mcp`, `/var/lib/shell-mcp`, the gate and helper binaries at their documented paths and under any name, the helper's unit files and `*.wants/*.requires` links, the running helper binary, and the policy file.
+  - Writes are also refused under every `.git`.
+  - A read root may contain the never list (`/etc`) but may not be inside it.
+- **Defaults.**
+  - Limits: 1 MiB read/write/output; timeouts 60 s default and 900 s max; 1000 delete entries.
+  - `modes.max` 0755; `backups.keep` 10.
+  - New files 0640 and directories 0750, both capped by `modes.max`.
+  - `MaxConnections=16`.
+  - `priv_exec` has no stdin (the schema has no stdin limit) and runs with `HOME=/root`.
+- **Shared packages changed.** Gate behaviour and tests are unchanged unless stated.
+  - `protocol`: UUID ids (gate tests updated for that); `DecodeResponse`, `ErrNoResponse`.
+  - `gate/policy` exports: `HardDenied`, `BuiltinDeny`, `BuiltinProtected`, `IsBuiltinOp`, `IsContainerCLI`, `CheckRoot`, `CheckFile`, `ErrReason`, `IdentityScan`.
+  - `gate/sandbox`: `PlanRules`, `ApplyRules`.
+  - `gate/fsx`: `WriteOptions.Owner`/`DefaultMode`, `MkdirAs`, `Chown`, `Config.Backup`.
+  - `gate/audit` and `gate/ops`: the request id in the audit line; forwarding.
+- **e2e bypass build.**
+  - `-tags shellmcp_e2e_bypass` adds raw read/write ops and skips Landlock. That lets the e2e job show the systemd layer confining a helper whose own checks are gone.
+  - A normal build has neither. `TestNoBypassInThisBuild` checks this and fails under the tag.
+  - `version` and `check-policy` flag the test build. CI and `ci-local.sh` fail if a built binary carries the tag.
+- **e2e identities.** Invented, in a documented test range 4200001–4200009: `svc-shell`, `svc-shell-priv`, `svc-other`, `example-app`. The range is above distribution, systemd dynamic-user and common container ranges.
+- **Finding for the maintainer.**
+  - On systemd hosts, `/usr/sbin/reboot` (PRIVILEGED §4's `reboot-host` example) is a symlink to `systemctl`. `systemctl` may not be a command (built-in op rule).
+  - execx also passes the resolved path as `argv[0]`, so a multi-call binary would not act as `reboot` anyway.
+  - So list B power commands cannot be declared on systemd hosts the way the example shows. S1d or the maintainer should decide, for example with an `argv0` field or a dedicated power operation.
+
+**sudo exception:** CLAUDE.md now allows `sudo` only in the `e2e-host` job of `ci.yml`, under these conditions:
+- a GitHub-hosted runner image;
+- `permissions: contents: read`;
+- no secrets;
+- `pull_request`/`push` triggers only.
+
+It is allowed nowhere else. Sessions keep their deny rule, and `sudo` does not appear in `ci-local.sh`, `local.sh`, `deploy/`, docs, examples or anything shipped.
+
+**Runner-host job (`e2e-host`):**
+- Runs on `ubuntu-26.04`, named explicitly: the newest LTS image, GA per GitHub's runner-images list.
+- Builds the binaries (CGO_ENABLED=0) and installs polkitd if the image lacks it.
+- Runs `test/e2e/setup.sh` and the suite as root with `E2E_REQUIRE_ALL=1`, so a skip is a failure.
+- Lists every test with its result in the job summary, and fails unless all passed.
+- Runner facts from the first run: RUNNERFACTS.
+
+**`systemd-analyze security shell-mcp-privd@.service`:**
+- 1.6 "OK" with systemd 257.13 (local container). Runner: RUNNEREXPOSURE. Threshold (`E2E_SECURITY_MAX`): THRESHOLD.
+- The remaining exposure items are inherent: the unit runs as root; `@privileged`/`@resources` are in `@system-service`; CAP_CHOWN/DAC/FOWNER are there by design; AF_UNIX is allowed.
+- Four more come from directives §5.1 does not list: `ProtectProc=`, `ProcSubset=`, `PrivateUsers=`, `RootDirectory=`. Adding them would be a §5.1 change, left for the maintainer to consider.
+
+**What S1d must add:**
+- the broad socket and service units (`shell-mcp-privd-broad.*`, §5.2) and their generator;
+- `unit: broad` commands and `packages` (apt ops) in place of the current refusals;
+- `CAP_SYS_TIME`, `CAP_NET_ADMIN` and `CAP_NET_BIND_SERVICE` only on broad-unit commands. Note that §5.2 lists `ProtectClock=yes` for the broad unit too, which removes `CAP_SYS_TIME` there as well; that is a §5.2 decision;
+- routing at the gate: `priv_pkg_*` and broad commands' `priv_exec` go to `broad_socket`, which the gate cannot tell from the request today;
+- e2e for the broad unit: network available, writes outside the core unit's paths, the apt ops;
+- the example privileged policy;
+- the power-command finding above.
+
+**Fuzzing (60 s each, golang container, no crashers):** FUZZRESULTS.
+
+**Alternatives rejected:**
+- Forwarding the principal in a new request field (a wire change), or reading it from the peer's `/proc/<pid>/cmdline` (racy).
+- A top-level scalar `sandbox: best-effort`.
+- Generating unit files with quoting for unusual paths; refusing them is simpler to audit.
+- A backup hook outside fsx: it could not use fsx's verified descriptors.
+- `StateDirectory=` for the backup store: §5.1 names `ReadWritePaths=`.
+- Changing the local container recipe (`--cgroupns=host`, Podman).
+
+**Deferred / follow-ups:**
+- S1d, as above.
+- S4c: the `shell_priv_*` tools and previews for write-class privileged ops.
+- The four `systemd-analyze security` items above.
+- ABI 9 socket rules: no runner has ABI 9 yet.
+
+**Versions:**
+- **Go:** 1.27.1, the newest stable per go.dev; `go get -u` changed nothing.
+- **Direct modules (unchanged):** `github.com/landlock-lsm/go-landlock` v0.10.1, `github.com/modelcontextprotocol/go-sdk` v1.8.0, `go.yaml.in/yaml/v3` v3.0.5, `golang.org/x/crypto` v0.57.0, `golang.org/x/sys` v0.48.0. Indirect modules are unchanged too.
+- **Dependencies added:** none. The helper uses the standard library, including `archive/tar`, and existing modules.
+- **Tools:** golangci-lint v2.14.0, govulncheck v1.8.0, actionlint v1.7.12 (a session check; its label list predates `ubuntu-26.04`).
+- **Actions (unchanged, newest):** checkout v7.0.1, setup-go v7.0.0.
+- **Target components:** systemd 257.13 and polkit 126 (local Debian 13 image); runner as above.
