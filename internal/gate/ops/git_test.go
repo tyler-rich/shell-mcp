@@ -389,7 +389,7 @@ func orphanGits(t *testing.T) []int {
 		if err != nil {
 			continue
 		}
-		b, err := os.ReadFile("/proc/" + e.Name() + "/stat") //nolint:gosec // G304: a numeric /proc entry
+		b, err := os.ReadFile("/proc/" + e.Name() + "/stat")
 		if err != nil {
 			continue
 		}

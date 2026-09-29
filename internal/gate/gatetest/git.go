@@ -25,7 +25,10 @@ const GitBin = "/usr/bin/git"
 // and system configuration.
 func Git(t testing.TB, dir string, args ...string) string {
 	t.Helper()
-	setup := []string{"-c", "user.name=Example", "-c", "user.email=dev@example.test", "-c", "init.defaultBranch=main", "-c", "protocol.file.allow=always"}
+	// No automatic maintenance: setup commits and pushes must not leave
+	// detached git processes that a test could mistake for the gate's.
+	setup := []string{"-c", "user.name=Example", "-c", "user.email=dev@example.test", "-c", "init.defaultBranch=main",
+		"-c", "protocol.file.allow=always", "-c", "maintenance.auto=false", "-c", "gc.auto=0"}
 	cmd := exec.CommandContext(t.Context(), GitBin, append(setup, args...)...) //nolint:gosec // G204: test setup running the fixed git binary
 	cmd.Dir = dir
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + dir, "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "LC_ALL=C.UTF-8"}
@@ -86,6 +89,11 @@ func (g *GitServer) Seed(t testing.TB, name string, files map[string]string) str
 	Git(t, work, "add", "-A")
 	Git(t, work, "commit", "-q", "-m", "initial")
 	Git(t, g.Root, "clone", "-q", "--bare", work, name)
+	// Pushes run receive-pack in the bare repository, which does not see
+	// the pusher's -c flags and would start its own detached maintenance.
+	for _, kv := range [][2]string{{"receive.autogc", "false"}, {"maintenance.auto", "false"}, {"gc.auto", "0"}} {
+		Git(t, filepath.Join(g.Root, name), "config", kv[0], kv[1])
+	}
 	Git(t, work, "remote", "add", "origin", filepath.Join(g.Root, name))
 	return work
 }

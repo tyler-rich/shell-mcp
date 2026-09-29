@@ -25,7 +25,8 @@ import (
 //	git -C <repo> --no-pager --no-optional-locks -c core.fsmonitor=false
 //	    -c core.hooksPath=/dev/null -c core.pager=cat -c core.sshCommand=/bin/false
 //	    -c credential.helper= -c protocol.file.allow=never -c protocol.ext.allow=never
-//	    -c safe.directory=<repo> <subcommand> …
+//	    -c safe.directory=<repo> -c maintenance.auto=false -c gc.auto=0
+//	    -c gc.autoDetach=false -c core.ignorecase=false <subcommand> …
 //
 // with GIT_CONFIG_NOSYSTEM=1, GIT_CONFIG_GLOBAL=/dev/null, GIT_DIR=<repo>/.git
 // and GIT_WORK_TREE=<repo> added to the gate's fixed environment (nothing
@@ -53,7 +54,14 @@ func GitArgs(repo, caFile string, sub ...string) []string {
 		"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.pager=cat",
 		"-c", "core.sshCommand=/bin/false", "-c", "credential.helper=",
 		"-c", "protocol.file.allow=never", "-c", "protocol.ext.allow=never",
-		"-c", "safe.directory=" + repo}
+		"-c", "safe.directory=" + repo,
+		// No automatic maintenance or gc: git would otherwise start
+		// `git maintenance run --auto --detach` after a pull, which
+		// daemonizes (setsid) out of the gate's process group and outlives
+		// the request. Case sensitivity is pinned: a repo-local
+		// core.ignorecase=true would hide untracked files from status and
+		// clean on a case-sensitive filesystem.
+		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "gc.autoDetach=false", "-c", "core.ignorecase=false"}
 	if caFile != "" {
 		a = append(a, "-c", "http.sslCAInfo="+caFile)
 	}
