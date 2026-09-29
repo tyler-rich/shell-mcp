@@ -55,7 +55,7 @@ func (s *server) forward() *protocol.Response {
 	if err != nil {
 		return s.errResp(errf(protocol.CodeInternal, "request could not be encoded"))
 	}
-	if _, err := conn.Write(append(line, '\n')); err != nil {
+	if _, err = conn.Write(append(line, '\n')); err != nil {
 		return s.forwardErr(err)
 	}
 	resp, err := protocol.DecodeResponse(conn)

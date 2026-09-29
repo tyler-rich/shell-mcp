@@ -17,7 +17,7 @@ import (
 
 // testEnv is an invented host: a secure temp dir with a policy, a helper
 // binary and fake user and group databases.
-func testEnv(t *testing.T, y string) (*loadEnv, string) {
+func testEnv(t *testing.T, y string) (env *loadEnv, policyPath string) {
 	t.Helper()
 	d := gatetest.SecureDir(t)
 	exe := filepath.Join(d, "libexec", "shell-mcp-privd")
@@ -26,7 +26,7 @@ func testEnv(t *testing.T, y string) (*loadEnv, string) {
 	gatetest.Mkdir(t, filepath.Join(d, "etc", "example-app"), 0o755)
 	p := filepath.Join(d, "etc", "shell-mcp", "privileged.yaml")
 	gatetest.WriteFile(t, p, strings.ReplaceAll(y, "{D}", d), 0o600)
-	env := &loadEnv{
+	env = &loadEnv{
 		trust:         gatetest.Trust(),
 		executable:    exe,
 		systemBinDirs: []string{filepath.Join(d, "sysbin")},

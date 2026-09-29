@@ -44,7 +44,11 @@ echo "e2e: built $(ls $out | tr "\n" " ")"'
 
 # --- Start the systemd container ----------------------------------------------
 docker build -q -t "$image" -f "$here/Dockerfile.systemd" "$here" >/dev/null
-trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
+if [[ -n "${E2E_KEEP:-}" ]]; then
+	echo "e2e: keeping container $name (E2E_KEEP is set); remove it with: docker rm -f $name" >&2
+else
+	trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
+fi
 # CLAUDE.md cgroup exception (the same recipe as scripts/probe/systemd.sh):
 # no --privileged, no added capabilities, no host path mounted; the image is
 # built from this repository on a digest-pinned base. systemd must create
@@ -86,8 +90,22 @@ if ! docker exec "$name" systemd-run --wait --quiet -p ProtectSystem=strict -p P
 fi
 
 docker exec -e E2E_BIN=/opt/e2e-bin -e E2E_LANDLOCK="$landlock" "$name" bash /opt/e2e-bin/setup.sh
+# What this container can run. On Docker Desktop (cgroupfs driver) this
+# recipe leaves the container's PID 1 at "0::/../../init.scope", outside its
+# own cgroup namespace; journald then fails ("Failed to acquire cgroup root
+# path"), and so do polkitd and every unit that logs to the journal, the
+# helper included. The maintainer kept the recipe unchanged: here only the
+# tests that need neither journald nor polkit run, and the runner-host job
+# ("e2e-host", on a VM's own systemd) is the authoritative end-to-end proof.
+# Where journald works, everything runs.
+run_args=("$@")
+if ! docker exec "$name" systemctl is-active --quiet systemd-journald.service; then
+	echo "e2e: journald is not running in this container (cgroup namespace limitation, see local.sh);" >&2
+	echo "e2e: running only the tests that need neither journald nor polkit; the runner-host job runs all of them." >&2
+	run_args=(-test.run '^(TestUnitsVerify|TestSecurityExposure|TestSocketPermissions)$' "$@")
+fi
 code=0
 docker exec -e E2E_BIN=/opt/e2e-bin -e E2E_LANDLOCK="$landlock" -e E2E_SECURITY_MAX="${E2E_SECURITY_MAX:-}" \
-	"$name" /opt/e2e-bin/e2e.test -test.v -test.count=1 "$@" || code=$?
+	"$name" /opt/e2e-bin/e2e.test -test.v -test.count=1 "${run_args[@]}" || code=$?
 docker exec "$name" systemd-analyze security --no-pager shell-mcp-privd@.service | tail -n 3 || true
 exit "$code"
