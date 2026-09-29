@@ -209,3 +209,21 @@ func TestCopyMoveDelete(t *testing.T) {
 		t.Fatal("a refused delete removed something")
 	}
 }
+
+// A new file's or directory's default mode (0640, 0750) is capped by
+// modes.max, like a requested one; an existing file keeps its mode.
+func TestDefaultModesWithinMask(t *testing.T) {
+	f := newFixture(t, func(_ *fixture, s *string) { *s = strings.Replace(*s, `max: "0755"`, `max: "0700"`, 1) })
+	p := filepath.Join(f.write, "new.conf")
+	f.ok("priv_write_file", m{"path": p, "content_b64": b64("x")}, nil)
+	d := filepath.Join(f.write, "newdir")
+	f.ok("priv_mkdir", m{"path": d}, nil)
+	if modeOf(t, p) != 0o600 || modeOf(t, d) != 0o700 {
+		t.Fatalf("defaults %04o %04o, want 0600 0700", modeOf(t, p), modeOf(t, d))
+	}
+	// The existing 0640 file keeps its mode on overwrite.
+	f.ok("priv_write_file", m{"path": filepath.Join(f.write, "app.conf"), "content_b64": b64("y")}, nil)
+	if modeOf(t, filepath.Join(f.write, "app.conf")) != 0o640 {
+		t.Fatalf("existing mode changed to %04o", modeOf(t, filepath.Join(f.write, "app.conf")))
+	}
+}
