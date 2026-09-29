@@ -166,7 +166,7 @@ func (f *fixture) serveRaw(in string) (response, *orderReader) {
 func (f *fixture) call(op string, args any) response {
 	f.t.Helper()
 	a, _ := json.Marshal(args)
-	resp, _ := f.serveRaw(fmt.Sprintf(`{"v":1,"id":"req-1","op":%q,"args":%s,"timeout_ms":5000}`+"\n", op, a))
+	resp, _ := f.serveRaw(fmt.Sprintf(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":%q,"args":%s,"timeout_ms":5000}`+"\n", op, a))
 	return resp
 }
 
@@ -211,7 +211,7 @@ func TestHelloAndGateInfo(t *testing.T) {
 		} `json:"privileged"`
 	}
 	r := f.ok("hello", m{}, &hello)
-	if r.V != 1 || r.ID != "req-1" || r.Gate == nil || r.Gate.Version != "test" || r.Gate.Principal != "readonly-key" ||
+	if r.V != 1 || r.ID != "0b5c0000-0000-4000-8000-000000000001" || r.Gate == nil || r.Gate.Version != "test" || r.Gate.Principal != "readonly-key" ||
 		r.Gate.MaxTier != "destructive" || len(r.Gate.PolicySHA256) != 64 || r.Warnings == nil {
 		t.Fatalf("envelope %+v gate %+v", r, r.Gate)
 	}
@@ -232,14 +232,14 @@ func TestHelloAndGateInfo(t *testing.T) {
 
 func TestSandboxBeforeRequest(t *testing.T) {
 	f := newFixture(t, "read")
-	_, rd := f.serveRaw(`{"v":1,"id":"a","op":"hello"}` + "\n")
+	_, rd := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}` + "\n")
 	if !rd.read || rd.readFirst || f.sandboxCalls != 1 {
 		t.Fatalf("request read before the sandbox (read=%v readFirst=%v calls=%d)", rd.read, rd.readFirst, f.sandboxCalls)
 	}
 	f.opts.ApplySandbox = func(*policy.Policy) (sandbox.Report, error) {
 		return sandbox.Report{}, sandbox.ErrUnavailable
 	}
-	resp, rd := f.serveRaw(`{"v":1,"id":"a","op":"hello"}` + "\n")
+	resp, rd := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}` + "\n")
 	if resp.OK || resp.Error.Code != "sandbox_unavailable" || rd.read {
 		t.Fatalf("sandbox failure: %+v read=%v", resp.Error, rd.read)
 	}
@@ -265,7 +265,7 @@ func TestInstallFailuresNeverReadRequest(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t, "read")
 			mutate(f)
-			resp, rd := f.serveRaw(`{"v":1,"id":"a","op":"hello"}` + "\n")
+			resp, rd := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}` + "\n")
 			if resp.OK || resp.Error.Code != "install_insecure" || rd.read || f.sandboxCalls != 0 {
 				t.Fatalf("%+v read=%v sandbox=%d", resp.Error, rd.read, f.sandboxCalls)
 			}
@@ -283,12 +283,12 @@ func TestInstallFailuresNeverReadRequest(t *testing.T) {
 func TestDecodeErrors(t *testing.T) {
 	f := newFixture(t, "read")
 	for in, code := range map[string]string{
-		`{"v":1,"id":"a","op":"hello","op":"write_file"}` + "\n":            "bad_request",
-		`{"v":1,"id":"a","op":"hello","x":1}` + "\n":                        "bad_request",
-		`{"v":2,"id":"a","op":"hello"}` + "\n":                              "protocol_mismatch",
-		`{"v":1,"id":"a","op":"hello"} {}` + "\n":                           "bad_request",
-		`{"v":1,"id":"a","op":"hello","args":{"x":1}}` + "\n":               "bad_request",
-		`{"v":1,"id":"a","op":"hello"}` + strings.Repeat(" ", 2<<20) + "\n": "too_large",
+		`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello","op":"write_file"}` + "\n":            "bad_request",
+		`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello","x":1}` + "\n":                        "bad_request",
+		`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}` + "\n":                              "protocol_mismatch",
+		`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"} {}` + "\n":                           "bad_request",
+		`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello","args":{"x":1}}` + "\n":               "bad_request",
+		`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}` + strings.Repeat(" ", 2<<20) + "\n": "too_large",
 	} {
 		resp, _ := f.serveRaw(in)
 		if resp.OK || resp.Error.Code != code {
@@ -441,7 +441,7 @@ func TestExec(t *testing.T) {
 
 func TestExecTimeout(t *testing.T) {
 	f := newFixture(t, "read")
-	resp, _ := f.serveRaw(`{"v":1,"id":"a","op":"exec","args":{"command_id":"probe-io","args":["sleep","5s"]},"timeout_ms":300}` + "\n")
+	resp, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"exec","args":{"command_id":"probe-io","args":["sleep","5s"]},"timeout_ms":300}` + "\n")
 	var d execData
 	if !resp.OK || json.Unmarshal(resp.Data, &d) != nil || !d.TimedOut || d.Signal == nil {
 		t.Fatalf("timeout %+v %s", resp.Error, resp.Data)

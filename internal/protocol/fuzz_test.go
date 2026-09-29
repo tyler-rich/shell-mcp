@@ -10,11 +10,11 @@ import (
 // every documented constraint; re-encoding an accepted request decodes to
 // the same request; duplicate keys are never accepted.
 func FuzzDecodeRequest(f *testing.F) {
-	f.Add([]byte(`{"v":1,"id":"a","op":"hello"}` + "\n"))
-	f.Add([]byte(`{"v":1,"id":"0b5c-1","op":"read_file","args":{"path":"/srv/app/x","max_bytes":10},"timeout_ms":3000}`))
-	f.Add([]byte(`{"v":1,"id":"a","op":"hello","op":"write_file"}`))
-	f.Add([]byte(`{"v":2,"id":"a","op":"hello","x":1}`))
-	f.Add([]byte(`{"v":1,"id":"a","op":"exec","args":{"args":["a","b"],"a":{"b":{"c":[1,2,{"d":null}]}}}}`))
+	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}` + "\n"))
+	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"read_file","args":{"path":"/srv/app/x","max_bytes":10},"timeout_ms":3000}`))
+	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello","op":"write_file"}`))
+	f.Add([]byte(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello","x":1}`))
+	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"exec","args":{"args":["a","b"],"a":{"b":{"c":[1,2,{"d":null}]}}}}`))
 	f.Fuzz(func(t *testing.T, in []byte) {
 		req, err := DecodeRequest(bytes.NewReader(in))
 		if err != nil {

@@ -43,20 +43,20 @@ func TestDecodeRequestValid(t *testing.T) {
 
 func TestDecodeRequestRejects(t *testing.T) {
 	cases := map[string]string{
-		"duplicate op":          `{"v":1,"id":"a","op":"hello","op":"write_file"}`,
-		"duplicate nested key":  `{"v":1,"id":"a","op":"read_file","args":{"path":"/a","path":"/b"}}`,
-		"unknown field":         `{"v":1,"id":"a","op":"hello","extra":1}`,
-		"trailing data":         `{"v":1,"id":"a","op":"hello"} x`,
-		"second value":          `{"v":1,"id":"a","op":"hello"}{"v":1,"id":"b","op":"hello"}`,
+		"duplicate op":          `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello","op":"write_file"}`,
+		"duplicate nested key":  `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"read_file","args":{"path":"/a","path":"/b"}}`,
+		"unknown field":         `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello","extra":1}`,
+		"trailing data":         `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"} x`,
+		"second value":          `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}`,
 		"empty":                 ``,
 		"not an object":         `[1]`,
 		"invalid utf8":          "{\"v\":1,\"id\":\"a\",\"op\":\"hel\xfflo\"}",
-		"case-insensitive name": `{"V":1,"id":"a","op":"hello"}`,
+		"case-insensitive name": `{"V":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}`,
 		"bad id":                `{"v":1,"id":"a b","op":"hello"}`,
-		"long id":               `{"v":1,"id":"` + strings.Repeat("a", MaxIDBytes+1) + `","op":"hello"}`,
-		"missing op":            `{"v":1,"id":"a"}`,
-		"args not object":       `{"v":1,"id":"a","op":"hello","args":[1]}`,
-		"negative timeout":      `{"v":1,"id":"a","op":"hello","timeout_ms":-1}`,
+		"long id":               `{"v":1,"id":"` + strings.Repeat("a", IDBytes+1) + `","op":"hello"}`,
+		"missing op":            `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001"}`,
+		"args not object":       `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello","args":[1]}`,
+		"negative timeout":      `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello","timeout_ms":-1}`,
 	}
 	for name, in := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -69,9 +69,9 @@ func TestDecodeRequestRejects(t *testing.T) {
 
 func TestDecodeRequestVersionMismatch(t *testing.T) {
 	for _, in := range []string{
-		`{"v":2,"id":"a","op":"hello"}`,
-		`{"v":2,"id":"a","op":"hello","new_field":true}`, // a newer protocol's field must not mask the mismatch
-		`{"id":"a","op":"hello"}`,
+		`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}`,
+		`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello","new_field":true}`, // a newer protocol's field must not mask the mismatch
+		`{"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}`,
 	} {
 		if de := decodeErr(t, in); de.Code != CodeProtocolMismatch {
 			t.Errorf("%s: code %q, want %q", in, de.Code, CodeProtocolMismatch)
@@ -81,11 +81,11 @@ func TestDecodeRequestVersionMismatch(t *testing.T) {
 
 func TestDecodeRequestTooLarge(t *testing.T) {
 	pad := strings.Repeat(" ", MaxRequestBytes)
-	if de := decodeErr(t, `{"v":1,"id":"a","op":"hello"}`+pad); de.Code != CodeTooLarge {
+	if de := decodeErr(t, `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}`+pad); de.Code != CodeTooLarge {
 		t.Fatalf("code %q", de.Code)
 	}
 	// Exactly at the limit is accepted.
-	body := `{"v":1,"id":"a","op":"hello"}`
+	body := `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}`
 	if _, err := DecodeRequest(strings.NewReader(body + strings.Repeat(" ", MaxRequestBytes-len(body)))); err != nil {
 		t.Fatalf("at limit: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestDecodeRequestBoundedRead(t *testing.T) {
 func TestDecodeRequestStopsAtNewline(t *testing.T) {
 	pr, pw := io.Pipe()
 	defer func() { _ = pw.Close() }()
-	go func() { _, _ = pw.Write([]byte(`{"v":1,"id":"a","op":"hello"}` + "\n")) }()
+	go func() { _, _ = pw.Write([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}` + "\n")) }()
 	done := make(chan error, 1)
 	go func() {
 		_, err := DecodeRequest(pr)
@@ -241,3 +241,9 @@ func TestDecodeRequestIDIsUUIDv4(t *testing.T) {
 			}
 		})
 	}}
+
+func TestIDBytes(t *testing.T) {
+	if IDBytes != 36 {
+		t.Fatalf("IDBytes = %d, want 36", IDBytes)
+	}
+}

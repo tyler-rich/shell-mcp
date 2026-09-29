@@ -105,6 +105,7 @@ One request per SSH session, UTF-8 JSON, newline-terminated, on stdin. One respo
 ```
 
 - `v` must equal the gate's protocol version, else `{"ok":false,"error":{"code":"protocol_mismatch"}}`.
+- `id` must be a UUID v4 in lowercase canonical form (`xxxxxxxx-xxxx-4xxx-[89ab]xxx-xxxxxxxxxxxx`, exactly 36 characters); anything else is `bad_request`. It is echoed in the response and written into the gate's and the helper's audit lines, which join on it.
 - `op` must be a known op; `args` are op-specific and strictly decoded (unknown fields are errors).
 - `timeout_ms` is clamped to the policy's `limits.max_timeout_s`.
 - Request size ≤ 2 MiB (write content is carried as base64 in `args.content_b64`, ≤ `limits.max_write_bytes` after decoding).

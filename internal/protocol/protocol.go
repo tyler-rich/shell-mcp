@@ -23,8 +23,11 @@ const Hello = "shell-mcp-gate/1"
 const (
 	MaxRequestBytes  = 2 << 20
 	MaxResponseBytes = 4 << 20
-	// MaxIDBytes bounds the request id echoed back in the response.
-	MaxIDBytes = 64
+	// IDBytes is the length of a request id: a UUID v4 in lowercase
+	// canonical form (ARCHITECTURE §4.1). The id is echoed in the response
+	// and written into the gate's and the helper's audit lines, which join
+	// on it, so nothing else is accepted.
+	IDBytes = 36
 )
 
 // Gate error codes (closed set, ARCHITECTURE §4.2).
@@ -200,7 +203,7 @@ func DecodeRequest(r io.Reader) (*Request, error) {
 		return nil, &DecodeError{CodeProtocolMismatch, "unsupported protocol version"}
 	}
 	if !validID(req.ID) {
-		return nil, &DecodeError{CodeBadRequest, "id must be 1-64 characters of [A-Za-z0-9._-]"}
+		return nil, &DecodeError{CodeBadRequest, "id must be a lowercase UUID v4"}
 	}
 	if !validOp(req.Op) {
 		return nil, &DecodeError{CodeBadRequest, "op is missing or malformed"}
@@ -244,14 +247,32 @@ func readLine(r io.Reader, limit int) ([]byte, error) {
 	return buf, nil
 }
 
+// validID accepts exactly a lowercase canonical UUID v4:
+// xxxxxxxx-xxxx-4xxx-Nxxx-xxxxxxxxxxxx with lowercase hex digits, version
+// nibble 4 and variant nibble N in 8, 9, a, b (RFC 9562 §4.1, §5.4).
 func validID(s string) bool {
-	if s == "" || len(s) > MaxIDBytes {
+	if len(s) != IDBytes {
 		return false
 	}
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if !isIDChar(c) {
-			return false
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		case 14:
+			if c != '4' {
+				return false
+			}
+		case 19:
+			if c != '8' && c != '9' && c != 'a' && c != 'b' {
+				return false
+			}
+		default:
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+				return false
+			}
 		}
 	}
 	return true
@@ -309,8 +330,4 @@ var ErrResponseTooLarge = errors.New("response exceeds 4 MiB")
 func Marshal(v any) (jsontext.Value, error) {
 	out, err := json.Marshal(v, marshalOpts)
 	return jsontext.Value(out), err
-}
-
-func isIDChar(c byte) bool {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-'
 }
