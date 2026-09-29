@@ -117,7 +117,9 @@ func TestDecodeRequestBoundedRead(t *testing.T) {
 func TestDecodeRequestStopsAtNewline(t *testing.T) {
 	pr, pw := io.Pipe()
 	defer func() { _ = pw.Close() }()
-	go func() { _, _ = pw.Write([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}` + "\n")) }()
+	go func() {
+		_, _ = pw.Write([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}` + "\n"))
+	}()
 	done := make(chan error, 1)
 	go func() {
 		_, err := DecodeRequest(pr)
@@ -240,7 +242,8 @@ func TestDecodeRequestIDIsUUIDv4(t *testing.T) {
 				t.Fatalf("code %q, want %q", de.Code, CodeBadRequest)
 			}
 		})
-	}}
+	}
+}
 
 func TestIDBytes(t *testing.T) {
 	if IDBytes != 36 {

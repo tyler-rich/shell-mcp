@@ -148,7 +148,7 @@ func (s *server) audit(resp *protocol.Response, d time.Duration) {
 	r := &audit.Record{Principal: s.gate.Principal, Client: audit.Client(s.o.SSHConnection),
 		Outcome: "ok", DurationMS: d.Milliseconds(), Args: map[string]any{}}
 	if s.req != nil {
-		r.Op, r.Args = s.req.Op, audit.SanitizeArgs(s.req.Op, s.req.Args)
+		r.ID, r.Op, r.Args = s.req.ID, s.req.Op, audit.SanitizeArgs(s.req.Op, s.req.Args)
 	}
 	if resp.Error != nil {
 		r.Outcome = resp.Error.Code

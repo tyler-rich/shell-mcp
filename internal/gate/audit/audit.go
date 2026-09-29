@@ -36,6 +36,10 @@ const (
 
 // Record is one request's audit data.
 type Record struct {
+	// ID is the request id (a validated lowercase UUID v4; empty when the
+	// request was refused before it was read). It joins this line with the
+	// privileged helper's line for the same forwarded request.
+	ID         string
 	Principal  string
 	Client     string
 	Op         string
@@ -59,6 +63,7 @@ func truncate(s string) string {
 }
 
 type line struct {
+	ID         string         `json:"id"`
 	Principal  string         `json:"principal"`
 	Client     string         `json:"client"`
 	Op         string         `json:"op"`
@@ -77,7 +82,7 @@ func Line(r *Record) string {
 		args[truncate(k)] = v
 	}
 	b, err := json.Marshal(line{
-		Principal: truncate(r.Principal), Client: truncate(r.Client), Op: truncate(r.Op),
+		ID: truncate(r.ID), Principal: truncate(r.Principal), Client: truncate(r.Client), Op: truncate(r.Op),
 		Args: args, Outcome: truncate(r.Outcome), DurationMS: r.DurationMS,
 	}, json.Deterministic(true), jsontext.AllowInvalidUTF8(true))
 	if err != nil {
