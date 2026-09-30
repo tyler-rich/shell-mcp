@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -28,9 +29,22 @@ type fakeHelper struct {
 	dialed int
 }
 
+// sockDir is a short-named private directory for a test's Unix sockets:
+// t.TempDir embeds the test name, and a long subtest name under a long
+// TMPDIR would pass the 108-byte sun_path limit (unix(7)).
+func sockDir(t *testing.T) string {
+	t.Helper()
+	d, err := os.MkdirTemp("", "s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(d) })
+	return d
+}
+
 func startHelper(t *testing.T, f *fixture, answer func(req string, c net.Conn)) *fakeHelper {
 	t.Helper()
-	h := &fakeHelper{path: filepath.Join(t.TempDir(), "privd.sock")}
+	h := &fakeHelper{path: filepath.Join(sockDir(t), "privd.sock")}
 	l, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", h.path)
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +183,7 @@ func TestForwardErrors(t *testing.T) {
 func TestForwardRefusedWithRequestUnread(t *testing.T) {
 	f := newFixture(t, "destructive")
 	startHelper(t, f, echoID(""))
-	p := filepath.Join(t.TempDir(), "refusing.sock")
+	p := filepath.Join(sockDir(t), "refusing.sock")
 	l, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", p)
 	if err != nil {
 		t.Fatal(err)
@@ -218,7 +232,7 @@ var selfCheckCodes = []string{"helper_install_insecure", "helper_policy_invalid"
 // waits until the request is queued, so its close resets the connection.
 func answerUnread(t *testing.T, f *fixture, line string, early bool) {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "answering.sock")
+	p := filepath.Join(sockDir(t), "answering.sock")
 	l, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", p)
 	if err != nil {
 		t.Fatal(err)
