@@ -67,6 +67,10 @@ type Rules struct {
 	UnixSocketDirs []string // connect to pathname sockets beneath (ABI >= 9)
 	SyslogSocket   string   // the audit socket; its real directory is granted
 	TCPConnect     []uint16
+	// UnscopedSignals leaves signals unscoped from ABI 8 (abstract Unix
+	// sockets stay scoped). Only the privileged helper sets it, when a core-
+	// unit command declares CAP_KILL (PRIVILEGED §5.1); the gate never does.
+	UnscopedSignals bool
 }
 
 // Enforcement is the per-class status.
@@ -178,13 +182,20 @@ func KernelABI() int {
 // With `landlock: required` and abi < RequiredMinABI it returns
 // ErrUnavailable. Plan changes nothing.
 func Plan(p *policy.Policy, abi int) (Report, error) {
+	rules := Compute(p)
+	return PlanRules(p.Sandbox.Landlock, &rules, abi)
+}
+
+// PlanRules is Plan for a ruleset computed elsewhere (the privileged
+// helper computes its own from the privileged policy).
+func PlanRules(mode policy.LandlockMode, rules *Rules, abi int) (Report, error) {
 	eff := min(abi, ABIHighest)
 	r := Report{
-		Mode:            string(p.Sandbox.Landlock),
+		Mode:            string(mode),
 		KernelABI:       abi,
 		EffectiveABI:    eff,
 		RequiredMinABI:  RequiredMinABI,
-		TCPConnectPorts: append([]uint16{}, p.Sandbox.TCPConnectPorts...),
+		TCPConnectPorts: append([]uint16{}, rules.TCPConnect...),
 		ExtraFiles:      []string{"/dev/null (read, write, truncate)", "/dev/urandom (read)"},
 		MPTCP:           MPTCPStatus,
 		Enforced: Enforcement{
@@ -208,7 +219,7 @@ func Plan(p *policy.Policy, abi int) (Report, error) {
 	} else {
 		r.UnixSocketControl = "file permissions and the helper's peer-UID check (kernel ABI below 9)"
 	}
-	if p.Sandbox.Landlock == policy.LandlockRequired && eff < RequiredMinABI {
+	if mode == policy.LandlockRequired && eff < RequiredMinABI {
 		return r, fmt.Errorf("%w: kernel Landlock ABI %d, policy needs %d (set sandbox.landlock: best-effort to run with reduced enforcement)",
 			ErrUnavailable, abi, RequiredMinABI)
 	}
@@ -252,7 +263,7 @@ func handledFS(abi int) landlock.AccessFSSet {
 // build returns the config and rules for exactly this ABI. UDP (ABI 10) is
 // deliberately not handled: POLICY §4a defines TCP rules only, and handling
 // UDP would deny DNS to every command.
-func build(p *policy.Policy, abi int) (landlock.Config, []landlock.Rule, error) {
+func build(r *Rules, abi int) (landlock.Config, []landlock.Rule, error) {
 	fs := handledFS(abi)
 	var net landlock.AccessNetSet
 	if abi >= ABINet {
@@ -260,13 +271,15 @@ func build(p *policy.Policy, abi int) (landlock.Config, []landlock.Rule, error) 
 	}
 	var scoped landlock.ScopedSet
 	if abi >= ABIScope {
-		scoped = llsys.ScopeAbstractUnixSocket | llsys.ScopeSignal
+		scoped = llsys.ScopeAbstractUnixSocket
+		if !r.UnscopedSignals {
+			scoped |= llsys.ScopeSignal
+		}
 	}
 	cfg, err := landlock.NewConfig(fs, net, scoped)
 	if err != nil {
 		return landlock.Config{}, nil, err
 	}
-	r := Compute(p)
 	var rules []landlock.Rule
 	add := func(access landlock.AccessFSSet, paths ...string) {
 		for _, pth := range paths {
@@ -290,7 +303,7 @@ func build(p *policy.Policy, abi int) (landlock.Config, []landlock.Rule, error) 
 	add(rightsDevNull, r.DevNull)
 	add(rightsURandom, r.DevURandom)
 	add(rightsUnixSock, r.UnixSocketDirs...)
-	if d, ok := SocketDir(r.SyslogSocket); ok {
+	if d, ok := SocketDir(r.SyslogSocket); r.SyslogSocket != "" && ok {
 		add(rightsUnixSock, d) // the audit line (ABI >= 9 governs it)
 	}
 	if abi >= ABINet {
@@ -310,8 +323,17 @@ func build(p *policy.Policy, abi int) (landlock.Config, []landlock.Rule, error) 
 // thread: on ABI < 8 with psx (landlock_restrict_self on each thread), on
 // ABI >= 8 with LANDLOCK_RESTRICT_SELF_TSYNC.
 func Apply(p *policy.Policy) (Report, error) {
+	rules := Compute(p)
+	return ApplyRules(p.Sandbox.Landlock, &rules)
+}
+
+// ApplyRules is Apply for a ruleset computed elsewhere: the privileged
+// helper applies one computed from its own policy (no TCP rule, so every
+// TCP bind and connect is denied from ABI 4), with the same all-thread
+// mechanism, MPTCP filter and verification.
+func ApplyRules(mode policy.LandlockMode, rules *Rules) (Report, error) {
 	abi := KernelABI()
-	r, err := Plan(p, abi)
+	r, err := PlanRules(mode, rules, abi)
 	r.KernelABI = rawKernelABI()
 	if err != nil {
 		return r, err
@@ -320,18 +342,18 @@ func Apply(p *policy.Policy) (Report, error) {
 		return r, fmt.Errorf("%w: prctl(PR_SET_NO_NEW_PRIVS): %w", ErrUnavailable, err)
 	}
 	if abi >= 1 {
-		cfg, rules, err := build(p, abi)
+		cfg, ll, err := build(rules, abi)
 		if err != nil {
 			return r, fmt.Errorf("%w: %w", ErrUnavailable, err)
 		}
-		if err := cfg.Restrict(rules...); err != nil {
+		if err := cfg.Restrict(ll...); err != nil {
 			return r, fmt.Errorf("%w: %w", ErrUnavailable, err)
 		}
 		r.Applied = true
 	}
 	// Landlock cannot govern MPTCP; make it unavailable (seccomp.go).
 	if err := applySeccomp(); err != nil {
-		if p.Sandbox.Landlock == policy.LandlockRequired {
+		if mode == policy.LandlockRequired {
 			return r, fmt.Errorf("%w: %w", ErrUnavailable, err)
 		}
 		r.MPTCP = "not blocked: seccomp is unavailable"

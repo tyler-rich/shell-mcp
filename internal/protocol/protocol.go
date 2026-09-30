@@ -8,7 +8,11 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"io"
+	"slices"
+	"strings"
+	"syscall"
 )
 
 // Version is the wire protocol version. A request with any other "v" is
@@ -23,8 +27,11 @@ const Hello = "shell-mcp-gate/1"
 const (
 	MaxRequestBytes  = 2 << 20
 	MaxResponseBytes = 4 << 20
-	// MaxIDBytes bounds the request id echoed back in the response.
-	MaxIDBytes = 64
+	// IDBytes is the length of a request id: a UUID v4 in lowercase
+	// canonical form (ARCHITECTURE §4.1). The id is echoed in the response
+	// and written into the gate's and the helper's audit lines, which join
+	// on it, so nothing else is accepted.
+	IDBytes = 36
 )
 
 // Gate error codes (closed set, ARCHITECTURE §4.2).
@@ -54,6 +61,28 @@ const (
 	CodeInternal           = "internal"
 )
 
+// The privileged helper's self-check codes (PRIVILEGED §7): answered only
+// to a peer that passed the SO_PEERCRED check, before the request is read,
+// so the response has no id. The gate passes them through unchanged.
+const (
+	// CodeHelperInstallInsecure: the helper is not root under its unit, runs
+	// without NoNewPrivs, or its binary or policy file is missing, not
+	// root-owned or group/other-writable.
+	CodeHelperInstallInsecure = "helper_install_insecure"
+	// CodeHelperPolicyInvalid: the privileged policy does not parse or fails
+	// validation.
+	CodeHelperPolicyInvalid = "helper_policy_invalid"
+	// CodeHelperPolicyMismatch: the policy's SHA-256 is not the one the
+	// units were generated from.
+	CodeHelperPolicyMismatch = "helper_policy_mismatch"
+	// CodeHelperClientUIDMismatch: the policy's client_uid is not the unit's
+	// SHELL_MCP_PRIVD_CLIENT_UID.
+	CodeHelperClientUIDMismatch = "helper_client_uid_mismatch"
+	// CodeHelperCapabilitiesBroad: the capability bounding set is broader
+	// than the unit declares.
+	CodeHelperCapabilitiesBroad = "helper_capabilities_broad"
+)
+
 // Codes lists every gate error code.
 var Codes = []string{
 	CodeProtocolMismatch, CodeBadRequest, CodeUnknownOp, CodeTierDenied, CodePolicyDenied,
@@ -61,6 +90,8 @@ var Codes = []string{
 	CodeTemplateMismatch, CodeNotAuthorized, CodeSandboxUnavailable, CodePrivilegedDisabled,
 	CodeHelperUnavailable, CodeHelperRefused, CodeBackupFailed, CodeExecFailed, CodeTimeout,
 	CodeVerifyFailed, CodeInstallInsecure, CodeInternal,
+	CodeHelperInstallInsecure, CodeHelperPolicyInvalid, CodeHelperPolicyMismatch,
+	CodeHelperClientUIDMismatch, CodeHelperCapabilitiesBroad,
 }
 
 // Gate operations (ARCHITECTURE §4.3).
@@ -200,7 +231,7 @@ func DecodeRequest(r io.Reader) (*Request, error) {
 		return nil, &DecodeError{CodeProtocolMismatch, "unsupported protocol version"}
 	}
 	if !validID(req.ID) {
-		return nil, &DecodeError{CodeBadRequest, "id must be 1-64 characters of [A-Za-z0-9._-]"}
+		return nil, &DecodeError{CodeBadRequest, "id must be a lowercase UUID v4"}
 	}
 	if !validOp(req.Op) {
 		return nil, &DecodeError{CodeBadRequest, "op is missing or malformed"}
@@ -238,20 +269,38 @@ func readLine(r io.Reader, limit int) ([]byte, error) {
 			return buf, nil
 		}
 		if err != nil {
-			return nil, err
+			return buf, err
 		}
 	}
 	return buf, nil
 }
 
+// validID accepts exactly a lowercase canonical UUID v4:
+// xxxxxxxx-xxxx-4xxx-Nxxx-xxxxxxxxxxxx with lowercase hex digits, version
+// nibble 4 and variant nibble N in 8, 9, a, b (RFC 9562 §4.1, §5.4).
 func validID(s string) bool {
-	if s == "" || len(s) > MaxIDBytes {
+	if len(s) != IDBytes {
 		return false
 	}
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if !isIDChar(c) {
-			return false
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		case 14:
+			if c != '4' {
+				return false
+			}
+		case 19:
+			if c != '8' && c != '9' && c != 'a' && c != 'b' {
+				return false
+			}
+		default:
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+				return false
+			}
 		}
 	}
 	return true
@@ -311,6 +360,54 @@ func Marshal(v any) (jsontext.Value, error) {
 	return jsontext.Value(out), err
 }
 
-func isIDChar(c byte) bool {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '_' || c == '-'
+// ErrNoResponse is returned by DecodeResponse when the peer closed the
+// connection without sending anything (the privileged helper's refusal).
+var ErrNoResponse = errors.New("the peer closed the connection without a response")
+
+// maxMessageBytes bounds an error message in a decoded response.
+const maxMessageBytes = 1024
+
+// DecodeResponse reads exactly one newline-terminated response (at most
+// MaxResponseBytes) and decodes it strictly: unknown fields, duplicate
+// keys, trailing data, another version, an error code outside the closed
+// set, a multi-line or oversized message, and an inconsistent ok/error pair
+// are errors. The id must be a valid request id, except on a failure
+// answered before the request was read (it is then empty). A peer that
+// closes without sending anything gives ErrNoResponse.
+func DecodeResponse(r io.Reader) (*Response, error) {
+	data, err := readLine(r, MaxResponseBytes+1)
+	switch {
+	case len(data) == 0 && errors.Is(err, syscall.ECONNRESET):
+		// A peer that closes with our request unread resets the
+		// connection: it sent nothing, as with a plain close.
+		return nil, ErrNoResponse
+	case err != nil:
+		// Wrapped, so a caller can tell a deadline from a broken peer.
+		return nil, fmt.Errorf("response could not be read: %w", err)
+	case len(data) == 0:
+		return nil, ErrNoResponse
+	case len(data) > MaxResponseBytes:
+		return nil, &DecodeError{CodeTooLarge, "response exceeds 4 MiB"}
+	}
+	var resp Response
+	if err := json.Unmarshal(data, &resp, json.RejectUnknownMembers(true)); err != nil {
+		return nil, &DecodeError{CodeBadRequest, "response is not one strict JSON object with known fields"}
+	}
+	switch {
+	case resp.V != Version:
+		return nil, &DecodeError{CodeProtocolMismatch, "unsupported protocol version"}
+	case resp.OK && resp.Error != nil, !resp.OK && resp.Error == nil:
+		return nil, &DecodeError{CodeBadRequest, "response has an inconsistent ok and error"}
+	case resp.OK && !validID(resp.ID), resp.ID != "" && !validID(resp.ID):
+		return nil, &DecodeError{CodeBadRequest, "response id is malformed"}
+	}
+	if e := resp.Error; e != nil {
+		if !slices.Contains(Codes, e.Code) {
+			return nil, &DecodeError{CodeBadRequest, "response error code is not in the closed set"}
+		}
+		if len(e.Message) > maxMessageBytes || strings.ContainsAny(e.Message, "\r\n") {
+			return nil, &DecodeError{CodeBadRequest, "response error message is not one bounded line"}
+		}
+	}
+	return &resp, nil
 }

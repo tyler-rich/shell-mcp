@@ -60,7 +60,7 @@ Python remains viable for the server alone, but one language for all three binar
 | `internal/gate/fsx` | Root selection (longest matching root), `os.Root` operations, `/proc/self/fd/N` real-path re-check, O_NOFOLLOW final component, deny matching, bounded reads, atomic writes with read-back, mode/owner preservation, setuid/setgid refusal. |
 | `internal/gate/execx` | Template matching, argv construction, scrubbed env, `SysProcAttr{Setpgid, Pdeathsig}`, rlimits, output capture with per-stream caps, timeout SIGTERM→SIGKILL on the process group, exit-code/signal reporting. |
 | `internal/gate/ops` | One file per op (§4.3). Each op declares its tier; the dispatcher refuses ops above `max_tier` before doing anything else. |
-| `internal/gate/audit` | One syslog line per request (authpriv; info on success, notice on refusal): principal, client address (`SSH_CONNECTION`), op, sanitized args (paths, units, ids, flags; an argument list only as its count), outcome, duration, as one JSON object. Never content, stdin, output or environment. One datagram to `/dev/log` with a 250 ms dial and write deadline: a missing socket or full queue never blocks the request. |
+| `internal/gate/audit` | One syslog line per request (authpriv; info on success, notice on refusal): request id, principal, client address (`SSH_CONNECTION`), op, sanitized args (paths, units, ids, flags; an argument list only as its count), outcome, duration, as one JSON object. Never content, stdin, output or environment. One datagram to `/dev/log` with a 250 ms dial and write deadline: a missing socket or full queue never blocks the request. |
 | `internal/gate/procfs`, `systemd`, `gitx`, `certs` | Bounded, fuzzed parsers for `/proc` and os-release, systemctl/journalctl arguments and output, git output and repository configuration, and certificates. |
 | `internal/gate/sandbox` | Compute the Landlock ruleset from the policy (system read/execute paths, read roots, write roots, allowed TCP connect ports, IPC scoping) and apply it with `no_new_privs` to all threads before the request is read; report the effective ABI level. |
 | `internal/template` | The argv-template engine shared by the gate and the helper (POLICY §4). |
@@ -70,10 +70,10 @@ Python remains viable for the server alone, but one language for all three binar
 
 | Package | Responsibility |
 |---|---|
-| `internal/privd/peercred` | Read `SO_PEERCRED` on the systemd-provided socket; require `uid == client_uid`. |
+| `internal/privd/peercred` | Read `SO_PEERCRED` on the systemd-provided socket; require the uid to equal the unit's `SHELL_MCP_PRIVD_CLIENT_UID`. |
 | `internal/privd/policy` | Strict privileged policy; never list (A) and acknowledge list (B); owners, mode mask, backups, commands, packages. |
-| `internal/privd/units` | Generate the core and broad socket/service units from the policy, embedding the policy SHA-256. |
-| `internal/privd/selfcheck` | uid 0, `NoNewPrivs: 1`, capability bounding set ⊆ the generated unit's, ownership, policy hash, stdin is a socket. |
+| `internal/privd/units` | Generate the core and broad socket/service units from the policy, embedding the policy SHA-256 and `client_uid`. |
+| `internal/privd/selfcheck` | Before the peer check: stdin is a socket, the unit's client uid is valid. After it: uid 0, `NoNewPrivs: 1`, ownership, policy hash and `client_uid` equal to the unit's, capability bounding set ⊆ the generated unit's. |
 | `internal/privd/ops` | Privileged read/write/mkdir/chown/chmod/copy/move/delete with backups and read-back; backup list/restore; root exec through `internal/template` and the gate's exec engine. |
 | `internal/privd/pkg` | apt: update index, install/remove allow-listed names, upgrade with `-s` simulation as the preview. |
 
@@ -82,8 +82,8 @@ Python remains viable for the server alone, but one language for all three binar
 1. **HTTP:** body ≤ 1 MiB (413) → global rate limit (429) → Host/Origin allow-list (403/421) → bearer auth (401; failures counted, 10/5 min/IP → 429 for 5 min) → SDK dispatch. Only registered tools exist.
 2. **Tool:** schema validation (SDK) → semantic validation (target exists, path absolute and clean, sizes) → for tiers in `SHELL_MCP_APPROVAL_TIERS`: no valid approval → fetch the gate preview and return `input_required` with an elicitation (preview in the message) and a bound `requestState`; valid accepted approval → continue → gate request.
 3. **SSH:** reuse or open the target connection (host key verified on every new connection) → new session → exec `shell-mcp-gate/1` (sshd ignores it and runs the forced command; the gate reads it from `SSH_ORIGINAL_COMMAND` as a protocol hello) → write request → read response → close session.
-4. **Gate:** check own install (not root, no privileged groups, policy/binary ownership) → load policy → **set `no_new_privs` and apply Landlock** → only now read and parse the request (bounded) → tier ≤ `max_tier` → op-specific validation against policy → execute → redact → respond → audit → exit. For `priv_*` ops: check `privileged.enabled` and `privileged.max_tier` → connect to the helper socket → forward the request unchanged → return the helper's response.
-5. **Helper** (privileged ops only): systemd accepts the connection and starts an instance → self-checks → peer-UID check → load privileged policy → Landlock (core unit) → read request → tier ≤ `max_tier` → validation against the privileged policy → backup → execute → verify → redact → respond → journald audit → exit.
+4. **Gate:** check own install (not root, no privileged groups, policy/binary ownership) → load policy → **set `no_new_privs` and apply Landlock** → only now read and parse the request (bounded) → tier ≤ `max_tier` → op-specific validation against policy → execute → redact → respond → audit → exit. For `priv_*` ops: check `privileged.enabled` and `privileged.max_tier` → connect to the helper socket → forward the request unchanged (the same `v`, `id`, `op`, `timeout_ms`, and the `args` bytes as received) → read one response (≤ 4 MiB, strictly decoded, within the request's timeout plus 15 s) → return the helper's `ok`, `data`, `error` and `warnings` under the gate's own `gate` block. An unreachable socket or an unreadable response is `helper_unavailable`; a connection closed without a byte (only a peer that failed the helper's peer check gets that) is `helper_refused`; no answer in time is `timeout`; a helper error passes through with its code, including the `helper_*` self-check codes, which the helper may answer before the request is even sent.
+5. **Helper** (privileged ops only): systemd accepts the connection and starts an instance → peer check from the connection and the unit alone: stdin, the unit's client uid, `SO_PEERCRED` (any failure: close without a byte, WARN journal line) → self-checks (uid, NoNewPrivs, binary) → load privileged policy → policy hash, `client_uid` and bounding set against the unit (any failure: a `helper_*` response without an id, WARN journal line) → Landlock (core unit) → read request → tier ≤ `max_tier` → validation against the privileged policy → backup → execute → verify → redact → respond → journald audit → exit.
 6. **Server:** map response → envelope → audit line.
 
 Every failure at steps 2–6 becomes a tool error in the envelope, never a transport error.
@@ -105,6 +105,7 @@ One request per SSH session, UTF-8 JSON, newline-terminated, on stdin. One respo
 ```
 
 - `v` must equal the gate's protocol version, else `{"ok":false,"error":{"code":"protocol_mismatch"}}`.
+- `id` must be a UUID v4 in lowercase canonical form (`xxxxxxxx-xxxx-4xxx-[89ab]xxx-xxxxxxxxxxxx`, exactly 36 characters); anything else is `bad_request`. It is echoed in the response and written into the gate's and the helper's audit lines, which join on it.
 - `op` must be a known op; `args` are op-specific and strictly decoded (unknown fields are errors).
 - `timeout_ms` is clamped to the policy's `limits.max_timeout_s`.
 - Request size ≤ 2 MiB (write content is carried as base64 in `args.content_b64`, ≤ `limits.max_write_bytes` after decoding).
@@ -125,6 +126,8 @@ One request per SSH session, UTF-8 JSON, newline-terminated, on stdin. One respo
 Failure: `"ok": false, "error": {"code": "<closed set>", "message": "<one line, no content>"}`. Exec ops report process results in `data` (`exit_code`, `signal`, `stdout`, `stderr`, `stdout_truncated`, `stderr_truncated`, `timed_out`) and use `ok: true` whenever the process was started — a non-zero exit is data, not a gate error.
 
 Gate error codes: `protocol_mismatch`, `bad_request`, `unknown_op`, `tier_denied`, `policy_denied`, `path_denied`, `not_found`, `not_a_directory`, `is_a_directory`, `too_large`, `exists`, `template_mismatch`, `not_authorized` (polkit denied), `sandbox_unavailable`, `privileged_disabled`, `helper_unavailable`, `helper_refused`, `backup_failed`, `exec_failed`, `timeout`, `verify_failed`, `install_insecure`, `internal`.
+
+Helper self-check codes (PRIVILEGED §7), answered by the privileged helper to an authenticated gate before the request is read (so without an id) and passed through by the gate unchanged: `helper_install_insecure` (not root under its unit, no NoNewPrivs, or its binary or policy file missing, not root-owned or group/other-writable), `helper_policy_invalid` (the policy does not parse or fails validation), `helper_policy_mismatch` (the policy's SHA-256 is not the units'), `helper_client_uid_mismatch` (the policy's `client_uid` is not the unit's), `helper_capabilities_broad` (the bounding set is broader than the unit declares).
 
 ### 4.3 Operations
 

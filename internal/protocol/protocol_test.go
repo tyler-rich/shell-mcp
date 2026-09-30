@@ -43,20 +43,20 @@ func TestDecodeRequestValid(t *testing.T) {
 
 func TestDecodeRequestRejects(t *testing.T) {
 	cases := map[string]string{
-		"duplicate op":          `{"v":1,"id":"a","op":"hello","op":"write_file"}`,
-		"duplicate nested key":  `{"v":1,"id":"a","op":"read_file","args":{"path":"/a","path":"/b"}}`,
-		"unknown field":         `{"v":1,"id":"a","op":"hello","extra":1}`,
-		"trailing data":         `{"v":1,"id":"a","op":"hello"} x`,
-		"second value":          `{"v":1,"id":"a","op":"hello"}{"v":1,"id":"b","op":"hello"}`,
+		"duplicate op":          `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello","op":"write_file"}`,
+		"duplicate nested key":  `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"read_file","args":{"path":"/a","path":"/b"}}`,
+		"unknown field":         `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello","extra":1}`,
+		"trailing data":         `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"} x`,
+		"second value":          `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}`,
 		"empty":                 ``,
 		"not an object":         `[1]`,
 		"invalid utf8":          "{\"v\":1,\"id\":\"a\",\"op\":\"hel\xfflo\"}",
-		"case-insensitive name": `{"V":1,"id":"a","op":"hello"}`,
+		"case-insensitive name": `{"V":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}`,
 		"bad id":                `{"v":1,"id":"a b","op":"hello"}`,
-		"long id":               `{"v":1,"id":"` + strings.Repeat("a", MaxIDBytes+1) + `","op":"hello"}`,
-		"missing op":            `{"v":1,"id":"a"}`,
-		"args not object":       `{"v":1,"id":"a","op":"hello","args":[1]}`,
-		"negative timeout":      `{"v":1,"id":"a","op":"hello","timeout_ms":-1}`,
+		"long id":               `{"v":1,"id":"` + strings.Repeat("a", IDBytes+1) + `","op":"hello"}`,
+		"missing op":            `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001"}`,
+		"args not object":       `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello","args":[1]}`,
+		"negative timeout":      `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello","timeout_ms":-1}`,
 	}
 	for name, in := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -69,9 +69,9 @@ func TestDecodeRequestRejects(t *testing.T) {
 
 func TestDecodeRequestVersionMismatch(t *testing.T) {
 	for _, in := range []string{
-		`{"v":2,"id":"a","op":"hello"}`,
-		`{"v":2,"id":"a","op":"hello","new_field":true}`, // a newer protocol's field must not mask the mismatch
-		`{"id":"a","op":"hello"}`,
+		`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}`,
+		`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello","new_field":true}`, // a newer protocol's field must not mask the mismatch
+		`{"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}`,
 	} {
 		if de := decodeErr(t, in); de.Code != CodeProtocolMismatch {
 			t.Errorf("%s: code %q, want %q", in, de.Code, CodeProtocolMismatch)
@@ -81,11 +81,11 @@ func TestDecodeRequestVersionMismatch(t *testing.T) {
 
 func TestDecodeRequestTooLarge(t *testing.T) {
 	pad := strings.Repeat(" ", MaxRequestBytes)
-	if de := decodeErr(t, `{"v":1,"id":"a","op":"hello"}`+pad); de.Code != CodeTooLarge {
+	if de := decodeErr(t, `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}`+pad); de.Code != CodeTooLarge {
 		t.Fatalf("code %q", de.Code)
 	}
 	// Exactly at the limit is accepted.
-	body := `{"v":1,"id":"a","op":"hello"}`
+	body := `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}`
 	if _, err := DecodeRequest(strings.NewReader(body + strings.Repeat(" ", MaxRequestBytes-len(body)))); err != nil {
 		t.Fatalf("at limit: %v", err)
 	}
@@ -117,7 +117,9 @@ func TestDecodeRequestBoundedRead(t *testing.T) {
 func TestDecodeRequestStopsAtNewline(t *testing.T) {
 	pr, pw := io.Pipe()
 	defer func() { _ = pw.Close() }()
-	go func() { _, _ = pw.Write([]byte(`{"v":1,"id":"a","op":"hello"}` + "\n")) }()
+	go func() {
+		_, _ = pw.Write([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}` + "\n"))
+	}()
 	done := make(chan error, 1)
 	go func() {
 		_, err := DecodeRequest(pr)
@@ -186,11 +188,109 @@ func TestCodesClosedSet(t *testing.T) {
 	want := []string{"protocol_mismatch", "bad_request", "unknown_op", "tier_denied", "policy_denied", "path_denied",
 		"not_found", "not_a_directory", "is_a_directory", "too_large", "exists", "template_mismatch", "not_authorized",
 		"sandbox_unavailable", "privileged_disabled", "helper_unavailable", "helper_refused", "backup_failed",
-		"exec_failed", "timeout", "verify_failed", "install_insecure", "internal"}
+		"exec_failed", "timeout", "verify_failed", "install_insecure", "internal",
+		// The helper's own self-checks (PRIVILEGED §7), answered to the
+		// authenticated gate before the request is read.
+		"helper_install_insecure", "helper_policy_invalid", "helper_policy_mismatch",
+		"helper_client_uid_mismatch", "helper_capabilities_broad"}
 	if !slices.Equal(Codes, want) {
 		t.Fatalf("Codes = %v", Codes)
 	}
 	if len(PrivOps) != 17 {
 		t.Fatalf("PrivOps has %d entries", len(PrivOps))
+	}
+}
+
+// The request id is written into the gate's and the helper's audit lines,
+// which join on it, so only its documented format is accepted: a UUID v4
+// in lowercase canonical form (8-4-4-4-12 hex digits, version 4, variant
+// 10xx), exactly IDBytes long.
+func TestDecodeRequestIDIsUUIDv4(t *testing.T) {
+	for _, id := range []string{
+		"0b5c0000-0000-4000-8000-000000000000",
+		"f47ac10b-58cc-4372-a567-0e02b2c3d479",
+		"00000000-0000-4000-b000-000000000000",
+		"ffffffff-ffff-4fff-9fff-ffffffffffff",
+	} {
+		in := `{"v":1,"id":"` + id + `","op":"hello"}` + "\n"
+		req, err := DecodeRequest(strings.NewReader(in))
+		if err != nil || req.ID != id {
+			t.Errorf("valid id %q: %v", id, err)
+		}
+	}
+	for name, id := range map[string]string{
+		"short label":        "a",
+		"uppercase":          "F47AC10B-58CC-4372-A567-0E02B2C3D479",
+		"version 1":          "f47ac10b-58cc-1372-a567-0e02b2c3d479",
+		"version 5":          "f47ac10b-58cc-5372-a567-0e02b2c3d479",
+		"variant 0xxx":       "f47ac10b-58cc-4372-7567-0e02b2c3d479",
+		"variant 110x":       "f47ac10b-58cc-4372-c567-0e02b2c3d479",
+		"no hyphens":         "f47ac10b58cc4372a5670e02b2c3d479",
+		"braces":             "{f47ac10b-58cc-4372-a567-0e02b2c3d479}",
+		"urn prefix":         "urn:uuid:f47ac10b-58cc-4372-a567-0e02b2c3d479",
+		"trailing char":      "f47ac10b-58cc-4372-a567-0e02b2c3d4790",
+		"one short":          "f47ac10b-58cc-4372-a567-0e02b2c3d47",
+		"hyphen misplaced":   "f47ac10b5-8cc-4372-a567-0e02b2c3d479",
+		"non-hex":            "g47ac10b-58cc-4372-a567-0e02b2c3d479",
+		"newline":            "f47ac10b-58cc-4372-a567-0e02b2c3d47\n",
+		"empty":              "",
+		"label with dots":    "req.1",
+		"64-char label":      strings.Repeat("a", 64),
+		"all-zero nil uuid":  "00000000-0000-0000-0000-000000000000",
+		"space inside":       "f47ac10b-58cc-4372-a567 0e02b2c3d479",
+		"trailing space pad": "f47ac10b-58cc-4372-a567-0e02b2c3d47 ",
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := `{"v":1,"id":"` + id + `","op":"hello"}` + "\n"
+			if de := decodeErr(t, in); de.Code != CodeBadRequest {
+				t.Fatalf("code %q, want %q", de.Code, CodeBadRequest)
+			}
+		})
+	}
+}
+
+func TestIDBytes(t *testing.T) {
+	if IDBytes != 36 {
+		t.Fatalf("IDBytes = %d, want 36", IDBytes)
+	}
+}
+
+const respID = "0b5c0000-0000-4000-8000-000000000003"
+
+func TestDecodeResponse(t *testing.T) {
+	ok := `{"v":1,"id":"` + respID + `","ok":true,"data":{"x":1},"warnings":["w"],"gate":{"version":"dev","principal":"p","duration_ms":1}}` + "\n"
+	r, err := DecodeResponse(strings.NewReader(ok))
+	if err != nil || !r.OK || r.ID != respID || string(r.Data) != `{"x":1}` || len(r.Warnings) != 1 {
+		t.Fatalf("%+v %v", r, err)
+	}
+	fail := `{"v":1,"id":"","ok":false,"error":{"code":"sandbox_unavailable","message":"m"},"warnings":[]}` + "\n"
+	if r, err := DecodeResponse(strings.NewReader(fail)); err != nil || r.OK || r.Error.Code != CodeSandboxUnavailable {
+		t.Fatalf("%+v %v", r, err)
+	}
+	if _, err := DecodeResponse(strings.NewReader("")); !errors.Is(err, ErrNoResponse) {
+		t.Fatalf("empty: %v", err)
+	}
+	for name, in := range map[string]string{
+		"not json":           "nope\n",
+		"unknown field":      `{"v":1,"id":"` + respID + `","ok":true,"warnings":[],"extra":1}` + "\n",
+		"duplicate key":      `{"v":1,"v":1,"id":"` + respID + `","ok":true,"warnings":[]}` + "\n",
+		"wrong version":      `{"v":2,"id":"` + respID + `","ok":true,"warnings":[]}` + "\n",
+		"ok with error":      `{"v":1,"id":"` + respID + `","ok":true,"error":{"code":"internal","message":"m"},"warnings":[]}` + "\n",
+		"failure no error":   `{"v":1,"id":"` + respID + `","ok":false,"warnings":[]}` + "\n",
+		"unknown code":       `{"v":1,"id":"` + respID + `","ok":false,"error":{"code":"root_now","message":"m"},"warnings":[]}` + "\n",
+		"bad id":             `{"v":1,"id":"x","ok":true,"warnings":[]}` + "\n",
+		"ok without id":      `{"v":1,"id":"","ok":true,"warnings":[]}` + "\n",
+		"two values":         `{"v":1,"id":"` + respID + `","ok":true,"warnings":[]} {}` + "\n",
+		"too large":          `{"v":1,"id":"` + respID + `","ok":true,"warnings":["` + strings.Repeat("a", MaxResponseBytes) + `"]}` + "\n",
+		"multi-line message": `{"v":1,"id":"` + respID + `","ok":false,"error":{"code":"internal","message":"a\nb"},"warnings":[]}` + "\n",
+	} {
+		if _, err := DecodeResponse(strings.NewReader(in)); err == nil || errors.Is(err, ErrNoResponse) {
+			t.Errorf("%s: accepted (%v)", name, err)
+		}
+	}
+	// Bounded: an endless peer is not read past the limit.
+	e := &endless{}
+	if _, err := DecodeResponse(e); err == nil || e.n > MaxResponseBytes+64<<10 {
+		t.Fatalf("endless: %v after %d bytes", err, e.n)
 	}
 }

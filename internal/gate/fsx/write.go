@@ -46,7 +46,14 @@ func (f *FS) WriteFile(p string, content []byte, o WriteOptions) (WriteResult, e
 	if l.parent == nil {
 		return WriteResult{}, errf(protocol.CodeIsADirectory, "is a directory")
 	}
-	return f.writeAtomic(l, content, o.Mode, defaultFileMode, o.Create, true, o.ExpectedSHA256)
+	newMode := os.FileMode(defaultFileMode)
+	if o.DefaultMode != 0 {
+		if e := checkMode(o.DefaultMode); e != nil {
+			return WriteResult{}, e
+		}
+		newMode = o.DefaultMode
+	}
+	return f.writeAtomic(l, content, &atomicOpts{mode: o.Mode, newMode: newMode, create: o.Create, overwrite: true, expected: o.ExpectedSHA256, owner: o.Owner})
 }
 
 func isSHA256Hex(s string) bool {
@@ -79,7 +86,18 @@ func countLines(b []byte) int {
 // fsync the directory, then re-open the target and compare SHA-256. An
 // existing file keeps its mode (unless mode is given) and, where the
 // service user may, its owner and group.
-func (f *FS) writeAtomic(l *loc, content []byte, mode *os.FileMode, newMode os.FileMode, create, overwrite bool, expected string) (WriteResult, error) {
+// atomicOpts are writeAtomic's options.
+type atomicOpts struct {
+	mode      *os.FileMode // requested mode (nil: keep, or newMode for a new file)
+	newMode   os.FileMode
+	create    bool
+	overwrite bool
+	expected  string // expected_sha256 of the current content
+	owner     *Owner // explicit owner (the helper only)
+}
+
+func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, error) {
+	mode, newMode, create, overwrite, expected := o.mode, o.newMode, o.create, o.overwrite, o.expected
 	res := WriteResult{Path: l.p}
 	fi, err := l.parent.Lstat(l.base)
 	exists := err == nil
@@ -133,6 +151,14 @@ func (f *FS) writeAtomic(l *loc, content []byte, mode *os.FileMode, newMode os.F
 	if mode != nil {
 		newMode = *mode
 	}
+	// The helper backs up the version it is about to replace; a failed
+	// backup changes nothing.
+	var backedUp fs.FileInfo
+	if exists && f.cfg.Backup != nil {
+		if backedUp, err = f.backupFile(l); err != nil {
+			return res, err
+		}
+	}
 
 	tmp := tempPrefix + randHex(8) + ".tmp"
 	tf, err := l.parent.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -155,11 +181,28 @@ func (f *FS) writeAtomic(l *loc, content []byte, mode *os.FileMode, newMode os.F
 		return res, mapErr(err)
 	}
 	res.OwnerPreserved = true
-	if exists {
+	if exists && o.owner == nil {
 		if tfi, serr := tf.Stat(); serr == nil {
 			if st, ok := tfi.Sys().(*syscall.Stat_t); ok && (st.Uid != oldUID || st.Gid != oldGID) {
 				res.OwnerPreserved = tf.Chown(int(oldUID), int(oldGID)) == nil
 			}
+		}
+	}
+	if o.owner != nil {
+		// An explicit owner must be set; the unset half keeps the old
+		// file's id (or the process's, for a new file).
+		uid, gid := -1, -1
+		if exists {
+			uid, gid = int(oldUID), int(oldGID)
+		}
+		if o.owner.UID != nil {
+			uid = int(*o.owner.UID)
+		}
+		if o.owner.GID != nil {
+			gid = int(*o.owner.GID)
+		}
+		if err = tf.Chown(uid, gid); err != nil {
+			return res, mapErr(err)
 		}
 	}
 	if err = tf.Sync(); err != nil {
@@ -168,6 +211,11 @@ func (f *FS) writeAtomic(l *loc, content []byte, mode *os.FileMode, newMode os.F
 	closed = true
 	if err = tf.Close(); err != nil {
 		return res, mapErr(err)
+	}
+	if backedUp != nil {
+		if e := unchangedSince(l.parent, l.base, backedUp); e != nil {
+			return res, e
+		}
 	}
 	if err = l.parent.Rename(tmp, l.base); err != nil {
 		return res, mapErr(err)
@@ -228,6 +276,12 @@ func (c *lineCounter) total() int {
 // ancestors are created one component at a time, each opened and verified
 // before the next is created inside it.
 func (f *FS) Mkdir(p string, mode *os.FileMode, parents bool) (MkdirResult, error) {
+	return f.MkdirAs(p, mode, parents, nil)
+}
+
+// MkdirAs is Mkdir with an owner for every directory it creates (the
+// helper only). A directory whose owner cannot be set is removed again.
+func (f *FS) MkdirAs(p string, mode *os.FileMode, parents bool, owner *Owner) (MkdirResult, error) {
 	m := os.FileMode(defaultDirMode)
 	if mode != nil {
 		if e := checkMode(*mode); e != nil {
@@ -245,7 +299,7 @@ func (f *FS) Mkdir(p string, mode *os.FileMode, parents bool) (MkdirResult, erro
 		if l.parent == nil {
 			return res, errf(protocol.CodeExists, "directory exists")
 		}
-		created, err := f.mkdirIn(l, l.parent, l.parentReal, l.base, m)
+		created, err := f.mkdirIn(l, l.parent, l.parentReal, l.base, m, owner)
 		if err != nil {
 			return res, err
 		}
@@ -281,7 +335,7 @@ func (f *FS) Mkdir(p string, mode *os.FileMode, parents bool) (MkdirResult, erro
 	cur, curReal := top, l.rootReal
 	comps := strings.Split(rel, "/")
 	for i, c := range comps {
-		created, err := f.mkdirIn(l, cur, curReal, c, m)
+		created, err := f.mkdirIn(l, cur, curReal, c, m, owner)
 		if err != nil {
 			if cur != top {
 				_ = cur.Close()
@@ -310,7 +364,7 @@ func (f *FS) Mkdir(p string, mode *os.FileMode, parents bool) (MkdirResult, erro
 // mkdirIn creates name in dir unless it is already a directory, verifies
 // it, and sets its mode (mkdir(2) is subject to the umask). It reports
 // whether it created the directory.
-func (f *FS) mkdirIn(l *loc, dir *os.Root, dirReal, name string, m os.FileMode) (bool, error) {
+func (f *FS) mkdirIn(l *loc, dir *os.Root, dirReal, name string, m os.FileMode, owner *Owner) (bool, error) {
 	fi, err := dir.Lstat(name)
 	switch {
 	case err == nil && fi.Mode()&fs.ModeSymlink != 0:
@@ -340,6 +394,19 @@ func (f *FS) mkdirIn(l *loc, dir *os.Root, dirReal, name string, m os.FileMode) 
 	defer func() { _ = d.Close() }()
 	if err = d.Chmod(m); err != nil {
 		return true, mapErr(err)
+	}
+	if owner != nil {
+		uid, gid := -1, -1
+		if owner.UID != nil {
+			uid = int(*owner.UID)
+		}
+		if owner.GID != nil {
+			gid = int(*owner.GID)
+		}
+		if err = d.Chown(uid, gid); err != nil {
+			_ = dir.Remove(name) // just created and empty
+			return false, mapErr(err)
+		}
 	}
 	return true, nil
 }
@@ -391,7 +458,7 @@ func (f *FS) Copy(src, dst string, overwrite bool) (WriteResult, error) {
 		return WriteResult{}, errf(protocol.CodeIsADirectory, "destination is a directory")
 	}
 	srcMode := os.FileMode(unixMode(fi)) &^ 0o7002
-	return f.writeAtomic(ld, data, nil, srcMode, true, overwrite, "")
+	return f.writeAtomic(ld, data, &atomicOpts{newMode: srcMode, create: true, overwrite: overwrite})
 }
 
 // Move renames src to dst. Both must be under the same write root; a
@@ -437,12 +504,12 @@ func (f *FS) Move(src, dst string, overwrite bool) (MoveResult, error) {
 			return res, serr
 		}
 		count := 0
-		werr := f.walkTree(ls, sub, src, subReal, 1, func(lp string, _ fs.FileInfo) error {
+		werr := f.walkTree(ls, sub, src, subReal, 1, func(e *treeEntry) error {
 			count++
 			if count > f.cfg.Limits.MaxDeleteEntries {
 				return errf(protocol.CodeTooLarge, "directory has more than %d entries", f.cfg.Limits.MaxDeleteEntries)
 			}
-			return f.checkPath(join(dst, pathx.Rel(src, lp)), true).orNil()
+			return f.checkPath(join(dst, pathx.Rel(src, e.lp)), true).orNil()
 		})
 		_ = sub.Close()
 		if werr != nil {
@@ -461,6 +528,18 @@ func (f *FS) Move(src, dst string, overwrite bool) (MoveResult, error) {
 		res.Replaced = true
 	case !errors.Is(err, fs.ErrNotExist):
 		return res, mapErr(err)
+	}
+	var backedUp fs.FileInfo
+	if res.Replaced && f.cfg.Backup != nil {
+		if !dfi.Mode().IsRegular() {
+			return res, errf(protocol.CodeBackupFailed, "only regular files can be backed up; nothing was moved")
+		}
+		if backedUp, err = f.backupFile(ld); err != nil {
+			return res, err
+		}
+		if e := unchangedSince(ld.parent, ld.base, backedUp); e != nil {
+			return res, e
+		}
 	}
 	if ls.parentReal == ld.parentReal {
 		err = ls.parent.Rename(ls.base, ld.base)

@@ -25,9 +25,25 @@ env:
 
 jobs:
   go:
-    name: go (fmt, vet, lint, test, vuln, build)
-    runs-on: ubuntu-latest
+    # Two pinned runner images, one per all-thread Landlock path: below ABI 8
+    # go-landlock applies no_new_privs and landlock_restrict_self on every
+    # thread through libcap/psx (the production path on Debian 13, ABI 6);
+    # from ABI 8 it uses LANDLOCK_RESTRICT_SELF_TSYNC. Each entry requires
+    # its kernel's ABI, so the kernel-dependent tests fail rather than skip,
+    # and asserts which path it took.
+    name: go (fmt, vet, lint, test, vuln, build) — ${{ matrix.image }}, Landlock ABI ${{ matrix.abi }} (${{ matrix.path }})
+    runs-on: ${{ matrix.image }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu-24.04
+            abi: "7"
+            path: psx
+          - image: ubuntu-26.04
+            abi: "8"
+            path: tsync
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -49,33 +65,50 @@ jobs:
           out="$(gofmt -l .)"
           if [ -n "$out" ]; then echo "gofmt: files need formatting:"; echo "$out"; exit 1; fi
       - name: go vet
-        run: go vet ./...
+        run: |
+          go vet ./...
+          # Files built only with a tag: the e2e suite and the helper's e2e
+          # bypass build (never released).
+          go vet -tags e2e ./test/e2e/
+          go vet -tags shellmcp_e2e_bypass ./internal/privd/... ./cmd/shell-mcp-privd/
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
+      - name: golangci-lint (e2e and bypass build tags)
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          args: --build-tags=e2e,shellmcp_e2e_bypass
       # SHELL_MCP_REQUIRE_SECURE_TMP: tests fail (never skip) without a
-      # trustworthy TMPDIR. SHELL_MCP_REQUIRE_LANDLOCK_ABI: this runner exposes
-      # Landlock ABI 7, so the network and scope sandbox tests (ABI 4/6) must
-      # run here and fail rather than skip if the kernel ever cannot run them.
+      # trustworthy TMPDIR. SHELL_MCP_REQUIRE_LANDLOCK_ABI: each entry's
+      # kernel ABI, so every sandbox test up to it (network rules from 4,
+      # signal and abstract-socket scoping from 8) must run and fail rather
+      # than skip. SHELL_MCP_EXPECT_LANDLOCK_PATH: the all-thread path this
+      # entry must take (TestLandlockThreadPath).
       - name: go test -race
         env:
           SHELL_MCP_REQUIRE_SECURE_TMP: "1"
-          SHELL_MCP_REQUIRE_LANDLOCK_ABI: "7"
+          SHELL_MCP_REQUIRE_LANDLOCK_ABI: ${{ matrix.abi }}
+          SHELL_MCP_EXPECT_LANDLOCK_PATH: ${{ matrix.path }}
           # The runner's kernel supports MPTCP: the MPTCP tests' control case
           # (a socket opened without the filter) must succeed here, or fail.
           SHELL_MCP_REQUIRE_MPTCP: "1"
         run: |
           go test -race -count=1 -v ./... 2>&1 | tee /tmp/go-test.log
           test "${PIPESTATUS[0]}" -eq 0
-      # Kernel-dependent tests, listed so that a skip is visible. On this
-      # runner the ABI 4+ ones (network rules, including the git_pull
-      # unlisted-port test) must PASS: SHELL_MCP_REQUIRE_LANDLOCK_ABI makes
-      # them fail rather than skip.
+      # Kernel-dependent tests, listed so that a skip is visible, with the
+      # all-thread Landlock path this entry exercised.
       - name: sandbox tests that ran on this runner
         if: always()
         run: |
-          grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|Integration(Sandbox|Swap|ExecLimits|GitPull|ServiceOps|SystemOps)|RequiredRefused|BestEffort)' /tmp/go-test.log | tee -a "$GITHUB_STEP_SUMMARY" || true
+          {
+            echo "### ${{ matrix.image }}: kernel $(uname -r)"
+            echo "- Landlock path exercised: $(grep -o 'LANDLOCK_PATH=[a-z]* kernel_abi=[0-9]*' /tmp/go-test.log | head -n1) (expected ${{ matrix.path }}, ABI ${{ matrix.abi }})"
+            echo '```'
+            grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|LandlockThreadPath|Integration(Sandbox|Swap|ExecLimits|GitPull|ServiceOps|SystemOps)|RequiredRefused|BestEffort)' /tmp/go-test.log || true
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: govulncheck
         run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
       - name: cross-build (linux/amd64, linux/arm64)
@@ -85,6 +118,8 @@ jobs:
               CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags '-s -w' -o "/tmp/$c-$arch" "./cmd/$c"
               # The gate relies on CGO_ENABLED=0 (psx then uses syscall.AllThreadsSyscall).
               go version -m "/tmp/$c-$arch" | grep -q 'CGO_ENABLED=0' || { echo "$c was built with cgo" >&2; exit 1; }
+              # The helper's e2e bypass build must never be what ships.
+              if go version -m "/tmp/$c-$arch" | grep -q shellmcp_e2e_bypass; then echo "$c was built with the e2e bypass tag" >&2; exit 1; fi
               echo "built $c linux/$arch (CGO_ENABLED=0)"
             done
           done
@@ -189,10 +224,101 @@ jobs:
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
+  e2e-host:
+    # End-to-end tests of the gate and the privileged helper against the
+    # runner VM's own systemd, journald and polkit (the runner's Docker
+    # cannot boot a systemd container: S0 probes). This is the only job that
+    # uses sudo (CLAUDE.md exception): a GitHub-hosted runner, no secrets,
+    # read-only token, pull_request and push only. It creates invented test
+    # accounts and installs units on a VM that is discarded afterwards.
+    name: e2e-host (systemd, journald, polkit on the runner VM)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      # Set from the first run on this image (ARCHIVE §14, S1c): the job fails
+      # if systemd-analyze security rates the helper's unit worse.
+      E2E_SECURITY_MAX: "1.6"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: build the binaries and the e2e suite (CGO_ENABLED=0)
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          out="$RUNNER_TEMP/e2e-bin"
+          mkdir -p "$out"
+          go build -trimpath -o "$out/shell-mcp-gate" ./cmd/shell-mcp-gate
+          go build -trimpath -o "$out/shell-mcp-privd" ./cmd/shell-mcp-privd
+          go build -trimpath -tags shellmcp_e2e_bypass -o "$out/shell-mcp-privd-bypass" ./cmd/shell-mcp-privd
+          go build -trimpath -ldflags "-X main.outside=/etc/example-other/secret.txt" -o "$out/example-probe" ./internal/gate/gatetest/testdata/probe
+          go test -c -trimpath -tags e2e -o "$out/e2e.test" ./test/e2e
+          chmod 0755 "$out"/*
+      - name: runner facts
+        run: |
+          {
+            echo "### e2e-host runner"
+            echo "- image: ubuntu-26.04, kernel $(uname -r)"
+            echo "- $(systemctl --version | head -n1)"
+            echo "- landlock: $(go run ./scripts/probe/landlock 2>&1 | tail -n1)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: install polkitd (if the image lacks it)
+        run: |
+          if ! test -x /usr/lib/polkit-1/polkitd; then
+            sudo apt-get update
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends polkitd
+          fi
+          echo "- polkit: $(dpkg-query -W -f='${Package} ${Version}' polkitd)" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: setup (as root)
+        run: |
+          sudo install -d -o root -g root -m 0755 /opt/e2e-bin
+          sudo install -o root -g root -m 0755 "$RUNNER_TEMP"/e2e-bin/* /opt/e2e-bin/
+          sudo env E2E_BIN=/opt/e2e-bin E2E_LANDLOCK=required bash test/e2e/setup.sh
+      - name: e2e tests (as root; nothing may skip)
+        run: |
+          sudo env E2E_BIN=/opt/e2e-bin E2E_REQUIRE_ALL=1 E2E_SECURITY_MAX="$E2E_SECURITY_MAX" \
+            /opt/e2e-bin/e2e.test -test.v -test.count=1 2>&1 | tee "$RUNNER_TEMP/e2e.log"
+          test "${PIPESTATUS[0]}" -eq 0
+      - name: summary (every test must have run and passed)
+        if: always()
+        run: |
+          log="$RUNNER_TEMP/e2e.log"
+          table="$RUNNER_TEMP/e2e-summary.md"
+          touch "$log"
+          sudo /opt/e2e-bin/e2e.test -test.list '.*' | grep '^Test' >"$RUNNER_TEMP/e2e.tests"
+          fail=0
+          {
+            echo "### e2e-host tests"
+            echo "| test | result |"
+            echo "|---|---|"
+          } >"$table"
+          while read -r t; do
+            r="$(grep -E -- "^--- (PASS|FAIL|SKIP): $t " "$log" | head -n1 | awk '{print $2}' | tr -d ':')"
+            [ -n "$r" ] || r="NOT RUN"
+            [ "$r" = PASS ] || fail=1
+            echo "| $t | $r |" >>"$table"
+          done <"$RUNNER_TEMP/e2e.tests"
+          grep -o 'E2E_EXPOSURE=[0-9.]*' "$log" | sed 's/^E2E_EXPOSURE=/- systemd-analyze security exposure: /' >>"$table" || true
+          echo "- threshold (E2E_SECURITY_MAX): $E2E_SECURITY_MAX" >>"$table"
+          tee -a "$GITHUB_STEP_SUMMARY" <"$table"
+          if grep -qE -- '--- (SKIP|FAIL)' "$log"; then fail=1; fi
+          exit "$fail"
+      - name: journal (on failure)
+        if: failure()
+        run: |
+          sudo journalctl --no-pager -n 100 -t shell-mcp-privd -t shell-mcp-gate || true
+          sudo journalctl --no-pager -n 60 -u 'shell-mcp-privd@*' -u polkit.service || true
+          systemctl --failed --no-pager || true
+
   ci:
     name: ci
     if: always()
-    needs: [go, deps-current, gitleaks, image]
+    needs: [go, deps-current, gitleaks, image, e2e-host]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

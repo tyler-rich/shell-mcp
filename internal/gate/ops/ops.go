@@ -6,9 +6,11 @@
 package ops
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -63,6 +65,13 @@ type Options struct {
 	SSHConnection *string
 	// Audit receives one record per request; nil disables auditing.
 	Audit audit.Sink
+
+	// DialHelper connects to the privileged helper's socket (production:
+	// a Unix stream dial). Tests connect to their own helper.
+	DialHelper func(ctx context.Context, socket string) (net.Conn, error)
+	// HelperGrace is added to the request's timeout for the helper's answer
+	// (0 means DefaultHelperGrace).
+	HelperGrace time.Duration
 }
 
 // ProductionOptions describes the running process: its real identity, its
@@ -86,6 +95,7 @@ func ProductionOptions(version, policyPath, principal string) (Options, error) {
 		ServiceHome: ServiceHome(), ApplySandbox: sandbox.Apply,
 		Audit:     audit.NewSyslog(audit.DevLog),
 		Systemctl: SystemctlPath, Journalctl: JournalctlPath, Git: GitPath,
+		DialHelper: DialHelper,
 	}
 	if v, ok := os.LookupEnv("SSH_ORIGINAL_COMMAND"); ok {
 		o.SSHOriginalCommand = &v
@@ -148,7 +158,7 @@ func (s *server) audit(resp *protocol.Response, d time.Duration) {
 	r := &audit.Record{Principal: s.gate.Principal, Client: audit.Client(s.o.SSHConnection),
 		Outcome: "ok", DurationMS: d.Milliseconds(), Args: map[string]any{}}
 	if s.req != nil {
-		r.Op, r.Args = s.req.Op, audit.SanitizeArgs(s.req.Op, s.req.Args)
+		r.ID, r.Op, r.Args = s.req.ID, s.req.Op, audit.SanitizeArgs(s.req.Op, s.req.Args)
 	}
 	if resp.Error != nil {
 		r.Outcome = resp.Error.Code
@@ -267,3 +277,7 @@ func (s *server) timeout() time.Duration {
 	}
 	return d
 }
+
+// DefaultHelperGrace is how long past the request's timeout the gate waits
+// for the privileged helper's answer (instance start-up, backups).
+const DefaultHelperGrace = 15 * time.Second

@@ -81,3 +81,21 @@ func TestAuditLines(t *testing.T) {
 		t.Errorf("install failure line %q", l)
 	}
 }
+
+// TestAuditLineCarriesRequestID: the gate's audit line carries the request
+// id (a validated UUID v4), which is how it joins the privileged helper's
+// line for the same forwarded request (PRIVILEGED §8). A request refused
+// before its id is known logs an empty id.
+func TestAuditLineCarriesRequestID(t *testing.T) {
+	f := newFixture(t, "operator")
+	next := f.auditTo(t)
+	f.ok("hello", m{}, nil)
+	if l := next(); !strings.Contains(l, `"id":"0b5c0000-0000-4000-8000-000000000001"`) {
+		t.Errorf("line lacks the request id: %q", l)
+	}
+	f.opts.Identity.UID = 0
+	f.fail("hello", m{}, "install_insecure")
+	if l := next(); !strings.Contains(l, `"id":""`) {
+		t.Errorf("refusal line lacks an empty id: %q", l)
+	}
+}

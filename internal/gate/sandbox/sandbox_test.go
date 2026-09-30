@@ -37,11 +37,37 @@ func needABI(t *testing.T, n int) {
 	if req, _ := strconv.Atoi(os.Getenv(RequireABIEnv)); req >= n {
 		t.Fatalf("%s=%d but the kernel's Landlock ABI is %d; this test needs ABI %d", RequireABIEnv, req, k, n)
 	}
-	where := "runs in CI (ABI 7)"
-	if n > 7 {
-		where = "no current runner has it (CI has ABI 7)"
+	where := "runs in CI (ABI 7 and ABI 8 entries)"
+	if n > 8 {
+		where = "no current runner has it (CI has ABI 7 and 8)"
 	}
 	t.Skipf("needs Landlock ABI %d (kernel has %d); %s", n, k, where)
+}
+
+// ExpectPathEnv names the variable each CI matrix entry sets to the thread
+// path it must exercise: "psx" (ABI < 8: no_new_privs and
+// landlock_restrict_self on every thread through libcap/psx, one domain per
+// thread) or "tsync" (ABI >= 8: one landlock_restrict_self with
+// LANDLOCK_RESTRICT_SELF_TSYNC). go-landlock v0.10.1 chooses by the
+// kernel's ABI after the signal-scoping errata check that
+// sandbox.KernelABI mirrors (restrict.go: useTsync := abi.version >= 8), so a
+// runner kernel that changes ABI cannot silently move an entry to the
+// other path.
+const ExpectPathEnv = "SHELL_MCP_EXPECT_LANDLOCK_PATH"
+
+// TestLandlockThreadPath reports which all-thread path this kernel makes
+// the sandbox take, for the CI summary, and fails when it is not the path
+// the environment expects.
+func TestLandlockThreadPath(t *testing.T) {
+	k := sandbox.KernelABI()
+	path := "psx"
+	if k >= 8 {
+		path = "tsync"
+	}
+	t.Logf("LANDLOCK_PATH=%s kernel_abi=%d", path, k)
+	if want := os.Getenv(ExpectPathEnv); want != "" && want != path {
+		t.Fatalf("%s=%s but this kernel (ABI %d) makes the sandbox take the %s path", ExpectPathEnv, want, k, path)
+	}
 }
 
 func parse(t *testing.T, y string) *policy.Policy {

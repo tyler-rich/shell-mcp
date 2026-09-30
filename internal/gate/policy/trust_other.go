@@ -27,3 +27,6 @@ func Load(_ string, _ *LoadOptions) (*Policy, error) { return nil, errLinuxOnly 
 
 // Parse is Linux-only.
 func Parse(_ []byte, _ string, _ *LoadOptions) (*Policy, error) { return nil, errLinuxOnly }
+
+// IdentityScan is Linux-only; see identity_linux.go.
+type IdentityScan struct{}
