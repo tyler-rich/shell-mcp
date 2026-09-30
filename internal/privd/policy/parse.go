@@ -54,6 +54,7 @@ type rawPolicy struct {
 	Backups     *rawBackups  `yaml:"backups"`
 	Commands    []rawCommand `yaml:"commands"`
 	Packages    *rawPackages `yaml:"packages"`
+	Power       *rawPower    `yaml:"power"`
 }
 
 type rawSandbox struct {
@@ -104,6 +105,11 @@ type rawCommand struct {
 	Capabilities   []string   `yaml:"capabilities"`
 	Acknowledge    string     `yaml:"acknowledge"`
 	Templates      [][]string `yaml:"templates"`
+}
+
+type rawPower struct {
+	Allowed     []string `yaml:"allowed"`
+	Acknowledge string   `yaml:"acknowledge"`
 }
 
 type rawPackages struct {
@@ -205,6 +211,7 @@ func parse(data []byte, files []string, opts *LoadOptions) (*Policy, error) {
 	v.backups(p, raw.Backups)
 	v.commands(p, raw.Commands)
 	v.packages(p, raw.Packages)
+	v.power(p, raw.Power)
 	v.capabilities(p)
 
 	if len(v.errs) > 0 {
@@ -591,12 +598,16 @@ func (v *validator) command(field string, rc *rawCommand, maxTier Tier) (Command
 			c.Templates = append(c.Templates, tpl)
 		}
 	}
-	if c.Unit == UnitBroad {
-		v.fail(field+".unit", "broad-unit commands arrive in S1d (the broad unit is not generated yet)")
-		return c, false
-	}
 	if !ok {
 		return c, false
+	}
+	if c.Unit == UnitBroad {
+		// The broad unit has network and full root capabilities: whatever the
+		// command does, it does as unconfined root (PRIVILEGED §4, §5.2).
+		v.find("root-equivalent", c.ID, "%s runs in the broad unit (unit: broad): network and full root capabilities", c.Resolved)
+		for _, cp := range c.Capabilities {
+			v.find("capability", cp, "declared by broad-unit command %s%s", c.ID, broadCapabilityEffect(cp))
+		}
 	}
 	if c.ListB > 0 {
 		g, gname := c.ListB, listBName(c.ListB)
@@ -708,7 +719,7 @@ func (v *validator) commandCapabilities(field string, rc *rawCommand, c *Command
 			v.fail(f, "CAP_SYS_ADMIN is root-equivalent; it needs root_equivalent: true")
 			ok = false
 		case brokenInCore[cp] != "" && c.Unit != UnitBroad:
-			v.fail(f, "%s has no effect in the core unit (%s); it is valid only for commands declared with unit: broad (S1d)", cp, brokenInCore[cp])
+			v.fail(f, "%s has no effect in the core unit (%s); it is valid only for commands declared with unit: broad", cp, brokenInCore[cp])
 			ok = false
 		default:
 			c.Capabilities = append(c.Capabilities, cp)
@@ -761,6 +772,13 @@ func (v *validator) packages(p *Policy, raw *rawPackages) {
 			switch {
 			case len(n) > 128 || !packageRE.MatchString(n):
 				v.fail(field, "%q is not a Debian package name", n)
+			case list.name == "packages.install" && strings.HasSuffix(n, "-"):
+				// apt-get install reads "name-" as "remove name" when no package
+				// has that exact name (apt-get(8)).
+				v.fail(field, "%q ends in \"-\", which apt-get install can read as a removal", n)
+			case list.name == "packages.remove" && strings.HasSuffix(n, "+"):
+				// apt-get remove reads "name+" as "install name".
+				v.fail(field, "%q ends in \"+\", which apt-get remove can read as an installation", n)
 			case slices.Contains(*list.out, n):
 				v.fail(field, "duplicate package %q", n)
 			default:
@@ -768,7 +786,113 @@ func (v *validator) packages(p *Policy, raw *rawPackages) {
 			}
 		}
 	}
-	if raw.Enabled {
-		v.fail("packages.enabled", "package operations arrive in S1d (they run in the broad unit, which is not generated yet)")
+	if !raw.Enabled {
+		return
 	}
+	p.Packages.Enabled = true
+	v.aptGet(p)
+	v.find("root-equivalent", "packages", "package operations run in the broad unit; maintainer scripts run arbitrary code as root (install %s; remove %s; update index %v; upgrade %v)",
+		strings.Join(p.Packages.Install, " "), strings.Join(p.Packages.Remove, " "), p.Packages.AllowUpdateIndex, p.Packages.AllowUpgrade)
+	if p.MaxTier != 0 && p.MaxTier < TierOperator {
+		v.warn("packages are enabled but max_tier %s refuses every package operation except the previews", p.MaxTier)
+	}
+}
+
+// DefaultAptGet is the apt-get binary the package operations run.
+const DefaultAptGet = "/usr/bin/apt-get"
+
+// aptGet checks the apt-get binary as a command binary is checked: it
+// resolves, it and its directories are root-owned and not
+// group/other-writable, and it is executable.
+func (v *validator) aptGet(p *Policy) {
+	path := v.opts.AptGet
+	if path == "" {
+		path = DefaultAptGet
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		v.fail("packages", "%s cannot be resolved: %v", path, gpolicy.ErrReason(err))
+		return
+	}
+	if _, err := gpolicy.CheckChain(v.opts.Trust, resolved); err != nil {
+		v.fail("packages", "%v", err)
+		return
+	}
+	fi, err := os.Stat(resolved)
+	if err != nil {
+		v.fail("packages", "%s: %v", resolved, gpolicy.ErrReason(err))
+		return
+	}
+	if ferr := gpolicy.CheckFile(v.opts.Trust, resolved, fi); ferr != nil {
+		v.fail("packages", "%v", ferr)
+		return
+	}
+	if fi.Mode().Perm()&0o111 == 0 {
+		v.fail("packages", "%s is not executable", resolved)
+		return
+	}
+	p.Packages.AptGet = resolved
+}
+
+// PowerActions are what power.allowed may list (priv_power).
+var PowerActions = []string{"reboot", "poweroff"}
+
+// power validates the power section: the built-in priv_power operation,
+// which asks systemd to start reboot.target or poweroff.target from the
+// broad unit. It needs a non-empty one-line acknowledge (POLICY §5 group
+// 11 is list B) and is always reported.
+func (v *validator) power(p *Policy, raw *rawPower) {
+	if raw == nil {
+		return
+	}
+	ok := true
+	if len(raw.Allowed) == 0 {
+		v.fail("power.allowed", "lists no action; want one or both of %s", strings.Join(PowerActions, ", "))
+		ok = false
+	}
+	var allowed []string
+	for i, a := range raw.Allowed {
+		field := fmt.Sprintf("power.allowed[%d]", i)
+		switch {
+		case !slices.Contains(PowerActions, a):
+			v.fail(field, "%q is not one of %s", a, strings.Join(PowerActions, ", "))
+			ok = false
+		case slices.Contains(allowed, a):
+			v.fail(field, "duplicate action %q", a)
+			ok = false
+		default:
+			allowed = append(allowed, a)
+		}
+	}
+	if !oneLine(raw.Acknowledge) {
+		v.fail("power.acknowledge", "is required: one line of at most %d characters saying when the host may be rebooted or powered off (PRIVILEGED §5.3 list B)", maxText)
+		ok = false
+	}
+	if !ok {
+		return
+	}
+	p.Power = Power{Allowed: allowed, Acknowledge: raw.Acknowledge}
+	v.find("power", strings.Join(allowed, " "), "priv_power runs in the broad unit and asks systemd to start %s; acknowledge: %s",
+		strings.Join(powerTargets(allowed), " and "), raw.Acknowledge)
+	if p.MaxTier != 0 && p.MaxTier < TierDestructive {
+		v.warn("power: priv_power is destructive and max_tier %s will always refuse it", p.MaxTier)
+	}
+}
+
+func powerTargets(actions []string) []string {
+	out := make([]string, len(actions))
+	for i, a := range actions {
+		out[i] = a + ".target"
+	}
+	return out
+}
+
+// broadCapabilityEffect says what a capability declared by a broad-unit
+// command changes: the broad unit already has full root capabilities, so
+// only CAP_SYS_TIME has an effect (ProtectClock= is then off).
+func broadCapabilityEffect(cp string) string {
+	if cp == "CAP_SYS_TIME" {
+		return "; the broad unit drops ProtectClock=yes"
+	}
+	return "; the broad unit already has it"
 }

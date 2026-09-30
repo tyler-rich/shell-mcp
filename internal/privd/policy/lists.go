@@ -40,7 +40,7 @@ var declarable = []string{"CAP_SYS_BOOT", "CAP_NET_ADMIN", "CAP_NET_BIND_SERVICE
 // unit (PRIVILEGED §5.1): ProtectClock=yes removes CAP_SYS_TIME from the
 // bounding set and filters @clock, and PrivateNetwork=yes with
 // RestrictAddressFamilies=AF_UNIX leaves the network capabilities nothing
-// to act on. They are valid only on `unit: broad` commands (S1d).
+// to act on. They are valid only on `unit: broad` commands.
 var brokenInCore = map[string]string{
 	"CAP_SYS_TIME":         "ProtectClock=yes removes it from the core unit's bounding set",
 	"CAP_NET_ADMIN":        "the core unit has a private network namespace and only AF_UNIX sockets",

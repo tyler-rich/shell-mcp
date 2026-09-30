@@ -15,6 +15,7 @@ package policy
 
 import (
 	"os"
+	"slices"
 
 	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/pathx"
@@ -159,9 +160,11 @@ type Command struct {
 	Templates []template.Template
 }
 
-// Packages is the packages section (parsed and validated; S1d enables it).
+// Packages is the packages section (the apt operations, broad unit).
 type Packages struct {
-	Enabled          bool
+	Enabled bool
+	// AptGet is the resolved apt-get binary (set when Enabled).
+	AptGet           string
 	Manager          string
 	Install          []string
 	Remove           []string
@@ -175,11 +178,24 @@ type Power struct {
 	Acknowledge string
 }
 
-// UsesBroad reports whether the policy uses the broad unit (stub).
-func (p *Policy) UsesBroad() bool { return false }
+// UsesBroad reports whether the policy uses the broad unit (PRIVILEGED §5.2):
+// packages enabled, a command declared unit: broad, or power. Only then is
+// the broad unit generated.
+func (p *Policy) UsesBroad() bool {
+	if p.Packages.Enabled || len(p.Power.Allowed) > 0 {
+		return true
+	}
+	return slices.ContainsFunc(p.Commands, func(c Command) bool { return c.Unit == UnitBroad })
+}
 
-// BroadProtectClock reports whether the broad unit keeps ProtectClock= (stub).
-func (p *Policy) BroadProtectClock() bool { return false }
+// BroadProtectClock reports whether the broad unit keeps ProtectClock=yes:
+// it does unless a broad-unit command declares CAP_SYS_TIME, the only
+// directive a capability may relax there (PRIVILEGED §5.2).
+func (p *Policy) BroadProtectClock() bool {
+	return !slices.ContainsFunc(p.Commands, func(c Command) bool {
+		return c.Unit == UnitBroad && slices.Contains(c.Capabilities, "CAP_SYS_TIME")
+	})
+}
 
 // Finding is one item check-policy reports for review.
 type Finding struct {

@@ -67,6 +67,8 @@ func breakages(t *testing.T) map[string]breakage {
 			rewritePolicy(f, "version: 1\n", "version: 1\n# edited after the units were generated\n")
 		}, "policy_hash", "helper_policy_mismatch"},
 		"no hash in the unit": {func(f *fixture) { f.opts.ExpectedSHA256 = "" }, "policy_hash", "helper_policy_mismatch"},
+		// A unit that does not say which sandbox it is (SHELL_MCP_PRIVD_UNIT).
+		"no unit in the unit": {func(f *fixture) { f.opts.Unit = "" }, "unit", "helper_install_insecure"},
 		// The unit names another client than the policy (a hand-edited
 		// unit): the peer passed the unit's check, so it is told.
 		"client_uid differs from the unit's": {func(f *fixture) {
@@ -299,8 +301,12 @@ func TestRequestErrors(t *testing.T) {
 			t.Errorf("%q: %q, want %s", in, out, code)
 		}
 	}
-	for _, op := range []string{"priv_pkg_install", "priv_pkg_update_index", "priv_pkg_upgrade", "priv_pkg_remove", "read_file", "priv_made_up"} {
+	for _, op := range []string{"read_file", "priv_made_up"} {
 		f.fail(op, m{}, "unknown_op")
+	}
+	// The package operations run in the broad unit; this is the core unit.
+	for _, op := range []string{"priv_pkg_install", "priv_pkg_update_index", "priv_pkg_upgrade", "priv_pkg_remove"} {
+		f.fail(op, m{}, "helper_wrong_unit")
 	}
 	f.fail("priv_stat", m{"path": f.read, "extra": true}, "bad_request")
 }

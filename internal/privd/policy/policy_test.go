@@ -682,7 +682,7 @@ func TestPower(t *testing.T) {
 	for y, want := range map[string]string{
 		"power:\n  allowed: [reboot]\n":                                      "power.acknowledge",
 		"power:\n  allowed: [reboot]\n  acknowledge: \"\"\n":                 "power.acknowledge",
-		"power:\n  allowed: [reboot]\n  acknowledge: \"two\nlines\"\n":       "power.acknowledge",
+		"power:\n  allowed: [reboot]\n  acknowledge: \"two\\nlines\"\n":      "power.acknowledge",
 		"power:\n  allowed: []\n  acknowledge: \"x\"\n":                      "power.allowed",
 		"power:\n  acknowledge: \"x\"\n":                                     "power.allowed",
 		"power:\n  allowed: [halt]\n  acknowledge: \"x\"\n":                  "power.allowed",

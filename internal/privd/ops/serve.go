@@ -103,6 +103,8 @@ func ProductionOptions(version, policyPath string) Options {
 			return filepath.EvalSymlinks(exe)
 		},
 		UnitClientUID:  os.Getenv(units.ClientUIDEnv),
+		Unit:           os.Getenv(units.UnitEnv),
+		AptGet:         policy.DefaultAptGet,
 		ExpectedSHA256: os.Getenv(units.HashEnv),
 		Trust:          gpolicy.RootTrust(),
 		Lookups:        policy.ProductionLookups,
@@ -122,7 +124,9 @@ type server struct {
 	p     *policy.Policy
 	cred  peercred.Cred
 	// unitUID is the unit's client uid, which the peer matched.
-	unitUID   uint32
+	unitUID uint32
+	// unit is the unit this instance runs in (SHELL_MCP_PRIVD_UNIT).
+	unit      policy.Unit
 	fs        *fsx.FS
 	restoreFS *fsx.FS
 	red       *redact.Redactor
@@ -251,7 +255,7 @@ func (s *server) checks() error {
 	if e := selfcheck.Binary(o.Trust, o.Executable); e != nil {
 		return e
 	}
-	lo := &policy.LoadOptions{Trust: o.Trust, HelperExecutable: o.Executable, SystemBinDirs: o.SystemBinDirs}
+	lo := &policy.LoadOptions{Trust: o.Trust, HelperExecutable: o.Executable, SystemBinDirs: o.SystemBinDirs, AptGet: o.AptGet}
 	o.Lookups(lo)
 	p, err := policy.Load(o.PolicyPath, lo)
 	if err != nil {
@@ -267,9 +271,24 @@ func (s *server) checks() error {
 	if e := selfcheck.ClientUID(p.ClientUID, s.unitUID); e != nil {
 		return e
 	}
-	if e := selfcheck.Capabilities(&st, p.Capabilities); e != nil {
-		return e
+	// Which unit this instance runs in: core, or broad for a policy that uses
+	// the broad unit (a broad instance for any other policy is a stale unit).
+	u, err := selfcheck.Unit(o.Unit)
+	if err != nil {
+		return err
 	}
+	if u == policy.UnitBroad && !p.UsesBroad() {
+		return &selfcheck.Error{Check: selfcheck.CheckUnit, Detail: "this is the broad unit, but the policy uses no broad unit (no packages, unit: broad command or power); remove the broad units"}
+	}
+	if u == policy.UnitCore {
+		err = selfcheck.Capabilities(&st, p.Capabilities)
+	} else {
+		err = selfcheck.BroadCapabilities(&st, p.BroadProtectClock())
+	}
+	if err != nil {
+		return err
+	}
+	s.unit = u
 	s.p = p
 	return nil
 }
@@ -316,6 +335,8 @@ func selfCheckFailure(err error) (code, msg string) {
 		return protocol.CodeHelperPolicyMismatch, "the privileged policy changed after the units were generated; regenerate and reinstall them (shell-mcp-privd units)"
 	case selfcheck.CheckClientUID:
 		return protocol.CodeHelperClientUIDMismatch, "the unit's client uid is not the privileged policy's client_uid; regenerate and reinstall the units (shell-mcp-privd units)"
+	case selfcheck.CheckUnit:
+		return protocol.CodeHelperInstallInsecure, "the unit does not say which sandbox it is (SHELL_MCP_PRIVD_UNIT), or is a broad unit for a policy that uses none; regenerate and reinstall the units (shell-mcp-privd units)"
 	case selfcheck.CheckCapabilities:
 		return protocol.CodeHelperCapabilitiesBroad, "the privileged helper's capability bounding set is broader than its unit declares; reinstall the generated units"
 	}
@@ -357,6 +378,11 @@ func policyInvalidMessage(err error) string {
 // *selfcheck.Error for the "landlock" check.
 func (s *server) sandbox() error {
 	_ = unix.Setrlimit(unix.RLIMIT_CORE, &unix.Rlimit{Cur: 0, Max: 0})
+	if s.unit != policy.UnitCore {
+		// The broad unit has no Landlock sandbox: package managers write
+		// anywhere and broad commands need the network (PRIVILEGED §5.2, §7).
+		return nil
+	}
 	if _, err := s.o.ApplySandbox(s.p, s.o.BackupDir); err != nil {
 		return &selfcheck.Error{Check: selfcheck.CheckLandlock, Detail: err.Error()}
 	}

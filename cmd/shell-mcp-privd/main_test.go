@@ -212,3 +212,44 @@ func TestVarRunMustBeRun(t *testing.T) {
 		})
 	}
 }
+
+// units writes the broad unit pair only for a policy that uses the broad
+// unit (packages, unit: broad commands, power), and says so either way.
+func TestUnitsBroad(t *testing.T) {
+	env, p := testEnv(t, validPolicy)
+	out := t.TempDir()
+	var so, se bytes.Buffer
+	if code := unitsWith([]string{"--policy", p, "--out", out}, &so, &se, env); code != 0 {
+		t.Fatalf("exit %d: %s %s", code, so.String(), se.String())
+	}
+	if _, err := os.Stat(filepath.Join(out, units.BroadServiceUnit)); err == nil || !strings.Contains(so.String(), "no broad unit") {
+		t.Fatalf("a policy without broad users got a broad unit: %s", so.String())
+	}
+	env, p = testEnv(t, validPolicy+"power:\n  allowed: [reboot]\n  acknowledge: \"invented maintenance window\"\n")
+	out = t.TempDir()
+	so.Reset()
+	if code := unitsWith([]string{"--policy", p, "--out", out}, &so, &se, env); code != 0 {
+		t.Fatalf("exit %d: %s %s", code, so.String(), se.String())
+	}
+	lo := &policy.LoadOptions{Trust: env.trust, HelperExecutable: env.executable, SystemBinDirs: env.systemBinDirs}
+	env.lookups(lo)
+	pol, err := policy.Load(p, lo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := units.Broad(pol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{units.BroadSocketUnit: want.Socket, units.BroadServiceUnit: want.Service} {
+		b, err := os.ReadFile(filepath.Join(out, name)) //nolint:gosec // G304: test output
+		if err != nil || string(b) != content {
+			t.Fatalf("%s: %v\n%s", name, err, b)
+		}
+	}
+	for _, s := range []string{units.BroadSocketUnit, "root-equivalent"} {
+		if !strings.Contains(so.String(), s) {
+			t.Errorf("output lacks %q: %s", s, so.String())
+		}
+	}
+}

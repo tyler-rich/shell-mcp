@@ -40,6 +40,8 @@ const (
 	CheckUnitClientUID = "unit_client_uid"
 	// CheckLandlock is the core unit's Landlock sandbox (PRIVILEGED §7 step 3).
 	CheckLandlock = "landlock"
+	// CheckUnit is the unit's SHELL_MCP_PRIVD_UNIT (core or broad).
+	CheckUnit = "unit"
 )
 
 // Error is a failed self-check. Check names it for the audit line; Detail
@@ -255,6 +257,45 @@ func UnitClientUID(env string) (uint32, error) {
 func ClientUID(policyUID, unitUID uint32) error {
 	if policyUID != unitUID {
 		return &Error{CheckClientUID, fmt.Sprintf("the policy's client_uid %d is not the unit's SHELL_MCP_PRIVD_CLIENT_UID %d; regenerate and reinstall the units", policyUID, unitUID)}
+	}
+	return nil
+}
+
+// Unit parses the unit's SHELL_MCP_PRIVD_UNIT: exactly "core" or "broad".
+func Unit(env string) (policy.Unit, error) {
+	switch u := policy.Unit(env); u {
+	case policy.UnitCore, policy.UnitBroad:
+		return u, nil
+	}
+	shown := env
+	if len(shown) > maxUnitValue {
+		shown = shown[:maxUnitValue] + "..."
+	}
+	return "", &Error{CheckUnit, fmt.Sprintf("the unit's SHELL_MCP_PRIVD_UNIT is %q, not core or broad; regenerate and reinstall the units (shell-mcp-privd units)", shown)}
+}
+
+// Capabilities the broad unit's directives drop from root's bounding set
+// (systemd.exec(5)): ProtectKernelModules=yes drops CAP_SYS_MODULE;
+// ProtectClock=yes drops CAP_SYS_TIME and CAP_WAKE_ALARM.
+const (
+	capSysModule  = 16
+	capSysTime    = 25
+	capWakeAlarm  = 35
+	allCapsMask   = ^uint64(0)
+	broadDropMask = uint64(1) << capSysModule
+	clockDropMask = uint64(1)<<capSysTime | uint64(1)<<capWakeAlarm
+)
+
+// BroadCapabilities requires the broad unit's bounding set to be no broader
+// than its directives leave: root's full set without CAP_SYS_MODULE, and
+// without CAP_SYS_TIME and CAP_WAKE_ALARM while it keeps ProtectClock=yes.
+func BroadCapabilities(s *Status, protectClock bool) error {
+	m := allCapsMask &^ broadDropMask
+	if protectClock {
+		m &^= clockDropMask
+	}
+	if extra := s.CapBnd &^ m; extra != 0 {
+		return &Error{CheckCapabilities, fmt.Sprintf("bounding set %016x is broader than the broad unit's %016x (extra %016x)", s.CapBnd, m, extra)}
 	}
 	return nil
 }
