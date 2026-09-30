@@ -625,6 +625,8 @@ Each entry sets `SHELL_MCP_REQUIRE_LANDLOCK_ABI` to its kernel's ABI, so every k
 
 **Tests (committed first, shown failing):** `2674844` (protocol codes, unit env and goldens, `UnitClientUID` + `FuzzUnitClientUID`, `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`, `TestPeerCheckComesFirst`, `TestNoRequestByteReadBeforeChecksPass`, `TestForwardHelperSelfCheckCodes`, e2e `TestHelperPolicyHashMismatch` → `helper_policy_mismatch`, `TestHelperPolicyInvalidAnswered`, `TestHelperUnitClientUID`) and `f7961d8` (the generator refuses root or (uid_t)-1 as the client). `TestHelperWrongPeerRefused` is unchanged and still expects a silent close mapped to `helper_refused`.
 
+**First CI run:** `e2e-host` passed with the new cases. Both `go` entries failed `TestForwardHelperSelfCheckCodes` with `bind: invalid argument`. The runner's longer `TMPDIR` plus the long subtest names in `t.TempDir()` passed the 108-byte `sun_path` limit. The gate tests now bind their sockets in a short `os.MkdirTemp` directory (`c53a39c`), verified locally under a long `TMPDIR`.
+
 **Fuzzing (60 s each, golang container, no crashers):** `FuzzUnitClientUID` (selfcheck, new) 27,248,058 execs; `FuzzDecodeResponse` (protocol, the code set grew) 28,711,704.
 
 **Alternatives rejected:**
