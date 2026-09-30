@@ -257,17 +257,31 @@ func TestServeAnswersAuthenticatedPeer(t *testing.T) {
 	}
 }
 
+// A Landlock refusal in the core unit is answered like the other
+// self-check failures (PRIVILEGED §7 step 3): helper_sandbox_unavailable —
+// never the gate's own sandbox_unavailable, so an operator can tell which
+// component lacks the sandbox — without an id (the request is unread),
+// with a one-line message naming no local path, a WARN journal line naming
+// the check, and exit status 1.
 func TestSandboxRefusal(t *testing.T) {
 	f := newFixture(t)
 	f.opts.ApplySandbox = func(*policy.Policy, string) (sandbox.Report, error) {
 		return sandbox.Report{}, sandbox.ErrUnavailable
 	}
-	// The request is never read, so the response has no id.
 	in := request("priv_stat", m{"path": f.read})
 	out, code := f.serveRaw(in)
 	var r response
-	if err := json.Unmarshal([]byte(out), &r); err != nil || code != 0 || r.ID != "" || r.Error == nil || r.Error.Code != "sandbox_unavailable" || f.unread != len(in) {
+	if err := json.Unmarshal([]byte(out), &r); err != nil || code != 1 || r.ID != "" || r.Error == nil || r.Error.Code != "helper_sandbox_unavailable" || f.unread != len(in) {
 		t.Fatalf("exit %d response %q, unread %d of %d", code, out, f.unread, len(in))
+	}
+	if msg := r.Error.Message; msg == "" || strings.Contains(msg, f.d) || strings.ContainsAny(msg, "\r\n") {
+		t.Fatalf("message %q is empty, multi-line or names a local path", msg)
+	}
+	l := f.lastAudit()
+	for _, want := range []string{`"check":"landlock"`, `"outcome":"helper_sandbox_unavailable"`, fmt.Sprintf(`"peer_uid":%d`, f.uid)} {
+		if !strings.HasPrefix(l, "<4>") || !strings.Contains(l, want) {
+			t.Fatalf("audit line %q lacks %s at WARN", l, want)
+		}
 	}
 }
 

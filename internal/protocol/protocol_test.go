@@ -192,7 +192,10 @@ func TestCodesClosedSet(t *testing.T) {
 		// The helper's own self-checks (PRIVILEGED §7), answered to the
 		// authenticated gate before the request is read.
 		"helper_install_insecure", "helper_policy_invalid", "helper_policy_mismatch",
-		"helper_client_uid_mismatch", "helper_capabilities_broad"}
+		"helper_client_uid_mismatch", "helper_capabilities_broad",
+		// The helper's Landlock refusal (PRIVILEGED §7 step 3), distinct from the
+		// gate's own sandbox_unavailable.
+		"helper_sandbox_unavailable"}
 	if !slices.Equal(Codes, want) {
 		t.Fatalf("Codes = %v", Codes)
 	}
