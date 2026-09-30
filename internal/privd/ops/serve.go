@@ -81,6 +81,9 @@ type Options struct {
 	// Audit receives one line per connection (production: stderr, which
 	// the unit sends to the journal).
 	Audit io.Writer
+	// SystemBus is the system bus socket priv_power talks to (production:
+	// dbus.SystemBus).
+	SystemBus string
 	// PkgLockRetry is the pause between attempts while the dpkg or lists lock
 	// is held (0 means 2 s); tests only.
 	PkgLockRetry time.Duration
