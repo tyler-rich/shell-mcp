@@ -195,11 +195,16 @@ func TestCodesClosedSet(t *testing.T) {
 		"helper_client_uid_mismatch", "helper_capabilities_broad",
 		// The helper's Landlock refusal (PRIVILEGED §7 step 3), distinct from the
 		// gate's own sandbox_unavailable.
-		"helper_sandbox_unavailable"}
+		"helper_sandbox_unavailable",
+		// An operation that reached the other unit's helper instance (the
+		// helper is authoritative for routing).
+		"helper_wrong_unit"}
 	if !slices.Equal(Codes, want) {
 		t.Fatalf("Codes = %v", Codes)
 	}
-	if len(PrivOps) != 17 {
+	// PRIVILEGED §6: the core operations, priv_exec, the four package
+	// operations, their three read-tier previews, and priv_power.
+	if len(PrivOps) != 21 {
 		t.Fatalf("PrivOps has %d entries", len(PrivOps))
 	}
 }

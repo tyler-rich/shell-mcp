@@ -32,6 +32,10 @@ const (
 	BackupDir   = "/var/lib/shell-mcp/backups"
 	SocketUnit  = "shell-mcp-privd.socket"
 	ServiceUnit = "shell-mcp-privd@.service"
+	// BroadSocketPath, BroadSocketUnit and BroadServiceUnit are the broad unit's.
+	BroadSocketPath  = "/run/shell-mcp/privd-broad.sock"
+	BroadSocketUnit  = "shell-mcp-privd-broad.socket"
+	BroadServiceUnit = "shell-mcp-privd-broad@.service"
 	// HashEnv carries the policy hash into the helper.
 	HashEnv = "SHELL_MCP_PRIVD_POLICY_SHA256"
 	// ClientUIDEnv carries the policy's client_uid into the helper, so the
@@ -270,3 +274,6 @@ func Render(lines [][2]string) (string, error) {
 	}
 	return b.String(), nil
 }
+
+// Broad generates the broad unit pair (stub).
+func Broad(p *policy.Policy) (Files, error) { return Files{}, errors.New("not implemented") }

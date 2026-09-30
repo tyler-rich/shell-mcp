@@ -35,6 +35,8 @@ type fixture struct {
 	opts                                ops.Options
 	audit                               *bytes.Buffer
 	status                              string
+	// unit is SHELL_MCP_PRIVD_UNIT (core unless asBroad).
+	unit string
 	// sandboxCalls counts ApplySandbox; unreadAtSandbox is how many request
 	// bytes were still unread on the helper's end of the connection when it
 	// was applied, and unread how many were left when Serve returned (both
@@ -61,6 +63,41 @@ func maxTier(t string) opt {
 	return func(_ *fixture, s *string) { *s = strings.Replace(*s, "max_tier: destructive", "max_tier: "+t, 1) }
 }
 
+// broadUsers makes the policy use the broad unit: a broad command, packages
+// and power (the instance stays the core unit unless asBroad is also given).
+func broadUsers() opt {
+	return func(f *fixture, s *string) {
+		*s += fmt.Sprintf(`  - id: probe-broad
+    path: %s
+    tier: read
+    unit: broad
+    templates: [["echo", "{regex:^[a-z]+$}"], ["write", "{path:write}", "{regex:^[a-z]+$}"]]
+packages:
+  enabled: true
+  install: [example-hello]
+  remove: [example-hello]
+  allow_update_index: true
+power:
+  allowed: [reboot]
+  acknowledge: "invented test policy"
+`, f.probe)
+	}
+}
+
+// broadCapBnd is the broad unit's bounding set on a kernel with 41
+// capabilities: every one except CAP_SYS_MODULE (ProtectKernelModules=yes),
+// CAP_SYS_TIME and CAP_WAKE_ALARM (ProtectClock=yes).
+const broadCapBnd = "000001f7fdfeffff"
+
+// asBroad makes this instance the broad unit's (SHELL_MCP_PRIVD_UNIT=broad,
+// the broad unit's bounding set).
+func asBroad() opt {
+	return func(f *fixture, _ *string) {
+		f.unit = "broad"
+		f.status = statusFor("0", "1", broadCapBnd)
+	}
+}
+
 func keep(n int) opt {
 	return func(_ *fixture, s *string) { *s = strings.Replace(*s, "keep: 3", fmt.Sprintf("keep: %d", n), 1) }
 }
@@ -81,6 +118,7 @@ func newFixture(t *testing.T, opts ...opt) *fixture {
 		gid:     uint32(os.Getgid()), //nolint:gosec // G115: test ids fit
 		audit:   &bytes.Buffer{},
 		status:  statusFor("0", "1", "000000000000000f"),
+		unit:    "core",
 	}
 	for _, p := range []string{f.read, f.write, f.etc} {
 		gatetest.Mkdir(t, p, 0o755)
@@ -167,6 +205,8 @@ commands:
 		},
 		SystemBinDirs: []string{filepath.Join(d, "sysbin")},
 		UnitClientUID: strconv.FormatUint(uint64(f.uid), 10),
+		Unit:          f.unit,
+		AptGet:        f.probe,
 		ReadStatus: func() ([]byte, error) {
 			f.statusReads++
 			return []byte(f.status), nil

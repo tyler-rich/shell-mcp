@@ -53,6 +53,10 @@ type Options struct {
 	ExpectedSHA256 string
 	// UnitClientUID is SHELL_MCP_PRIVD_CLIENT_UID from the unit.
 	UnitClientUID string
+	// Unit is SHELL_MCP_PRIVD_UNIT from the unit: core or broad.
+	Unit string
+	// AptGet is the apt-get binary (production: /usr/bin/apt-get).
+	AptGet string
 	// ResolveExecutable, when set, resolves Executable after the peer check
 	// (production: the running binary, so nothing touches the filesystem
 	// before the peer is authenticated).

@@ -138,7 +138,7 @@ func TestServiceDirectives(t *testing.T) {
 	want(t, d, s+"SyslogIdentifier", "shell-mcp-privd")
 	// The unit pins the policy hash and names the peer the helper serves:
 	// the peer check needs no disk read (PRIVILEGED §7).
-	want(t, d, s+"Environment", "SHELL_MCP_PRIVD_POLICY_SHA256="+hash, "SHELL_MCP_PRIVD_CLIENT_UID=60123")
+	want(t, d, s+"Environment", "SHELL_MCP_PRIVD_POLICY_SHA256="+hash, "SHELL_MCP_PRIVD_CLIENT_UID=60123", "SHELL_MCP_PRIVD_UNIT=core")
 	want(t, d, s+"User", "root")
 	want(t, d, s+"NoNewPrivileges", "yes")
 	want(t, d, s+"CapabilityBoundingSet", "CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_KILL CAP_SYS_BOOT")
@@ -204,11 +204,13 @@ func TestRefusesWhatTheCoreUnitCannotHold(t *testing.T) {
 		t.Fatalf("control: %v", err)
 	}
 	for name, mut := range map[string]func(p *policy.Policy){
-		"unknown capability":  func(p *policy.Policy) { p.Capabilities = append(p.Capabilities, "CAP_SYS_MODULE") },
-		"core-ineffective":    func(p *policy.Policy) { p.Capabilities = append(p.Capabilities, "CAP_SYS_TIME") },
-		"missing base":        func(p *policy.Policy) { p.Capabilities = p.Capabilities[1:] },
-		"broad command":       func(p *policy.Policy) { p.Commands = []policy.Command{{ID: "x", Unit: policy.UnitBroad}} },
-		"packages":            func(p *policy.Policy) { p.Packages.Enabled = true },
+		"unknown capability": func(p *policy.Policy) { p.Capabilities = append(p.Capabilities, "CAP_SYS_MODULE") },
+		"core-ineffective":   func(p *policy.Policy) { p.Capabilities = append(p.Capabilities, "CAP_SYS_TIME") },
+		"missing base":       func(p *policy.Policy) { p.Capabilities = p.Capabilities[1:] },
+		"broad capability in the core set": func(p *policy.Policy) {
+			p.Commands = append(p.Commands, policy.Command{ID: "x", Unit: policy.UnitBroad, Capabilities: []string{"CAP_SYS_ADMIN"}})
+			p.Capabilities = append(p.Capabilities, "CAP_SYS_ADMIN")
+		},
 		"no hash":             func(p *policy.Policy) { p.SHA256 = "" },
 		"bad hash":            func(p *policy.Policy) { p.SHA256 = strings.ToUpper(hash) },
 		"relative policy":     func(p *policy.Policy) { p.File = "privileged.yaml" },
@@ -280,5 +282,165 @@ func TestNeverPrivateUsersOrRootDirectory(t *testing.T) {
 				t.Fatalf("generated unit contains %s", bad)
 			}
 		}
+	}
+}
+
+// broadPolicy uses the broad unit for packages, a broad command and power
+// (invented values).
+func broadPolicy() *policy.Policy {
+	p := examplePolicy()
+	p.Commands = append(p.Commands, policy.Command{ID: "renew-certs", Unit: policy.UnitBroad, RootEquivalent: true})
+	p.Packages = policy.Packages{Enabled: true, Manager: "apt", Install: []string{"htop"}, Remove: []string{"htop"}, AllowUpdateIndex: true}
+	p.Power = policy.Power{Allowed: []string{"reboot"}, Acknowledge: "maintenance windows"}
+	return p
+}
+
+func generateBroad(t *testing.T, p *policy.Policy) units.Files {
+	t.Helper()
+	f, err := units.Broad(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func TestBroadGolden(t *testing.T) {
+	f := generateBroad(t, broadPolicy())
+	golden(t, "broad.socket.golden", f.Socket)
+	golden(t, "broad.service.golden", f.Service)
+}
+
+// The broad unit is generated only when the policy uses it: packages
+// enabled, a unit: broad command, or power.
+func TestBroadOnlyWhenUsed(t *testing.T) {
+	if f, err := units.Broad(examplePolicy()); err == nil {
+		t.Fatalf("a policy without packages, broad commands or power generated a broad unit:\n%s", f.Service)
+	}
+	for name, mut := range map[string]func(p *policy.Policy){
+		"packages": func(p *policy.Policy) { p.Packages.Enabled = true },
+		"broad command": func(p *policy.Policy) {
+			p.Commands = append(p.Commands, policy.Command{ID: "b", Unit: policy.UnitBroad})
+		},
+		"power": func(p *policy.Policy) { p.Power = policy.Power{Allowed: []string{"poweroff"}, Acknowledge: "x"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := examplePolicy()
+			mut(p)
+			generateBroad(t, p)
+			// The core unit is generated from the same policy, unchanged.
+			if generate(t, p).Service != generate(t, examplePolicy()).Service {
+				t.Fatal("the broad unit's users changed the core unit")
+			}
+		})
+	}
+}
+
+func TestBroadSocketDirectives(t *testing.T) {
+	d := directives(t, generateBroad(t, broadPolicy()).Socket)
+	want(t, d, "[Socket]ListenStream", "/run/shell-mcp/privd-broad.sock")
+	want(t, d, "[Socket]Accept", "yes")
+	want(t, d, "[Socket]SocketUser", "root")
+	want(t, d, "[Socket]SocketGroup", "svc-shell-priv")
+	want(t, d, "[Socket]SocketMode", "0660")
+	want(t, d, "[Socket]DirectoryMode", "0711")
+	want(t, d, "[Socket]MaxConnections", "16")
+	want(t, d, "[Install]WantedBy", "sockets.target")
+}
+
+// TestBroadServiceDirectives: every PRIVILEGED §5.2 directive, exactly —
+// network allowed, ProtectSystem= off, full root capabilities,
+// RestrictSUIDSGID= off (so none of those appear), and still
+// NoNewPrivileges=, PrivateTmp=, ProtectKernelModules=,
+// ProtectKernelTunables=, ProtectClock=, RuntimeMaxSec=, TasksMax=,
+// MemoryMax= — with the same client uid and policy hash as the core unit.
+func TestBroadServiceDirectives(t *testing.T) {
+	d := directives(t, generateBroad(t, broadPolicy()).Service)
+	s := "[Service]"
+	want(t, d, s+"ExecStart", "/usr/local/libexec/shell-mcp-privd serve --policy /etc/shell-mcp/privileged.yaml")
+	want(t, d, s+"StandardInput", "socket")
+	want(t, d, s+"StandardOutput", "socket")
+	want(t, d, s+"StandardError", "journal")
+	want(t, d, s+"SyslogIdentifier", "shell-mcp-privd")
+	want(t, d, s+"Environment", "SHELL_MCP_PRIVD_POLICY_SHA256="+hash, "SHELL_MCP_PRIVD_CLIENT_UID=60123", "SHELL_MCP_PRIVD_UNIT=broad")
+	want(t, d, s+"User", "root")
+	for _, k := range []string{"NoNewPrivileges", "PrivateTmp", "ProtectKernelModules", "ProtectKernelTunables", "ProtectClock"} {
+		want(t, d, s+k, "yes")
+	}
+	want(t, d, s+"RuntimeMaxSec", "150")
+	want(t, d, s+"TasksMax", "256")
+	want(t, d, s+"MemoryMax", "1G")
+	want(t, d, "[Unit]CollectMode", "inactive-or-failed")
+	for _, k := range []string{"ProtectSystem", "CapabilityBoundingSet", "PrivateNetwork", "RestrictAddressFamilies", "IPAddressDeny",
+		"RestrictSUIDSGID", "ReadWritePaths", "TemporaryFileSystem", "SystemCallFilter", "PrivateUsers", "RootDirectory"} {
+		if v, ok := d[s+k]; ok {
+			t.Errorf("the broad unit sets %s=%v, which §5.2 does not list", k, v)
+		}
+	}
+	if n := len(d); n != 18 {
+		keys := make([]string, 0, n)
+		for k := range d {
+			keys = append(keys, k)
+		}
+		slices.Sort(keys)
+		t.Errorf("%d directives, want 18: %q", n, keys)
+	}
+}
+
+// A broad command that declares CAP_SYS_TIME turns ProtectClock= off in the
+// broad unit only; no other capability relaxes anything there, and the
+// core unit keeps ProtectClock=yes.
+func TestBroadProtectClockOnlyForCAPSYSTIME(t *testing.T) {
+	for _, c := range []string{"CAP_SYS_TIME", "CAP_NET_ADMIN", "CAP_NET_BIND_SERVICE", "CAP_KILL"} {
+		t.Run(c, func(t *testing.T) {
+			p := broadPolicy()
+			p.Commands = append(p.Commands, policy.Command{ID: "clock", Unit: policy.UnitBroad, Capabilities: []string{c}})
+			bd := directives(t, generateBroad(t, p).Service)
+			if c == "CAP_SYS_TIME" {
+				if v, ok := bd["[Service]ProtectClock"]; ok {
+					t.Fatalf("ProtectClock=%v with a broad CAP_SYS_TIME", v)
+				}
+			} else {
+				want(t, bd, "[Service]ProtectClock", "yes")
+			}
+			cd := directives(t, generate(t, p).Service)
+			want(t, cd, "[Service]ProtectClock", "yes")
+			// A broad CAP_KILL does not relax the core unit's ProtectProc=.
+			want(t, cd, "[Service]ProtectProc", "default") // examplePolicy's own core CAP_KILL
+		})
+	}
+	p := broadPolicy()
+	p.Commands = []policy.Command{{ID: "k", Unit: policy.UnitBroad, Capabilities: []string{"CAP_KILL"}}}
+	p.Capabilities = append([]string(nil), policy.BaseCapabilities...)
+	want(t, directives(t, generate(t, p).Service), "[Service]ProtectProc", "invisible")
+}
+
+// Both sockets stay well under the 108-byte sun_path limit (unix(7)).
+func TestSocketPathsFit(t *testing.T) {
+	for _, p := range []string{units.SocketPath, units.BroadSocketPath} {
+		if len(p) >= 64 {
+			t.Errorf("%s is %d bytes", p, len(p))
+		}
+	}
+	if units.BroadSocketUnit != "shell-mcp-privd-broad.socket" || units.BroadServiceUnit != "shell-mcp-privd-broad@.service" {
+		t.Errorf("broad unit names %s %s", units.BroadSocketUnit, units.BroadServiceUnit)
+	}
+}
+
+// The broad unit refuses what the core refuses about the policy itself.
+func TestBroadRefuses(t *testing.T) {
+	for name, mut := range map[string]func(p *policy.Policy){
+		"no hash":         func(p *policy.Policy) { p.SHA256 = "" },
+		"relative policy": func(p *policy.Policy) { p.File = "privileged.yaml" },
+		"odd group":       func(p *policy.Policy) { p.SocketGroup = "svc shell" },
+		"root as client":  func(p *policy.Policy) { p.ClientUID = 0 },
+		"timeout":         func(p *policy.Policy) { p.Limits.MaxTimeoutS = policy.MaxTimeoutCeiling + 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := broadPolicy()
+			mut(p)
+			if f, err := units.Broad(p); err == nil {
+				t.Fatalf("generated:\n%s", f.Service)
+			}
+		})
 	}
 }

@@ -75,6 +75,7 @@ type Policy struct {
 	BackupsKeep int
 	Commands    []Command
 	Packages    Packages
+	Power       Power
 	// Capabilities is the core unit's bounding set: BaseCapabilities plus
 	// every capability a core-unit command declares, sorted by number.
 	Capabilities []string
@@ -168,6 +169,18 @@ type Packages struct {
 	AllowUpgrade     bool
 }
 
+// Power is the power section (the built-in priv_power operation).
+type Power struct {
+	Allowed     []string // reboot | poweroff
+	Acknowledge string
+}
+
+// UsesBroad reports whether the policy uses the broad unit (stub).
+func (p *Policy) UsesBroad() bool { return false }
+
+// BroadProtectClock reports whether the broad unit keeps ProtectClock= (stub).
+func (p *Policy) BroadProtectClock() bool { return false }
+
 // Finding is one item check-policy reports for review.
 type Finding struct {
 	Kind   string // list-b-binary | persistence | capability | root-equivalent
@@ -208,6 +221,10 @@ type LoadOptions struct {
 	// HelperExecutable is the resolved path of the running helper binary;
 	// it joins the never list.
 	HelperExecutable string
+	// AptGet is the apt-get binary package operations run (production:
+	// /usr/bin/apt-get); it is resolved and ownership-checked when packages
+	// are enabled.
+	AptGet string
 	// SystemBinDirs are the directories the binary identity check scans;
 	// nil means the gate's defaults. Tests set their own.
 	SystemBinDirs []string
