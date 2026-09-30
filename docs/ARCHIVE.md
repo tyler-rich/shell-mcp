@@ -591,3 +591,55 @@ Each entry sets `SHELL_MCP_REQUIRE_LANDLOCK_ABI` to its kernel's ABI, so every k
 - **Tools:** golangci-lint v2.14.0, govulncheck v1.8.0, actionlint v1.7.12 (a session check; its label list predates `ubuntu-26.04`).
 - **Actions (unchanged, newest):** checkout v7.0.1, setup-go v7.0.0.
 - **Target components:** systemd 257.13 and polkit 126 (local Debian 13 image); runner as above.
+
+### 2026-09-29 — Helper refusal order and self-check codes (PR #5 follow-up)
+**Decision:** The privileged helper authenticates its peer before anything else, and answers every later self-check failure with its own code instead of closing silently. PRIVILEGED §7 now states the order:
+1. **Peer check, from the connection and the unit alone.** The socket checks (`fstat`, `getsockopt`, `getpeername`), the unit's new `SHELL_MCP_PRIVD_CLIENT_UID`, and `SO_PEERCRED`. Nothing is read from disk or from the connection. A failure is a silent close and one WARN line (`stdin`, `unit_client_uid` or `peer_uid`, outcome `refused`). This is now the only case the gate maps to `helper_refused`.
+2. **Every other self-check**, for the authenticated peer: uid 0 and NoNewPrivs, the cgo build and the binary's ownership, the policy load, the policy hash, the policy's `client_uid` against the unit's, and the bounding set. A failure is answered with one response: no id (the request is unread), a `helper_*` code and a fixed one-line message. It is logged at WARN with the check name and the code as the outcome.
+3. **Landlock.** A failure is `sandbox_unavailable`, as before.
+4. **Only then read the request.**
+
+**New codes** (closed set, `internal/protocol`, ARCHITECTURE §4.2; the maintainer chose a `helper_` prefix for every helper self-check code, so the operator knows which component failed):
+
+| Code | When |
+|---|---|
+| `helper_install_insecure` | not uid 0, no NoNewPrivs, a cgo build, or the binary or policy file missing, unreadable, not root-owned or group/other-writable |
+| `helper_policy_invalid` | the policy does not parse or fails validation |
+| `helper_policy_mismatch` | the policy's SHA-256 is not the unit's |
+| `helper_client_uid_mismatch` | the policy's `client_uid` is not the unit's `SHELL_MCP_PRIVD_CLIENT_UID` |
+| `helper_capabilities_broad` | the bounding set is broader than the unit declares |
+
+**Unit change (maintainer decision).** The generator writes `Environment=SHELL_MCP_PRIVD_CLIENT_UID=<client_uid>` beside the policy hash. It refuses a client uid of 0 or 4294967295. The peer check had needed `client_uid` from the policy, so the policy (a disk read of a file that might be insecure) had to be loaded before anyone was authenticated. A `client_uid` from a policy that failed its ownership check cannot authenticate anyone. The unit is root-owned and generated, so its value is a trust anchor, and the policy is cross-checked against it once the peer has passed. D-021 still holds: the helper serves only a peer whose uid is the policy's `client_uid`. The parser (`selfcheck.UnitClientUID`) accepts exactly one canonical decimal in 1..4294967294, with no sign, space or leading zero.
+
+**Nothing pre-auth touches disk.** `ProductionOptions` no longer resolves the helper's own path before `Serve`. The binary is resolved after the peer check, and the cgo build check moved there too (it answers `helper_install_insecure`). Only argument parsing stays ahead of `Serve`, as a silent refusal: a malformed `ExecStart=` is not a unit this project generated.
+
+**Wire messages carry no host data.** The privileged policy is root-only (`0600`), and a YAML parser's error can quote the file. So the messages are fixed text. `helper_policy_invalid` names at most the first failing field and a count (for example "fails validation at paths.write[0] and 2 more"). The field must match a schema-path pattern, or it is left out. It never includes a path, a value or the parser's message. The journal line carries the full detail, as before.
+
+**Gate.** `forward` used to map an EPIPE or reset on its *write* straight to `helper_refused`. Now the helper can answer before the gate has written (systemd starts it while the gate is still writing, and it never reads). So on EPIPE or a reset the gate now reads the response: a queued answer passes through, and nothing is still `helper_refused`. `TestForwardHelperSelfCheckCodes` covers both timings (`early=true` failed with `helper_refused` before the change).
+
+**Test defect found and fixed.** The S1c fixture's "unread bytes when the sandbox is applied" check peeked at the *client's* end with `MSG_PEEK|MSG_DONTWAIT`. It got `EAGAIN` (n = -1), so the `== 0` guard passed vacuously. The invariant test (`TestNoRequestByteReadBeforeChecksPass`) now reads the helper's end with `SIOCINQ` (unix(7): "the number of unread bytes in the receive buffer"). It checks every refusal, silent or answered, and the moment the sandbox is applied on success. A mutant that reads one byte after the peer check fails it: "the helper read 1 of 184 request bytes before refusing".
+
+**Exit codes.** An answered self-check failure exits 1, so the instance shows as failed; `sandbox_unavailable` is unchanged (0).
+
+**Verified at the source:** systemd.exec(5) (man7.org): `Environment=` "may be used more than once, in which case all listed variables are set"; "If the empty string is assigned … the entire list of previous assignments is reset"; "the later assignment takes precedence". The e2e drop-ins rely on all three. unix(7): SIOCINQ as above. The af_unix close and write behaviour (a reset when unread data is dropped, EPIPE on a write after the peer closed, queued data readable before the error) is exercised by the gate tests on the container kernel and both CI kernels.
+
+**Tests (committed first, shown failing):** `2674844` (protocol codes, unit env and goldens, `UnitClientUID` + `FuzzUnitClientUID`, `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`, `TestPeerCheckComesFirst`, `TestNoRequestByteReadBeforeChecksPass`, `TestForwardHelperSelfCheckCodes`, e2e `TestHelperPolicyHashMismatch` → `helper_policy_mismatch`, `TestHelperPolicyInvalidAnswered`, `TestHelperUnitClientUID`) and `f7961d8` (the generator refuses root or (uid_t)-1 as the client). `TestHelperWrongPeerRefused` is unchanged and still expects a silent close mapped to `helper_refused`.
+
+**Fuzzing (60 s each, golang container, no crashers):** `FuzzUnitClientUID` (selfcheck, new) 27,248,058 execs; `FuzzDecodeResponse` (protocol, the code set grew) 28,711,704.
+
+**Alternatives rejected:**
+- Loading the whole policy before the peer check, with every policy problem kept silent: worse diagnostics, and a disk read before authentication.
+- A split load (ownership and a strict decode for `client_uid` before the peer check, validation after): still a disk read before authentication, and more code.
+- Authenticating against a `client_uid` read from a policy that failed its ownership check.
+- Reusing the gate's `install_insecure` (the maintainer chose the `helper_` prefix).
+- Returning the validator's messages on the wire: they name paths from the root-only policy.
+- Mapping a command binary's ownership failure to `helper_install_insecure`. It is a validation error with a field name (`commands[N].path`), so it is `helper_policy_invalid`. Retyping the validator's errors was out of scope.
+- Renaming `sandbox_unavailable` for the helper: not among the codes the follow-up names.
+
+**Deferred:** S1d's broad unit carries the same `SHELL_MCP_PRIVD_CLIENT_UID` line and the same order.
+
+**Versions:**
+- **Go:** 1.27.1, the newest stable per go.dev; `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing, and `deps-current` passes.
+- **Direct modules (unchanged):** go-landlock v0.10.1, go-sdk v1.8.0, yaml/v3 v3.0.5, x/crypto v0.57.0, x/sys v0.48.0.
+- **Tools:** golangci-lint v2.14.0, govulncheck v1.8.0.
+- **Dependencies added:** none.
