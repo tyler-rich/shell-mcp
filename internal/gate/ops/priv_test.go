@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -157,6 +158,51 @@ func TestForwardErrors(t *testing.T) {
 				t.Fatalf("timeout took %v", time.Since(start))
 			}
 		})
+	}
+}
+
+// A refusing helper closes without reading the request. Closing a Unix
+// stream socket with unread data resets it, so the gate sees ECONNRESET on
+// its read (or EPIPE on its write) rather than EOF — still a refusal with
+// no byte received, never helper_unavailable.
+func TestForwardRefusedWithRequestUnread(t *testing.T) {
+	f := newFixture(t, "destructive")
+	startHelper(t, f, echoID(""))
+	p := filepath.Join(t.TempDir(), "refusing.sock")
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			// Wait until the request is queued, then close without reading it.
+			buf := make([]byte, 1)
+			uc := c.(*net.UnixConn)
+			raw, _ := uc.SyscallConn()
+			for range 200 {
+				n := 0
+				_ = raw.Read(func(fd uintptr) bool {
+					n, _, _ = syscall.Recvfrom(int(fd), buf, syscall.MSG_PEEK|syscall.MSG_DONTWAIT)
+					return true
+				})
+				if n > 0 {
+					break
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			_ = c.Close()
+		}
+	}()
+	f.opts.DialHelper = func(ctx context.Context, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", p)
+	}
+	for range 5 {
+		f.fail("priv_stat", m{"path": "/etc/example-app"}, "helper_refused")
 	}
 }
 
