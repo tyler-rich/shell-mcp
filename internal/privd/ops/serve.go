@@ -1,13 +1,16 @@
 //go:build linux
 
 // Package ops is the privileged helper's serve pipeline (docs/PRIVILEGED.md
-// §3, §6, §7, §8; ARCHITECTURE §3 step 5): self-checks → policy → peer
-// credentials → Landlock → read one request → tier → op against the
-// privileged policy → backup → execute → verify → respond → audit.
+// §3, §6, §7, §8; ARCHITECTURE §3 step 5): peer credentials against the
+// unit → self-checks and policy → Landlock → read one request → tier → op
+// against the privileged policy → backup → execute → verify → respond →
+// audit.
 //
-// Nothing is ever written to a peer that has not passed every self-check
-// and the SO_PEERCRED check: a refusal closes the connection without a
-// byte and leaves one WARN line in the journal.
+// Nothing is ever written to a peer that has not passed the SO_PEERCRED
+// check, which uses only the connection and the unit's environment: a
+// refusal there closes the connection without a byte. A self-check that
+// fails after it is answered with its own code before the request is read.
+// Either way the journal gets one WARN line naming the check.
 package ops
 
 import (
@@ -17,6 +20,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -49,7 +53,14 @@ type Options struct {
 	ExpectedSHA256 string
 	// UnitClientUID is SHELL_MCP_PRIVD_CLIENT_UID from the unit.
 	UnitClientUID string
-	Trust          gpolicy.Trust
+	// ResolveExecutable, when set, resolves Executable after the peer check
+	// (production: the running binary, so nothing touches the filesystem
+	// before the peer is authenticated).
+	ResolveExecutable func() (string, error)
+	// BuiltWithCGO reports a binary built with cgo, which the helper refuses
+	// to run (no_new_privs and Landlock need CGO_ENABLED=0).
+	BuiltWithCGO bool
+	Trust        gpolicy.Trust
 	// Lookups fills the policy loader's user and group lookups
 	// (production: policy.ProductionLookups).
 	Lookups func(*policy.LoadOptions)
@@ -72,20 +83,22 @@ type Options struct {
 	Now func() time.Time
 }
 
-// ProductionOptions describes the running process: its resolved
-// executable, the unit's policy hash, root-only trust, the local user and
-// group databases, /proc/self/status, stdin as the connection, the fixed
-// backup store, the helper's Landlock ruleset and stderr for the audit.
-func ProductionOptions(version, policyPath string) (Options, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return Options{}, fmt.Errorf("executable: %w", err)
-	}
-	if exe, err = filepath.EvalSymlinks(exe); err != nil {
-		return Options{}, fmt.Errorf("executable: %w", err)
-	}
+// ProductionOptions describes the running process: the unit's client uid
+// and policy hash, its own executable (resolved after the peer check),
+// root-only trust, the local user and group databases, /proc/self/status,
+// stdin as the connection, the fixed backup store, the helper's Landlock
+// ruleset and stderr for the audit.
+func ProductionOptions(version, policyPath string) Options {
 	return Options{
-		Version: version, PolicyPath: policyPath, Executable: exe,
+		Version: version, PolicyPath: policyPath,
+		ResolveExecutable: func() (string, error) {
+			exe, err := os.Executable()
+			if err != nil {
+				return "", err
+			}
+			return filepath.EvalSymlinks(exe)
+		},
+		UnitClientUID:  os.Getenv(units.ClientUIDEnv),
 		ExpectedSHA256: os.Getenv(units.HashEnv),
 		Trust:          gpolicy.RootTrust(),
 		Lookups:        policy.ProductionLookups,
@@ -95,15 +108,17 @@ func ProductionOptions(version, policyPath string) (Options, error) {
 		ApplySandbox:   ApplyLandlock,
 		Audit:          os.Stderr,
 		Now:            time.Now,
-	}, nil
+	}
 }
 
 // server holds one connection's state.
 type server struct {
-	o         *Options
-	start     time.Time
-	p         *policy.Policy
-	cred      peercred.Cred
+	o     *Options
+	start time.Time
+	p     *policy.Policy
+	cred  peercred.Cred
+	// unitUID is the unit's client uid, which the peer matched.
+	unitUID   uint32
 	fs        *fsx.FS
 	restoreFS *fsx.FS
 	red       *redact.Redactor
@@ -114,41 +129,92 @@ type server struct {
 }
 
 // Serve handles one connection and returns the process exit code: 0 when a
-// response was written, 1 otherwise (including every refusal, which closes
-// the connection without a response).
+// request was read and answered, 1 otherwise — including every refused
+// connection, whether it was closed without a byte (the peer check) or
+// answered with a self-check code.
+//
+// The order is PRIVILEGED §7: (1) authenticate the peer from the
+// connection and the unit's environment alone; (2) every other self-check,
+// the policy load among them, answered to the authenticated peer; (3)
+// Landlock; (4) only then read the request. Nothing reads from the
+// connection before (4).
 func Serve(o *Options) int {
 	s := &server{o: o, start: time.Now()}
 	if o.Now == nil {
 		o.Now = time.Now
 	}
-	if err := s.checks(); err != nil {
-		s.auditRefusal(err)
+	if err := s.authenticate(); err != nil {
+		s.auditRefusal(err, "")
 		return 1
 	}
-	// A duplicate of the connection with deadlines, made before the
-	// sandbox (it needs no filesystem access, but nothing else should
-	// happen after it).
+	// A duplicate of the connection with deadlines (it needs no filesystem
+	// access and reads nothing).
 	nc, err := net.FileConn(o.Conn)
 	if err != nil {
-		s.auditRefusal(&selfcheck.Error{Check: selfcheck.CheckStdin, Detail: "connection cannot be used: " + err.Error()})
+		s.auditRefusal(&selfcheck.Error{Check: selfcheck.CheckStdin, Detail: "connection cannot be used: " + err.Error()}, "")
 		return 1
 	}
 	defer func() { _ = nc.Close() }()
 
+	if err := s.checks(); err != nil {
+		code, msg := selfCheckFailure(err)
+		s.respond(nc, failure(code, msg))
+		s.auditRefusal(err, code)
+		return 1
+	}
 	resp := s.run(nc)
-	resp.V = protocol.Version
 	if s.req != nil {
 		resp.ID = s.req.ID
 	}
-	resp.Gate = &protocol.GateInfo{Version: o.Version, Principal: "shell-mcp-privd", PolicySHA256: s.p.SHA256,
-		MaxTier: s.p.MaxTier.String(), DurationMS: time.Since(s.start).Milliseconds()}
-	_ = nc.SetWriteDeadline(time.Now().Add(writeDeadline))
-	code := writeResponse(nc, resp)
+	code := s.respond(nc, resp)
 	s.auditRequest(resp)
 	return code
 }
 
-// checks runs PRIVILEGED §7 in order; each failure is a *selfcheck.Error.
+// respond writes resp with the helper's gate block; it returns 0 if the
+// response was written.
+func (s *server) respond(nc net.Conn, resp *protocol.Response) int {
+	resp.V = protocol.Version
+	resp.Gate = &protocol.GateInfo{Version: s.o.Version, Principal: "shell-mcp-privd", DurationMS: time.Since(s.start).Milliseconds()}
+	if s.p != nil {
+		resp.Gate.PolicySHA256, resp.Gate.MaxTier = s.p.SHA256, s.p.MaxTier.String()
+	}
+	_ = nc.SetWriteDeadline(time.Now().Add(writeDeadline))
+	return writeResponse(nc, resp)
+}
+
+// authenticate is PRIVILEGED §7 step 1. It uses only the connection (fstat,
+// getsockopt, getpeername, SO_PEERCRED — never a read) and the unit's
+// SHELL_MCP_PRIVD_CLIENT_UID; nothing is read from disk. A failure here
+// is never answered.
+func (s *server) authenticate() error {
+	o := s.o
+	if o.Conn == nil {
+		return &selfcheck.Error{Check: selfcheck.CheckStdin, Detail: "no connection"}
+	}
+	fd := int(o.Conn.Fd())
+	if e := selfcheck.Stdin(fd); e != nil {
+		return e
+	}
+	want, err := selfcheck.UnitClientUID(o.UnitClientUID)
+	if err != nil {
+		return err
+	}
+	cred, err := peercred.Authenticate(fd, want)
+	s.cred = cred
+	switch {
+	case errors.Is(err, peercred.ErrWrongPeer):
+		return &selfcheck.Error{Check: selfcheck.CheckPeer, Detail: fmt.Sprintf("peer uid %d is not the unit's client uid %d", cred.UID, want)}
+	case err != nil:
+		return &selfcheck.Error{Check: selfcheck.CheckPeer, Detail: err.Error()}
+	}
+	s.unitUID = want
+	return nil
+}
+
+// checks is PRIVILEGED §7 step 2, for an authenticated peer: the process,
+// the binary, the policy, the policy's hash and client_uid against the
+// unit's, and the bounding set. Each failure is a *selfcheck.Error.
 func (s *server) checks() error {
 	o := s.o
 	raw, err := o.ReadStatus()
@@ -162,12 +228,15 @@ func (s *server) checks() error {
 	if e := selfcheck.Process(&st); e != nil {
 		return e
 	}
-	if o.Conn == nil {
-		return &selfcheck.Error{Check: selfcheck.CheckStdin, Detail: "no connection"}
+	if o.BuiltWithCGO {
+		return &selfcheck.Error{Check: selfcheck.CheckBinary, Detail: "the helper was built with cgo; rebuild with CGO_ENABLED=0"}
 	}
-	fd := int(o.Conn.Fd())
-	if e := selfcheck.Stdin(fd); e != nil {
-		return e
+	if o.ResolveExecutable != nil {
+		exe, rerr := o.ResolveExecutable()
+		if rerr != nil {
+			return &selfcheck.Error{Check: selfcheck.CheckBinary, Detail: "cannot resolve own path: " + rerr.Error()}
+		}
+		o.Executable = exe
 	}
 	if e := selfcheck.Binary(o.Trust, o.Executable); e != nil {
 		return e
@@ -176,24 +245,101 @@ func (s *server) checks() error {
 	o.Lookups(lo)
 	p, err := policy.Load(o.PolicyPath, lo)
 	if err != nil {
-		return &selfcheck.Error{Check: selfcheck.CheckPolicy, Detail: err.Error()}
+		var oe *gpolicy.OwnershipError
+		if errors.As(err, &oe) {
+			return &policyError{&selfcheck.Error{Check: selfcheck.CheckPolicyFile, Detail: err.Error()}, err}
+		}
+		return &policyError{&selfcheck.Error{Check: selfcheck.CheckPolicy, Detail: err.Error()}, err}
 	}
 	if e := selfcheck.Hash(p.SHA256, o.ExpectedSHA256); e != nil {
+		return e
+	}
+	if e := selfcheck.ClientUID(p.ClientUID, s.unitUID); e != nil {
 		return e
 	}
 	if e := selfcheck.Capabilities(&st, p.Capabilities); e != nil {
 		return e
 	}
-	cred, err := peercred.Authenticate(fd, p.ClientUID)
-	s.cred = cred
-	switch {
-	case errors.Is(err, peercred.ErrWrongPeer):
-		return &selfcheck.Error{Check: selfcheck.CheckPeer, Detail: fmt.Sprintf("peer uid %d is not client_uid %d", cred.UID, p.ClientUID)}
-	case err != nil:
-		return &selfcheck.Error{Check: selfcheck.CheckPeer, Detail: err.Error()}
-	}
 	s.p = p
 	return nil
+}
+
+// policyError is a failed policy load; err is the loader's error, from
+// which the wire message takes only field names.
+type policyError struct {
+	check *selfcheck.Error
+	err   error
+}
+
+func (e *policyError) Error() string   { return e.check.Error() }
+func (e *policyError) Unwrap() []error { return []error{e.check, e.err} }
+
+// fieldRE is a policy field path as the validator names it
+// ("paths.write[0]", "commands[2].path"): schema keys and indexes only,
+// never a value from the policy.
+var fieldRE = regexp.MustCompile(`^[a-z_]{1,32}(\[[0-9]{1,4}\])?(\.[a-z_]{1,32}(\[[0-9]{1,4}\])?){0,3}$`)
+
+// selfCheckFailure maps a failed self-check to its code and a one-line
+// message for the authenticated gate. Messages are fixed text: they name
+// the failed check and at most schema field names of the policy, never a
+// local path, a value from the root-only policy, or a parser's message
+// (which could quote the file). The journal line has the full detail.
+func selfCheckFailure(err error) (code, msg string) {
+	const hint = "; see the helper's journal and run shell-mcp-privd check-policy on the host"
+	check := "internal"
+	var se *selfcheck.Error
+	if errors.As(err, &se) {
+		check = se.Check
+	}
+	switch check {
+	case selfcheck.CheckUID:
+		return protocol.CodeHelperInstallInsecure, "the privileged helper is not running as root under its generated unit" + hint
+	case selfcheck.CheckNoNewPrivs:
+		return protocol.CodeHelperInstallInsecure, "the privileged helper is running without NoNewPrivs, outside its generated unit" + hint
+	case selfcheck.CheckBinary:
+		return protocol.CodeHelperInstallInsecure, "the privileged helper's binary is not a root-owned, not group/other-writable CGO_ENABLED=0 build" + hint
+	case selfcheck.CheckPolicyFile:
+		return protocol.CodeHelperInstallInsecure, "the privileged policy is missing, unreadable, or not root-owned and private" + hint
+	case selfcheck.CheckPolicy:
+		return protocol.CodeHelperPolicyInvalid, policyInvalidMessage(err) + hint
+	case selfcheck.CheckPolicyHash:
+		return protocol.CodeHelperPolicyMismatch, "the privileged policy changed after the units were generated; regenerate and reinstall them (shell-mcp-privd units)"
+	case selfcheck.CheckClientUID:
+		return protocol.CodeHelperClientUIDMismatch, "the unit's client uid is not the privileged policy's client_uid; regenerate and reinstall the units (shell-mcp-privd units)"
+	case selfcheck.CheckCapabilities:
+		return protocol.CodeHelperCapabilitiesBroad, "the privileged helper's capability bounding set is broader than its unit declares; reinstall the generated units"
+	}
+	return protocol.CodeInternal, "the privileged helper failed a self-check" + hint
+}
+
+// policyInvalidMessage names where a policy failed validation: the first
+// failing field and how many problems there are, or that it did not parse.
+func policyInvalidMessage(err error) string {
+	var fields []string
+	var walk func(error)
+	walk = func(e error) {
+		switch x := e.(type) { //nolint:errorlint // walking the loader's joined errors one level at a time
+		case *policy.Error:
+			fields = append(fields, x.Field)
+		case interface{ Unwrap() []error }:
+			for _, c := range x.Unwrap() {
+				walk(c)
+			}
+		}
+	}
+	var pe *policyError
+	if errors.As(err, &pe) {
+		walk(pe.err)
+	}
+	switch {
+	case len(fields) == 0 || fields[0] == "":
+		return "the privileged policy cannot be parsed (YAML syntax, an unknown or duplicate key, or its size)"
+	case !fieldRE.MatchString(fields[0]):
+		return fmt.Sprintf("the privileged policy fails validation (%d problem(s))", len(fields))
+	case len(fields) == 1:
+		return "the privileged policy fails validation at " + fields[0]
+	}
+	return fmt.Sprintf("the privileged policy fails validation at %s and %d more", fields[0], len(fields)-1)
 }
 
 // run applies the sandbox, reads one request and dispatches it. Every

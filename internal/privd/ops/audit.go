@@ -111,10 +111,15 @@ func (s *server) writeAudit(pri int, l *auditLine) {
 	_, _ = fmt.Fprintf(s.o.Audit, "<%d>%s\n", pri, b)
 }
 
-// auditRefusal logs a refused connection at warning. The request was
-// never read, so it has no id or op; the peer is logged when known.
-func (s *server) auditRefusal(err error) {
+// auditRefusal logs a refused connection at warning: outcome "refused"
+// when it was closed without a byte (the peer check), or the code it was
+// answered with (a later self-check). The request was never read, so it
+// has no id or op; the peer is logged when known.
+func (s *server) auditRefusal(err error, code string) {
 	l := &auditLine{Outcome: "refused", Check: "internal", Detail: auditText(err.Error())}
+	if code != "" {
+		l.Outcome = code
+	}
 	var se *selfcheck.Error
 	if errors.As(err, &se) {
 		l.Check = se.Check

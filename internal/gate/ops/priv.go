@@ -30,11 +30,14 @@ func DialHelper(ctx context.Context, socket string) (net.Conn, error) {
 // received — the same v, id, op and timeout_ms, and the args bytes
 // unchanged — and one bounded, strictly decoded response comes back.
 // Failures map to closed-set codes: no connection is helper_unavailable; a
-// connection closed without a byte (a refused peer or a failed self-check),
-// which may arrive as a reset because the helper never reads the request,
-// is helper_refused; no answer by the request's timeout plus the grace is
-// timeout; anything malformed is helper_unavailable. A helper error passes
-// through with its own code. The envelope's gate block stays the gate's.
+// connection closed without a byte — only a peer that failed the helper's
+// SO_PEERCRED check gets that (PRIVILEGED §7) — is helper_refused, also
+// when it arrives as a reset because the helper never read the request; no
+// answer by the request's timeout plus the grace is timeout; anything
+// malformed is helper_unavailable. A helper error passes through with its
+// own code, including the helper_* self-check codes, which the helper
+// answers before reading the request (without an id, and possibly before
+// the request is even sent). The envelope's gate block stays the gate's.
 func (s *server) forward() *protocol.Response {
 	dial := s.o.DialHelper
 	if dial == nil {
@@ -57,14 +60,13 @@ func (s *server) forward() *protocol.Response {
 	if err != nil {
 		return s.errResp(errf(protocol.CodeInternal, "request could not be encoded"))
 	}
-	if _, err = conn.Write(append(line, '\n')); err != nil {
-		// The helper closed before the request was sent: it refused the
-		// connection (it never reads before the peer check passes).
-		if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) {
-			return s.forwardErr(protocol.ErrNoResponse)
-		}
+	if _, err = conn.Write(append(line, '\n')); err != nil &&
+		!errors.Is(err, syscall.EPIPE) && !errors.Is(err, syscall.ECONNRESET) {
 		return s.forwardErr(err)
 	}
+	// On EPIPE or a reset the helper closed before taking the request: it
+	// either refused the peer (nothing to read) or answered a self-check
+	// failure first (its answer is queued on this end). Read either way.
 	resp, err := protocol.DecodeResponse(conn)
 	if err != nil {
 		return s.forwardErr(err)

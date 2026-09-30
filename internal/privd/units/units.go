@@ -2,8 +2,8 @@
 
 // Package units generates the privileged helper's systemd units from its
 // policy (docs/PRIVILEGED.md §2, §5.1): the socket unit and the templated
-// service unit of the core sandbox, pinned to the policy's SHA-256. The
-// broad unit arrives in S1d.
+// service unit of the core sandbox, pinned to the policy's SHA-256 and
+// naming its client_uid. The broad unit arrives in S1d.
 //
 // The output is deterministic, and the generator refuses anything the core
 // unit cannot hold exactly as declared: a capability outside the policy's
@@ -15,6 +15,7 @@ package units
 import (
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"strconv"
@@ -33,6 +34,9 @@ const (
 	ServiceUnit = "shell-mcp-privd@.service"
 	// HashEnv carries the policy hash into the helper.
 	HashEnv = "SHELL_MCP_PRIVD_POLICY_SHA256"
+	// ClientUIDEnv carries the policy's client_uid into the helper, so the
+	// peer check reads nothing from disk (PRIVILEGED §7).
+	ClientUIDEnv = "SHELL_MCP_PRIVD_CLIENT_UID"
 	// MaxConnections bounds concurrent helper instances (and so root
 	// processes) started by the socket.
 	MaxConnections = 16
@@ -141,6 +145,7 @@ func Core(p *policy.Policy) (Files, error) {
 		{"StandardError", "journal"},
 		{"SyslogIdentifier", "shell-mcp-privd"},
 		{"Environment", HashEnv + "=" + p.SHA256},
+		{"Environment", ClientUIDEnv + "=" + strconv.FormatUint(uint64(p.ClientUID), 10)},
 		{"User", "root"},
 		{"NoNewPrivileges", "yes"},
 		{"CapabilityBoundingSet", strings.Join(caps, " ")},
@@ -188,6 +193,9 @@ func check(p *policy.Policy) error {
 	}
 	if !groupRE.MatchString(p.SocketGroup) {
 		return fmt.Errorf("socket group %q is not a plain group name", p.SocketGroup)
+	}
+	if p.ClientUID == 0 || p.ClientUID == math.MaxUint32 {
+		return fmt.Errorf("client_uid %d is not in 1..4294967294 (root may never be the client)", p.ClientUID)
 	}
 	if p.Limits.MaxTimeoutS < 1 || p.Limits.MaxTimeoutS > policy.MaxTimeoutCeiling {
 		return fmt.Errorf("limits.max_timeout_s %d is not in 1..%d", p.Limits.MaxTimeoutS, policy.MaxTimeoutCeiling)

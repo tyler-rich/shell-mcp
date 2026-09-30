@@ -61,6 +61,28 @@ const (
 	CodeInternal           = "internal"
 )
 
+// The privileged helper's self-check codes (PRIVILEGED §7): answered only
+// to a peer that passed the SO_PEERCRED check, before the request is read,
+// so the response has no id. The gate passes them through unchanged.
+const (
+	// CodeHelperInstallInsecure: the helper is not root under its unit, runs
+	// without NoNewPrivs, or its binary or policy file is missing, not
+	// root-owned or group/other-writable.
+	CodeHelperInstallInsecure = "helper_install_insecure"
+	// CodeHelperPolicyInvalid: the privileged policy does not parse or fails
+	// validation.
+	CodeHelperPolicyInvalid = "helper_policy_invalid"
+	// CodeHelperPolicyMismatch: the policy's SHA-256 is not the one the
+	// units were generated from.
+	CodeHelperPolicyMismatch = "helper_policy_mismatch"
+	// CodeHelperClientUIDMismatch: the policy's client_uid is not the unit's
+	// SHELL_MCP_PRIVD_CLIENT_UID.
+	CodeHelperClientUIDMismatch = "helper_client_uid_mismatch"
+	// CodeHelperCapabilitiesBroad: the capability bounding set is broader
+	// than the unit declares.
+	CodeHelperCapabilitiesBroad = "helper_capabilities_broad"
+)
+
 // Codes lists every gate error code.
 var Codes = []string{
 	CodeProtocolMismatch, CodeBadRequest, CodeUnknownOp, CodeTierDenied, CodePolicyDenied,
@@ -68,6 +90,8 @@ var Codes = []string{
 	CodeTemplateMismatch, CodeNotAuthorized, CodeSandboxUnavailable, CodePrivilegedDisabled,
 	CodeHelperUnavailable, CodeHelperRefused, CodeBackupFailed, CodeExecFailed, CodeTimeout,
 	CodeVerifyFailed, CodeInstallInsecure, CodeInternal,
+	CodeHelperInstallInsecure, CodeHelperPolicyInvalid, CodeHelperPolicyMismatch,
+	CodeHelperClientUIDMismatch, CodeHelperCapabilitiesBroad,
 }
 
 // Gate operations (ARCHITECTURE §4.3).

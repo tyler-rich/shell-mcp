@@ -1,17 +1,19 @@
 //go:build linux
 
 // Package selfcheck implements the helper's fail-closed startup checks
-// (PRIVILEGED §7): uid 0, NoNewPrivs 1, a capability bounding set no
-// broader than the generated unit's, stdin a connected AF_UNIX stream
-// socket, a root-owned and not group/other-writable binary, and the
-// policy's SHA-256 equal to the unit's. The policy's own ownership and
-// validity are checked by internal/privd/policy.Load, and the peer's uid by
-// internal/privd/peercred.
+// (PRIVILEGED §7). Before the peer is authenticated: stdin a connected
+// AF_UNIX stream socket and the unit's SHELL_MCP_PRIVD_CLIENT_UID a valid
+// uid (the peer's uid itself is checked by internal/privd/peercred). After
+// it: uid 0, NoNewPrivs 1, a root-owned and not group/other-writable
+// binary, the policy's SHA-256 and client_uid equal to the unit's, and a
+// capability bounding set no broader than the unit's. The policy's own
+// ownership and validity are checked by internal/privd/policy.Load.
 package selfcheck
 
 import (
 	"crypto/subtle"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -29,8 +31,10 @@ const (
 	CheckCapabilities = "capabilities"
 	CheckStdin        = "stdin"
 	CheckBinary       = "binary"
-	CheckPolicy       = "policy"
+	CheckPolicyFile   = "policy_file" // missing, unreadable, or insecure ownership or mode
+	CheckPolicy       = "policy"      // does not parse or fails validation
 	CheckPolicyHash   = "policy_hash"
+	CheckClientUID    = "client_uid" // the policy's client_uid is not the unit's
 	CheckPeer         = "peer_uid"
 	// CheckUnitClientUID is the unit's SHELL_MCP_PRIVD_CLIENT_UID.
 	CheckUnitClientUID = "unit_client_uid"
@@ -216,7 +220,39 @@ func Hash(policySHA256, env string) error {
 	return nil
 }
 
-// UnitClientUID parses the unit's SHELL_MCP_PRIVD_CLIENT_UID.
-func UnitClientUID(string) (uint32, error) {
-	return 0, &Error{CheckUnitClientUID, "not implemented"}
+// maxUnitValue bounds how much of a malformed unit value reaches the audit.
+const maxUnitValue = 32
+
+// UnitClientUID parses the unit's SHELL_MCP_PRIVD_CLIENT_UID, the only
+// input to the peer check: exactly one canonical decimal uid in
+// 1..4294967294 — no sign, space or leading zero. Root is never the
+// client, and 4294967295 is (uid_t)-1.
+func UnitClientUID(env string) (uint32, error) {
+	ok := env != "" && len(env) <= 10 && env[0] != '0'
+	for i := 0; ok && i < len(env); i++ {
+		ok = env[i] >= '0' && env[i] <= '9'
+	}
+	var n uint64
+	if ok {
+		var err error
+		n, err = strconv.ParseUint(env, 10, 32)
+		ok = err == nil && n != math.MaxUint32
+	}
+	if !ok {
+		shown := env
+		if len(shown) > maxUnitValue {
+			shown = shown[:maxUnitValue] + "..."
+		}
+		return 0, &Error{CheckUnitClientUID, fmt.Sprintf("the unit's SHELL_MCP_PRIVD_CLIENT_UID is %q, not a uid in 1..4294967294; regenerate and reinstall the units (shell-mcp-privd units)", shown)}
+	}
+	return uint32(n), nil
+}
+
+// ClientUID requires the policy's client_uid to be the unit's (the unit is
+// generated from the policy; a difference is a hand-edited unit).
+func ClientUID(policyUID, unitUID uint32) error {
+	if policyUID != unitUID {
+		return &Error{CheckClientUID, fmt.Sprintf("the policy's client_uid %d is not the unit's SHELL_MCP_PRIVD_CLIENT_UID %d; regenerate and reinstall the units", policyUID, unitUID)}
+	}
+	return nil
 }

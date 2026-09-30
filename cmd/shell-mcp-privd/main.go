@@ -129,7 +129,8 @@ func refuse(stderr io.Writer, check, detail string) int {
 }
 
 // serve is the unit's ExecStart. Stdout is the connection: nothing but the
-// response is ever written to it, and a refusal writes nothing at all.
+// response is ever written to it, and nothing at all to a peer that fails
+// the peer check (PRIVILEGED §7).
 func serve(args []string, stderr io.Writer) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -137,13 +138,10 @@ func serve(args []string, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil || *policyPath == "" || fs.NArg() != 0 {
 		return refuse(stderr, "arguments", "ExecStart is malformed (want: serve --policy <file>)")
 	}
-	if builtWithCGO() {
-		return refuse(stderr, "binary", "the helper was built with cgo; rebuild with CGO_ENABLED=0")
-	}
-	o, err := ops.ProductionOptions(version, *policyPath)
-	if err != nil {
-		return refuse(stderr, "binary", err.Error())
-	}
+	// Everything else, the cgo build check and the binary's own path among
+	// them, is checked by Serve after the peer is authenticated.
+	o := ops.ProductionOptions(version, *policyPath)
+	o.BuiltWithCGO = builtWithCGO()
 	o.Audit = stderr
 	return ops.Serve(&o)
 }
