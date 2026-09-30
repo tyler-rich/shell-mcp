@@ -112,6 +112,7 @@ func mustPkg(t *testing.T, op string, args any) {
 	var r pkgResult
 	mustGate(t, op, args, &r)
 	if r.ExitCode == nil || *r.ExitCode != 0 {
+		t.Logf("broad unit process status:\n%s", privExec(t, "probe-broad", "broad", "status"))
 		t.Fatalf("%s: exit %v, stderr %q", op, r.ExitCode, r.Stderr)
 	}
 }
@@ -367,6 +368,7 @@ func TestCoreProtectProc(t *testing.T) {
 		t.Fatalf("ProcSubset=%s", got)
 	}
 	if got := privExec(t, "probe-visible", "", "visible", pid); got != "ENOENT" {
+		t.Logf("core unit process status:\n%s", privExec(t, "probe-visible", "", "status"))
 		t.Fatalf("with ProtectProc=invisible: %q, want ENOENT", got)
 	}
 	installPolicy(t, "privileged-cap-kill.yaml")

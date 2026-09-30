@@ -188,7 +188,7 @@ $1    templates: [["signal", "{int:2-4194304}"]]
   - id: probe-visible
     path: /usr/local/bin/example-probe
     tier: read
-    templates: [["visible", "{int:1-4194304}"]]
+    templates: [["visible", "{int:1-4194304}"], ["status"]]
   - id: probe-unix
     path: /usr/local/bin/example-probe
     tier: read
@@ -204,6 +204,7 @@ $2    templates:
       - ["connect", "{int:1-65535}"]
       - ["unix-connect", "{enum:/run/dbus/system_bus_socket|/var/run/dbus/system_bus_socket|/run/shell-mcp-e2e.sock}"]
       - ["abstract-connect", "{regex:^[a-z0-9-]{1,64}\$}"]
+      - ["status"]
 power:
   allowed: [reboot]
   acknowledge: "e2e: priv_power is called only with reboot.target and poweroff.target runtime-masked"
