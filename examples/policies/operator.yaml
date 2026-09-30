@@ -61,11 +61,13 @@ commands:
     description: "Packages with available upgrades"
     templates:
       - ["list", "--upgradable"]
-  - id: app-disk-usage
-    path: /usr/bin/du
+  - id: app-filesystem
+    path: /usr/bin/findmnt
     tier: read
-    description: "Disk usage of an application directory"
+    description: "Filesystem and free space holding an application directory"
     templates:
       # {path:read} is resolved under a read root and checked against the
-      # deny list; the resolved path is what du receives.
-      - ["-s", "-h", "{path:read}"]
+      # deny list; the resolved path is what findmnt receives. (findmnt, from
+      # util-linux, is its own binary; coreutils commands such as du cannot be
+      # declared on hosts whose coreutils is one multi-call binary, POLICY §5.)
+      - ["--noheadings", "--output", "SOURCE,FSTYPE,SIZE,USED,AVAIL", "--target", "{path:read}"]

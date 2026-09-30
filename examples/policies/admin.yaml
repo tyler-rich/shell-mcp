@@ -60,9 +60,9 @@ commands:
     description: "Packages with available upgrades"
     templates:
       - ["list", "--upgradable"]
-  - id: cache-usage
-    path: /usr/bin/du
+  - id: cache-filesystem
+    path: /usr/bin/findmnt
     tier: read
-    description: "Disk usage of the application cache"
+    description: "Filesystem and free space holding the application cache"
     templates:
-      - ["-s", "-h", "{path:read}"]
+      - ["--noheadings", "--output", "SOURCE,FSTYPE,SIZE,USED,AVAIL", "--target", "{path:read}"]
