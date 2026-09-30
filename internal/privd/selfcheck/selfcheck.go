@@ -38,6 +38,8 @@ const (
 	CheckPeer         = "peer_uid"
 	// CheckUnitClientUID is the unit's SHELL_MCP_PRIVD_CLIENT_UID.
 	CheckUnitClientUID = "unit_client_uid"
+	// CheckLandlock is the core unit's Landlock sandbox (PRIVILEGED §7 step 3).
+	CheckLandlock = "landlock"
 )
 
 // Error is a failed self-check. Check names it for the audit line; Detail

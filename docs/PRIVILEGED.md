@@ -170,7 +170,7 @@ The checks run in that order, in four steps. **No byte is read from the connecti
    | `capabilities` | `helper_capabilities_broad` |
 
    The gate passes these codes through unchanged (ARCHITECTURE §4.2).
-3. **Landlock** (core unit): a refusal is `sandbox_unavailable`, also answered without an id.
+3. **Landlock** (core unit): a refusal is `helper_sandbox_unavailable` — not the gate's own `sandbox_unavailable`, so the operator can tell which component lacks the sandbox — answered without an id, logged at WARN with the check `landlock`, and the instance exits 1 like the other answered self-check failures.
 4. **Only then read the request.** Every outcome from here on is a response carrying the request's id.
 
 ## 8. Audit

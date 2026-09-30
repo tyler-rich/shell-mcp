@@ -136,7 +136,8 @@ type server struct {
 // The order is PRIVILEGED §7: (1) authenticate the peer from the
 // connection and the unit's environment alone; (2) every other self-check,
 // the policy load among them, answered to the authenticated peer; (3)
-// Landlock; (4) only then read the request. Nothing reads from the
+// Landlock, answered as helper_sandbox_unavailable; (4) only then read the
+// request. Nothing reads from the
 // connection before (4).
 func Serve(o *Options) int {
 	s := &server{o: o, start: time.Now()}
@@ -160,6 +161,11 @@ func Serve(o *Options) int {
 		code, msg := selfCheckFailure(err)
 		s.respond(nc, failure(code, msg))
 		s.auditRefusal(err, code)
+		return 1
+	}
+	if err := s.sandbox(); err != nil {
+		s.respond(nc, failure(protocol.CodeHelperSandboxUnavailable, "the privileged helper's Landlock sandbox could not be applied under sandbox.landlock: required; see the helper's journal and run shell-mcp-privd check-policy on the host"))
+		s.auditRefusal(err, protocol.CodeHelperSandboxUnavailable)
 		return 1
 	}
 	resp := s.run(nc)
@@ -342,16 +348,22 @@ func policyInvalidMessage(err error) string {
 	return fmt.Sprintf("the privileged policy fails validation at %s and %d more", fields[0], len(fields)-1)
 }
 
-// run applies the sandbox, reads one request and dispatches it. Every
-// outcome from here on is a response: the peer is authenticated.
+// sandbox is PRIVILEGED §7 step 3 (D-019 for the helper): Landlock is in
+// place before any byte of the request is read. A failure is a
+// *selfcheck.Error for the "landlock" check.
+func (s *server) sandbox() error {
+	_ = unix.Setrlimit(unix.RLIMIT_CORE, &unix.Rlimit{Cur: 0, Max: 0})
+	if _, err := s.o.ApplySandbox(s.p, s.o.BackupDir); err != nil {
+		return &selfcheck.Error{Check: selfcheck.CheckLandlock, Detail: err.Error()}
+	}
+	return nil
+}
+
+// run reads one request and dispatches it. Every outcome from here on is a
+// response carrying the request's id: the peer is authenticated and the
+// sandbox applied.
 func (s *server) run(nc net.Conn) *protocol.Response {
 	o, p := s.o, s.p
-	_ = unix.Setrlimit(unix.RLIMIT_CORE, &unix.Rlimit{Cur: 0, Max: 0})
-	// D-019 for the helper: Landlock is in place before any byte of the
-	// request is read.
-	if _, err := o.ApplySandbox(p, o.BackupDir); err != nil {
-		return failure(protocol.CodeSandboxUnavailable, "the privileged helper's Landlock sandbox could not be applied under sandbox.landlock: required; run shell-mcp-privd check-policy on the host")
-	}
 	s.red = redact.New(nil)
 	s.store = &store{dir: o.BackupDir, trust: o.Trust, keep: p.BackupsKeep, now: o.Now}
 	cfg := &fsx.Config{

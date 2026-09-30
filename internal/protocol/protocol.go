@@ -81,6 +81,10 @@ const (
 	// CodeHelperCapabilitiesBroad: the capability bounding set is broader
 	// than the unit declares.
 	CodeHelperCapabilitiesBroad = "helper_capabilities_broad"
+	// CodeHelperSandboxUnavailable: the helper could not apply its Landlock
+	// sandbox in the core unit under sandbox.landlock: required (distinct from
+	// the gate's own CodeSandboxUnavailable).
+	CodeHelperSandboxUnavailable = "helper_sandbox_unavailable"
 )
 
 // Codes lists every gate error code.
@@ -91,7 +95,7 @@ var Codes = []string{
 	CodeHelperUnavailable, CodeHelperRefused, CodeBackupFailed, CodeExecFailed, CodeTimeout,
 	CodeVerifyFailed, CodeInstallInsecure, CodeInternal,
 	CodeHelperInstallInsecure, CodeHelperPolicyInvalid, CodeHelperPolicyMismatch,
-	CodeHelperClientUIDMismatch, CodeHelperCapabilitiesBroad,
+	CodeHelperClientUIDMismatch, CodeHelperCapabilitiesBroad, CodeHelperSandboxUnavailable,
 }
 
 // Gate operations (ARCHITECTURE §4.3).
