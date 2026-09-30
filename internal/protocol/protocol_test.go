@@ -188,7 +188,11 @@ func TestCodesClosedSet(t *testing.T) {
 	want := []string{"protocol_mismatch", "bad_request", "unknown_op", "tier_denied", "policy_denied", "path_denied",
 		"not_found", "not_a_directory", "is_a_directory", "too_large", "exists", "template_mismatch", "not_authorized",
 		"sandbox_unavailable", "privileged_disabled", "helper_unavailable", "helper_refused", "backup_failed",
-		"exec_failed", "timeout", "verify_failed", "install_insecure", "internal"}
+		"exec_failed", "timeout", "verify_failed", "install_insecure", "internal",
+		// The helper's own self-checks (PRIVILEGED §7), answered to the
+		// authenticated gate before the request is read.
+		"helper_install_insecure", "helper_policy_invalid", "helper_policy_mismatch",
+		"helper_client_uid_mismatch", "helper_capabilities_broad"}
 	if !slices.Equal(Codes, want) {
 		t.Fatalf("Codes = %v", Codes)
 	}

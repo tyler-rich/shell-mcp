@@ -136,7 +136,9 @@ func TestServiceDirectives(t *testing.T) {
 	want(t, d, s+"StandardOutput", "socket")
 	want(t, d, s+"StandardError", "journal")
 	want(t, d, s+"SyslogIdentifier", "shell-mcp-privd")
-	want(t, d, s+"Environment", "SHELL_MCP_PRIVD_POLICY_SHA256="+hash)
+	// The unit pins the policy hash and names the peer the helper serves:
+	// the peer check needs no disk read (PRIVILEGED §7).
+	want(t, d, s+"Environment", "SHELL_MCP_PRIVD_POLICY_SHA256="+hash, "SHELL_MCP_PRIVD_CLIENT_UID=60123")
 	want(t, d, s+"User", "root")
 	want(t, d, s+"NoNewPrivileges", "yes")
 	want(t, d, s+"CapabilityBoundingSet", "CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER CAP_KILL CAP_SYS_BOOT")

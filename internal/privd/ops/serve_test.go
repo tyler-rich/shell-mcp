@@ -5,8 +5,10 @@ package ops_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,67 +17,192 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 )
 
-// A refusal (PRIVILEGED §3, §7) closes the connection without writing a
-// single byte and logs one WARN audit line naming the failed check. Every
-// case is paired with the passing control in TestServeAnswersAuthenticatedPeer.
-func TestRefusalsCloseWithoutResponse(t *testing.T) {
-	for name, c := range map[string]struct {
-		setup func(f *fixture)
-		check string
-	}{
-		"not root":           {func(f *fixture) { f.status = statusFor("60123", "1", "000000000000000f") }, "uid"},
-		"no NoNewPrivs":      {func(f *fixture) { f.status = statusFor("0", "0", "000000000000000f") }, "no_new_privs"},
-		"broad bounding set": {func(f *fixture) { f.status = statusFor("0", "1", "000001ffffffffff") }, "capabilities"},
+// breakage is one post-authentication self-check failure (PRIVILEGED §7)
+// and the check and code it is reported with.
+type breakage struct {
+	setup       func(f *fixture)
+	check, code string
+}
+
+// breakages are paired with the passing control in
+// TestServeAnswersAuthenticatedPeer.
+func breakages(t *testing.T) map[string]breakage {
+	rewritePolicy := func(f *fixture, from, to string) {
+		y := readFile(t, f.policyPath)
+		if !strings.Contains(y, from) {
+			t.Fatalf("fixture policy lacks %q", from)
+		}
+		if err := os.WriteFile(f.policyPath, []byte(strings.Replace(y, from, to, 1)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return map[string]breakage{
+		"not root":           {func(f *fixture) { f.status = statusFor("60123", "1", "000000000000000f") }, "uid", "helper_install_insecure"},
+		"no NoNewPrivs":      {func(f *fixture) { f.status = statusFor("0", "0", "000000000000000f") }, "no_new_privs", "helper_install_insecure"},
+		"broad bounding set": {func(f *fixture) { f.status = statusFor("0", "1", "000001ffffffffff") }, "capabilities", "helper_capabilities_broad"},
 		"unreadable status": {func(f *fixture) {
-			f.opts.ReadStatus = func() ([]byte, error) { return nil, errors.New("no proc") }
-		}, "uid"},
+			f.opts.ReadStatus = func() ([]byte, error) { f.statusReads++; return nil, errors.New("no proc") }
+		}, "uid", "helper_install_insecure"},
 		"insecure binary": {func(f *fixture) {
 			if err := os.Chmod(f.opts.Executable, 0o775); err != nil { //nolint:gosec // G302: a deliberately insecure or test fixture mode
 				t.Fatal(err)
 			}
-		}, "binary"},
+		}, "binary", "helper_install_insecure"},
 		"insecure policy": {func(f *fixture) {
 			if err := os.Chmod(f.policyPath, 0o620); err != nil { //nolint:gosec // G302: a deliberately insecure or test fixture mode
 				t.Fatal(err)
 			}
-		}, "policy"},
-		"invalid policy": {func(f *fixture) {
+		}, "policy_file", "helper_install_insecure"},
+		"missing policy": {func(f *fixture) { f.opts.PolicyPath = filepath.Join(f.etc, "absent.yaml") }, "policy_file", "helper_install_insecure"},
+		"policy YAML error": {func(f *fixture) {
 			if err := os.WriteFile(f.policyPath, []byte("version: 1\nsudo: true\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-		}, "policy"},
+		}, "policy", "helper_policy_invalid"},
+		"policy validation error": {func(f *fixture) {
+			rewritePolicy(f, "write: ["+f.write+"]", "write: [/etc/ssh]")
+		}, "policy", "helper_policy_invalid"},
 		// A policy edited without regenerating the units (PRIVILEGED §2).
 		"policy hash differs": {func(f *fixture) {
-			fh, err := os.OpenFile(f.policyPath, os.O_APPEND|os.O_WRONLY, 0)
-			if err != nil {
-				t.Fatal(err)
+			rewritePolicy(f, "version: 1\n", "version: 1\n# edited after the units were generated\n")
+		}, "policy_hash", "helper_policy_mismatch"},
+		"no hash in the unit": {func(f *fixture) { f.opts.ExpectedSHA256 = "" }, "policy_hash", "helper_policy_mismatch"},
+		// The unit names another client than the policy (a hand-edited
+		// unit): the peer passed the unit's check, so it is told.
+		"client_uid differs from the unit's": {func(f *fixture) {
+			rewritePolicy(f, fmt.Sprintf("client_uid: %d", f.uid), fmt.Sprintf("client_uid: %d", f.uid+1))
+			f.rehash()
+		}, "client_uid", "helper_client_uid_mismatch"},
+	}
+}
+
+// After the peer check passes, a failed self-check is answered — to the
+// authenticated gate only — with its own code and a one-line reason that
+// names no local path, before any byte of the request is read: the
+// response has no id, the sandbox is never applied, and the journal gets
+// one WARN line naming the check and the code.
+func TestSelfCheckFailuresAnswered(t *testing.T) {
+	for name, c := range breakages(t) {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			c.setup(f)
+			in := request("priv_stat", m{"path": f.read})
+			out, code := f.serveRaw(in)
+			var r response
+			if err := json.Unmarshal([]byte(out), &r); err != nil || code == 0 {
+				t.Fatalf("exit %d, response %q", code, out)
 			}
-			_, _ = fh.WriteString("# edited after the units were generated\n")
-			_ = fh.Close()
-		}, "policy_hash"},
-		"no hash in the unit": {func(f *fixture) { f.opts.ExpectedSHA256 = "" }, "policy_hash"},
-		"wrong peer uid":      {func(*fixture) {}, "peer_uid"},
+			if r.V != 1 || r.ID != "" || r.OK || r.Error == nil || r.Error.Code != c.code || strings.Count(out, "\n") != 1 || !strings.HasSuffix(out, "\n") {
+				t.Fatalf("response %q, want one line with %s and no id", out, c.code)
+			}
+			if msg := r.Error.Message; msg == "" || strings.Contains(msg, f.d) || strings.ContainsAny(msg, "\r\n") {
+				t.Fatalf("message %q is empty, multi-line or names a local path", msg)
+			}
+			if f.unread != len(in) || f.sandboxCalls != 0 {
+				t.Fatalf("%d of %d request bytes left unread, sandbox applied %d times", f.unread, len(in), f.sandboxCalls)
+			}
+			l := f.lastAudit()
+			for _, want := range []string{`"check":"` + c.check + `"`, `"outcome":"` + c.code + `"`, fmt.Sprintf(`"peer_uid":%d`, f.uid)} {
+				if !strings.HasPrefix(l, "<4>") || !strings.Contains(l, want) {
+					t.Fatalf("audit line %q lacks %s at WARN", l, want)
+				}
+			}
+		})
+	}
+}
+
+// Before the peer is authenticated nothing is written to it: a missing or
+// malformed SHELL_MCP_PRIVD_CLIENT_UID in the unit, or a peer whose
+// SO_PEERCRED uid is not that value, closes the connection without a byte
+// and leaves one WARN line explaining why. Nothing is read from disk first.
+func TestPreAuthRefusalsAreSilent(t *testing.T) {
+	for name, c := range map[string]struct {
+		env   func(uid uint32) string
+		check string
+	}{
+		"wrong peer uid":          {func(uid uint32) string { return strconv.FormatUint(uint64(uid)+1, 10) }, "peer_uid"},
+		"no client uid in unit":   {func(uint32) string { return "" }, "unit_client_uid"},
+		"root as client uid":      {func(uint32) string { return "0" }, "unit_client_uid"},
+		"malformed client uid":    {func(uid uint32) string { return " " + strconv.FormatUint(uint64(uid), 10) }, "unit_client_uid"},
+		"client uid out of range": {func(uint32) string { return "4294967295" }, "unit_client_uid"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			var f *fixture
-			if name == "wrong peer uid" {
-				f = newFixture(t, func(f *fixture, s *string) { clientUID(f.uid+1)(f, s) })
-			} else {
-				f = newFixture(t)
-			}
-			c.setup(f)
-			out, code := f.serveRaw(request("priv_stat", m{"path": f.read}))
+			f := newFixture(t)
+			f.opts.UnitClientUID = c.env(f.uid)
+			in := request("priv_stat", m{"path": f.read})
+			out, code := f.serveRaw(in)
 			if out != "" || code == 0 {
 				t.Fatalf("refusal wrote %q (exit %d)", out, code)
 			}
-			if f.sandboxCalls != 0 {
-				t.Fatal("sandbox applied before the refusal")
+			if f.unread != len(in) || f.sandboxCalls != 0 || f.statusReads != 0 || f.lookups != 0 {
+				t.Fatalf("unread %d of %d, sandbox %d, status reads %d, policy loads %d", f.unread, len(in), f.sandboxCalls, f.statusReads, f.lookups)
 			}
 			l := f.lastAudit()
 			if !strings.HasPrefix(l, "<4>") || !strings.Contains(l, `"check":"`+c.check+`"`) || !strings.Contains(l, `"outcome":"refused"`) {
 				t.Fatalf("audit line %q", l)
 			}
 		})
+	}
+}
+
+// The peer check comes first: a wrong peer is refused silently whatever
+// else is broken, so an unauthenticated caller learns nothing about the
+// helper's installation.
+func TestPeerCheckComesFirst(t *testing.T) {
+	for name, c := range breakages(t) {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			c.setup(f)
+			f.opts.UnitClientUID = strconv.FormatUint(uint64(f.uid)+1, 10)
+			in := request("priv_stat", m{"path": f.read})
+			out, code := f.serveRaw(in)
+			if out != "" || code == 0 {
+				t.Fatalf("wrong peer got %q (exit %d)", out, code)
+			}
+			if f.unread != len(in) || f.statusReads != 0 || f.lookups != 0 {
+				t.Fatalf("unread %d of %d, status reads %d, policy loads %d", f.unread, len(in), f.statusReads, f.lookups)
+			}
+			if l := f.lastAudit(); !strings.Contains(l, `"check":"peer_uid"`) || !strings.Contains(l, `"outcome":"refused"`) {
+				t.Fatalf("audit line %q", l)
+			}
+		})
+	}
+}
+
+// The invariant behind the gate's helper_refused: the helper reads no byte
+// of the request until the peer check and every self-check have passed and
+// Landlock is applied. Every refusal — silent or answered — leaves the
+// whole request queued on the socket, and on success all of it is still
+// unread when the sandbox is applied.
+func TestNoRequestByteReadBeforeChecksPass(t *testing.T) {
+	cases := map[string]func(f *fixture){
+		"wrong peer":  func(f *fixture) { f.opts.UnitClientUID = strconv.FormatUint(uint64(f.uid)+1, 10) },
+		"no unit uid": func(f *fixture) { f.opts.UnitClientUID = "" },
+		"sandbox refuses": func(f *fixture) {
+			f.opts.ApplySandbox = func(*policy.Policy, string) (sandbox.Report, error) {
+				f.sandboxCalls++
+				return sandbox.Report{}, sandbox.ErrUnavailable
+			}
+		},
+	}
+	for name, c := range breakages(t) {
+		cases[name] = c.setup
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			setup(f)
+			in := request("priv_stat", m{"path": f.read})
+			_, _ = f.serveRaw(in)
+			if f.unread != len(in) {
+				t.Fatalf("the helper read %d of %d request bytes before refusing", len(in)-f.unread, len(in))
+			}
+		})
+	}
+	f := newFixture(t)
+	in := request("priv_stat", m{"path": f.read})
+	if _, code := f.serveRaw(in); code != 0 || f.sandboxCalls != 1 || f.unreadAtSandbox != len(in) || f.unread != 0 {
+		t.Fatalf("exit %d, sandbox calls %d, unread at sandbox %d of %d, unread at exit %d", code, f.sandboxCalls, f.unreadAtSandbox, len(in), f.unread)
 	}
 }
 
@@ -116,8 +243,8 @@ func TestServeAnswersAuthenticatedPeer(t *testing.T) {
 		t.Fatalf("gate info %s", r.Gate)
 	}
 	// Landlock is applied after the checks and before a byte is read.
-	if f.sandboxCalls != 1 || f.peekedAtSandbox == 0 {
-		t.Fatalf("sandbox calls %d, unread bytes at sandbox time %d", f.sandboxCalls, f.peekedAtSandbox)
+	if f.sandboxCalls != 1 || f.unreadAtSandbox != len(request("priv_stat", m{"path": filepath.Join(f.read, "hello.txt")})) {
+		t.Fatalf("sandbox calls %d, unread bytes at sandbox time %d", f.sandboxCalls, f.unreadAtSandbox)
 	}
 	l := f.lastAudit()
 	for _, want := range []string{`"id":"` + reqID + `"`, `"peer_uid":`, `"peer_pid":`, `"op":"priv_stat"`, `"outcome":"ok"`, `"duration_ms":`} {
@@ -136,10 +263,11 @@ func TestSandboxRefusal(t *testing.T) {
 		return sandbox.Report{}, sandbox.ErrUnavailable
 	}
 	// The request is never read, so the response has no id.
-	out, code := f.serveRaw(request("priv_stat", m{"path": f.read}))
+	in := request("priv_stat", m{"path": f.read})
+	out, code := f.serveRaw(in)
 	var r response
-	if err := json.Unmarshal([]byte(out), &r); err != nil || code != 0 || r.ID != "" || r.Error == nil || r.Error.Code != "sandbox_unavailable" {
-		t.Fatalf("exit %d response %q", code, out)
+	if err := json.Unmarshal([]byte(out), &r); err != nil || code != 0 || r.ID != "" || r.Error == nil || r.Error.Code != "sandbox_unavailable" || f.unread != len(in) {
+		t.Fatalf("exit %d response %q, unread %d of %d", code, out, f.unread, len(in))
 	}
 }
 

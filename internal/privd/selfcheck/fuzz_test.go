@@ -3,6 +3,7 @@
 package selfcheck_test
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/tyler-rich/shell-mcp/internal/privd/selfcheck"
@@ -21,6 +22,27 @@ func FuzzParseStatus(f *testing.F) {
 		}
 		if selfcheck.Process(&s) == nil && (s.UIDs != [4]uint32{} || !s.NoNewPrivs) {
 			t.Fatalf("Process accepted %+v", s)
+		}
+	})
+}
+
+// FuzzUnitClientUID: arbitrary strings never panic the parser, and what it
+// accepts is a non-root, non-(uid_t)-1 uid whose canonical decimal form is
+// exactly the input.
+func FuzzUnitClientUID(f *testing.F) {
+	for _, s := range []string{"60123", "0", "4294967294", "4294967295", "-1", "01", ""} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		uid, err := selfcheck.UnitClientUID(s)
+		if err != nil {
+			if uid != 0 {
+				t.Fatalf("%q: uid %d with error", s, uid)
+			}
+			return
+		}
+		if uid == 0 || uid == 4294967295 || strconv.FormatUint(uint64(uid), 10) != s {
+			t.Fatalf("accepted %q as %d", s, uid)
 		}
 	})
 }

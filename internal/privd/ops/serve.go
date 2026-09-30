@@ -47,6 +47,8 @@ type Options struct {
 	Executable string
 	// ExpectedSHA256 is SHELL_MCP_PRIVD_POLICY_SHA256 from the unit.
 	ExpectedSHA256 string
+	// UnitClientUID is SHELL_MCP_PRIVD_CLIENT_UID from the unit.
+	UnitClientUID string
 	Trust          gpolicy.Trust
 	// Lookups fills the policy loader's user and group lookups
 	// (production: policy.ProductionLookups).

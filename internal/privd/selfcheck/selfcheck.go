@@ -32,6 +32,8 @@ const (
 	CheckPolicy       = "policy"
 	CheckPolicyHash   = "policy_hash"
 	CheckPeer         = "peer_uid"
+	// CheckUnitClientUID is the unit's SHELL_MCP_PRIVD_CLIENT_UID.
+	CheckUnitClientUID = "unit_client_uid"
 )
 
 // Error is a failed self-check. Check names it for the audit line; Detail
@@ -212,4 +214,9 @@ func Hash(policySHA256, env string) error {
 		return &Error{CheckPolicyHash, "the policy's SHA-256 does not match the unit's SHELL_MCP_PRIVD_POLICY_SHA256; regenerate and reinstall the units"}
 	}
 	return nil
+}
+
+// UnitClientUID parses the unit's SHELL_MCP_PRIVD_CLIENT_UID.
+func UnitClientUID(string) (uint32, error) {
+	return 0, &Error{CheckUnitClientUID, "not implemented"}
 }

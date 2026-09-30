@@ -153,3 +153,24 @@ func TestHash(t *testing.T) {
 	check(t, selfcheck.Hash(h, h+" "), "policy_hash")
 	check(t, selfcheck.Hash("", ""), "policy_hash")
 }
+
+// The unit's SHELL_MCP_PRIVD_CLIENT_UID is the only input to the peer
+// check: exactly one canonical decimal uid in 1..4294967294 (root may never
+// be the client, and 4294967295 is (uid_t)-1). Anything else refuses.
+func TestUnitClientUID(t *testing.T) {
+	for in, want := range map[string]uint32{"60123": 60123, "1": 1, "4294967294": 4294967294, "4200001": 4200001} {
+		got, err := selfcheck.UnitClientUID(in)
+		check(t, err, "")
+		if got != want {
+			t.Fatalf("%q = %d, want %d", in, got, want)
+		}
+	}
+	for _, in := range []string{"", "0", "00", "-1", "+1", "01", " 1", "1 ", "1\n", "4294967295", "4294967296",
+		"99999999999", "1e3", "0x10", "1_000", "６０１２３", "60123,60124"} {
+		got, err := selfcheck.UnitClientUID(in)
+		check(t, err, selfcheck.CheckUnitClientUID)
+		if got != 0 {
+			t.Fatalf("%q returned %d with its error", in, got)
+		}
+	}
+}

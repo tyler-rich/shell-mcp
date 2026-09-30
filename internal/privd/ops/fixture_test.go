@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -34,11 +35,16 @@ type fixture struct {
 	opts                                ops.Options
 	audit                               *bytes.Buffer
 	status                              string
-	// sandboxCalls counts ApplySandbox; peekedAtSandbox is what was still
-	// unread on the connection when it was applied.
+	// sandboxCalls counts ApplySandbox; unreadAtSandbox is how many request
+	// bytes were still unread on the helper's end of the connection when it
+	// was applied, and unread how many were left when Serve returned (both
+	// from the kernel's SIOCINQ, so nothing is consumed by looking).
 	sandboxCalls    int
-	peekedAtSandbox int
-	clientFD        int
+	unreadAtSandbox int
+	unread          int
+	helperFD        int
+	// statusReads and lookups count what the checks read from the host.
+	statusReads, lookups int
 }
 
 const reqID = "0b5c0000-0000-4000-8000-000000000002"
@@ -57,12 +63,6 @@ func maxTier(t string) opt {
 
 func keep(n int) opt {
 	return func(_ *fixture, s *string) { *s = strings.Replace(*s, "keep: 3", fmt.Sprintf("keep: %d", n), 1) }
-}
-
-func clientUID(uid uint32) opt {
-	return func(f *fixture, s *string) {
-		*s = strings.Replace(*s, fmt.Sprintf("client_uid: %d", f.uid), fmt.Sprintf("client_uid: %d", uid), 1)
-	}
 }
 
 func newFixture(t *testing.T, opts ...opt) *fixture {
@@ -141,6 +141,7 @@ commands:
 		Executable: exe,
 		Trust:      gatetest.Trust(),
 		Lookups: func(o *policy.LoadOptions) {
+			f.lookups++
 			users := map[string]uint32{"root": 0, "tester": f.uid, "example-app": 1001}
 			groups := map[string]uint32{"root": 0, "tester": f.gid, "svc-shell-priv": 60124}
 			o.LookupUser = func(n string) (uint32, error) {
@@ -165,16 +166,18 @@ commands:
 			}
 		},
 		SystemBinDirs: []string{filepath.Join(d, "sysbin")},
-		ReadStatus:    func() ([]byte, error) { return []byte(f.status), nil },
-		BackupDir:     f.backups,
-		Audit:         f.audit,
-		Now:           func() time.Time { return time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC) },
+		UnitClientUID: strconv.FormatUint(uint64(f.uid), 10),
+		ReadStatus: func() ([]byte, error) {
+			f.statusReads++
+			return []byte(f.status), nil
+		},
+		BackupDir: f.backups,
+		Audit:     f.audit,
+		Now:       func() time.Time { return time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC) },
 	}
 	f.opts.ApplySandbox = func(*policy.Policy, string) (sandbox.Report, error) {
 		f.sandboxCalls++
-		buf := make([]byte, 1<<16)
-		n, _, _ := unix.Recvfrom(f.clientFD, buf, unix.MSG_PEEK|unix.MSG_DONTWAIT)
-		f.peekedAtSandbox = n
+		f.unreadAtSandbox = unreadBytes(f.t, f.helperFD)
 		return sandbox.Report{Mode: "best-effort"}, nil
 	}
 	f.rehash()
@@ -197,6 +200,17 @@ func (f *fixture) loadOptions() *policy.LoadOptions {
 	return o
 }
 
+// unreadBytes is the number of bytes queued on fd that nobody has read
+// (SIOCINQ, unix(7)).
+func unreadBytes(t *testing.T, fd int) int {
+	t.Helper()
+	n, err := unix.IoctlGetInt(fd, unix.SIOCINQ)
+	if err != nil {
+		t.Fatalf("SIOCINQ: %v", err)
+	}
+	return n
+}
+
 // serveRaw runs Serve on one end of a socket pair after writing in to the
 // other end, and returns everything the helper wrote before closing.
 func (f *fixture) serveRaw(in string) (out string, code int) {
@@ -206,7 +220,8 @@ func (f *fixture) serveRaw(in string) (out string, code int) {
 		f.t.Fatal(err)
 	}
 	defer func() { _ = unix.Close(fds[1]) }()
-	f.clientFD = fds[1]
+	f.helperFD = fds[0]
+	f.statusReads, f.lookups = 0, 0
 	if _, err := unix.Write(fds[1], []byte(in)); err != nil {
 		f.t.Fatal(err)
 	}
@@ -214,6 +229,7 @@ func (f *fixture) serveRaw(in string) (out string, code int) {
 	o := f.opts
 	o.Conn = conn
 	code = ops.Serve(&o)
+	f.unread = unreadBytes(f.t, fds[0])
 	_ = conn.Close()
 	var b []byte
 	buf := make([]byte, 64<<10)

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"path/filepath"
 	"strings"
@@ -204,6 +205,94 @@ func TestForwardRefusedWithRequestUnread(t *testing.T) {
 	for range 5 {
 		f.fail("priv_stat", m{"path": "/etc/example-app"}, "helper_refused")
 	}
+}
+
+// selfCheckCodes are the helper's own self-check codes (PRIVILEGED §7),
+// answered to the authenticated gate before the request is read.
+var selfCheckCodes = []string{"helper_install_insecure", "helper_policy_invalid", "helper_policy_mismatch",
+	"helper_client_uid_mismatch", "helper_capabilities_broad"}
+
+// answerUnread is a helper that answers line without reading the request
+// and closes. With early set, it answers and closes before the gate has
+// written anything (the gate's write then fails with EPIPE); otherwise it
+// waits until the request is queued, so its close resets the connection.
+func answerUnread(t *testing.T, f *fixture, line string, early bool) {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "answering.sock")
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	closed := make(chan struct{}, 1)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			if !early {
+				buf := make([]byte, 1)
+				raw, _ := c.(*net.UnixConn).SyscallConn()
+				for range 200 {
+					n := 0
+					_ = raw.Read(func(fd uintptr) bool {
+						n, _, _ = syscall.Recvfrom(int(fd), buf, syscall.MSG_PEEK|syscall.MSG_DONTWAIT)
+						return true
+					})
+					if n > 0 {
+						break
+					}
+					time.Sleep(5 * time.Millisecond)
+				}
+			}
+			_, _ = c.Write([]byte(line))
+			_ = c.Close()
+			select {
+			case closed <- struct{}{}:
+			default:
+			}
+		}
+	}()
+	f.opts.DialHelper = func(ctx context.Context, _ string) (net.Conn, error) {
+		c, err := (&net.Dialer{}).DialContext(ctx, "unix", p)
+		if err == nil && early {
+			select {
+			case <-closed:
+			case <-time.After(5 * time.Second):
+				t.Error("the helper did not close")
+			}
+		}
+		return c, err
+	}
+}
+
+// A self-check failure answered by the authenticated helper passes through
+// the gate with its code and message, whether the helper's close arrives
+// before the gate's write (EPIPE) or after it (a reset): never
+// helper_refused, which is kept for a close without a byte.
+func TestForwardHelperSelfCheckCodes(t *testing.T) {
+	for _, code := range selfCheckCodes {
+		for _, early := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/early=%v", code, early), func(t *testing.T) {
+				f := newFixture(t, "destructive")
+				startHelper(t, f, echoID(""))
+				msg := "the privileged helper refused to serve: " + code
+				answerUnread(t, f, `{"v":1,"id":"","ok":false,"error":{"code":"`+code+`","message":"`+msg+`"},"warnings":[]}`+"\n", early)
+				for range 3 {
+					r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"priv_stat","args":{"path":"/etc/example-app"},"timeout_ms":2000}` + "\n")
+					if r.OK || r.Error == nil || r.Error.Code != code || r.Error.Message != msg {
+						t.Fatalf("got %+v, want %s", r.Error, code)
+					}
+				}
+			})
+		}
+	}
+	// The control: closed early without a byte is still helper_refused.
+	f := newFixture(t, "destructive")
+	startHelper(t, f, echoID(""))
+	answerUnread(t, f, "", true)
+	f.fail("priv_stat", m{"path": "/etc/example-app"}, "helper_refused")
 }
 
 func TestForwardUnavailable(t *testing.T) {

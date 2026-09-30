@@ -527,7 +527,9 @@ func TestHelperOneInstancePerConnection(t *testing.T) {
 	t.Fatalf("instances left after the connections closed: %v", active())
 }
 
-// A policy edited without regenerating the units is refused (PRIVILEGED §2).
+// A policy edited without regenerating the units is refused (PRIVILEGED
+// §2), and the authenticated gate is told why: helper_policy_mismatch, not
+// helper_refused. Another account still gets nothing.
 func TestHelperPolicyHashMismatch(t *testing.T) {
 	mustGate(t, "priv_stat", map[string]any{"path": "/etc/example-app"}, nil) // control
 	orig := readFile(t, privPolicy)
@@ -536,12 +538,93 @@ func TestHelperPolicyHashMismatch(t *testing.T) {
 	if err := os.WriteFile(privPolicy, []byte(orig+"# edited after the units were generated\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	wantGate(t, svcShell, "priv_stat", map[string]any{"path": "/etc/example-app"}, "helper_refused")
-	findJournal(t, "shell-mcp-privd", start, `"check":"policy_hash"`)
+	wantGate(t, svcShell, "priv_stat", map[string]any{"path": "/etc/example-app"}, "helper_policy_mismatch")
+	e := findJournal(t, "shell-mcp-privd", start, `"check":"policy_hash"`, `"outcome":"helper_policy_mismatch"`, `"peer_uid":4200001`)
+	if e.Priority != "4" {
+		t.Fatalf("self-check failure logged at priority %s", e.Priority)
+	}
+	wantGate(t, svcOther, "priv_stat", map[string]any{"path": "/etc/example-app"}, "helper_refused")
 	if err := os.WriteFile(privPolicy, []byte(orig), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mustGate(t, "priv_stat", map[string]any{"path": "/etc/example-app"}, nil)
+}
+
+// A policy that no longer parses is reported to the authenticated gate as
+// helper_policy_invalid, with a one-line reason and no policy content.
+func TestHelperPolicyInvalidAnswered(t *testing.T) {
+	mustGate(t, "priv_stat", map[string]any{"path": "/etc/example-app"}, nil) // control
+	orig := readFile(t, privPolicy)
+	t.Cleanup(func() { _ = os.WriteFile(privPolicy, []byte(orig), 0o600) })
+	start := time.Now()
+	if err := os.WriteFile(privPolicy, []byte(orig+"unknown_key_for_e2e: true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := gate(t, svcShell, "priv_stat", map[string]any{"path": "/etc/example-app"})
+	if r.code() != "helper_policy_invalid" || strings.Contains(r.Error.Message, "unknown_key_for_e2e") {
+		t.Fatalf("got %s %+v, want helper_policy_invalid without policy content", r.code(), r.Error)
+	}
+	findJournal(t, "shell-mcp-privd", start, `"check":"policy"`, `"outcome":"helper_policy_invalid"`)
+	wantGate(t, svcOther, "priv_stat", map[string]any{"path": "/etc/example-app"}, "helper_refused")
+}
+
+// unitDropIn overrides the helper's service unit with a drop-in for the
+// rest of the test.
+func unitDropIn(t *testing.T, content string) {
+	t.Helper()
+	dir := "/etc/systemd/system/shell-mcp-privd@.service.d"
+	run(t, "install", "-d", "-o", "root", "-g", "root", "-m", "0755", dir)
+	if err := os.WriteFile(filepath.Join(dir, "e2e.conf"), []byte(content), 0o644); err != nil { //nolint:gosec // G306: unit drop-ins are root:root 0644
+		t.Fatal(err)
+	}
+	run(t, "systemctl", "daemon-reload")
+	t.Cleanup(func() {
+		_ = os.RemoveAll(dir)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		_ = exec.CommandContext(ctx, "systemctl", "daemon-reload").Run()
+	})
+}
+
+// The peer check reads only the unit's SHELL_MCP_PRIVD_CLIENT_UID. A unit
+// that names another account than the policy serves that account only far
+// enough to tell it helper_client_uid_mismatch; a unit without the value
+// serves nobody and says so in the journal.
+func TestHelperUnitClientUID(t *testing.T) {
+	line := func() string {
+		return fmt.Sprintf(`{"v":1,"id":%q,"op":"priv_stat","args":{"path":"/etc/example-app"}}`+"\n", newID())
+	}
+	if out := direct(t, svcShell, line()); !strings.Contains(out, `"ok":true`) { // control
+		t.Fatalf("client_uid got %q", out)
+	}
+	if !strings.Contains(readFile(t, "/etc/systemd/system/shell-mcp-privd@.service"), "Environment=SHELL_MCP_PRIVD_CLIENT_UID=4200001\n") {
+		t.Fatal("the generated unit does not name client_uid")
+	}
+
+	unitDropIn(t, "[Service]\nEnvironment=SHELL_MCP_PRIVD_CLIENT_UID=4200003\n")
+	start := time.Now()
+	if out := direct(t, svcShell, line()); out != "" {
+		t.Fatalf("the policy's client, no longer the unit's, got %q", out)
+	}
+	findJournal(t, "shell-mcp-privd", start, `"check":"peer_uid"`, `"peer_uid":4200001`, `"outcome":"refused"`)
+	var r response
+	out := direct(t, svcOther, line())
+	if err := json.Unmarshal([]byte(out), &r); err != nil || r.code() != "helper_client_uid_mismatch" || r.ID != "" {
+		t.Fatalf("the unit's client got %q, want helper_client_uid_mismatch without an id", out)
+	}
+	findJournal(t, "shell-mcp-privd", start, `"check":"client_uid"`, `"outcome":"helper_client_uid_mismatch"`)
+
+	// An empty Environment= clears every earlier assignment (systemd.exec(5)).
+	unitDropIn(t, "[Service]\nEnvironment=\n")
+	start = time.Now()
+	if out := direct(t, svcShell, line()); out != "" {
+		t.Fatalf("a unit without SHELL_MCP_PRIVD_CLIENT_UID answered %q", out)
+	}
+	wantGate(t, svcShell, "priv_stat", map[string]any{"path": "/etc/example-app"}, "helper_refused")
+	e := findJournal(t, "shell-mcp-privd", start, `"check":"unit_client_uid"`, `"outcome":"refused"`)
+	if e.Priority != "4" {
+		t.Fatalf("refusal logged at priority %s", e.Priority)
+	}
 }
 
 // With the helper's own checks and Landlock bypassed (the e2e test build),
