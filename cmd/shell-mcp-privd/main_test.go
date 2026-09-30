@@ -187,7 +187,7 @@ func TestVarRunMustBeRun(t *testing.T) {
 		t.Fatalf("control: exit %d: %s %s", code, so.String(), se.String())
 	}
 	for name, mk := range map[string]func(string) error{
-		"a directory":         func(p string) error { return os.Mkdir(p, 0o755) },
+		"a directory":         func(p string) error { return os.Mkdir(p, 0o750) },
 		"a symlink elsewhere": func(p string) error { return os.Symlink("/tmp", p) },
 		"missing":             func(string) error { return nil },
 	} {

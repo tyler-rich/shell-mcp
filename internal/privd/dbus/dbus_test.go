@@ -44,8 +44,8 @@ func TestCall(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got, err := r.Strings(); err != nil || !slices.Equal(got, []string{"/org/freedesktop/systemd1/job/7"}) || r.Signature != "o" {
-				t.Fatalf("reply %v %v (signature %q)", got, err, r.Signature)
+			if got, serr := r.Strings(); serr != nil || !slices.Equal(got, []string{"/org/freedesktop/systemd1/job/7"}) || r.Signature != "o" {
+				t.Fatalf("reply %v %v (signature %q)", got, serr, r.Signature)
 			}
 			if a := b.Auth(); len(a) != 1 || a[0] != "AUTH EXTERNAL 30\r\n" {
 				t.Fatalf("auth lines %q", a)

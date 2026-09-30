@@ -76,37 +76,37 @@ type previewData struct {
 	DurationMS      int64   `json:"duration_ms"`
 }
 
-func (s *server) pkgUpdateIndex(raw jsontext.Value) (any, []string, error) {
+func (s *server) pkgUpdateIndex(raw jsontext.Value) (data any, warns []string, failure error) {
 	return s.pkgOp(raw, pkg.OpUpdate, false)
 }
 
-func (s *server) pkgInstall(raw jsontext.Value) (any, []string, error) {
+func (s *server) pkgInstall(raw jsontext.Value) (data any, warns []string, failure error) {
 	return s.pkgOp(raw, pkg.OpInstall, false)
 }
 
-func (s *server) pkgInstallPreview(raw jsontext.Value) (any, []string, error) {
+func (s *server) pkgInstallPreview(raw jsontext.Value) (data any, warns []string, failure error) {
 	return s.pkgOp(raw, pkg.OpInstall, true)
 }
 
-func (s *server) pkgUpgrade(raw jsontext.Value) (any, []string, error) {
+func (s *server) pkgUpgrade(raw jsontext.Value) (data any, warns []string, failure error) {
 	return s.pkgOp(raw, pkg.OpUpgrade, false)
 }
 
-func (s *server) pkgUpgradePreview(raw jsontext.Value) (any, []string, error) {
+func (s *server) pkgUpgradePreview(raw jsontext.Value) (data any, warns []string, failure error) {
 	return s.pkgOp(raw, pkg.OpUpgrade, true)
 }
 
-func (s *server) pkgRemove(raw jsontext.Value) (any, []string, error) {
+func (s *server) pkgRemove(raw jsontext.Value) (data any, warns []string, failure error) {
 	return s.pkgOp(raw, pkg.OpRemove, false)
 }
 
-func (s *server) pkgRemovePreview(raw jsontext.Value) (any, []string, error) {
+func (s *server) pkgRemovePreview(raw jsontext.Value) (data any, warns []string, failure error) {
 	return s.pkgOp(raw, pkg.OpRemove, true)
 }
 
 // pkgOp checks the request against the packages section and runs apt-get
 // with the fixed argv for op.
-func (s *server) pkgOp(raw jsontext.Value, op pkg.Op, simulate bool) (any, []string, error) {
+func (s *server) pkgOp(raw jsontext.Value, op pkg.Op, simulate bool) (data any, warns []string, failure error) {
 	var names []string
 	if op == pkg.OpInstall || op == pkg.OpRemove {
 		var a pkgArgs

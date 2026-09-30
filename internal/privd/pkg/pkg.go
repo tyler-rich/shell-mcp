@@ -188,7 +188,7 @@ func ParseSimulation(out []byte) Simulation {
 
 func (s *Simulation) addInst(line string) bool {
 	m := instRE.FindStringSubmatch(line)
-	if m == nil || !validQualified(m[1]) || !versionRE.MatchString(m[3]) || (m[2] != "" && !versionRE.MatchString(m[2])) {
+	if len(m) != 4 || !validQualified(m[1]) || !versionRE.MatchString(m[3]) || (m[2] != "" && !versionRE.MatchString(m[2])) {
 		return false
 	}
 	if m[2] == "" {
@@ -201,7 +201,7 @@ func (s *Simulation) addInst(line string) bool {
 
 func (s *Simulation) addRemove(line string) bool {
 	m := removeRE.FindStringSubmatch(line)
-	if m == nil || m[3] == "" || !validQualified(m[2]) || !versionRE.MatchString(m[3]) {
+	if len(m) != 4 || m[3] == "" || !validQualified(m[2]) || !versionRE.MatchString(m[3]) {
 		return false
 	}
 	s.Remove = append(s.Remove, Removal{Name: m[2], Version: m[3], Purge: m[1] == "Purg"})

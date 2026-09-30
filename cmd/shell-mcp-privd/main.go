@@ -178,8 +178,8 @@ func unitsWith(args []string, stdout, stderr io.Writer, env *loadEnv) int {
 		}
 		return 1
 	}
-	if err := env.checkVarRun(); err != nil {
-		_, _ = fmt.Fprintf(stderr, "shell-mcp-privd units: %v\n", err)
+	if verr := env.checkVarRun(); verr != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-privd units: %v\n", verr)
 		return 1
 	}
 	f, err := units.Core(p)

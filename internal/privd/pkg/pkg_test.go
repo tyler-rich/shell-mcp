@@ -211,18 +211,18 @@ func TestRunLockWait(t *testing.T) {
 		t.Fatalf("run %+v %v, %d calls", res, err, len(calls(t, log)))
 	}
 	for _, mode := range []string{"lockforever", "listslock"} {
-		bin, log := fake(t, mode)
-		r := pkg.Runner{AptGet: bin, Env: pkg.Env("/root"), MaxOutput: 4096, LockWait: 300 * time.Millisecond, Retry: 50 * time.Millisecond}
+		mbin, mlog := fake(t, mode)
+		mr := pkg.Runner{AptGet: mbin, Env: pkg.Env("/root"), MaxOutput: 4096, LockWait: 300 * time.Millisecond, Retry: 50 * time.Millisecond}
 		start := time.Now()
-		res, err := r.Run(context.Background(), 10*time.Second, []string{"-q", "update"})
-		if !errors.Is(err, pkg.ErrLockHeld) || res.Attempts < 2 {
-			t.Fatalf("%s: %+v %v", mode, res, err)
+		mres, merr := mr.Run(context.Background(), 10*time.Second, []string{"-q", "update"})
+		if !errors.Is(merr, pkg.ErrLockHeld) || mres.Attempts < 2 {
+			t.Fatalf("%s: %+v %v", mode, mres, merr)
 		}
 		if d := time.Since(start); d > 3*time.Second {
 			t.Fatalf("%s: waited %v past a 300ms lock wait", mode, d)
 		}
-		if n := len(calls(t, log)); n != res.Attempts {
-			t.Fatalf("%s: %d calls, %d attempts", mode, n, res.Attempts)
+		if n := len(calls(t, mlog)); n != mres.Attempts {
+			t.Fatalf("%s: %d calls, %d attempts", mode, n, mres.Attempts)
 		}
 	}
 	// Another failure is not a lock: no retry.

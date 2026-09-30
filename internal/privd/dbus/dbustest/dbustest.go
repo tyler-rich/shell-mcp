@@ -141,7 +141,7 @@ func message(o Order, typ byte, fields func([]byte) []byte, sig string, body []b
 	h = fields(h)
 	if sig != "" {
 		h = pad(h, 8)
-		h = append(h, 8, 1, 'g', 0, byte(len(sig)))
+		h = append(h, 8, 1, 'g', 0, byte(len(sig))) //nolint:gosec // G115: test signatures are short
 		h = append(append(h, sig...), 0)
 	}
 	o.PutUint32(h[12:], uint32(len(h)-start)) //nolint:gosec // G115: test headers are short

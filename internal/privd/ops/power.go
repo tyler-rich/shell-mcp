@@ -43,7 +43,7 @@ type powerData struct {
 // errorNameRE is a D-Bus error name safe to put in a message.
 var errorNameRE = regexp.MustCompile(`^[A-Za-z0-9_.]{1,255}$`)
 
-func (s *server) power(raw jsontext.Value) (any, []string, error) {
+func (s *server) power(raw jsontext.Value) (data any, warns []string, failure error) {
 	var a powerArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err

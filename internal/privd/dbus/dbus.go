@@ -343,7 +343,7 @@ func (e *encoder) field(code, typ byte, s string) {
 	e.align(8)
 	e.b = append(e.b, code, 1, typ, 0)
 	if typ == 'g' {
-		e.b = append(append(append(e.b, byte(len(s))), s...), 0)
+		e.b = append(append(append(e.b, byte(len(s))), s...), 0) //nolint:gosec // G115: marshal bounds every string to 255 bytes
 		return
 	}
 	e.str(s)
@@ -402,16 +402,16 @@ func Dial(ctx context.Context, path string, uid int) (*Conn, error) {
 		_ = c.SetDeadline(time.Now().Add(10 * time.Second))
 	}
 	conn := &Conn{c: c, r: bufio.NewReaderSize(c, 4096)}
-	if err := conn.auth(uid); err != nil {
+	if aerr := conn.auth(uid); aerr != nil {
 		_ = c.Close()
-		return nil, err
+		return nil, aerr
 	}
 	r, err := conn.Call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "Hello")
 	if err != nil {
 		_ = c.Close()
 		return nil, err
 	}
-	if s, err := r.Strings(); err != nil || len(s) != 1 {
+	if s, serr := r.Strings(); serr != nil || len(s) != 1 {
 		_ = c.Close()
 		return nil, errors.New("dbus: malformed Hello reply")
 	}

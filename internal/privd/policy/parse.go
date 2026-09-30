@@ -814,7 +814,7 @@ func (v *validator) aptGet(p *Policy) {
 		v.fail("packages", "%s cannot be resolved: %v", path, gpolicy.ErrReason(err))
 		return
 	}
-	if _, err := gpolicy.CheckChain(v.opts.Trust, resolved); err != nil {
+	if _, err = gpolicy.CheckChain(v.opts.Trust, resolved); err != nil {
 		v.fail("packages", "%v", err)
 		return
 	}
