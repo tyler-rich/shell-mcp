@@ -44,8 +44,8 @@ type opSpec struct {
 	run  opFunc
 }
 
-// ops are the core unit's operations and their tiers (PRIVILEGED §6).
-// priv_exec's tier is the command's.
+// opTable holds every operation and its tier (PRIVILEGED §6); broadOps
+// says which run in the broad unit. priv_exec's tier is the command's.
 func opTable() map[string]opSpec {
 	return map[string]opSpec{
 		protocol.OpPrivReadFile:      {policy.TierRead, (*server).readFile},
@@ -60,6 +60,14 @@ func opTable() map[string]opSpec {
 		protocol.OpPrivMove:          {policy.TierOperator, (*server).move},
 		protocol.OpPrivRestoreBackup: {policy.TierOperator, (*server).restoreBackup},
 		protocol.OpPrivDelete:        {policy.TierDestructive, (*server).delete},
+		// Broad unit (broadOps).
+		protocol.OpPrivPkgUpdateIndex:    {policy.TierOperator, (*server).pkgUpdateIndex},
+		protocol.OpPrivPkgInstall:        {policy.TierOperator, (*server).pkgInstall},
+		protocol.OpPrivPkgUpgrade:        {policy.TierOperator, (*server).pkgUpgrade},
+		protocol.OpPrivPkgRemove:         {policy.TierDestructive, (*server).pkgRemove},
+		protocol.OpPrivPkgInstallPreview: {policy.TierRead, (*server).pkgInstallPreview},
+		protocol.OpPrivPkgUpgradePreview: {policy.TierRead, (*server).pkgUpgradePreview},
+		protocol.OpPrivPkgRemovePreview:  {policy.TierRead, (*server).pkgRemovePreview},
 	}
 }
 
