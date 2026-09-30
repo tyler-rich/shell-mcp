@@ -376,7 +376,7 @@ The accepted values, with the reasoning per key family, are in the POLICY §7 ta
 
 **Versions:** unchanged. git verified: 2.47.3 (local image), 2.55.0 (CI image).
 
-### 2026-09-29 — Privileged helper core: policy, units, self-checks, operations, backups; gate forwarding; runner-host e2e (PR #PRNUM, branch sec/privd-core)
+### 2026-09-29 — Privileged helper core: policy, units, self-checks, operations, backups; gate forwarding; runner-host e2e (PR #5, branch sec/privd-core)
 **Decision:** Implement `shell-mcp-privd` per PRIVILEGED.md for the core unit, the gate's forwarding of `priv_*`, and the first CI job that runs the real stack on a VM's own systemd:
 - **Privileged policy** (`internal/privd/policy`): strict YAML and full §4 validation.
   - Identity: `client_uid` (never 0); `socket_group` (local, not in the D-020 deny list, not gid 0); `max_tier`; `sandbox.landlock`; limits with ceilings.
@@ -422,6 +422,17 @@ The accepted values, with the reasoning per key family, are in the POLICY §7 ta
   - The maintainer kept the recipe unchanged. `test/e2e/local.sh` runs what works there (units verify, security rating, socket permissions) and says why.
   - The **runner-host job is the authoritative helper e2e**, with every helper test required.
   - Only the S1b groups could have moved to S1c-2; none did.
+
+**Findings from the runner and further maintainer decisions:**
+- **CAP_KILL and signal scoping.** At Landlock ABI 8, the helper's ruleset (reused from the gate's sandbox) scoped signals to the helper's own domain. So a declared `CAP_KILL` reached no process on the host: the e2e control got EPERM. Maintainer decision: when a core-unit command declares `CAP_KILL`, the helper leaves signals unscoped, while abstract Unix sockets stay scoped. The gate never unscopes (`sandbox.Rules.UnscopedSignals`; `TestScopedSignals`, `TestRulesUnscopeSignalsOnlyForCAPKILL`, both committed failing first). PRIVILEGED §5.1 updated.
+- **Multi-call coreutils (Ubuntu 26.04).** Every coreutils command is a hard link to one Rust coreutils binary that also answers to `chroot`, `env`, `nice`, `nohup`, `stdbuf` and `timeout`. The binary identity check therefore refused `/usr/bin/du` in the example policies, and `TestExamplePolicies` failed on the ABI 8 entry. Maintainer decision:
+  - the check stays unchanged;
+  - the examples declare util-linux `findmnt` (its own binary), and both matrix images load them;
+  - POLICY §5 records that coreutils commands cannot be declared on hosts with a multi-call coreutils in v1;
+  - plan.md §5 names a design session (S-MC, before S5) on allowing argv[0]-dispatched multi-call binaries, under strict conditions and with two-sided tests on both images. Nothing is relaxed in this PR.
+- **Refusal seen as a reset.** A refusing helper closes without reading the request, and closing a Unix stream socket with unread data resets it. The gate saw `ECONNRESET` (or `EPIPE` on its write), so a refusal came out as `helper_unavailable`. Now, with no byte received, it is `helper_refused`; a reset after a partial response stays `helper_unavailable` (`TestForwardRefusedWithRequestUnread`, committed failing first).
+- **World-writable directories on the runner image.** `/usr/local/bin` and `/opt` are 0777 on `ubuntu-26.04`. The gate and the helper correctly refused binaries and policies beneath them. `setup.sh` normalizes those directories on the disposable VM.
+- **Bypass op names.** The e2e bypass ops were renamed `bypass_raw_*`: the protocol's op format allows lowercase letters and underscores only, and `e2e_raw_*` was rejected as `bad_request`.
 
 **systemd directives, verified at the source.** Sources: the man pages of systemd 257 (Debian trixie) and 259 (Ubuntu resolute), and the source at v257/v259.
 - **Socket** (`systemd.socket(5)`, identical in 257 and 259):
@@ -537,7 +548,7 @@ It is allowed nowhere else. Sessions keep their deny rule, and `sudo` does not a
 - Runner facts from the first run: kernel 7.0.0-1012-azure, systemd 259.5 (259.5-0ubuntu3.4), polkitd 127 (127-2ubuntu1.1, preinstalled), Landlock ABI 8. The image ships `/usr/local/bin` and `/opt` world-writable (0777); the gate and the helper rightly refuse binaries and policies beneath them, so `setup.sh` makes those directories `root:root` without group/other write on the disposable VM, as SECURITY §5 requires of a target.
 
 **`systemd-analyze security shell-mcp-privd@.service`:**
-- 1.6 "OK" with systemd 257.13 (local container). Runner: RUNNEREXPOSURE. Threshold (`E2E_SECURITY_MAX`): THRESHOLD.
+- 1.6 "OK" with systemd 257.13 (local container). Runner: 1.6 "OK" with systemd 259.5 (ubuntu-26.04, first run). Threshold (`E2E_SECURITY_MAX`): **1.6 exactly**, the runner's first measured score with no slack (maintainer decision), so any regression fails the job.
 - The remaining exposure items are inherent: the unit runs as root; `@privileged`/`@resources` are in `@system-service`; CAP_CHOWN/DAC/FOWNER are there by design; AF_UNIX is allowed.
 - Four more come from directives §5.1 does not list: `ProtectProc=`, `ProcSubset=`, `PrivateUsers=`, `RootDirectory=`. Adding them would be a §5.1 change, left for the maintainer to consider.
 
