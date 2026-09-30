@@ -208,6 +208,8 @@ func TestRefusesWhatTheCoreUnitCannotHold(t *testing.T) {
 		"dash-leading policy": func(p *policy.Policy) { p.File = "/etc/shell-mcp/-x.yaml" },
 		"percent in policy":   func(p *policy.Policy) { p.File = "/etc/shell-mcp/%n.yaml" },
 		"odd socket group":    func(p *policy.Policy) { p.SocketGroup = "svc shell" },
+		"root as client":      func(p *policy.Policy) { p.ClientUID = 0 },
+		"(uid_t)-1 as client": func(p *policy.Policy) { p.ClientUID = 4294967295 },
 		"persistence space": func(p *policy.Policy) {
 			p.Paths.Persistence = []policy.Persistence{{Path: "/etc/cron.d/a b", Acknowledge: "x"}}
 		},
