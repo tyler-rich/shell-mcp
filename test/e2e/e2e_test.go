@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -128,9 +129,14 @@ func cred(t *testing.T, uid uint32) *syscall.Credential {
 	return &syscall.Credential{Uid: uid, Gid: uid}
 }
 
+// run runs a fixed command with its own bounded context, not the test's:
+// t.Context() is already cancelled when t.Cleanup functions run, and the
+// cleanups restore the production helper and the base policy.
 func run(t *testing.T, name string, args ...string) string {
 	t.Helper()
-	out, err := exec.CommandContext(t.Context(), name, args...).CombinedOutput() //nolint:gosec // G204: fixed test commands
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput() //nolint:gosec // G204: fixed test commands
 	if err != nil {
 		t.Fatalf("%s %v: %v\n%s", name, args, err, out)
 	}
@@ -578,13 +584,30 @@ func TestHelperSystemdConfinesWithoutOwnChecks(t *testing.T) {
 			t.Fatalf("%s was written", p)
 		}
 	}
-	// Control: root outside the unit reads /etc/shadow; the unit cannot.
-	if _, err := os.ReadFile("/etc/shadow"); err != nil {
-		t.Fatalf("control read of /etc/shadow: %v", err)
+	// Control: root outside the unit reads the real, non-empty /etc/shadow.
+	// Inside the unit InaccessiblePaths= puts an empty mode-0000 node over
+	// it; root with CAP_DAC_READ_SEARCH may open that node, but it must
+	// never see the real file's content.
+	shadow, err := os.ReadFile("/etc/shadow")
+	if err != nil || len(shadow) == 0 {
+		t.Fatalf("control read of /etc/shadow: %v (%d bytes)", err, len(shadow))
 	}
-	if got := result(raw("bypass_raw_read", "/etc/shadow")); got == "OK" {
-		t.Fatal("the unit read /etc/shadow")
+	realSum := sha256.Sum256(shadow)
+	var sr struct {
+		Data struct {
+			Result string `json:"result"`
+			Bytes  int    `json:"bytes"`
+			SHA256 string `json:"sha256"`
+		} `json:"data"`
 	}
+	out := raw("bypass_raw_read", "/etc/shadow")
+	if err := json.Unmarshal([]byte(out), &sr); err != nil {
+		t.Fatalf("bypass helper: %q", out)
+	}
+	if sr.Data.Result == "OK" && (sr.Data.Bytes != 0 || sr.Data.SHA256 == hex.EncodeToString(realSum[:])) {
+		t.Fatalf("the unit read the real /etc/shadow (%d bytes)", sr.Data.Bytes)
+	}
+	t.Logf("inside the unit /etc/shadow reads as: %s, %d bytes", sr.Data.Result, sr.Data.Bytes)
 	if got := result(raw("bypass_raw_read", "/etc/example-app/app.conf")); got != "OK" {
 		t.Fatalf("raw read inside the roots: %s", got)
 	}
