@@ -25,9 +25,25 @@ env:
 
 jobs:
   go:
-    name: go (fmt, vet, lint, test, vuln, build)
-    runs-on: ubuntu-latest
+    # Two pinned runner images, one per all-thread Landlock path: below ABI 8
+    # go-landlock applies no_new_privs and landlock_restrict_self on every
+    # thread through libcap/psx (the production path on Debian 13, ABI 6);
+    # from ABI 8 it uses LANDLOCK_RESTRICT_SELF_TSYNC. Each entry requires
+    # its kernel's ABI, so the kernel-dependent tests fail rather than skip,
+    # and asserts which path it took.
+    name: go (fmt, vet, lint, test, vuln, build) — ${{ matrix.image }}, Landlock ABI ${{ matrix.abi }} (${{ matrix.path }})
+    runs-on: ${{ matrix.image }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu-24.04
+            abi: "7"
+            path: psx
+          - image: ubuntu-26.04
+            abi: "8"
+            path: tsync
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -65,27 +81,34 @@ jobs:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
           args: --build-tags=e2e,shellmcp_e2e_bypass
       # SHELL_MCP_REQUIRE_SECURE_TMP: tests fail (never skip) without a
-      # trustworthy TMPDIR. SHELL_MCP_REQUIRE_LANDLOCK_ABI: this runner exposes
-      # Landlock ABI 7, so the network and scope sandbox tests (ABI 4/6) must
-      # run here and fail rather than skip if the kernel ever cannot run them.
+      # trustworthy TMPDIR. SHELL_MCP_REQUIRE_LANDLOCK_ABI: each entry's
+      # kernel ABI, so every sandbox test up to it (network rules from 4,
+      # signal and abstract-socket scoping from 8) must run and fail rather
+      # than skip. SHELL_MCP_EXPECT_LANDLOCK_PATH: the all-thread path this
+      # entry must take (TestLandlockThreadPath).
       - name: go test -race
         env:
           SHELL_MCP_REQUIRE_SECURE_TMP: "1"
-          SHELL_MCP_REQUIRE_LANDLOCK_ABI: "7"
+          SHELL_MCP_REQUIRE_LANDLOCK_ABI: ${{ matrix.abi }}
+          SHELL_MCP_EXPECT_LANDLOCK_PATH: ${{ matrix.path }}
           # The runner's kernel supports MPTCP: the MPTCP tests' control case
           # (a socket opened without the filter) must succeed here, or fail.
           SHELL_MCP_REQUIRE_MPTCP: "1"
         run: |
           go test -race -count=1 -v ./... 2>&1 | tee /tmp/go-test.log
           test "${PIPESTATUS[0]}" -eq 0
-      # Kernel-dependent tests, listed so that a skip is visible. On this
-      # runner the ABI 4+ ones (network rules, including the git_pull
-      # unlisted-port test) must PASS: SHELL_MCP_REQUIRE_LANDLOCK_ABI makes
-      # them fail rather than skip.
+      # Kernel-dependent tests, listed so that a skip is visible, with the
+      # all-thread Landlock path this entry exercised.
       - name: sandbox tests that ran on this runner
         if: always()
         run: |
-          grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|Integration(Sandbox|Swap|ExecLimits|GitPull|ServiceOps|SystemOps)|RequiredRefused|BestEffort)' /tmp/go-test.log | tee -a "$GITHUB_STEP_SUMMARY" || true
+          {
+            echo "### ${{ matrix.image }}: kernel $(uname -r)"
+            echo "- Landlock path exercised: $(grep -o 'LANDLOCK_PATH=[a-z]* kernel_abi=[0-9]*' /tmp/go-test.log | head -n1) (expected ${{ matrix.path }}, ABI ${{ matrix.abi }})"
+            echo '```'
+            grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|LandlockThreadPath|Integration(Sandbox|Swap|ExecLimits|GitPull|ServiceOps|SystemOps)|RequiredRefused|BestEffort)' /tmp/go-test.log || true
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: govulncheck
         run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
       - name: cross-build (linux/amd64, linux/arm64)
