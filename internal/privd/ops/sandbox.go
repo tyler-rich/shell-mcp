@@ -3,6 +3,8 @@
 package ops
 
 import (
+	"slices"
+
 	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
@@ -32,6 +34,10 @@ func Rules(p *policy.Policy, backupDir string) sandbox.Rules {
 	}
 	r.ReadOnly = append(append([]string(nil), helperReadFiles...), p.Paths.Read...)
 	r.ReadWrite = append(p.Paths.WriteRoots(), backupDir)
+	// A declared CAP_KILL must be able to reach processes outside the
+	// helper's Landlock domain, so signals are then left unscoped (from ABI
+	// 8); abstract Unix sockets stay scoped (maintainer decision, S1c).
+	r.UnscopedSignals = slices.Contains(p.Capabilities, "CAP_KILL")
 	return r
 }
 

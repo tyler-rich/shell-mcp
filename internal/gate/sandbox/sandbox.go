@@ -271,7 +271,10 @@ func build(r *Rules, abi int) (landlock.Config, []landlock.Rule, error) {
 	}
 	var scoped landlock.ScopedSet
 	if abi >= ABIScope {
-		scoped = llsys.ScopeAbstractUnixSocket | llsys.ScopeSignal
+		scoped = llsys.ScopeAbstractUnixSocket
+		if !r.UnscopedSignals {
+			scoped |= llsys.ScopeSignal
+		}
 	}
 	cfg, err := landlock.NewConfig(fs, net, scoped)
 	if err != nil {
