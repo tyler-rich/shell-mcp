@@ -76,9 +76,11 @@ Inst broken line without version
 		fmt.Fprintln(os.Stderr, "E: Unable to locate package example-missing")
 		os.Exit(100)
 	case "secret":
-		fmt.Println("-----BEGIN OPENSSH PRIVATE KEY-----")
+		// An invented key-shaped block, assembled at run time so that no
+		// key literal is committed (secret scanners).
+		fmt.Println("-----BEGIN " + "OPENSSH PRIVATE KEY-----")
 		fmt.Println("aW52ZW50ZWQgdGVzdCBrZXkgbWF0ZXJpYWw=")
-		fmt.Println("-----END OPENSSH PRIVATE KEY-----")
+		fmt.Println("-----END " + "OPENSSH PRIVATE KEY-----")
 	case "flood":
 		fmt.Print(strings.Repeat("y", 1<<20))
 	}

@@ -9,3 +9,8 @@
 8638631da479ec209cbc53a6dd1a2e9b74cfa394:internal/redact/redact_test.go:private-key:44
 8638631da479ec209cbc53a6dd1a2e9b74cfa394:internal/redact/redact_test.go:curl-auth-header:74
 a53197e4d089d6c98ad594d5e09d75417438bcdc:internal/redact/fuzz_test.go:private-key:13
+#
+# Branch sec/privd-broad (PR #6), the apt-get stand-in's redaction case: an
+# invented OpenSSH private-key PEM block (a later commit on the branch
+# assembles it at run time).
+414d9bbc6419b178b21814a2d503bb881b46381d:internal/privd/pkg/testdata/fakeapt/main.go:private-key:79
