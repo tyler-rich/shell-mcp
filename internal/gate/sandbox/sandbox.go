@@ -67,6 +67,10 @@ type Rules struct {
 	UnixSocketDirs []string // connect to pathname sockets beneath (ABI >= 9)
 	SyslogSocket   string   // the audit socket; its real directory is granted
 	TCPConnect     []uint16
+	// UnscopedSignals leaves signals unscoped from ABI 8 (abstract Unix
+	// sockets stay scoped). Only the privileged helper sets it, when a core-
+	// unit command declares CAP_KILL (PRIVILEGED §5.1); the gate never does.
+	UnscopedSignals bool
 }
 
 // Enforcement is the per-class status.
