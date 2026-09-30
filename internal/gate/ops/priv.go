@@ -4,9 +4,11 @@ package ops
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"net"
 	"os"
+	"slices"
 	"syscall"
 	"time"
 
@@ -25,6 +27,58 @@ func DialHelper(ctx context.Context, socket string) (net.Conn, error) {
 	return (&net.Dialer{}).DialContext(ctx, "unix", socket)
 }
 
+// broadOps go to the broad unit's socket (PRIVILEGED §5.2, §6).
+var broadOps = []string{
+	protocol.OpPrivPkgUpdateIndex, protocol.OpPrivPkgInstall, protocol.OpPrivPkgUpgrade, protocol.OpPrivPkgRemove,
+	protocol.OpPrivPkgInstallPreview, protocol.OpPrivPkgUpgradePreview, protocol.OpPrivPkgRemovePreview, protocol.OpPrivPower,
+}
+
+// route picks the helper socket for a privileged op: privileged.broad_socket
+// for the package operations, their previews and priv_power, and for
+// priv_exec when its `unit` argument is "broad" (the server supplies it: the
+// gate cannot read the privileged policy to learn a command's unit);
+// privileged.socket for everything else. This only picks the door: each
+// helper instance refuses an operation meant for the other unit
+// (helper_wrong_unit), so a wrong or forged label never runs anything in
+// the wrong sandbox. The args are read here, never rewritten.
+func (s *server) route(op string) (string, error) {
+	broad := slices.Contains(broadOps, op)
+	if op == protocol.OpPrivExec {
+		b, err := execBroad(s.req.Args)
+		if err != nil {
+			return "", err
+		}
+		broad = b
+	}
+	if !broad {
+		return s.p.Privileged.Socket, nil
+	}
+	if s.p.Privileged.BroadSocket == "" {
+		return "", errf(protocol.CodePrivilegedDisabled, "this operation runs in the privileged helper's broad unit, and this gate policy sets no privileged.broad_socket")
+	}
+	return s.p.Privileged.BroadSocket, nil
+}
+
+// execBroad reads priv_exec's routing label: absent, null, "" or "core" is
+// the core unit, "broad" the broad unit, anything else bad_request.
+// encoding/json/v2 rejects duplicate names by default, so the gate and the
+// helper can never read two different labels from one request.
+func execBroad(args []byte) (bool, error) {
+	var a struct {
+		Unit *string `json:"unit"`
+	}
+	if len(args) > 0 && json.Unmarshal(args, &a) != nil {
+		return false, errf(protocol.CodeBadRequest, "args are not a strict object of known fields with the expected types")
+	}
+	switch {
+	case a.Unit == nil, *a.Unit == "", *a.Unit == "core":
+		return false, nil
+	case *a.Unit == "broad":
+		return true, nil
+	}
+	return false, errf(protocol.CodeBadRequest, "unit must be core or broad")
+}
+
 // forward sends the request to the privileged helper and returns its
 // answer (ARCHITECTURE §3 step 4, PRIVILEGED §3). The request goes out as
 // received — the same v, id, op and timeout_ms, and the args bytes
@@ -38,13 +92,13 @@ func DialHelper(ctx context.Context, socket string) (net.Conn, error) {
 // own code, including the helper_* self-check codes, which the helper
 // answers before reading the request (without an id, and possibly before
 // the request is even sent). The envelope's gate block stays the gate's.
-func (s *server) forward() *protocol.Response {
+func (s *server) forward(socket string) *protocol.Response {
 	dial := s.o.DialHelper
 	if dial == nil {
 		dial = DialHelper
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), helperConnectTimeout)
-	conn, err := dial(ctx, s.p.Privileged.Socket)
+	conn, err := dial(ctx, socket)
 	cancel()
 	if err != nil {
 		return s.errResp(errf(protocol.CodeHelperUnavailable, "the privileged helper's socket cannot be reached"))

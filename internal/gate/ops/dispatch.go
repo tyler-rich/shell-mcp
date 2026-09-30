@@ -92,7 +92,10 @@ var privTiers = map[string]policy.Tier{
 	protocol.OpPrivCopy: policy.TierOperator, protocol.OpPrivMove: policy.TierOperator,
 	protocol.OpPrivRestoreBackup: policy.TierOperator, protocol.OpPrivPkgUpdateIndex: policy.TierOperator,
 	protocol.OpPrivPkgInstall: policy.TierOperator, protocol.OpPrivPkgUpgrade: policy.TierOperator,
-	protocol.OpPrivDelete: policy.TierDestructive, protocol.OpPrivPkgRemove: policy.TierDestructive,
+	protocol.OpPrivPkgInstallPreview: policy.TierRead, protocol.OpPrivPkgUpgradePreview: policy.TierRead,
+	protocol.OpPrivPkgRemovePreview: policy.TierRead,
+	protocol.OpPrivDelete:           policy.TierDestructive, protocol.OpPrivPkgRemove: policy.TierDestructive,
+	protocol.OpPrivPower: policy.TierDestructive,
 }
 
 func (s *server) dispatch() *protocol.Response {
@@ -102,7 +105,11 @@ func (s *server) dispatch() *protocol.Response {
 		if err := s.priv(op); err != nil {
 			return s.errResp(err)
 		}
-		return s.forward()
+		socket, err := s.route(op)
+		if err != nil {
+			return s.errResp(err)
+		}
+		return s.forward(socket)
 	case op == protocol.OpExec:
 		data, warnings, err := s.exec(s.req.Args)
 		return s.result(data, warnings, err)
