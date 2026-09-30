@@ -37,6 +37,9 @@ type fixture struct {
 	status                              string
 	// unit is SHELL_MCP_PRIVD_UNIT (core unless asBroad).
 	unit string
+	// aptGet is the apt-get the policy checks and package operations run
+	// (the probe unless withFakeApt), aptLog the fake's log.
+	aptGet, aptLog string
 	// sandboxCalls counts ApplySandbox; unreadAtSandbox is how many request
 	// bytes were still unread on the helper's end of the connection when it
 	// was applied, and unread how many were left when Serve returned (both
@@ -98,6 +101,29 @@ func asBroad() opt {
 	}
 }
 
+// withFakeApt builds the apt-get stand-in (internal/privd/pkg/testdata/fakeapt)
+// as the apt-get the policy checks and the package operations run, in the
+// given mode.
+func withFakeApt(mode string) opt {
+	return func(f *fixture, _ *string) {
+		dir := filepath.Join(f.d, "apt")
+		gatetest.Mkdir(f.t, dir, 0o755)
+		f.aptLog = filepath.Join(f.d, "apt.log")
+		f.aptGet = gatetest.Build(f.t, "internal/privd/pkg/testdata/fakeapt", dir, "apt-get", nil, "-ldflags", "-X main.logPath="+f.aptLog)
+		gatetest.WriteFile(f.t, f.aptLog+".mode", mode, 0o600)
+	}
+}
+
+// replace edits the fixture policy.
+func replace(from, to string) opt {
+	return func(f *fixture, s *string) {
+		if !strings.Contains(*s, from) {
+			f.t.Fatalf("fixture policy lacks %q", from)
+		}
+		*s = strings.Replace(*s, from, to, 1)
+	}
+}
+
 func keep(n int) opt {
 	return func(_ *fixture, s *string) { *s = strings.Replace(*s, "keep: 3", fmt.Sprintf("keep: %d", n), 1) }
 }
@@ -134,6 +160,7 @@ func newFixture(t *testing.T, opts ...opt) *fixture {
 		gatetest.Mkdir(t, filepath.Dir(f.probe), 0o755)
 		gatetest.BuildProbe(t, filepath.Dir(f.probe), "example-probe", filepath.Join(d, "outside.txt"))
 	}
+	f.aptGet = f.probe
 	y := fmt.Sprintf(`version: 1
 client_uid: %d
 socket_group: svc-shell-priv
@@ -206,7 +233,7 @@ commands:
 		SystemBinDirs: []string{filepath.Join(d, "sysbin")},
 		UnitClientUID: strconv.FormatUint(uint64(f.uid), 10),
 		Unit:          f.unit,
-		AptGet:        f.probe,
+		AptGet:        f.aptGet,
 		ReadStatus: func() ([]byte, error) {
 			f.statusReads++
 			return []byte(f.status), nil

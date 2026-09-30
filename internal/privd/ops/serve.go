@@ -81,6 +81,9 @@ type Options struct {
 	// Audit receives one line per connection (production: stderr, which
 	// the unit sends to the journal).
 	Audit io.Writer
+	// PkgLockRetry is the pause between attempts while the dpkg or lists lock
+	// is held (0 means 2 s); tests only.
+	PkgLockRetry time.Duration
 	// InjectReadBackFault is passed to fsx; tests only.
 	InjectReadBackFault func([]byte) []byte
 	// Now is the clock (backup ids and times).
