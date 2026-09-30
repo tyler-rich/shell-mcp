@@ -146,6 +146,17 @@ func TestServiceDirectives(t *testing.T) {
 	want(t, d, s+"ReadWritePaths", "/etc/example-app/conf.d /srv/app/config /etc/systemd/system/example-app.service.d /var/lib/shell-mcp/backups")
 	want(t, d, s+"InaccessiblePaths", "-/etc/shadow -/etc/shadow- -/etc/gshadow -/etc/gshadow- -/etc/sudoers -/etc/sudoers.d -/etc/security/opasswd -/etc/ssh -/root/.ssh")
 	want(t, d, s+"ProtectHome", "read-only")
+	// /run holds the system bus, systemd's private socket and other root-
+	// equivalent sockets; the core unit sees an empty read-only tmpfs there
+	// (TemporaryFileSystem=, not InaccessiblePaths=: systemd 257 remounts its
+	// own /run/systemd/incoming after setting up the namespace, which an
+	// inaccessible /run would make fail).
+	want(t, d, s+"TemporaryFileSystem", "/run:ro")
+	// ProcSubset=pid always; ProtectProc=invisible unless a core-unit command
+	// declares CAP_KILL, which needs to see the processes it signals (this
+	// policy's stop-worker does).
+	want(t, d, s+"ProtectProc", "default")
+	want(t, d, s+"ProcSubset", "pid")
 	for _, k := range []string{"PrivateTmp", "PrivateDevices", "PrivateNetwork", "ProtectKernelTunables", "ProtectKernelModules",
 		"ProtectKernelLogs", "ProtectControlGroups", "ProtectClock", "ProtectHostname", "RestrictNamespaces", "RestrictRealtime",
 		"RestrictSUIDSGID", "LockPersonality", "MemoryDenyWriteExecute"} {
@@ -163,13 +174,13 @@ func TestServiceDirectives(t *testing.T) {
 	want(t, d, s+"MemoryMax", "256M")
 	want(t, d, "[Unit]CollectMode", "inactive-or-failed")
 	// Nothing else: a directive the generator adds must be added here.
-	if n := len(d); n != 38 {
+	if n := len(d); n != 41 {
 		keys := make([]string, 0, n)
 		for k := range d {
 			keys = append(keys, k)
 		}
 		slices.Sort(keys)
-		t.Errorf("%d directives, want 38: %q", n, keys)
+		t.Errorf("%d directives, want 41: %q", n, keys)
 	}
 }
 
@@ -179,6 +190,9 @@ func TestSyscallFilterWithoutCapabilities(t *testing.T) {
 	want(t, d, "[Service]CapabilityBoundingSet", "CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER")
 	want(t, d, "[Service]ReadWritePaths", "/var/lib/shell-mcp/backups")
 	want(t, d, "[Service]RuntimeMaxSec", "930")
+	want(t, d, "[Service]ProtectProc", "invisible")
+	want(t, d, "[Service]ProcSubset", "pid")
+	want(t, d, "[Service]TemporaryFileSystem", "/run:ro")
 }
 
 // The generator never widens the unit beyond the policy: capabilities
@@ -221,5 +235,50 @@ func TestRefusesWhatTheCoreUnitCannotHold(t *testing.T) {
 				t.Fatalf("generated:\n%s", f.Service)
 			}
 		})
+	}
+}
+
+// ProtectProc=invisible hides other users' processes from the core unit;
+// only a core-unit command that declares CAP_KILL relaxes it to default,
+// because signalling a process means finding it in /proc first.
+func TestProtectProcRelaxedOnlyForCAPKILL(t *testing.T) {
+	for name, c := range map[string]struct {
+		caps []string
+		want string
+	}{
+		"no capability": {nil, "invisible"},
+		"CAP_SYS_BOOT":  {[]string{"CAP_SYS_BOOT"}, "invisible"},
+		"CAP_KILL":      {[]string{"CAP_KILL"}, "default"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := minimalPolicy()
+			p.Commands = []policy.Command{{ID: "x", Unit: policy.UnitCore, Capabilities: c.caps}}
+			p.Capabilities = append(append([]string(nil), policy.BaseCapabilities...), c.caps...)
+			d := directives(t, generate(t, p).Service)
+			want(t, d, "[Service]ProtectProc", c.want)
+			want(t, d, "[Service]ProcSubset", "pid")
+		})
+	}
+}
+
+// PrivateUsers= and RootDirectory= (and RootImage=) are never emitted: a
+// private user namespace breaks chown to real host users, and a separate
+// root filesystem defeats working on the host's files (PRIVILEGED §5.1).
+// The renderer refuses them whatever the caller passes.
+func TestNeverPrivateUsersOrRootDirectory(t *testing.T) {
+	if _, err := units.Render([][2]string{{"ProtectHome", "read-only"}}); err != nil {
+		t.Fatalf("control: %v", err)
+	}
+	for _, k := range []string{"PrivateUsers", "RootDirectory", "RootImage", "privateusers"} {
+		if out, err := units.Render([][2]string{{"ProtectHome", "read-only"}, {k, "yes"}}); err == nil {
+			t.Errorf("%s rendered:\n%s", k, out)
+		}
+	}
+	for _, p := range []*policy.Policy{minimalPolicy(), examplePolicy()} {
+		for _, bad := range []string{"PrivateUsers", "RootDirectory", "RootImage"} {
+			if strings.Contains(generate(t, p).Service, bad) {
+				t.Fatalf("generated unit contains %s", bad)
+			}
+		}
 	}
 }

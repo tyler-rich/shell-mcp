@@ -26,10 +26,14 @@ func testEnv(t *testing.T, y string) (env *loadEnv, policyPath string) {
 	gatetest.Mkdir(t, filepath.Join(d, "etc", "example-app"), 0o755)
 	p := filepath.Join(d, "etc", "shell-mcp", "privileged.yaml")
 	gatetest.WriteFile(t, p, strings.ReplaceAll(y, "{D}", d), 0o600)
+	if err := os.Symlink("/run", filepath.Join(d, "var-run")); err != nil {
+		t.Fatal(err)
+	}
 	env = &loadEnv{
 		trust:         gatetest.Trust(),
 		executable:    exe,
 		systemBinDirs: []string{filepath.Join(d, "sysbin")},
+		varRun:        filepath.Join(d, "var-run"),
 		lookups: func(o *policy.LoadOptions) {
 			o.LookupUser = func(n string) (uint32, error) {
 				if n == "root" {
@@ -169,5 +173,42 @@ func TestServeRefusesOutsideItsUnit(t *testing.T) {
 		if code := run(args, &so, &se); code != 1 || so.Len() != 0 || !strings.HasPrefix(se.String(), "<4>") || !strings.Contains(se.String(), `"outcome":"refused"`) {
 			t.Fatalf("%v: exit %d stdout %q stderr %q", args, code, so.String(), se.String())
 		}
+	}
+}
+
+// The core unit hides /run behind an empty tmpfs (TemporaryFileSystem=),
+// which also hides /var/run only where /var/run is the usual symlink to
+// /run. On a host where it is anything else, units and check-policy refuse
+// rather than generate a unit that leaves /var/run's sockets reachable.
+func TestVarRunMustBeRun(t *testing.T) {
+	env, p := testEnv(t, validPolicy)
+	var so, se bytes.Buffer
+	if code := unitsWith([]string{"--policy", p, "--out", t.TempDir()}, &so, &se, env); code != 0 {
+		t.Fatalf("control: exit %d: %s %s", code, so.String(), se.String())
+	}
+	for name, mk := range map[string]func(string) error{
+		"a directory":         func(p string) error { return os.Mkdir(p, 0o755) },
+		"a symlink elsewhere": func(p string) error { return os.Symlink("/tmp", p) },
+		"missing":             func(string) error { return nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			env, p := testEnv(t, validPolicy)
+			env.varRun = filepath.Join(t.TempDir(), "var-run")
+			if err := mk(env.varRun); err != nil {
+				t.Fatal(err)
+			}
+			out := t.TempDir()
+			var so, se bytes.Buffer
+			if code := unitsWith([]string{"--policy", p, "--out", out}, &so, &se, env); code != 1 || !strings.Contains(se.String(), "/var/run") {
+				t.Fatalf("units: exit %d: %s %s", code, so.String(), se.String())
+			}
+			if ents, _ := os.ReadDir(out); len(ents) != 0 {
+				t.Fatalf("refused units wrote %v", ents)
+			}
+			so.Reset()
+			if code := checkPolicyWith([]string{"--policy", p}, &so, &se, env); code != 1 || !strings.Contains(so.String(), "FAIL") || !strings.Contains(so.String(), "/var/run") {
+				t.Fatalf("check-policy: exit %d: %s", code, so.String())
+			}
+		})
 	}
 }

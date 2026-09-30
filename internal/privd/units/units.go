@@ -234,3 +234,12 @@ func check(p *policy.Policy) error {
 	}
 	return nil
 }
+
+// Render writes directive lines (stub: no guard yet).
+func Render(lines [][2]string) (string, error) {
+	var b strings.Builder
+	for _, l := range lines {
+		fmt.Fprintf(&b, "%s=%s\n", l[0], l[1])
+	}
+	return b.String(), nil
+}

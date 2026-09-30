@@ -53,7 +53,9 @@ type loadEnv struct {
 	trust         gpolicy.Trust
 	executable    string
 	systemBinDirs []string
-	lookups       func(*policy.LoadOptions)
+	// varRun is the path that must resolve to /run (production: /var/run).
+	varRun  string
+	lookups func(*policy.LoadOptions)
 }
 
 func productionEnv() (*loadEnv, error) {
