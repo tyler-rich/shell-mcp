@@ -534,7 +534,7 @@ It is allowed nowhere else. Sessions keep their deny rule, and `sudo` does not a
 - Builds the binaries (CGO_ENABLED=0) and installs polkitd if the image lacks it.
 - Runs `test/e2e/setup.sh` and the suite as root with `E2E_REQUIRE_ALL=1`, so a skip is a failure.
 - Lists every test with its result in the job summary, and fails unless all passed.
-- Runner facts from the first run: RUNNERFACTS.
+- Runner facts from the first run: kernel 7.0.0-1012-azure, systemd 259.5 (259.5-0ubuntu3.4), polkitd 127 (127-2ubuntu1.1, preinstalled), Landlock ABI 8. The image ships `/usr/local/bin` and `/opt` world-writable (0777); the gate and the helper rightly refuse binaries and policies beneath them, so `setup.sh` makes those directories `root:root` without group/other write on the disposable VM, as SECURITY §5 requires of a target.
 
 **`systemd-analyze security shell-mcp-privd@.service`:**
 - 1.6 "OK" with systemd 257.13 (local container). Runner: RUNNEREXPOSURE. Threshold (`E2E_SECURITY_MAX`): THRESHOLD.
@@ -550,7 +550,13 @@ It is allowed nowhere else. Sessions keep their deny rule, and `sudo` does not a
 - the example privileged policy;
 - the power-command finding above.
 
-**Fuzzing (60 s each, golang container, no crashers):** FUZZRESULTS.
+**Both Landlock thread paths in CI (maintainer request).** The runner image moved to Landlock ABI 8, where go-landlock v0.10.1 restricts every thread with one `landlock_restrict_self(…, LANDLOCK_RESTRICT_SELF_TSYNC)`. Below ABI 8 it sets no_new_privs and calls `landlock_restrict_self` on each thread through libcap/psx. The choice depends on the kernel's ABI alone, after the signal-scoping errata downgrade that `sandbox.KernelABI` mirrors (`restrict.go`: `useTsync := abi.version >= 8`; `internal/abi.go`). Production targets such as Debian 13 (ABI 6) take the psx path, so the `go` job is now a matrix, both entries required by `ci`:
+- `ubuntu-24.04` with Landlock ABI 7 takes the **psx** path.
+- `ubuntu-26.04` with Landlock ABI 8 takes the **TSYNC** path.
+
+Each entry sets `SHELL_MCP_REQUIRE_LANDLOCK_ABI` to its kernel's ABI, so every kernel-dependent test up to it fails rather than skips. On ABI 8 that now includes the signal and abstract-socket scoping tests. Each entry also sets `SHELL_MCP_EXPECT_LANDLOCK_PATH`. `TestLandlockThreadPath` fails when the kernel would take the other path (shown failing locally by expecting `tsync` at ABI 3), and the job summary shows the path each entry exercised. Results: MATRIXRESULTS.
+
+**Fuzzing (60 s each, golang container, no crashers):** `FuzzParse` (privd policy) 2,264,889; `FuzzParseStatus` (selfcheck) 27,964,524; `FuzzDecodeResponse` (protocol, new) 29,498,994; `FuzzDecodeRequest` (protocol, UUID ids) 10,968,429.
 
 **Alternatives rejected:**
 - Forwarding the principal in a new request field (a wire change), or reading it from the peer's `/proc/<pid>/cmdline` (racy).

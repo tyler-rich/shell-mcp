@@ -547,7 +547,7 @@ func TestHelperSystemdConfinesWithoutOwnChecks(t *testing.T) {
 		return direct(t, svcShell, line)
 	}
 	// The production binary has no such operation.
-	if out := raw("e2e_raw_write", "/etc/example-app/bypass.txt"); !strings.Contains(out, `"unknown_op"`) {
+	if out := raw("bypass_raw_write", "/etc/example-app/bypass.txt"); !strings.Contains(out, `"unknown_op"`) {
 		t.Fatalf("production helper: %q", out)
 	}
 	run(t, "install", "-o", "root", "-g", "root", "-m", "0755", filepath.Join(bin(), "shell-mcp-privd-bypass"), privdBin)
@@ -566,12 +566,12 @@ func TestHelperSystemdConfinesWithoutOwnChecks(t *testing.T) {
 		return r.Data.Result
 	}
 	// Control: inside ReadWritePaths= the raw write works.
-	if got := result(raw("e2e_raw_write", "/etc/example-app/bypass.txt")); got != "OK" {
+	if got := result(raw("bypass_raw_write", "/etc/example-app/bypass.txt")); got != "OK" {
 		t.Fatalf("raw write inside paths.write: %s", got)
 	}
 	_ = os.Remove("/etc/example-app/bypass.txt")
 	for _, p := range []string{"/etc/example-other/bypass.txt", "/usr/local/bin/bypass", "/var/lib/bypass"} {
-		if got := result(raw("e2e_raw_write", p)); got != "EROFS" {
+		if got := result(raw("bypass_raw_write", p)); got != "EROFS" {
 			t.Fatalf("raw write %s: %s, want EROFS", p, got)
 		}
 		if _, err := os.Stat(p); err == nil {
@@ -582,10 +582,10 @@ func TestHelperSystemdConfinesWithoutOwnChecks(t *testing.T) {
 	if _, err := os.ReadFile("/etc/shadow"); err != nil {
 		t.Fatalf("control read of /etc/shadow: %v", err)
 	}
-	if got := result(raw("e2e_raw_read", "/etc/shadow")); got == "OK" {
+	if got := result(raw("bypass_raw_read", "/etc/shadow")); got == "OK" {
 		t.Fatal("the unit read /etc/shadow")
 	}
-	if got := result(raw("e2e_raw_read", "/etc/example-app/app.conf")); got != "OK" {
+	if got := result(raw("bypass_raw_read", "/etc/example-app/app.conf")); got != "OK" {
 		t.Fatalf("raw read inside the roots: %s", got)
 	}
 }

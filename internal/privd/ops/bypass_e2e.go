@@ -23,8 +23,8 @@ import (
 
 func init() {
 	BypassBuild = true
-	extraOps["e2e_raw_write"] = opSpec{policy.TierRead, (*server).rawWrite}
-	extraOps["e2e_raw_read"] = opSpec{policy.TierRead, (*server).rawRead}
+	extraOps["bypass_raw_write"] = opSpec{policy.TierRead, (*server).rawWrite}
+	extraOps["bypass_raw_read"] = opSpec{policy.TierRead, (*server).rawRead}
 }
 
 type rawArgs struct {

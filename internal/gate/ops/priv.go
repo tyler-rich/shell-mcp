@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"syscall"
 	"time"
 
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
@@ -29,7 +30,8 @@ func DialHelper(ctx context.Context, socket string) (net.Conn, error) {
 // received — the same v, id, op and timeout_ms, and the args bytes
 // unchanged — and one bounded, strictly decoded response comes back.
 // Failures map to closed-set codes: no connection is helper_unavailable; a
-// connection closed without a byte (a refused peer or a failed self-check)
+// connection closed without a byte (a refused peer or a failed self-check),
+// which may arrive as a reset because the helper never reads the request,
 // is helper_refused; no answer by the request's timeout plus the grace is
 // timeout; anything malformed is helper_unavailable. A helper error passes
 // through with its own code. The envelope's gate block stays the gate's.
@@ -56,6 +58,11 @@ func (s *server) forward() *protocol.Response {
 		return s.errResp(errf(protocol.CodeInternal, "request could not be encoded"))
 	}
 	if _, err = conn.Write(append(line, '\n')); err != nil {
+		// The helper closed before the request was sent: it refused the
+		// connection (it never reads before the peer check passes).
+		if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) {
+			return s.forwardErr(protocol.ErrNoResponse)
+		}
 		return s.forwardErr(err)
 	}
 	resp, err := protocol.DecodeResponse(conn)

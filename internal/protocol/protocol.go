@@ -12,6 +12,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"syscall"
 )
 
 // Version is the wire protocol version. A request with any other "v" is
@@ -244,7 +245,7 @@ func readLine(r io.Reader, limit int) ([]byte, error) {
 			return buf, nil
 		}
 		if err != nil {
-			return nil, err
+			return buf, err
 		}
 	}
 	return buf, nil
@@ -352,6 +353,10 @@ const maxMessageBytes = 1024
 func DecodeResponse(r io.Reader) (*Response, error) {
 	data, err := readLine(r, MaxResponseBytes+1)
 	switch {
+	case len(data) == 0 && errors.Is(err, syscall.ECONNRESET):
+		// A peer that closes with our request unread resets the
+		// connection: it sent nothing, as with a plain close.
+		return nil, ErrNoResponse
 	case err != nil:
 		// Wrapped, so a caller can tell a deadline from a broken peer.
 		return nil, fmt.Errorf("response could not be read: %w", err)
