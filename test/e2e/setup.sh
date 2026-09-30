@@ -68,6 +68,50 @@ printf 'outside\n' >/etc/example-other/secret.txt
 chmod 0644 /etc/example-other/secret.txt
 install -o root -g root -m 0700 -d /var/lib/shell-mcp /var/lib/shell-mcp/backups
 
+# --- apt: a local file repository, and nothing else --------------------------
+# The package tests must be deterministic and need no internet. Stop
+# everything that runs apt on its own (timers, unattended upgrades,
+# PackageKit) so nothing else holds the dpkg lock, wait for anything already
+# running, and point apt at one local flat repository only (the original
+# sources are moved aside on this disposable machine). The tests write the
+# repository's index (e2e_test.go, aptRepo); the packages are invented and
+# install one text file each. example-hello recommends example-extra, so
+# the tests can show --no-install-recommends; example-other is on no
+# allow-list.
+for u in apt-daily.timer apt-daily-upgrade.timer apt-daily.service apt-daily-upgrade.service unattended-upgrades.service packagekit.service; do
+	systemctl stop "$u" 2>/dev/null || true
+	systemctl mask "$u" >/dev/null 2>&1 || true
+done
+for _ in $(seq 1 150); do
+	pgrep -x 'apt|apt-get|dpkg|unattended-upgr|packagekitd' >/dev/null || break
+	sleep 2
+done
+install -d -o root -g root -m 0755 /etc/apt/e2e-disabled
+find /etc/apt/sources.list.d -maxdepth 1 -type f \( -name '*.list' -o -name '*.sources' \) -exec mv {} /etc/apt/e2e-disabled/ \;
+if [ -f /etc/apt/sources.list ]; then mv /etc/apt/sources.list /etc/apt/e2e-disabled/sources.list.orig; fi
+install -d -o root -g root -m 0755 /srv/e2e-apt
+printf 'deb [trusted=yes] file:/srv/e2e-apt ./\n' >/etc/apt/sources.list.d/e2e-local.list
+chmod 0644 /etc/apt/sources.list.d/e2e-local.list
+mkdeb() { # mkdeb <name> <version> [<recommends>]
+	local d
+	d="$(mktemp -d)"
+	install -d "$d/DEBIAN" "$d/usr/share/$1"
+	printf '%s %s\n' "$1" "$2" >"$d/usr/share/$1/version"
+	{
+		printf 'Package: %s\nVersion: %s\nArchitecture: all\n' "$1" "$2"
+		printf 'Maintainer: shell-mcp end-to-end tests <e2e@example.test>\n'
+		if [ -n "${3:-}" ]; then printf 'Recommends: %s\n' "$3"; fi
+		printf 'Description: invented package for the shell-mcp end-to-end tests\n'
+	} >"$d/DEBIAN/control"
+	dpkg-deb --root-owner-group --build "$d" "$bin/debs/${1}_${2}_all.deb" >/dev/null
+	rm -rf "$d"
+}
+install -d -o root -g root -m 0755 "$bin/debs"
+mkdeb example-hello 1.0 example-extra
+mkdeb example-hello 1.1 example-extra
+mkdeb example-extra 1.0
+mkdeb example-other 1.0
+
 # --- Policies ---------------------------------------------------------------
 install -o root -g root -m 0755 -d /etc/shell-mcp
 gate_policy() { # gate_policy <units> <verbs>
@@ -89,6 +133,7 @@ journal:
 privileged:
   enabled: true
   socket: /run/shell-mcp/privd.sock
+  broad_socket: /run/shell-mcp/privd-broad.sock
   max_tier: destructive
 EOF
 }
@@ -99,7 +144,8 @@ gate_policy '"example-app.service", "example-other.service"' 'restart, reload, s
 gate_policy '"example-app.service"' 'restart, reload' >"$bin/gate-rule.yaml"
 chmod 0644 /etc/shell-mcp/gate.yaml "$bin/gate-rule.yaml"
 
-priv_policy() { # priv_policy <extra line for probe-signal>
+# priv_policy <extra line for probe-signal> <extra line for probe-broad> <allow_upgrade>
+priv_policy() {
 	cat <<EOF
 version: 1
 client_uid: 4200001
@@ -139,12 +185,44 @@ commands:
     path: /usr/local/bin/example-probe
     tier: operator
 $1    templates: [["signal", "{int:2-4194304}"]]
+  - id: probe-visible
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["visible", "{int:1-4194304}"]]
+  - id: probe-unix
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates:
+      - ["unix-connect", "{enum:/run/dbus/system_bus_socket|/var/run/dbus/system_bus_socket|/run/shell-mcp-e2e.sock}"]
+      - ["abstract-connect", "{regex:^[a-z0-9-]{1,64}\$}"]
+  - id: probe-broad
+    path: /usr/local/bin/example-probe
+    tier: read
+    unit: broad
+$2    templates:
+      - ["echo", "{regex:^[a-z-]+\$}"]
+      - ["connect", "{int:1-65535}"]
+      - ["unix-connect", "{enum:/run/dbus/system_bus_socket|/var/run/dbus/system_bus_socket|/run/shell-mcp-e2e.sock}"]
+      - ["abstract-connect", "{regex:^[a-z0-9-]{1,64}\$}"]
+power:
+  allowed: [reboot]
+  acknowledge: "e2e: priv_power is called only with reboot.target and poweroff.target runtime-masked"
+packages:
+  enabled: true
+  manager: apt
+  install: [example-hello]
+  remove: [example-hello]
+  allow_update_index: true
+  allow_upgrade: $3
 EOF
 }
-priv_policy '' >"$bin/privileged.yaml"
+priv_policy '' '' false >"$bin/privileged.yaml"
 priv_policy '    capabilities: [CAP_KILL]
-' >"$bin/privileged-cap-kill.yaml"
-chmod 0600 "$bin/privileged.yaml" "$bin/privileged-cap-kill.yaml"
+' '' false >"$bin/privileged-cap-kill.yaml"
+priv_policy '' '    capabilities: [CAP_SYS_TIME]
+' false >"$bin/privileged-sys-time.yaml"
+priv_policy '' '' true >"$bin/privileged-upgrade.yaml"
+chmod 0600 "$bin"/privileged*.yaml
 install -o root -g root -m 0600 "$bin/privileged.yaml" /etc/shell-mcp/privileged.yaml
 
 # --- Placeholder units ------------------------------------------------------
@@ -171,7 +249,7 @@ chmod 0644 /etc/polkit-1/rules.d/60-shell-mcp.rules
 
 systemctl daemon-reload
 systemctl enable --now example-app.service example-other.service
-systemctl enable --now shell-mcp-privd.socket
+systemctl enable --now shell-mcp-privd.socket shell-mcp-privd-broad.socket
 systemctl restart polkit.service 2>/dev/null || systemctl restart polkitd.service 2>/dev/null || true
 
 echo "e2e setup: done (landlock $landlock)"

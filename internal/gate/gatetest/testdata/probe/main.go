@@ -96,6 +96,24 @@ func main() {
 	case "signal":
 		pid, _ := strconv.Atoi(args[0])
 		report(syscall.Kill(pid, syscall.SIGTERM), "SIGNALLED")
+	case "visible":
+		// Whether /proc shows the process (ProtectProc=, hidepid).
+		_, err := os.Stat("/proc/" + args[0])
+		report(err, "VISIBLE")
+	case "unix-connect":
+		c, err := net.DialTimeout("unix", args[0], 2*time.Second)
+		if err == nil {
+			_ = c.Close()
+		}
+		report(err, "CONNECTED")
+	case "abstract-connect":
+		// An abstract Unix socket (a name, not a file), which belongs to a
+		// network namespace.
+		c, err := net.DialTimeout("unix", "@"+args[0], 2*time.Second)
+		if err == nil {
+			_ = c.Close()
+		}
+		report(err, "CONNECTED")
 	case "rlimits":
 		for _, r := range []struct {
 			name string
