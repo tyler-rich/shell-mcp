@@ -66,7 +66,18 @@ func productionEnv() (*loadEnv, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot resolve own path: %w", err)
 	}
-	return &loadEnv{trust: gpolicy.RootTrust(), executable: exe, lookups: policy.ProductionLookups}, nil
+	return &loadEnv{trust: gpolicy.RootTrust(), executable: exe, lookups: policy.ProductionLookups, varRun: "/var/run"}, nil
+}
+
+// checkVarRun requires e.varRun (/var/run) to resolve to /run. The core unit
+// hides /run behind an empty read-only tmpfs (TemporaryFileSystem=/run:ro);
+// where /var/run is the usual symlink to /run that hides it too. Anything
+// else would leave the sockets under /var/run reachable from the core unit.
+func (e *loadEnv) checkVarRun() error {
+	if r, err := filepath.EvalSymlinks(e.varRun); err != nil || r != "/run" {
+		return fmt.Errorf("/var/run is not a symlink to /run on this host; the core unit hides only /run, so it would leave /var/run's sockets reachable (make /var/run a symlink to /run)")
+	}
+	return nil
 }
 
 func (e *loadEnv) load(file string) (*policy.Policy, error) {
@@ -166,6 +177,10 @@ func unitsWith(args []string, stdout, stderr io.Writer, env *loadEnv) int {
 		}
 		return 1
 	}
+	if err := env.checkVarRun(); err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-privd units: %v\n", err)
+		return 1
+	}
 	f, err := units.Core(p)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "shell-mcp-privd units: %v\n", err)
@@ -228,6 +243,10 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 		}
 		pr("serve would refuse this policy")
 		return 1
+	}
+	if err := env.checkVarRun(); err != nil {
+		failures++
+		pr("FAIL host: %v", err)
 	}
 	if fi, err := os.Stat(*policyPath); err == nil && fi.Mode().Perm()&0o077 != 0 {
 		pr("WARN the policy file is mode %04o; make it root:root 0600 (only root reads it, PRIVILEGED §2)", fi.Mode().Perm())

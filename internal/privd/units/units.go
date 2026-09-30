@@ -153,6 +153,9 @@ func Core(p *policy.Policy) (Files, error) {
 		{"ReadWritePaths", strings.Join(rw, " ")},
 		{"InaccessiblePaths", strings.Join(inacc, " ")},
 		{"ProtectHome", "read-only"},
+		{"TemporaryFileSystem", "/run:ro"},
+		{"ProtectProc", protectProc(caps)},
+		{"ProcSubset", "pid"},
 		{"PrivateTmp", "yes"},
 		{"PrivateDevices", "yes"},
 		{"PrivateNetwork", "yes"},
@@ -177,10 +180,23 @@ func Core(p *policy.Policy) (Files, error) {
 		{"TasksMax", "64"},
 		{"MemoryMax", "256M"},
 	}
-	for _, l := range lines {
-		fmt.Fprintf(&svc, "%s=%s\n", l[0], l[1])
+	body, err := Render(lines)
+	if err != nil {
+		return Files{}, err
 	}
+	svc.WriteString(body)
 	return Files{Socket: sock.String(), Service: svc.String()}, nil
+}
+
+// protectProc is the core unit's ProtectProc=: invisible (other users'
+// processes are hidden; the helper runs as root without CAP_SYS_PTRACE, so
+// hidepid applies to it), or default when a core-unit command declares
+// CAP_KILL, because signalling a process requires seeing it.
+func protectProc(caps []string) string {
+	if slices.Contains(caps, "CAP_KILL") {
+		return "default"
+	}
+	return "invisible"
 }
 
 // check refuses anything the core unit cannot hold exactly as declared.
@@ -235,10 +251,21 @@ func check(p *policy.Policy) error {
 	return nil
 }
 
-// Render writes directive lines (stub: no guard yet).
+// forbidden are directives the generator never emits, for any unit
+// (PRIVILEGED §5.1): a private user namespace (PrivateUsers=) maps real host
+// users away, so chown to an owner from the policy's allow-list could not
+// work; a separate root filesystem (RootDirectory=, RootImage=) defeats the
+// purpose of working on the host's own files.
+var forbidden = []string{"privateusers", "rootdirectory", "rootimage"}
+
+// Render writes directive lines as "Key=value" lines, refusing any
+// directive in the forbidden set whatever the caller passes.
 func Render(lines [][2]string) (string, error) {
 	var b strings.Builder
 	for _, l := range lines {
+		if slices.Contains(forbidden, strings.ToLower(l[0])) {
+			return "", fmt.Errorf("directive %s= is never generated (PRIVILEGED §5.1)", l[0])
+		}
 		fmt.Fprintf(&b, "%s=%s\n", l[0], l[1])
 	}
 	return b.String(), nil
