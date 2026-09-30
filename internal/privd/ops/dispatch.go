@@ -68,6 +68,7 @@ func opTable() map[string]opSpec {
 		protocol.OpPrivPkgInstallPreview: {policy.TierRead, (*server).pkgInstallPreview},
 		protocol.OpPrivPkgUpgradePreview: {policy.TierRead, (*server).pkgUpgradePreview},
 		protocol.OpPrivPkgRemovePreview:  {policy.TierRead, (*server).pkgRemovePreview},
+		protocol.OpPrivPower:             {policy.TierDestructive, (*server).power},
 	}
 }
 
@@ -97,7 +98,7 @@ func (s *server) dispatch() *protocol.Response {
 	if !ok {
 		spec, ok = extraOps[op]
 	}
-	if !ok && !slices.Contains(broadOps, op) {
+	if !ok {
 		return s.errResp(errf(protocol.CodeUnknownOp, "operation is not available in this helper version"))
 	}
 	// The unit first: an operation meant for the other unit is refused
@@ -109,10 +110,7 @@ func (s *server) dispatch() *protocol.Response {
 	if want != s.unit {
 		return s.errResp(s.wrongUnit(want))
 	}
-	if !ok {
-		return s.errResp(errf(protocol.CodeUnknownOp, "operation is not available in this helper version"))
-	}
-	// Tier first, before any other processing.
+	// Then the tier, before any other processing.
 	if spec.tier > s.p.MaxTier {
 		return s.errResp(errf(protocol.CodeTierDenied, "operation tier %s exceeds the privileged policy's max_tier %s", spec.tier, s.p.MaxTier))
 	}

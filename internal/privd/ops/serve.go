@@ -28,6 +28,7 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
+	"github.com/tyler-rich/shell-mcp/internal/privd/dbus"
 	"github.com/tyler-rich/shell-mcp/internal/privd/peercred"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 	"github.com/tyler-rich/shell-mcp/internal/privd/selfcheck"
@@ -111,6 +112,7 @@ func ProductionOptions(version, policyPath string) Options {
 		UnitClientUID:  os.Getenv(units.ClientUIDEnv),
 		Unit:           os.Getenv(units.UnitEnv),
 		AptGet:         policy.DefaultAptGet,
+		SystemBus:      dbus.SystemBus,
 		ExpectedSHA256: os.Getenv(units.HashEnv),
 		Trust:          gpolicy.RootTrust(),
 		Lookups:        policy.ProductionLookups,
