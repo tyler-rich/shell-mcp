@@ -6,7 +6,7 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
-	"strings"
+	"slices"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
@@ -44,8 +44,8 @@ type opSpec struct {
 	run  opFunc
 }
 
-// ops are the core unit's operations and their tiers (PRIVILEGED §6).
-// priv_exec's tier is the command's.
+// opTable holds every operation and its tier (PRIVILEGED §6); broadOps
+// says which run in the broad unit. priv_exec's tier is the command's.
 func opTable() map[string]opSpec {
 	return map[string]opSpec{
 		protocol.OpPrivReadFile:      {policy.TierRead, (*server).readFile},
@@ -60,17 +60,39 @@ func opTable() map[string]opSpec {
 		protocol.OpPrivMove:          {policy.TierOperator, (*server).move},
 		protocol.OpPrivRestoreBackup: {policy.TierOperator, (*server).restoreBackup},
 		protocol.OpPrivDelete:        {policy.TierDestructive, (*server).delete},
+		// Broad unit (broadOps).
+		protocol.OpPrivPkgUpdateIndex:    {policy.TierOperator, (*server).pkgUpdateIndex},
+		protocol.OpPrivPkgInstall:        {policy.TierOperator, (*server).pkgInstall},
+		protocol.OpPrivPkgUpgrade:        {policy.TierOperator, (*server).pkgUpgrade},
+		protocol.OpPrivPkgRemove:         {policy.TierDestructive, (*server).pkgRemove},
+		protocol.OpPrivPkgInstallPreview: {policy.TierRead, (*server).pkgInstallPreview},
+		protocol.OpPrivPkgUpgradePreview: {policy.TierRead, (*server).pkgUpgradePreview},
+		protocol.OpPrivPkgRemovePreview:  {policy.TierRead, (*server).pkgRemovePreview},
+		protocol.OpPrivPower:             {policy.TierDestructive, (*server).power},
 	}
+}
+
+// broadOps are the operations that run in the broad unit (PRIVILEGED §6);
+// priv_exec runs in its command's unit and every other operation in the
+// core unit.
+var broadOps = []string{
+	protocol.OpPrivPkgUpdateIndex, protocol.OpPrivPkgInstall, protocol.OpPrivPkgUpgrade, protocol.OpPrivPkgRemove,
+	protocol.OpPrivPkgInstallPreview, protocol.OpPrivPkgUpgradePreview, protocol.OpPrivPkgRemovePreview, protocol.OpPrivPower,
+}
+
+// wrongUnit is the refusal of an operation meant for the other unit's
+// instance. The helper is authoritative for routing: whatever the gate sent
+// where, nothing meant for the other unit runs here.
+func (s *server) wrongUnit(want policy.Unit) error {
+	return errf(protocol.CodeHelperWrongUnit, "this operation runs in the %s unit; this is the %s unit's helper, so it was not executed (the gate routes it to privileged.%s)",
+		want, s.unit, map[policy.Unit]string{policy.UnitCore: "socket", policy.UnitBroad: "broad_socket"}[want])
 }
 
 func (s *server) dispatch() *protocol.Response {
 	op := s.req.Op
-	switch {
-	case op == protocol.OpPrivExec:
+	if op == protocol.OpPrivExec {
 		data, warnings, err := s.exec(s.req.Args)
 		return s.result(data, warnings, err)
-	case strings.HasPrefix(op, "priv_pkg_"):
-		return s.errResp(errf(protocol.CodeUnknownOp, "package operations arrive with the broad unit (S1d)"))
 	}
 	spec, ok := opTable()[op]
 	if !ok {
@@ -79,7 +101,16 @@ func (s *server) dispatch() *protocol.Response {
 	if !ok {
 		return s.errResp(errf(protocol.CodeUnknownOp, "operation is not available in this helper version"))
 	}
-	// Tier first, before any other processing.
+	// The unit first: an operation meant for the other unit is refused
+	// before anything else about it is looked at.
+	want := policy.UnitCore
+	if slices.Contains(broadOps, op) {
+		want = policy.UnitBroad
+	}
+	if want != s.unit {
+		return s.errResp(s.wrongUnit(want))
+	}
+	// Then the tier, before any other processing.
 	if spec.tier > s.p.MaxTier {
 		return s.errResp(errf(protocol.CodeTierDenied, "operation tier %s exceeds the privileged policy's max_tier %s", spec.tier, s.p.MaxTier))
 	}

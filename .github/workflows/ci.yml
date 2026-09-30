@@ -303,7 +303,8 @@ jobs:
             [ "$r" = PASS ] || fail=1
             echo "| $t | $r |" >>"$table"
           done <"$RUNNER_TEMP/e2e.tests"
-          grep -o 'E2E_EXPOSURE=[0-9.]*' "$log" | sed 's/^E2E_EXPOSURE=/- systemd-analyze security exposure: /' >>"$table" || true
+          grep -o 'E2E_EXPOSURE=[0-9.]*' "$log" | sed 's/^E2E_EXPOSURE=/- systemd-analyze security exposure (core unit): /' >>"$table" || true
+          grep -o 'E2E_EXPOSURE_BROAD=[0-9.]*' "$log" | sed 's/^E2E_EXPOSURE_BROAD=/- systemd-analyze security exposure (broad unit, root-equivalent by design, information only): /' >>"$table" || true
           echo "- threshold (E2E_SECURITY_MAX): $E2E_SECURITY_MAX" >>"$table"
           tee -a "$GITHUB_STEP_SUMMARY" <"$table"
           if grep -qE -- '--- (SKIP|FAIL)' "$log"; then fail=1; fi

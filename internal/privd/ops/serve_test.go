@@ -67,6 +67,8 @@ func breakages(t *testing.T) map[string]breakage {
 			rewritePolicy(f, "version: 1\n", "version: 1\n# edited after the units were generated\n")
 		}, "policy_hash", "helper_policy_mismatch"},
 		"no hash in the unit": {func(f *fixture) { f.opts.ExpectedSHA256 = "" }, "policy_hash", "helper_policy_mismatch"},
+		// A unit that does not say which sandbox it is (SHELL_MCP_PRIVD_UNIT).
+		"no unit in the unit": {func(f *fixture) { f.opts.Unit = "" }, "unit", "helper_install_insecure"},
 		// The unit names another client than the policy (a hand-edited
 		// unit): the peer passed the unit's check, so it is told.
 		"client_uid differs from the unit's": {func(f *fixture) {
@@ -257,17 +259,31 @@ func TestServeAnswersAuthenticatedPeer(t *testing.T) {
 	}
 }
 
+// A Landlock refusal in the core unit is answered like the other
+// self-check failures (PRIVILEGED §7 step 3): helper_sandbox_unavailable —
+// never the gate's own sandbox_unavailable, so an operator can tell which
+// component lacks the sandbox — without an id (the request is unread),
+// with a one-line message naming no local path, a WARN journal line naming
+// the check, and exit status 1.
 func TestSandboxRefusal(t *testing.T) {
 	f := newFixture(t)
 	f.opts.ApplySandbox = func(*policy.Policy, string) (sandbox.Report, error) {
 		return sandbox.Report{}, sandbox.ErrUnavailable
 	}
-	// The request is never read, so the response has no id.
 	in := request("priv_stat", m{"path": f.read})
 	out, code := f.serveRaw(in)
 	var r response
-	if err := json.Unmarshal([]byte(out), &r); err != nil || code != 0 || r.ID != "" || r.Error == nil || r.Error.Code != "sandbox_unavailable" || f.unread != len(in) {
+	if err := json.Unmarshal([]byte(out), &r); err != nil || code != 1 || r.ID != "" || r.Error == nil || r.Error.Code != "helper_sandbox_unavailable" || f.unread != len(in) {
 		t.Fatalf("exit %d response %q, unread %d of %d", code, out, f.unread, len(in))
+	}
+	if msg := r.Error.Message; msg == "" || strings.Contains(msg, f.d) || strings.ContainsAny(msg, "\r\n") {
+		t.Fatalf("message %q is empty, multi-line or names a local path", msg)
+	}
+	l := f.lastAudit()
+	for _, want := range []string{`"check":"landlock"`, `"outcome":"helper_sandbox_unavailable"`, fmt.Sprintf(`"peer_uid":%d`, f.uid)} {
+		if !strings.HasPrefix(l, "<4>") || !strings.Contains(l, want) {
+			t.Fatalf("audit line %q lacks %s at WARN", l, want)
+		}
 	}
 }
 
@@ -285,8 +301,12 @@ func TestRequestErrors(t *testing.T) {
 			t.Errorf("%q: %q, want %s", in, out, code)
 		}
 	}
-	for _, op := range []string{"priv_pkg_install", "priv_pkg_update_index", "priv_pkg_upgrade", "priv_pkg_remove", "read_file", "priv_made_up"} {
+	for _, op := range []string{"read_file", "priv_made_up"} {
 		f.fail(op, m{}, "unknown_op")
+	}
+	// The package operations run in the broad unit; this is the core unit.
+	for _, op := range []string{"priv_pkg_install", "priv_pkg_update_index", "priv_pkg_upgrade", "priv_pkg_remove"} {
+		f.fail(op, m{}, "helper_wrong_unit")
 	}
 	f.fail("priv_stat", m{"path": f.read, "extra": true}, "bad_request")
 }

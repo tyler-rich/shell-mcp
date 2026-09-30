@@ -224,7 +224,7 @@ func TestForwardRefusedWithRequestUnread(t *testing.T) {
 // selfCheckCodes are the helper's own self-check codes (PRIVILEGED §7),
 // answered to the authenticated gate before the request is read.
 var selfCheckCodes = []string{"helper_install_insecure", "helper_policy_invalid", "helper_policy_mismatch",
-	"helper_client_uid_mismatch", "helper_capabilities_broad"}
+	"helper_client_uid_mismatch", "helper_capabilities_broad", "helper_sandbox_unavailable"}
 
 // answerUnread is a helper that answers line without reading the request
 // and closes. With early set, it answers and closes before the gate has

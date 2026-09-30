@@ -52,6 +52,7 @@ func newFixture(t testing.TB) *fixture {
 	f.opts = policy.LoadOptions{
 		Trust:            gatetest.Trust(),
 		HelperExecutable: f.helper,
+		AptGet:           f.exe(t, "apt-get", "invented apt-get\n"),
 		SystemBinDirs:    []string{f.sysbin},
 		LookupUser: func(n string) (uint32, error) {
 			if id, ok := fakeUsers[n]; ok {
@@ -158,12 +159,11 @@ func TestLoadMinimalDefaults(t *testing.T) {
 }
 
 // The PRIVILEGED §4 example, with invented binaries standing in for the
-// ones it names. The broad-unit command and packages are left out: they
-// arrive in S1d (TestBroadAndPackagesArriveInS1d).
+// ones it names.
 const example = `version: 1
 client_uid: 60123
 socket_group: svc-shell-priv
-max_tier: operator
+max_tier: destructive
 sandbox:
   landlock: best-effort
 limits:
@@ -193,14 +193,21 @@ commands:
     tier: read
     description: "Configuration test"
     templates: [["-t"], ["--check", "{path:read}"]]
-  - id: reboot-host
-    path: {BIN}/reboot
-    tier: destructive
-    capabilities: [CAP_SYS_BOOT]
-    acknowledge: "planned maintenance only"
-    templates: [[]]
+  - id: renew-certs
+    path: {BIN}/example-renew
+    tier: operator
+    unit: broad
+    templates: [["--all"]]
+  - id: firewall-list
+    path: {BIN}/nft
+    tier: read
+    acknowledge: "firewall rules are listed, never changed"
+    templates: [["list", "ruleset"]]
+power:
+  allowed: [reboot]
+  acknowledge: "planned maintenance windows only"
 packages:
-  enabled: false
+  enabled: true
   manager: apt
   install: [htop, jq]
   remove: [htop]
@@ -210,9 +217,9 @@ packages:
 
 func TestLoadExample(t *testing.T) {
 	f := newFixture(t)
-	f.exe(t, "reboot", "power body\n") // same bytes as sysbin/reboot: list B by name and by identity
+	f.exe(t, "nft", "firewall body\n") // same bytes as sysbin/nft: list B by name and by identity
 	p := f.mustLoad(t, example)
-	if p.Landlock != policy.LandlockBestEffort || p.MaxTier != policy.TierOperator {
+	if p.Landlock != policy.LandlockBestEffort || p.MaxTier != policy.TierDestructive {
 		t.Errorf("landlock %q max_tier %v", p.Landlock, p.MaxTier)
 	}
 	if !slices.Equal(p.Paths.Read, []string{"/etc/example-app", "/var/log/example-app"}) ||
@@ -223,21 +230,30 @@ func TestLoadExample(t *testing.T) {
 		p.Owners.Groups[0] != (policy.NamedID{Name: "root", ID: 0}) {
 		t.Errorf("owners %+v", p.Owners)
 	}
-	c, ok := p.Command("reboot-host")
-	if !ok || c.ListB != 11 || c.Unit != policy.UnitCore || c.Acknowledge != "planned maintenance only" {
-		t.Fatalf("reboot-host %+v", c)
+	c, ok := p.Command("firewall-list")
+	if !ok || c.ListB != 13 || c.Unit != policy.UnitCore || c.Acknowledge != "firewall rules are listed, never changed" {
+		t.Fatalf("firewall-list %+v", c)
 	}
-	if !slices.Equal(p.Capabilities, []string{"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_DAC_READ_SEARCH", "CAP_FOWNER", "CAP_SYS_BOOT"}) {
+	if c, ok := p.Command("renew-certs"); !ok || c.Unit != policy.UnitBroad {
+		t.Fatalf("renew-certs %+v", c)
+	}
+	if !slices.Equal(p.Capabilities, policy.BaseCapabilities) {
 		t.Errorf("capabilities %v", p.Capabilities)
 	}
-	if p.Packages.Enabled || p.Packages.Manager != "apt" || !slices.Equal(p.Packages.Install, []string{"htop", "jq"}) {
+	if !p.Packages.Enabled || p.Packages.Manager != "apt" || !slices.Equal(p.Packages.Install, []string{"htop", "jq"}) {
 		t.Errorf("packages %+v", p.Packages)
+	}
+	if !slices.Equal(p.Power.Allowed, []string{"reboot"}) || p.Power.Acknowledge != "planned maintenance windows only" {
+		t.Errorf("power %+v", p.Power)
+	}
+	if !p.UsesBroad() {
+		t.Error("the example uses the broad unit")
 	}
 	kinds := map[string]bool{}
 	for _, fd := range p.Acknowledged {
 		kinds[fd.Kind] = true
 	}
-	for _, k := range []string{"list-b-binary", "persistence", "capability"} {
+	for _, k := range []string{"list-b-binary", "persistence", "root-equivalent", "power"} {
 		if !kinds[k] {
 			t.Errorf("check-policy findings lack %s: %+v", k, p.Acknowledged)
 		}
@@ -542,19 +558,6 @@ func TestCapabilities(t *testing.T) {
 	}
 }
 
-func TestBroadAndPackagesArriveInS1d(t *testing.T) {
-	f := newFixture(t)
-	f.mustFail(t, withCommand(cmd("x", "{BIN}/example-renew", "    unit: broad\n")), "S1d")
-	// A broad command is still validated first.
-	f.mustFail(t, withCommand(cmd("x", "{BIN}/missing", "    unit: broad\n")), "cannot be resolved")
-	f.mustFail(t, head+"packages:\n  enabled: true\n  manager: apt\n  install: [htop]\n", "S1d")
-	f.mustFail(t, head+"packages:\n  enabled: false\n  manager: dnf\n", "packages.manager")
-	for _, name := range []string{"-rf", "Htop", "h", "../x", "htop jq", "a;b"} {
-		f.mustFail(t, head+fmt.Sprintf("packages:\n  install: [%q]\n", name), "packages.install")
-	}
-	f.mustLoad(t, head+"packages:\n  enabled: false\n  manager: apt\n  install: [htop, libfoo2.0, g++]\n  remove: [htop]\n")
-}
-
 func TestOwnershipOfPolicyFile(t *testing.T) {
 	f := newFixture(t)
 	p := f.put(t, head)
@@ -584,5 +587,112 @@ func TestOwnershipOfPolicyFile(t *testing.T) {
 	big := head + "# " + strings.Repeat("x", policy.MaxPolicyBytes) + "\n"
 	if _, err := f.load(t, big); err == nil {
 		t.Fatal("oversized policy accepted")
+	}
+}
+
+// Commands declared `unit: broad` run in the broad unit: they are
+// root-equivalent (the unit has network and full root capabilities), are
+// always reported, and never widen the core unit's bounding set.
+func TestBroadCommands(t *testing.T) {
+	f := newFixture(t)
+	p := f.mustLoad(t, withCommand(cmd("x", "{BIN}/example-renew", "    unit: broad\n")))
+	if c, _ := p.Command("x"); c.Unit != policy.UnitBroad || !p.UsesBroad() {
+		t.Fatalf("broad command %+v, uses broad %v", c, p.UsesBroad())
+	}
+	if !slices.ContainsFunc(p.Acknowledged, func(fd policy.Finding) bool { return fd.Kind == "root-equivalent" && fd.Item == "x" }) {
+		t.Errorf("broad command not reported as root-equivalent: %+v", p.Acknowledged)
+	}
+	if f.mustLoad(t, withCommand(cmd("x", "{BIN}/example-renew", ""))).UsesBroad() {
+		t.Error("a core command alone makes the policy use the broad unit")
+	}
+	// A broad command is validated like any other.
+	f.mustFail(t, withCommand(cmd("x", "{BIN}/missing", "    unit: broad\n")), "cannot be resolved")
+	bash := f.exe(t, "bash", "shell body\n")
+	f.mustFail(t, withCommand(cmd("x", bash, "    unit: broad\n")), "never")
+}
+
+// CAP_SYS_TIME, CAP_NET_ADMIN and CAP_NET_BIND_SERVICE are valid on broad
+// commands (and still refused on core ones, TestCapabilities); capabilities
+// of broad commands never reach the core unit's bounding set. A broad
+// CAP_SYS_TIME turns ProtectClock= off in the broad unit — the only
+// directive a capability relaxes there.
+func TestBroadCapabilities(t *testing.T) {
+	f := newFixture(t)
+	for _, c := range []string{"CAP_SYS_TIME", "CAP_NET_ADMIN", "CAP_NET_BIND_SERVICE", "CAP_KILL", "CAP_SYS_BOOT"} {
+		p := f.mustLoad(t, withCommand(cmd("x", "{BIN}/example-renew", "    unit: broad\n    capabilities: ["+c+"]\n")))
+		if !slices.Equal(p.Capabilities, policy.BaseCapabilities) {
+			t.Errorf("%s on a broad command reached the core unit: %v", c, p.Capabilities)
+		}
+		if got, want := p.BroadProtectClock(), c != "CAP_SYS_TIME"; got != want {
+			t.Errorf("%s: BroadProtectClock %v, want %v", c, got, want)
+		}
+	}
+	f.mustFail(t, withCommand(cmd("x", "{BIN}/example-renew", "    unit: broad\n    capabilities: [CAP_SYS_ADMIN]\n")), "root_equivalent")
+	if !f.mustLoad(t, head+"packages:\n  enabled: true\n  install: [htop]\n").BroadProtectClock() {
+		t.Error("ProtectClock is off without a broad CAP_SYS_TIME")
+	}
+}
+
+func TestPackages(t *testing.T) {
+	f := newFixture(t)
+	p := f.mustLoad(t, head+"packages:\n  enabled: true\n  manager: apt\n  install: [htop, libfoo2.0, g++]\n  remove: [htop]\n  allow_update_index: true\n")
+	if !p.Packages.Enabled || !p.UsesBroad() || !slices.Equal(p.Packages.Install, []string{"htop", "libfoo2.0", "g++"}) || !p.Packages.AllowUpdateIndex || p.Packages.AllowUpgrade {
+		t.Fatalf("packages %+v, uses broad %v", p.Packages, p.UsesBroad())
+	}
+	if !slices.ContainsFunc(p.Acknowledged, func(fd policy.Finding) bool { return fd.Kind == "root-equivalent" && fd.Item == "packages" }) {
+		t.Errorf("packages not reported as root-equivalent: %+v", p.Acknowledged)
+	}
+	if f.mustLoad(t, head+"packages:\n  enabled: false\n  install: [htop]\n").UsesBroad() {
+		t.Error("disabled packages make the policy use the broad unit")
+	}
+	f.mustFail(t, head+"packages:\n  enabled: false\n  manager: dnf\n", "packages.manager")
+	for _, name := range []string{"-rf", "Htop", "h", "../x", "htop jq", "a;b", "htop=1.0", "htop/stable", "htop:amd64"} {
+		f.mustFail(t, head+fmt.Sprintf("packages:\n  install: [%q]\n", name), "packages.install")
+	}
+	// apt reads a trailing "-" on an install argument as "remove", and a
+	// trailing "+" on a remove argument as "install", when no package has
+	// that exact name: such names could turn one operation into the other.
+	f.mustFail(t, head+"packages:\n  install: [htop-]\n", "packages.install")
+	f.mustFail(t, head+"packages:\n  remove: [htop+]\n", "packages.remove")
+	f.mustFail(t, head+"packages:\n  install: [htop, htop]\n", "duplicate")
+	// Enabled packages need a root-owned, not group/other-writable apt-get.
+	f.opts.AptGet = filepath.Join(f.bin, "missing-apt-get")
+	f.mustFail(t, head+"packages:\n  enabled: true\n  install: [htop]\n", "packages")
+	f.opts.AptGet = f.exe(t, "apt-get-writable", "apt\n")
+	if err := os.Chmod(f.opts.AptGet, 0o775); err != nil { //nolint:gosec // G302: a deliberately insecure fixture mode
+		t.Fatal(err)
+	}
+	f.mustFail(t, head+"packages:\n  enabled: true\n  install: [htop]\n", "writable")
+}
+
+// The built-in power operation (priv_power) needs a power section with a
+// non-empty acknowledge; it runs in the broad unit and is always reported.
+func TestPower(t *testing.T) {
+	f := newFixture(t)
+	p := f.mustLoad(t, head+"power:\n  allowed: [reboot, poweroff]\n  acknowledge: \"maintenance windows\"\n")
+	if !slices.Equal(p.Power.Allowed, []string{"reboot", "poweroff"}) || !p.UsesBroad() {
+		t.Fatalf("power %+v, uses broad %v", p.Power, p.UsesBroad())
+	}
+	if !slices.ContainsFunc(p.Acknowledged, func(fd policy.Finding) bool { return fd.Kind == "power" }) {
+		t.Errorf("power not reported: %+v", p.Acknowledged)
+	}
+	if p := f.mustLoad(t, head); p.UsesBroad() || len(p.Power.Allowed) != 0 {
+		t.Errorf("no power section: %+v", p.Power)
+	}
+	for y, want := range map[string]string{
+		"power:\n  allowed: [reboot]\n":                                      "power.acknowledge",
+		"power:\n  allowed: [reboot]\n  acknowledge: \"\"\n":                 "power.acknowledge",
+		"power:\n  allowed: [reboot]\n  acknowledge: \"two\\nlines\"\n":      "power.acknowledge",
+		"power:\n  allowed: []\n  acknowledge: \"x\"\n":                      "power.allowed",
+		"power:\n  acknowledge: \"x\"\n":                                     "power.allowed",
+		"power:\n  allowed: [halt]\n  acknowledge: \"x\"\n":                  "power.allowed",
+		"power:\n  allowed: [reboot, reboot]\n  acknowledge: \"x\"\n":        "duplicate",
+		"power:\n  allowed: [reboot]\n  acknowledge: \"x\"\n  kexec: true\n": "field kexec not found",
+	} {
+		f.mustFail(t, head+y, want)
+	}
+	low := f.mustLoad(t, "version: 1\nclient_uid: 60123\nsocket_group: svc-shell-priv\nmax_tier: operator\npower:\n  allowed: [reboot]\n  acknowledge: \"x\"\n")
+	if !strings.Contains(strings.Join(low.Warnings, "\n"), "power") {
+		t.Errorf("power under max_tier operator is not warned: %q", low.Warnings)
 	}
 }

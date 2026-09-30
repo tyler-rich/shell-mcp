@@ -28,6 +28,7 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
+	"github.com/tyler-rich/shell-mcp/internal/privd/dbus"
 	"github.com/tyler-rich/shell-mcp/internal/privd/peercred"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 	"github.com/tyler-rich/shell-mcp/internal/privd/selfcheck"
@@ -53,6 +54,10 @@ type Options struct {
 	ExpectedSHA256 string
 	// UnitClientUID is SHELL_MCP_PRIVD_CLIENT_UID from the unit.
 	UnitClientUID string
+	// Unit is SHELL_MCP_PRIVD_UNIT from the unit: core or broad.
+	Unit string
+	// AptGet is the apt-get binary (production: /usr/bin/apt-get).
+	AptGet string
 	// ResolveExecutable, when set, resolves Executable after the peer check
 	// (production: the running binary, so nothing touches the filesystem
 	// before the peer is authenticated).
@@ -77,6 +82,12 @@ type Options struct {
 	// Audit receives one line per connection (production: stderr, which
 	// the unit sends to the journal).
 	Audit io.Writer
+	// SystemBus is the system bus socket priv_power talks to (production:
+	// dbus.SystemBus).
+	SystemBus string
+	// PkgLockRetry is the pause between attempts while the dpkg or lists lock
+	// is held (0 means 2 s); tests only.
+	PkgLockRetry time.Duration
 	// InjectReadBackFault is passed to fsx; tests only.
 	InjectReadBackFault func([]byte) []byte
 	// Now is the clock (backup ids and times).
@@ -99,6 +110,9 @@ func ProductionOptions(version, policyPath string) Options {
 			return filepath.EvalSymlinks(exe)
 		},
 		UnitClientUID:  os.Getenv(units.ClientUIDEnv),
+		Unit:           os.Getenv(units.UnitEnv),
+		AptGet:         policy.DefaultAptGet,
+		SystemBus:      dbus.SystemBus,
 		ExpectedSHA256: os.Getenv(units.HashEnv),
 		Trust:          gpolicy.RootTrust(),
 		Lookups:        policy.ProductionLookups,
@@ -118,7 +132,9 @@ type server struct {
 	p     *policy.Policy
 	cred  peercred.Cred
 	// unitUID is the unit's client uid, which the peer matched.
-	unitUID   uint32
+	unitUID uint32
+	// unit is the unit this instance runs in (SHELL_MCP_PRIVD_UNIT).
+	unit      policy.Unit
 	fs        *fsx.FS
 	restoreFS *fsx.FS
 	red       *redact.Redactor
@@ -136,7 +152,8 @@ type server struct {
 // The order is PRIVILEGED §7: (1) authenticate the peer from the
 // connection and the unit's environment alone; (2) every other self-check,
 // the policy load among them, answered to the authenticated peer; (3)
-// Landlock; (4) only then read the request. Nothing reads from the
+// Landlock, answered as helper_sandbox_unavailable; (4) only then read the
+// request. Nothing reads from the
 // connection before (4).
 func Serve(o *Options) int {
 	s := &server{o: o, start: time.Now()}
@@ -160,6 +177,11 @@ func Serve(o *Options) int {
 		code, msg := selfCheckFailure(err)
 		s.respond(nc, failure(code, msg))
 		s.auditRefusal(err, code)
+		return 1
+	}
+	if err := s.sandbox(); err != nil {
+		s.respond(nc, failure(protocol.CodeHelperSandboxUnavailable, "the privileged helper's Landlock sandbox could not be applied under sandbox.landlock: required; see the helper's journal and run shell-mcp-privd check-policy on the host"))
+		s.auditRefusal(err, protocol.CodeHelperSandboxUnavailable)
 		return 1
 	}
 	resp := s.run(nc)
@@ -241,7 +263,7 @@ func (s *server) checks() error {
 	if e := selfcheck.Binary(o.Trust, o.Executable); e != nil {
 		return e
 	}
-	lo := &policy.LoadOptions{Trust: o.Trust, HelperExecutable: o.Executable, SystemBinDirs: o.SystemBinDirs}
+	lo := &policy.LoadOptions{Trust: o.Trust, HelperExecutable: o.Executable, SystemBinDirs: o.SystemBinDirs, AptGet: o.AptGet}
 	o.Lookups(lo)
 	p, err := policy.Load(o.PolicyPath, lo)
 	if err != nil {
@@ -257,9 +279,24 @@ func (s *server) checks() error {
 	if e := selfcheck.ClientUID(p.ClientUID, s.unitUID); e != nil {
 		return e
 	}
-	if e := selfcheck.Capabilities(&st, p.Capabilities); e != nil {
-		return e
+	// Which unit this instance runs in: core, or broad for a policy that uses
+	// the broad unit (a broad instance for any other policy is a stale unit).
+	u, err := selfcheck.Unit(o.Unit)
+	if err != nil {
+		return err
 	}
+	if u == policy.UnitBroad && !p.UsesBroad() {
+		return &selfcheck.Error{Check: selfcheck.CheckUnit, Detail: "this is the broad unit, but the policy uses no broad unit (no packages, unit: broad command or power); remove the broad units"}
+	}
+	if u == policy.UnitCore {
+		err = selfcheck.Capabilities(&st, p.Capabilities)
+	} else {
+		err = selfcheck.BroadCapabilities(&st, p.BroadProtectClock())
+	}
+	if err != nil {
+		return err
+	}
+	s.unit = u
 	s.p = p
 	return nil
 }
@@ -306,6 +343,8 @@ func selfCheckFailure(err error) (code, msg string) {
 		return protocol.CodeHelperPolicyMismatch, "the privileged policy changed after the units were generated; regenerate and reinstall them (shell-mcp-privd units)"
 	case selfcheck.CheckClientUID:
 		return protocol.CodeHelperClientUIDMismatch, "the unit's client uid is not the privileged policy's client_uid; regenerate and reinstall the units (shell-mcp-privd units)"
+	case selfcheck.CheckUnit:
+		return protocol.CodeHelperInstallInsecure, "the unit does not say which sandbox it is (SHELL_MCP_PRIVD_UNIT), or is a broad unit for a policy that uses none; regenerate and reinstall the units (shell-mcp-privd units)"
 	case selfcheck.CheckCapabilities:
 		return protocol.CodeHelperCapabilitiesBroad, "the privileged helper's capability bounding set is broader than its unit declares; reinstall the generated units"
 	}
@@ -342,16 +381,27 @@ func policyInvalidMessage(err error) string {
 	return fmt.Sprintf("the privileged policy fails validation at %s and %d more", fields[0], len(fields)-1)
 }
 
-// run applies the sandbox, reads one request and dispatches it. Every
-// outcome from here on is a response: the peer is authenticated.
+// sandbox is PRIVILEGED §7 step 3 (D-019 for the helper): Landlock is in
+// place before any byte of the request is read. A failure is a
+// *selfcheck.Error for the "landlock" check.
+func (s *server) sandbox() error {
+	_ = unix.Setrlimit(unix.RLIMIT_CORE, &unix.Rlimit{Cur: 0, Max: 0})
+	if s.unit != policy.UnitCore {
+		// The broad unit has no Landlock sandbox: package managers write
+		// anywhere and broad commands need the network (PRIVILEGED §5.2, §7).
+		return nil
+	}
+	if _, err := s.o.ApplySandbox(s.p, s.o.BackupDir); err != nil {
+		return &selfcheck.Error{Check: selfcheck.CheckLandlock, Detail: err.Error()}
+	}
+	return nil
+}
+
+// run reads one request and dispatches it. Every outcome from here on is a
+// response carrying the request's id: the peer is authenticated and the
+// sandbox applied.
 func (s *server) run(nc net.Conn) *protocol.Response {
 	o, p := s.o, s.p
-	_ = unix.Setrlimit(unix.RLIMIT_CORE, &unix.Rlimit{Cur: 0, Max: 0})
-	// D-019 for the helper: Landlock is in place before any byte of the
-	// request is read.
-	if _, err := o.ApplySandbox(p, o.BackupDir); err != nil {
-		return failure(protocol.CodeSandboxUnavailable, "the privileged helper's Landlock sandbox could not be applied under sandbox.landlock: required; run shell-mcp-privd check-policy on the host")
-	}
 	s.red = redact.New(nil)
 	s.store = &store{dir: o.BackupDir, trust: o.Trust, keep: p.BackupsKeep, now: o.Now}
 	cfg := &fsx.Config{

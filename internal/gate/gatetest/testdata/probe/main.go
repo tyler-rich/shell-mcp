@@ -96,6 +96,37 @@ func main() {
 	case "signal":
 		pid, _ := strconv.Atoi(args[0])
 		report(syscall.Kill(pid, syscall.SIGTERM), "SIGNALLED")
+	case "status":
+		// Diagnostics: this process's credentials, capability sets,
+		// NoNewPrivs and seccomp mode, and how its /proc is mounted.
+		for _, k := range []string{"Uid", "CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb", "NoNewPrivs", "Seccomp", "Seccomp_filters"} {
+			fmt.Println(statusField(k))
+		}
+		if b, err := os.ReadFile("/proc/self/mountinfo"); err == nil {
+			for _, l := range strings.Split(string(b), "\n") {
+				if f := strings.Fields(l); len(f) > 4 && (f[4] == "/proc" || f[4] == "/run") {
+					fmt.Println("mount:", l)
+				}
+			}
+		}
+	case "visible":
+		// Whether /proc shows the process (ProtectProc=, hidepid).
+		_, err := os.Stat("/proc/" + args[0])
+		report(err, "VISIBLE")
+	case "unix-connect":
+		c, err := net.DialTimeout("unix", args[0], 2*time.Second)
+		if err == nil {
+			_ = c.Close()
+		}
+		report(err, "CONNECTED")
+	case "abstract-connect":
+		// An abstract Unix socket (a name, not a file), which belongs to a
+		// network namespace.
+		c, err := net.DialTimeout("unix", "@"+args[0], 2*time.Second)
+		if err == nil {
+			_ = c.Close()
+		}
+		report(err, "CONNECTED")
 	case "rlimits":
 		for _, r := range []struct {
 			name string
