@@ -848,7 +848,7 @@ Each entry sets `SHELL_MCP_REQUIRE_LANDLOCK_ABI` to its kernel's ABI, so every k
 
 **Versions:** unchanged (Go 1.27.2). No dependency added.
 
-### 2026-10-15 — ci-local lints with golangci-lint built in the Go image (PR #n, branch chore/ci-local-lint)
+### 2026-10-15 — ci-local lints with golangci-lint built in the Go image (PR #13, branch chore/ci-local-lint)
 **Decision:** `scripts/ci-local.sh` no longer runs the prebuilt `golangci/golangci-lint` image. It runs `go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$golangci_lint_version` inside the digest-pinned Go image the tests use (`in_go`), the same way govulncheck already runs. The version variable is kept equal to `GOLANGCI_LINT_VERSION` in `ci.yml`. Both lint steps stay: default tags, and `--build-tags=e2e,shellmcp_e2e_bypass`.
 - **deps-current** reads the golangci-lint pin from the new `golangci_lint_version="vX.Y.Z"` line, and still compares it with `ci.yml` and the newest stable release.
 - **New deps-current check:** it fails when ci-local's lint toolchain is older than go.mod's go/toolchain line. That Go is the Dockerfile's golang builder image, so the check reads the version from that image's tag. It also fails when the lint step does not run this way: `in_lint` must be exactly the `go run` line, `in_go` must run the Go image read from the Dockerfile, and every `golangci-lint` step must use `in_lint`.
