@@ -42,7 +42,7 @@ Trust boundaries:
 | **Unauthenticated enumeration** | `tools/list` without auth | Auth before any response (D-004); `/healthz` returns nothing informational. |
 | **DNS rebinding** | Browser on the LAN reaches a loopback-bound server | Host/Origin allow-list in our own middleware; loopback bind by default outside Docker. |
 | **Brute force** | Guessing the bearer token | ≥ 256-bit tokens enforced; constant-time compare; auth-failure limiter; global limiter. |
-| **Denial of service** | Huge outputs, deep walks, fork bombs, slow commands | Caps on output, stdin, file size, walk depth/results, delete entries, request/response size; timeouts with process-group kill; `RLIMIT_NPROC`/`RLIMIT_CORE`; per-target session limit; sshd `MaxSessions`/`MaxStartups`. |
+| **Denial of service** | Huge outputs, deep walks, fork bombs, slow commands | Caps on output, stdin, file size, walk depth/results, delete entries, request/response size; timeouts with process-group kill; `RLIMIT_NPROC`/`RLIMIT_CORE` on every child, in force before its first instruction; per-target session limit; sshd `MaxSessions`/`MaxStartups`. |
 | **Tool poisoning / rug pull** | Our descriptions change between versions | `shell-mcp tools` catalogue with schema hashes; snapshot test; signed images pinned by digest. |
 | **Supply chain** | Malicious module, base image, or Action | `go.sum`, `govulncheck`, Trivy + Grype, CodeQL, gitleaks, Dependabot daily, `deps-current`, SHA-pinned Actions, digest-pinned bases, cosign signatures and provenance for image and gate binaries. |
 | **Container breakout** | Bug in the server | Distroless static, non-root, `cap_drop: ALL`, `no-new-privileges`, read-only FS, limits, no socket or mounts. Blast radius = the SSH key's policy. |
