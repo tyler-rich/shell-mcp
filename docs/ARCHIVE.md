@@ -866,3 +866,31 @@ Each entry sets `SHELL_MCP_REQUIRE_LANDLOCK_ABI` to its kernel's ABI, so every k
 **Deferred / follow-ups:** none.
 
 **Versions:** Go 1.27.2 (newest stable per go.dev; `deps-current` reports every in-scope module current). Direct modules unchanged: go-landlock v0.10.1, go-sdk v1.8.0, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0. Tools: golangci-lint v2.14.0, govulncheck v1.9.0. No dependency added.
+
+### 2026-10-15 — ci-local touches only containers it started; CLAUDE.md rule (PR #13 follow-up)
+**What happened:** while working on this PR, the session cancelled a background ci-local run and then ran `docker ps -q | xargs -r docker stop`. That stops **every running container** on the workstation's Docker, not only the one the cancelled run had left. Afterwards `docker ps -a` listed no other container, so only that run's own `--rm` container was affected, but the command could have stopped anything. The session reported it to the maintainer. The underlying cause is in ci-local:
+- `docker run --rm` removes a container when it exits, but a killed docker client leaves its container running.
+- ci-local did not label its containers, so nothing could tell its containers from anyone else's.
+
+**Decision (maintainer request):**
+- **Labels.** Every container `scripts/ci-local.sh` starts carries `--label shell-mcp.ci-local=<run id>`, with one id per run (time, pid, random). That covers the cache-preparation run and every `in_go` run. The systemd probe adds ci-local's label when ci-local runs it, and a label of its own when run alone (the CI `probes` job).
+- **Cleanup only by label.** ci-local and the probe list and remove containers only with `docker ps -aq --filter label=<their label>` and `docker rm -f` of those ids. They never stop anything by name or pattern, and never prune. The probe's own cleanup by container name was replaced by the same label cleanup.
+- **Cleanup on every exit.** An `EXIT` trap removes the run's labelled containers however the run ends. `INT`/`TERM` end the run (exit 130) instead of failing one step and going on.
+- **CLAUDE.md hard rule:** never stop, kill, remove or prune containers, images, volumes or networks a session did not create itself; nothing aimed at all running containers, no removal by name pattern, no prune. Sessions label the containers they start and remove them only through that label or by an id they started. Anything else is a STOP-and-ask.
+
+**Tests (committed first, shown failing, `3bf682f`):** `scripts/ci-local_test.sh` runs ci-local against a fake `docker` (first on `PATH`) that logs every call. Any unfiltered `docker ps` gets a foreign container from it, which must never be named. The test checks a complete run and a run interrupted by `SIGTERM` to its whole process group while a step's container runs:
+- every `docker run` carries the run label, one id per run;
+- nothing is pruned;
+- containers are listed only through the label;
+- only its own containers are stopped or removed;
+- the labelled containers are removed at exit and after the interrupt;
+- the interrupt ends the run.
+
+Against the old script, 6 of 15 checks failed: no labels, so no run id, and no removal by label at exit or after the interrupt. Now 15/15 pass. The test runs as a ci-local step (skipped when the test itself drives ci-local) and in CI's `deps-current` job. It uses `SIGTERM` because a background job of a non-interactive shell starts with `SIGINT` ignored, and an ignored signal cannot be trapped; ci-local traps a foreground Ctrl-C (`SIGINT`) the same way.
+
+**Alternatives rejected:**
+- Fixed container names: a second run, or a name collision, would remove the wrong container.
+- `docker container prune --filter label=…`: a prune, which the new rule forbids even when filtered.
+- Relying on `--rm` alone: it does not cover an interrupted client.
+
+**Versions:** unchanged (Go 1.27.2; golangci-lint v2.14.0; govulncheck v1.9.0). No dependency added.
