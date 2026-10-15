@@ -136,7 +136,6 @@ func runLines(p *policy.Policy, unit policy.Unit) [][2]string {
 		{"Environment", HashEnv + "=" + p.SHA256},
 		{"Environment", ClientUIDEnv + "=" + strconv.FormatUint(uint64(p.ClientUID), 10)},
 		{"Environment", UnitEnv + "=" + string(unit)},
-		{"User", "root"},
 	}
 }
 
@@ -178,6 +177,7 @@ func Core(p *policy.Policy) (Files, error) {
 	fmt.Fprintf(&svc, "[Unit]\nDescription=shell-mcp privileged helper (core unit, one request)\nDocumentation=%s\nCollectMode=inactive-or-failed\n\n", documentation)
 	svc.WriteString("[Service]\n")
 	lines := append(runLines(p, policy.UnitCore), [][2]string{
+		{"User", "root"},
 		{"NoNewPrivileges", "yes"},
 		{"CapabilityBoundingSet", strings.Join(caps, " ")},
 		{"ProtectSystem", "strict"},
@@ -233,6 +233,11 @@ const (
 
 // Broad generates the broad unit pair (PRIVILEGED §5.2) for a policy that
 // uses it (packages, unit: broad commands, power); it refuses otherwise.
+// It sets no User=: the service runs as root without it, and with User=
+// systemd drops CAP_SETUID from a unit that has seccomp filters (its
+// keep_seccomp_privileges path in exec-invoke.c, 257 and 259; ProtectClock=
+// and ProtectKernelModules= install filters), which apt needs to switch to
+// its _apt user.
 // Network is allowed, ProtectSystem= and RestrictSUIDSGID= are off and the
 // capability bounding set is root's (none of them is written); still
 // NoNewPrivileges=, PrivateTmp=, ProtectKernelModules=,
@@ -273,15 +278,19 @@ func Broad(p *policy.Policy) (Files, error) {
 	return Files{Socket: socket(p, h, "broad", BroadSocketPath), Service: svc.String()}, nil
 }
 
-// protectProc is the core unit's ProtectProc=: invisible (other users'
-// processes are hidden; the helper runs as root without CAP_SYS_PTRACE, so
-// hidepid applies to it), or default when a core-unit command declares
-// CAP_KILL, because signalling a process requires seeing it.
+// protectProc is the core unit's ProtectProc=: ptraceable, which hides every
+// process the unit may not ptrace — other users' processes, since it has no
+// CAP_SYS_PTRACE (root-owned processes, same uid, stay visible) — or
+// default when a core-unit command declares CAP_KILL, because signalling a
+// process requires seeing it. Not invisible: the kernel exempts procfs's
+// gid= group from that mode's check (has_pid_permissions(), fs/proc/base.c),
+// that group is gid 0 when systemd passes no gid=, and the helper runs as
+// root:root, so invisible would hide nothing.
 func protectProc(caps []string) string {
 	if slices.Contains(caps, "CAP_KILL") {
 		return "default"
 	}
-	return "invisible"
+	return "ptraceable"
 }
 
 // check refuses a policy whose units could not be written exactly: an odd
