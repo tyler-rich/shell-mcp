@@ -408,7 +408,9 @@ func (s *server) run(nc net.Conn) *protocol.Response {
 		ReadRoots:  p.Paths.Read,
 		WriteRoots: p.Paths.WriteRoots(),
 		Deny:       p.Paths.Deny,
-		Protected:  p.Paths.Protected,
+		// The policy's deny matcher starts with the built-in list (parse.go).
+		BuiltinDeny: len(gpolicy.BuiltinDeny()),
+		Protected:   p.Paths.Protected,
 		Limits: fsx.Limits{
 			MaxReadBytes:     p.Limits.MaxReadBytes,
 			MaxWriteBytes:    p.Limits.MaxWriteBytes,

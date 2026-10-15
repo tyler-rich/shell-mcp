@@ -12,6 +12,10 @@ var builtinDeny = []string{
 	"/etc/ssh/*_key", "/etc/ssh/authorized_keys.d/**", "/root/**", "/home/*/.ssh/**",
 	"**/.ssh/**", "**/.gnupg/**", "**/.docker/config.json", "**/.kube/config",
 	"**/.netrc", "**/.git-credentials", "**/.pgpass", "/var/lib/shell-mcp/**",
+	// Other processes' environment and memory, and the kernel's memory image:
+	// defence in depth behind Landlock and the rule that no root may be or be
+	// inside /proc (POLICY §3).
+	"/proc/*/environ", "/proc/*/mem", "/proc/kcore",
 }
 
 // builtinProtected is the built-in protected set (POLICY §3). The gate

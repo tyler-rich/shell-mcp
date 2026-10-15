@@ -240,7 +240,9 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 		ReadRoots:  p.Paths.Read,
 		WriteRoots: p.Paths.Write,
 		Deny:       p.Paths.Deny,
-		Protected:  p.Paths.Protected,
+		// The policy's deny matcher starts with the built-in list (parse.go).
+		BuiltinDeny: len(policy.BuiltinDeny()),
+		Protected:   p.Paths.Protected,
 		Limits: fsx.Limits{
 			MaxReadBytes:     p.Limits.MaxReadBytes,
 			MaxWriteBytes:    p.Limits.MaxWriteBytes,
