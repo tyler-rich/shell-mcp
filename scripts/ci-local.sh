@@ -35,6 +35,27 @@ if [[ "$go_image" != *@sha256:* ]]; then
 	exit 1
 fi
 
+# --- Only our own containers -------------------------------------------------
+# Every container this run starts carries run_label, and this script lists,
+# stops and removes containers only through it (CLAUDE.md): never by name
+# pattern, never all running containers, never prune. `docker run --rm`
+# removes a container when it exits, but an interrupted docker client leaves
+# its container running, so the labelled containers are removed when the run
+# ends, however it ends. An interrupt ends the run instead of failing one
+# step and going on. The systemd probe labels its container the same way.
+run_label="shell-mcp.ci-local=$(date +%s)-$$-$RANDOM"
+export SHELL_MCP_CI_LOCAL_LABEL="$run_label"
+remove_own_containers() {
+	local ids
+	ids="$(docker ps -aq --filter "label=$run_label" 2>/dev/null || true)"
+	if [[ -n "$ids" ]]; then
+		# shellcheck disable=SC2086 # one container id per word
+		docker rm -f $ids >/dev/null 2>&1 || true
+	fi
+}
+trap remove_own_containers EXIT
+trap 'echo "ci-local: interrupted" >&2; exit 130' INT TERM
+
 # --- Container user and caches ----------------------------------------------
 # Never root. On Linux use the invoking user (so the bind-mounted checkout is
 # readable); on Windows, Docker Desktop's bind mounts are readable by any uid.
@@ -45,11 +66,11 @@ else
 fi
 cache_volume="shell-mcp-ci-cache"
 docker volume create "$cache_volume" >/dev/null
-docker run --rm -u 0:0 -v "$cache_volume:/cache" "$go_image" \
+docker run --rm --label "$run_label" -u 0:0 -v "$cache_volume:/cache" "$go_image" \
 	sh -c "mkdir -p /cache/build /cache/mod /cache/lint /cache/tmp && chown -R $run_as /cache && chmod 0700 /cache/tmp" >/dev/null
 
 common=(
-	--rm -u "$run_as"
+	--rm --label "$run_label" -u "$run_as"
 	-e HOME=/tmp -e GOCACHE=/cache/build -e GOMODCACHE=/cache/mod
 	-e GOLANGCI_LINT_CACHE=/cache/lint -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local
 	# The gate refuses fixtures whose parent directories are group/other-writable,
@@ -134,6 +155,10 @@ step "build linux/amd64" "" cross_build amd64
 step "build linux/arm64" "" cross_build arm64
 step "deps-current" "run go get -u ./... && go mod tidy, or bump go.mod's go line" in_go bash scripts/deps-current.sh
 step "deps-current self-test" "" in_go bash scripts/deps-current_test.sh
+# The ci-local test runs this script against a fake docker; not from itself.
+if [[ -z "${CI_LOCAL_UNDER_TEST:-}" ]]; then
+	step "ci-local self-test" "" in_go bash scripts/ci-local_test.sh
+fi
 
 if [[ -z "${CI_LOCAL_SKIP_PROBES:-}" ]]; then
 	probe "Landlock in test container" in_go go run ./scripts/probe/landlock
