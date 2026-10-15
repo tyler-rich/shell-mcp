@@ -23,7 +23,7 @@ go_image="$(awk 'toupper($1) == "FROM" && $2 ~ /^golang:/ { print $2; exit }' Do
 lint_image="golangci/golangci-lint:v2.14.0@sha256:ad862ba6b3798cbe0fd9fd7408d498fd74fbd2623a92406b2fd3898faf0bf98f"
 # govulncheck runs from its module at a pinned version (verified by the Go
 # checksum database); keep in step with ci.yml.
-govulncheck_version="v1.8.0"
+govulncheck_version="v1.9.0"
 
 if [[ "$go_image" != *@sha256:* ]]; then
 	echo "ci-local: the Dockerfile's golang builder image is not pinned by digest" >&2
