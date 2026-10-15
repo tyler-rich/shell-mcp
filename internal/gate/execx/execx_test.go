@@ -5,14 +5,18 @@ package execx_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
@@ -219,6 +223,139 @@ func TestChildRlimits(t *testing.T) {
 	cur, _, _ = strings.Cut(got["nproc"], "/")
 	if n, err := strconv.ParseUint(cur, 10, 64); err != nil || n == 0 || n > 1<<22 {
 		t.Fatalf("nproc must be bounded: %q", got["nproc"])
+	}
+}
+
+// raiseOwnLimits sets this process's soft core, open-file and process
+// limits to their hard limits (unprivileged), so that a child that still
+// carries the parent's limits is told apart from one that got the child
+// limits. It returns the parent's limits after raising them.
+func raiseOwnLimits(t *testing.T) map[string]syscall.Rlimit {
+	t.Helper()
+	got := map[string]syscall.Rlimit{}
+	for name, res := range map[string]int{"core": unix.RLIMIT_CORE, "nofile": unix.RLIMIT_NOFILE, "nproc": unix.RLIMIT_NPROC} {
+		var l syscall.Rlimit
+		if err := syscall.Getrlimit(res, &l); err != nil {
+			t.Fatalf("getrlimit %s: %v", name, err)
+		}
+		l.Cur = l.Max
+		// syscall.Setrlimit (not x/sys/unix) so that os/exec children
+		// inherit the raised RLIMIT_NOFILE instead of Go's saved original.
+		if err := syscall.Setrlimit(res, &l); err != nil {
+			t.Fatalf("setrlimit %s: %v", name, err)
+		}
+		got[name] = l
+	}
+	return got
+}
+
+// nprocBound is the highest RLIMIT_NPROC a child may have: the user's
+// tasks now plus the child's allowance, with slack for tasks that come and
+// go while the tests run.
+func nprocBound() uint64 {
+	return execx.UserTasks(os.Getuid()) + execx.ChildExtraTasks + 1024
+}
+
+// requireDiscriminating fails the test when no limit the child gets differs
+// from the parent's, because the limit tests could then pass vacuously.
+func requireDiscriminating(t *testing.T, parent map[string]syscall.Rlimit) {
+	t.Helper()
+	if parent["core"].Max == 0 && parent["nofile"].Max <= execx.ChildNofile && parent["nproc"].Max <= nprocBound() {
+		t.Fatalf("this host's hard limits (%+v) equal the child limits; the rlimit tests cannot tell them apart", parent)
+	}
+}
+
+// childLimitsError checks the probe's "rlimits" output against the child
+// limits: core 0/0, both open-file limits ≤ ChildNofile, both process
+// limits ≤ nprocBound.
+func childLimitsError(out []byte) error {
+	got := map[string][2]uint64{}
+	for _, l := range lines(out) {
+		k, v, _ := strings.Cut(l, "=")
+		c, m, _ := strings.Cut(v, "/")
+		cur, err1 := strconv.ParseUint(c, 10, 64)
+		maxv, err2 := strconv.ParseUint(m, 10, 64)
+		if err1 != nil || err2 != nil {
+			return fmt.Errorf("unparsable probe output %q", out)
+		}
+		got[k] = [2]uint64{cur, maxv}
+	}
+	if len(got) != 3 {
+		return fmt.Errorf("unparsable probe output %q", out)
+	}
+	var errs []string
+	if got["core"] != [2]uint64{0, 0} {
+		errs = append(errs, fmt.Sprintf("core %d/%d, want 0/0", got["core"][0], got["core"][1]))
+	}
+	if n := got["nofile"]; n[0] > execx.ChildNofile || n[1] > execx.ChildNofile {
+		errs = append(errs, fmt.Sprintf("nofile %d/%d, want ≤ %d", n[0], n[1], execx.ChildNofile))
+	}
+	if n, b := got["nproc"], nprocBound(); n[0] > b || n[1] > b {
+		errs = append(errs, fmt.Sprintf("nproc %d/%d, want ≤ %d", n[0], n[1], b))
+	}
+	if len(errs) > 0 {
+		return errors.New(strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// TestChildRlimitsBeforeFirstInstruction: the child's limits are in force
+// before it runs its first instruction, however long the parent takes after
+// starting it. The probe reads its limits as its first action, and the
+// parent pauses right after the start; limits applied by the parent after
+// the start (prlimit) reach the probe only after it has read them.
+func TestChildRlimitsBeforeFirstInstruction(t *testing.T) {
+	p := probePath(t)
+	requireDiscriminating(t, raiseOwnLimits(t))
+	r, err := execx.RunWithStartDelay(context.Background(), &execx.Spec{Path: p, Args: []string{"rlimits"},
+		Env: execx.Environment("/nonexistent-home"), Timeout: 10 * time.Second, MaxOutput: 1 << 20}, 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if err := childLimitsError(r.Stdout); err != nil {
+		t.Fatalf("the child ran without its limits: %v", err)
+	}
+}
+
+// TestChildRlimitsNeverRace runs the probe a few hundred times, four at a
+// time, with no pause: not one run may read its limits before they apply.
+func TestChildRlimitsNeverRace(t *testing.T) {
+	p := probePath(t)
+	requireDiscriminating(t, raiseOwnLimits(t))
+	const runs, workers = 400, 4
+	var (
+		mu     sync.Mutex
+		failed int
+		first  error
+		wg     sync.WaitGroup
+	)
+	next := make(chan struct{})
+	for range workers {
+		wg.Go(func() {
+			for range next {
+				r, err := execx.Run(context.Background(), &execx.Spec{Path: p, Args: []string{"rlimits"},
+					Env: execx.Environment("/nonexistent-home"), Timeout: 10 * time.Second, MaxOutput: 1 << 20})
+				if err == nil {
+					err = childLimitsError(r.Stdout)
+				}
+				if err != nil {
+					mu.Lock()
+					failed++
+					if first == nil {
+						first = err
+					}
+					mu.Unlock()
+				}
+			}
+		})
+	}
+	for range runs {
+		next <- struct{}{}
+	}
+	close(next)
+	wg.Wait()
+	if failed > 0 {
+		t.Fatalf("%d of %d runs ran without their limits; first: %v", failed, runs, first)
 	}
 }
 

@@ -133,6 +133,17 @@ func (w *capWriter) result(limit int) (out []byte, truncated, hit bool) {
 // bounds how long pipes held open by grandchildren can delay Wait, and the
 // group is always sent SIGKILL so nothing the command started outlives it.
 func Run(ctx context.Context, spec *Spec) (Result, error) {
+	return run(ctx, spec, nil)
+}
+
+// hooks are test seams, set only through export_test.go; production passes
+// nil.
+type hooks struct {
+	// afterStart runs in the parent right after the child started.
+	afterStart func()
+}
+
+func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	sc := *spec // defaults below must not change the caller's Spec
 	s := &sc
 	if !filepath.IsAbs(s.Path) {
@@ -195,6 +206,9 @@ func Run(ctx context.Context, spec *Spec) (Result, error) {
 	}
 	pid := cmd.Process.Pid
 	pgid.Store(int64(pid)) // Setpgid: the child leads its own group
+	if h != nil && h.afterStart != nil {
+		h.afterStart()
+	}
 	applyChildRlimits(pid)
 	_ = cmd.Wait()
 	killGroup(syscall.SIGKILL)
