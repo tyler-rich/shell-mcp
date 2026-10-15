@@ -42,6 +42,8 @@ const (
 	gatePolicy  = "/etc/shell-mcp/gate.yaml"
 	privPolicy  = "/etc/shell-mcp/privileged.yaml"
 	socketPath  = "/run/shell-mcp/privd.sock"
+	broadSocket = "/run/shell-mcp/privd-broad.sock"
+	repoDir     = "/srv/e2e-apt"
 	backupDir   = "/var/lib/shell-mcp/backups"
 	svcShell    = 4200001
 	socketGroup = 4200002
@@ -69,10 +71,15 @@ func TestMain(m *testing.M) {
 }
 
 // client is this binary run as another user: it connects to the helper's
-// socket and either sends stdin and prints everything the helper writes
-// ("send"), or holds the connection open without sending ("hold").
+// socket (E2E_SOCKET, default the core unit's) and either sends stdin and
+// prints everything the helper writes ("send"), or holds the connection
+// open without sending ("hold").
 func client() int {
-	c, err := (&net.Dialer{}).DialContext(context.Background(), "unix", socketPath)
+	sock := os.Getenv("E2E_SOCKET")
+	if sock == "" {
+		sock = socketPath
+	}
+	c, err := (&net.Dialer{}).DialContext(context.Background(), "unix", sock)
 	if err != nil {
 		fmt.Println("DIAL:", err)
 		return 3
@@ -217,9 +224,15 @@ func wantGate(t *testing.T, uid uint32, op string, args any, code string) {
 	}
 }
 
-// direct connects to the helper's socket as uid with this binary in client
-// mode, sends one request line and returns what the helper wrote.
+// direct connects to the core helper socket as uid with this binary in
+// client mode, sends one request line and returns what the helper wrote.
 func direct(t *testing.T, uid uint32, line string) string {
+	t.Helper()
+	return directTo(t, uid, socketPath, line)
+}
+
+// directTo is direct for a given helper socket.
+func directTo(t *testing.T, uid uint32, socket, line string) string {
 	t.Helper()
 	self, err := os.Executable()
 	if err != nil {
@@ -227,7 +240,7 @@ func direct(t *testing.T, uid uint32, line string) string {
 	}
 	cmd := exec.CommandContext(t.Context(), self) //nolint:gosec // G204: this test binary itself, in client mode
 	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, uid)}
-	cmd.Env = []string{"E2E_CLIENT=send"}
+	cmd.Env = []string{"E2E_CLIENT=send", "E2E_SOCKET=" + socket}
 	cmd.Stdin = strings.NewReader(line)
 	out, err := cmd.Output()
 	if err != nil {
@@ -312,7 +325,8 @@ func readFile(t *testing.T, p string) string {
 
 func TestUnitsVerify(t *testing.T) {
 	out, err := exec.CommandContext(t.Context(), "systemd-analyze", "verify", "--man=no",
-		"/etc/systemd/system/shell-mcp-privd.socket", "/etc/systemd/system/shell-mcp-privd@.service").CombinedOutput()
+		"/etc/systemd/system/shell-mcp-privd.socket", "/etc/systemd/system/shell-mcp-privd@.service",
+		"/etc/systemd/system/shell-mcp-privd-broad.socket", "/etc/systemd/system/shell-mcp-privd-broad@.service").CombinedOutput()
 	t.Logf("systemd-analyze verify:\n%s", out)
 	if err != nil {
 		t.Fatalf("systemd-analyze verify: %v", err)
@@ -321,15 +335,25 @@ func TestUnitsVerify(t *testing.T) {
 
 var exposureRE = regexp.MustCompile(`Overall exposure level for [^:]+: (\d+\.\d)`)
 
-func TestSecurityExposure(t *testing.T) {
-	out, _ := exec.CommandContext(t.Context(), "systemd-analyze", "security", "--no-pager", "shell-mcp-privd@.service").CombinedOutput()
-	t.Logf("systemd-analyze security:\n%s", out)
+func exposure(t *testing.T, unit string) float64 {
+	t.Helper()
+	out, _ := exec.CommandContext(t.Context(), "systemd-analyze", "security", "--no-pager", unit).CombinedOutput() //nolint:gosec // G204: fixed unit names
+	t.Logf("systemd-analyze security %s:\n%s", unit, out)
 	m := exposureRE.FindSubmatch(out)
 	if m == nil {
-		t.Fatal("no exposure level in the output")
+		t.Fatalf("%s: no exposure level in the output", unit)
 	}
 	got, _ := strconv.ParseFloat(string(m[1]), 64)
+	return got
+}
+
+// The core unit's exposure may only improve (E2E_SECURITY_MAX, the
+// measured score with no slack). The broad unit's is recorded for
+// information only: it is root-equivalent by design.
+func TestSecurityExposure(t *testing.T) {
+	got := exposure(t, "shell-mcp-privd@.service")
 	fmt.Printf("E2E_EXPOSURE=%.1f\n", got)
+	fmt.Printf("E2E_EXPOSURE_BROAD=%.1f\n", exposure(t, "shell-mcp-privd-broad@.service"))
 	maxS := os.Getenv("E2E_SECURITY_MAX")
 	need(t, maxS != "", "E2E_SECURITY_MAX is not set")
 	limit, err := strconv.ParseFloat(maxS, 64)
@@ -341,7 +365,7 @@ func TestSecurityExposure(t *testing.T) {
 	}
 }
 
-// The socket is root:<socket group> 0660 in a root-owned 0711 directory
+// Both sockets are root:<socket group> 0660 in a root-owned 0711 directory
 // (PRIVILEGED §2, §3; DirectoryMode=).
 func TestSocketPermissions(t *testing.T) {
 	check := func(p string, uid, gid uint32, mode os.FileMode, socket bool) {
@@ -356,6 +380,7 @@ func TestSocketPermissions(t *testing.T) {
 	}
 	check("/run/shell-mcp", 0, 0, 0o711, false)
 	check(socketPath, 0, socketGroup, 0o660, true)
+	check(broadSocket, 0, socketGroup, 0o660, true)
 }
 
 // ---- The helper through the gate ----------------------------------------------

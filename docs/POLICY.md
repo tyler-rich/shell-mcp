@@ -75,7 +75,8 @@ An op or command above `max_tier` is refused with `tier_denied` before any other
 - os.Root refuses a directory symlink with an **absolute** target even when it points back inside the root. Such a refusal is `path_denied` with a message that says so (without naming any path); stat the symlink to see its target and retry with the resolved path.
 
 **Built-in read deny list** (always applied; policy `deny` adds to it):
-`/etc/shadow*`, `/etc/gshadow*`, `/etc/sudoers`, `/etc/sudoers.d/**`, `/etc/ssh/*_key`, `/etc/ssh/authorized_keys.d/**`, `/root/**`, `/home/*/.ssh/**`, `**/.ssh/**`, `**/.gnupg/**`, `**/.docker/config.json`, `**/.kube/config`, `**/.netrc`, `**/.git-credentials`, `**/.pgpass`, `/var/lib/shell-mcp/**`.
+`/etc/shadow*`, `/etc/gshadow*`, `/etc/sudoers`, `/etc/sudoers.d/**`, `/etc/ssh/*_key`, `/etc/ssh/authorized_keys.d/**`, `/root/**`, `/home/*/.ssh/**`, `**/.ssh/**`, `**/.gnupg/**`, `**/.docker/config.json`, `**/.kube/config`, `**/.netrc`, `**/.git-credentials`, `**/.pgpass`, `/var/lib/shell-mcp/**`, `/proc/*/environ`, `/proc/*/mem`, `/proc/*/task/*/environ`, `/proc/*/task/*/mem`, `/proc/kcore`.
+The `/proc` entries (per process and per thread) are defence in depth: no root may be `/proc` or inside it (above), and the helper's Landlock ruleset grants nothing there (PRIVILEGED §5.1). They still refuse on their own if either rule ever gives way. The gate and the privileged helper apply this list alike. A refusal names the rule that applied: a built-in rule by its pattern, a policy `deny` entry only by its index (`paths.deny[N]`), so a privileged policy's values never reach the wire.
 Additionally, any file whose first 64 KiB contain a `-----BEGIN … PRIVATE KEY-----` header is refused for `read_file`.
 
 **Built-in protected set** (never writable; a write root equal to, inside, or containing any of these is a policy error):

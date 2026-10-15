@@ -40,7 +40,8 @@ commands:
   check-policy --policy <file>
                 validate a privileged policy and report everything that needs review
   units --policy <file> [--out <dir>]
-                write shell-mcp-privd.socket and shell-mcp-privd@.service for the policy
+                write shell-mcp-privd.socket and shell-mcp-privd@.service for the policy,
+                and the broad unit pair when the policy uses it
   version       print version information
 `
 
@@ -53,7 +54,9 @@ type loadEnv struct {
 	trust         gpolicy.Trust
 	executable    string
 	systemBinDirs []string
-	lookups       func(*policy.LoadOptions)
+	// varRun is the path that must resolve to /run (production: /var/run).
+	varRun  string
+	lookups func(*policy.LoadOptions)
 }
 
 func productionEnv() (*loadEnv, error) {
@@ -64,7 +67,18 @@ func productionEnv() (*loadEnv, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot resolve own path: %w", err)
 	}
-	return &loadEnv{trust: gpolicy.RootTrust(), executable: exe, lookups: policy.ProductionLookups}, nil
+	return &loadEnv{trust: gpolicy.RootTrust(), executable: exe, lookups: policy.ProductionLookups, varRun: "/var/run"}, nil
+}
+
+// checkVarRun requires e.varRun (/var/run) to resolve to /run. The core unit
+// hides /run behind an empty read-only tmpfs (TemporaryFileSystem=/run:ro);
+// where /var/run is the usual symlink to /run that hides it too. Anything
+// else would leave the sockets under /var/run reachable from the core unit.
+func (e *loadEnv) checkVarRun() error {
+	if r, err := filepath.EvalSymlinks(e.varRun); err != nil || r != "/run" {
+		return fmt.Errorf("/var/run is not a symlink to /run on this host; the core unit hides only /run, so it would leave /var/run's sockets reachable (make /var/run a symlink to /run)")
+	}
+	return nil
 }
 
 func (e *loadEnv) load(file string) (*policy.Policy, error) {
@@ -164,12 +178,25 @@ func unitsWith(args []string, stdout, stderr io.Writer, env *loadEnv) int {
 		}
 		return 1
 	}
+	if verr := env.checkVarRun(); verr != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-privd units: %v\n", verr)
+		return 1
+	}
 	f, err := units.Core(p)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "shell-mcp-privd units: %v\n", err)
 		return 1
 	}
-	for _, u := range []struct{ name, content string }{{units.SocketUnit, f.Socket}, {units.ServiceUnit, f.Service}} {
+	files := []struct{ name, content string }{{units.SocketUnit, f.Socket}, {units.ServiceUnit, f.Service}}
+	if p.UsesBroad() {
+		b, err := units.Broad(p)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "shell-mcp-privd units: %v\n", err)
+			return 1
+		}
+		files = append(files, struct{ name, content string }{units.BroadSocketUnit, b.Socket}, struct{ name, content string }{units.BroadServiceUnit, b.Service})
+	}
+	for _, u := range files {
 		dst := filepath.Join(*out, u.name)
 		if err := os.WriteFile(dst, []byte(u.content), 0o644); err != nil { //nolint:gosec // G306: unit files are root:root 0644 (PRIVILEGED §2)
 			_, _ = fmt.Fprintf(stderr, "shell-mcp-privd units: %v\n", err)
@@ -186,10 +213,35 @@ func unitsWith(args []string, stdout, stderr io.Writer, env *loadEnv) int {
 	if env.executable != units.HelperPath {
 		pr("NOTE the units run %s; install this binary there (root:root 0755)", units.HelperPath)
 	}
-	pr("next, as root: install both files in /etc/systemd/system (root:root 0644); create %s (root:root 0700);", units.BackupDir)
+	if p.UsesBroad() {
+		pr("NOTE the broad unit (%s, %s) is root-equivalent by design: network and full root capabilities, for %s", units.BroadSocketUnit, units.BroadServiceUnit, strings.Join(broadUsers(p), ", "))
+	} else {
+		pr("no broad unit: the policy uses no packages, unit: broad command or power (remove %s and %s if installed)", units.BroadSocketUnit, units.BroadServiceUnit)
+	}
+	pr("next, as root: install the files in /etc/systemd/system (root:root 0644); create %s (root:root 0700);", units.BackupDir)
 	pr("  systemctl daemon-reload; systemd-analyze verify /etc/systemd/system/%s /etc/systemd/system/%s;", units.SocketUnit, units.ServiceUnit)
 	pr("  systemd-analyze security %s; systemctl enable --now %s", units.ServiceUnit, units.SocketUnit)
+	if p.UsesBroad() {
+		pr("  systemd-analyze verify /etc/systemd/system/%s /etc/systemd/system/%s; systemctl enable --now %s", units.BroadSocketUnit, units.BroadServiceUnit, units.BroadSocketUnit)
+	}
 	return 0
+}
+
+// broadUsers names what makes the policy use the broad unit.
+func broadUsers(p *policy.Policy) []string {
+	var out []string
+	if p.Packages.Enabled {
+		out = append(out, "packages")
+	}
+	for i := range p.Commands {
+		if p.Commands[i].Unit == policy.UnitBroad {
+			out = append(out, "command "+p.Commands[i].ID)
+		}
+	}
+	if len(p.Power.Allowed) > 0 {
+		out = append(out, "power ("+strings.Join(p.Power.Allowed, ", ")+")")
+	}
+	return out
 }
 
 // checkPolicyWith validates the policy as serve would and reports every
@@ -227,6 +279,10 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 		pr("serve would refuse this policy")
 		return 1
 	}
+	if err := env.checkVarRun(); err != nil {
+		failures++
+		pr("FAIL host: %v", err)
+	}
 	if fi, err := os.Stat(*policyPath); err == nil && fi.Mode().Perm()&0o077 != 0 {
 		pr("WARN the policy file is mode %04o; make it root:root 0600 (only root reads it, PRIVILEGED §2)", fi.Mode().Perm())
 	}
@@ -250,6 +306,17 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 	pr("owners: users %s; groups %s", strings.Join(owners, " "), strings.Join(groups, " "))
 	pr("modes.max: %04o   backups.keep: %d", uint32(p.ModesMax), p.BackupsKeep)
 	pr("core unit capability bounding set: %s", strings.Join(p.Capabilities, " "))
+	if p.UsesBroad() {
+		pr("broad unit: yes, ROOT-EQUIVALENT (network, full root capabilities%s) for %s", map[bool]string{true: "", false: ", no ProtectClock="}[p.BroadProtectClock()], strings.Join(broadUsers(p), ", "))
+	} else {
+		pr("broad unit: none")
+	}
+	if len(p.Power.Allowed) > 0 {
+		pr("power: %s (broad unit, systemd StartUnit; acknowledge: %q)", strings.Join(p.Power.Allowed, " "), p.Power.Acknowledge)
+	}
+	if p.Packages.Enabled {
+		pr("packages: apt (%s); install %s; remove %s; update index %v; upgrade %v", p.Packages.AptGet, strings.Join(p.Packages.Install, " "), strings.Join(p.Packages.Remove, " "), p.Packages.AllowUpdateIndex, p.Packages.AllowUpgrade)
+	}
 	for i := range p.Commands {
 		c := &p.Commands[i]
 		extra := ""

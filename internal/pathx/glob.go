@@ -191,18 +191,26 @@ func (m *Matcher) Patterns() []string {
 // Covers reports whether p, or any ancestor of p, matches a pattern: a
 // pattern that matches a directory also covers everything beneath it.
 func (m *Matcher) Covers(p string) bool {
+	_, _, ok := m.Covering(p)
+	return ok
+}
+
+// Covering is Covers that also names the rule: the index and the pattern
+// (as written) of the first pattern, in order, that covers p or an
+// ancestor of p.
+func (m *Matcher) Covering(p string) (index int, pattern string, ok bool) {
 	if m == nil {
-		return false
+		return 0, "", false
 	}
 	comps := split(p)
-	for n := len(comps); n >= 0; n-- {
-		for _, g := range m.globs {
+	for i, g := range m.globs {
+		for n := len(comps); n >= 0; n-- {
 			if g.match(comps[:n], false) {
-				return true
+				return i, g.raw, true
 			}
 		}
 	}
-	return false
+	return 0, "", false
 }
 
 // MayContain reports whether some path strictly beneath dir could match a

@@ -1,0 +1,121 @@
+# Example privileged policy for shell-mcp-privd (docs/PRIVILEGED.md §4).
+#
+# Placeholders only: every path, name, id and package here is invented.
+# Install as root at /etc/shell-mcp/privileged.yaml, root:root 0600 — only
+# root reads it. Then, as root:
+#   shell-mcp-privd check-policy --policy /etc/shell-mcp/privileged.yaml
+#   shell-mcp-privd units --policy /etc/shell-mcp/privileged.yaml --out /etc/systemd/system
+# and review every REVIEW line check-policy prints. Regenerate the units
+# after every edit: the helper refuses to serve a policy whose SHA-256 is
+# not the one its units were generated from.
+#
+# Write this file for the worst case: what would you accept a fully
+# compromised MCP server doing as root with it? Human approval (D-006)
+# stops a misled model, not a compromised server (PRIVILEGED §3).
+
+version: 1
+
+# The gate service account's pinned UID (D-020). Only a peer with this uid
+# is served (SO_PEERCRED). Never 0.
+client_uid: 60123
+
+# Group of the helper's sockets (root:<group> 0660). It must exist locally;
+# the gate's account is its only member. Never root, sudo, docker, ….
+socket_group: svc-shell-priv
+
+# Ceiling for every privileged operation: read | operator | destructive.
+# priv_delete, priv_pkg_remove and priv_power are destructive.
+max_tier: destructive
+
+sandbox:
+  # Landlock inside the core unit: required (default) refuses to serve
+  # without it; best-effort must be chosen explicitly. The broad unit has
+  # no Landlock sandbox (package managers write everywhere).
+  landlock: required
+
+limits:
+  max_read_bytes: 1048576      # priv_read_file ceiling, ≤ 4 MiB
+  max_write_bytes: 1048576     # priv_write_file ceiling, ≤ 1 MiB
+  max_output_bytes: 1048576    # per stream for commands and apt, ≤ 4 MiB
+  default_timeout_s: 60
+  max_timeout_s: 900           # package operations can be slow; ≤ 1800
+  max_delete_entries: 1000     # recursive delete ceiling, ≤ 10000
+
+paths:
+  # Roots root may read. A read root may contain credential files (the deny
+  # list and the unit's InaccessiblePaths= keep them out) but may not be
+  # inside the never list (PRIVILEGED §5.3 list A).
+  read: [/etc/example-app, /var/log/example-app]
+  # Roots root may write (implicitly readable); they become the core unit's
+  # ReadWritePaths=. Never on or around the never list, never inside .git.
+  write: [/etc/example-app/conf.d]
+  # Write roots inside normally protected persistence areas (systemd unit
+  # directories, cron, /etc/profile.d, …) need a one-line acknowledge.
+  persistence:
+    - path: /etc/systemd/system/example-app.service.d
+      acknowledge: "drop-ins for example-app only"
+  # Added to the built-in read deny list (POLICY §3).
+  deny: ["/etc/example-app/secrets/**"]
+
+owners:
+  # The only users and groups priv_chown and priv_write_file may set.
+  users: [root, example-app]
+  groups: [root, example-app]
+
+modes:
+  # No requested mode may exceed this mask; setuid, setgid, sticky and
+  # world-write are never allowed.
+  max: "0755"
+
+backups:
+  # Previous versions kept per file in /var/lib/shell-mcp/backups (0..100).
+  keep: 10
+
+# Commands run as root, matched against argv templates exactly as in the
+# gate policy (POLICY §4). A command whose binary is a power, kernel,
+# storage or firewall tool (POLICY §5 groups 11–13) needs an acknowledge;
+# shells, interpreters, launchers and the like are never allowed.
+commands:
+  # Core unit (the default): no network, writes only to the roots above,
+  # Landlock, a four-capability bounding set.
+  - id: mounts
+    path: /usr/bin/findmnt
+    tier: read
+    description: "Mounted filesystems, as root"
+    templates: [["--json"], ["--json", "--target", "{path:read}"]]
+  - id: block-devices
+    path: /usr/bin/lsblk
+    tier: read
+    description: "Block devices and their mount points"
+    templates: [["--json", "--output", "NAME,SIZE,TYPE,MOUNTPOINTS"]]
+    # capabilities: [CAP_KILL]   # a core command may add CAP_SYS_BOOT,
+    #                            # CAP_KILL or (root_equivalent) CAP_SYS_ADMIN
+  # Broad unit: network and full root capabilities — root-equivalent by
+  # design, always reported. Only for commands that need it.
+  - id: resolve-name
+    path: /usr/bin/getent
+    tier: read
+    unit: broad
+    description: "Resolve a host name through the system resolver"
+    templates: [["hosts", "{regex:^[a-z0-9.-]{1,253}$}"]]
+    # capabilities: [CAP_NET_BIND_SERVICE]   # broad commands may also add
+    #                                        # CAP_SYS_TIME (drops ProtectClock=),
+    #                                        # CAP_NET_ADMIN, CAP_NET_BIND_SERVICE
+
+# The built-in priv_power operation (destructive): asks systemd, from the
+# broad unit, to start reboot.target or poweroff.target — an orderly
+# shutdown. Omit the section to disallow it; the acknowledge is required.
+power:
+  allowed: [reboot]            # reboot | poweroff
+  acknowledge: "planned maintenance windows only"
+
+# apt operations, in the broad unit. Root-equivalent: a package's
+# maintainer scripts run arbitrary code as root. Every operation has a
+# read-tier preview (apt-get -s) that the approval request shows.
+packages:
+  enabled: true
+  manager: apt                 # only apt in v1
+  install: [htop, jq]          # exact names priv_pkg_install may install
+  remove: [htop]               # exact names priv_pkg_remove may remove (never purged)
+  allow_update_index: true     # priv_pkg_update_index (apt-get update)
+  allow_upgrade: false         # priv_pkg_upgrade (apt-get upgrade of everything)

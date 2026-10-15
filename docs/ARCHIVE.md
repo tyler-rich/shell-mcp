@@ -645,3 +645,205 @@ Each entry sets `SHELL_MCP_REQUIRE_LANDLOCK_ABI` to its kernel's ABI, so every k
 - **Direct modules (unchanged):** go-landlock v0.10.1, go-sdk v1.8.0, yaml/v3 v3.0.5, x/crypto v0.57.0, x/sys v0.48.0.
 - **Tools:** golangci-lint v2.14.0, govulncheck v1.8.0.
 - **Dependencies added:** none.
+
+### 2026-10-15 — Privileged helper: broad unit, packages, power, core-unit hardening (PR #6, branch sec/privd-broad)
+**Decision:** Complete the privileged helper for v0.1.0 (S1d):
+- **Landlock failure code.** A Landlock refusal in the core unit is `helper_sandbox_unavailable`: answered without an id, logged at WARN with the check `landlock`, exit 1. The gate's own refusal stays `sandbox_unavailable`.
+- **Core-unit hardening.**
+  - `ProtectProc=ptraceable` (`default` when a core-unit command declares `CAP_KILL`) and `ProcSubset=pid`.
+  - `TemporaryFileSystem=/run:ro`.
+  - The unit renderer refuses `PrivateUsers=`, `RootDirectory=` and `RootImage=` whatever it is passed. Reasons: a private user namespace breaks chown to real host users; a separate root filesystem defeats working on the host's files.
+  - `units` and `check-policy` refuse a host whose `/var/run` does not resolve to `/run`.
+  - The decisions behind all three are below.
+- **Broad unit** (`internal/privd/units`).
+  - `shell-mcp-privd-broad.socket` and `shell-mcp-privd-broad@.service`, generated only when the policy enables `packages`, declares a `unit: broad` command, or has `power`.
+  - Exactly PRIVILEGED §5.2. `TasksMax=256` and `MemoryMax=1G`: §5.2 names those directives but not their values, and apt/dpkg need more than one core request. No `User=` (finding below).
+  - The same policy-hash and client-uid lines as the core unit, plus `Environment=SHELL_MCP_PRIVD_UNIT=broad`; the core unit gets `…=core`.
+  - A broad command declaring `CAP_SYS_TIME` drops `ProtectClock=yes` from the broad unit only.
+- **Unit-aware instances** (`internal/privd/ops`, `selfcheck`).
+  - `SHELL_MCP_PRIVD_UNIT` is checked after the peer. Missing, malformed, or `broad` for a policy without a broad unit, it is answered as `helper_install_insecure` with the check `unit`.
+  - The broad instance checks its own bounding set: root's full set without `CAP_SYS_MODULE`, and without `CAP_SYS_TIME`/`CAP_WAKE_ALARM` while `ProtectClock=` is on. It applies no Landlock.
+  - After the request is read, an operation meant for the other unit is refused with the new code `helper_wrong_unit` before anything else. For `priv_exec` that happens once the command is known to be declared, and also when the request's `unit` label disagrees with the instance.
+  - Everything the broad unit serves is audited at WARN, with package names, the power action and the `unit` label.
+- **Routing** (`internal/gate/ops/priv.go`). The gate sends `priv_pkg_*`, the previews and `priv_power` to `privileged.broad_socket`, and `priv_exec` by its `unit` argument (`core`, `broad`, or absent for core). Everything else goes to `privileged.socket`.
+  - A broad route without `broad_socket` is `privileged_disabled`; a malformed label is `bad_request`.
+  - The args are read, never rewritten. encoding/json/v2 rejects duplicate names in both the gate and the helper, so they cannot read different labels.
+  - **Why the helper is authoritative:** the gate cannot read the privileged policy, so it cannot know a command's unit, and the label comes from a server that may be compromised. Any request at the wrong door is refused by the instance behind it, never executed. Proven by unit tests and by e2e: a direct connection and a mislabelled gate request are each refused by both instances.
+- **Packages** (`internal/privd/pkg`, `ops/pkg.go`).
+  - The operations: update index (`allow_update_index`), install (names from `packages.install`), upgrade (`allow_upgrade`), remove (names from `packages.remove`, never a purge).
+  - Read-tier previews: `priv_pkg_install_preview`, `priv_pkg_upgrade_preview`, `priv_pkg_remove_preview`. Each runs the same argv with `-s` and parses it into installed (name, version), upgraded (name, from, to) and removed (name, version, purge) lists, plus `complete`.
+  - Fixed argv: `-q -y -o Dpkg::Options::=--force-confold -o Dpkg::Use-Pty=0 -o APT::Get::AutomaticRemove=false`, then `--no-install-recommends` (install, upgrade) or `-o APT::Get::Purge=false` (remove), then the command, then `--` and the names. The environment is the fixed one plus `DEBIAN_FRONTEND=noninteractive`.
+  - Names: Debian Policy §5.6.1, 1..20 per request, no duplicates. The policy refuses an install name ending in `-` and a remove name ending in `+`: apt-get reads those suffixes as the opposite operation when no package has the exact name.
+  - A held dpkg frontend, administration or lists lock is retried every 2 s for at most `min(60 s, timeout/2)`, then `exec_failed` ("the package database is locked"). Any other failed transaction is data: the exit code and capped, redacted output.
+  - `/usr/bin/apt-get` is ownership-checked at policy load when packages are enabled.
+- **Power** (`ops/power.go`, `internal/privd/dbus`).
+  - `priv_power` (`reboot` | `poweroff`, destructive) needs a `power: {allowed, acknowledge}` section with a non-empty acknowledge (list B).
+  - It runs in the broad unit and asks PID 1 over the system bus for `StartUnit("<action>.target", "replace-irreversibly")`.
+  - The D-Bus client is new and minimal: standard library only, EXTERNAL auth, Hello, one call with string arguments, strict bounded decoding of either byte order, fuzzed.
+  - An authorization refusal is `not_authorized`; any other systemd refusal is `exec_failed` naming the D-Bus error.
+- **Example privileged policy.** `examples/privileged/privileged.yaml`: commented, placeholders only. `TestExamplePrivilegedPolicy` loads it and generates both unit pairs from it. The admin gate example now names `broad_socket`.
+
+**Maintainer decisions during the session:**
+- **The reboot mechanism.** Established at the source (systemd v257 and v259):
+  - `Manager.Reboot()`/`PowerOff()` carry `SD_BUS_VTABLE_CAPABILITY(CAP_SYS_BOOT)` and skip stopping services (`systemctl --force`).
+  - `StartUnit` is `SD_BUS_VTABLE_UNPRIVILEGED`. Its authorization (`bus_verify_manage_units_async_full` → `bus_verify_polkit_async_full`) calls `sd_bus_query_sender_privilege(call, -1)`, which grants any sender whose euid is systemd's uid 0, with no capability check.
+  - `systemctl reboot` itself falls back to `StartUnit("reboot.target", "replace-irreversibly")`.
+  - `reboot(2)` would skip the orderly shutdown.
+
+  The prompt's decision placed power in the core unit with `CAP_SYS_BOOT`. The maintainer chose instead:
+  - the `StartUnit` route, without `CAP_SYS_BOOT`, and `@reboot` stays filtered in the core unit;
+  - `priv_power` in the **broad** unit: a root process with system-bus access can have PID 1 start any unit, so it can escape the core sandbox, and the core unit must never reach D-Bus;
+  - `power` generates the broad unit and keeps its non-empty acknowledge.
+
+  PRIVILEGED §4's `reboot-host` example was replaced by the `power` key. D-021's text names the broad unit for "package management and commands declared `unit: broad`"; power now uses it too. The locked text is left for the maintainer to update.
+- **The core unit's IPC escape path (closed).** The core unit allowed `AF_UNIX`, and below Landlock ABI 9 root can connect to any socket file it can reach: the system bus, `/run/systemd/private` and container-engine sockets are each root-equivalent. The maintainer asked to hide `/run` from the core unit.
+  - `InaccessiblePaths=/run` would stop the unit starting on systemd 257, verified at the source. There, `setup_namespace()` always adds a `/run/systemd/incoming` bind for system units (259 only on kernels without the new mount API). `drop_inaccessible()` drops it under an inaccessible `/run`, and the final `mount(NULL, "/run/systemd/incoming", NULL, MS_SLAVE)` then fails with ENOENT.
+  - `TemporaryFileSystem=/run:ro` works on both versions. `append_tmpfs_mounts()` mounts the tmpfs read-write, systemd creates its own mount points inside it, and `make_read_only()` remounts it afterwards.
+  - The helper needs nothing under `/run`: `setup_input()`/`setup_output()` connect the socket and the journal stream before the namespace is set up, in both versions.
+  - `/var/run` is the usual symlink into the same tmpfs; `units` and `check-policy` refuse any other host layout.
+  - **Abstract sockets** were already isolated by `PrivateNetwork=yes`. `systemd.exec(5)` (257, 259): "AF_UNIX sockets in the abstract socket namespace of the host will become unavailable to the unit's processes". Landlock's abstract scope (ABI 8) adds the same inside the unit.
+  - **This closes a D-Bus/IPC escape path from the core unit that existed since S1c.** Proven two-sided on the runner: the system bus (through `/run` and through `/var/run`), a test socket under `/run`, and an abstract socket are each unreachable from the core unit, and reachable from the broad unit and from outside it.
+- **`ProtectProc=ptraceable`, not `invisible`.** The first runner run showed `invisible` hiding nothing: a core-unit command saw another user's process, while `systemctl show` reported `invisible` and `pid`. The cause, verified at the source:
+  - With `hidepid=invisible`, the kernel exempts members of procfs's `gid=` group before the ptrace check (`has_pid_permissions()`, `fs/proc/base.c`).
+  - systemd passes no `gid=`, so that group is gid 0 (`fs_info` is zero-allocated, `fs/proc/root.c`), and the helper runs as root:root.
+  - `hidepid=ptraceable` skips the exemption and applies the ptrace check alone, which the core unit fails for other users' processes because it has no `CAP_SYS_PTRACE`.
+
+  The maintainer chose `ptraceable` (`default` with a core `CAP_KILL`, as decided), and asked for two things: record that root-owned processes stay visible (same uid), and confirm and assert that their environments stay out of reach.
+  - **Runner finding: root-owned processes are hidden too.** Under the helper's Landlock domain the kernel refuses ptrace access, in every mode including procfs's read mode, to a process outside the caller's domain (`hook_ptrace_access_check()`, `security/landlock/task.c`: the mode only decides whether the denial is audited). Core-unit commands therefore see only the helper instance and its children. Without Landlock (`best-effort` on a kernel without it), root-owned processes would stay visible under `ptraceable`. PRIVILEGED §5.1 says so.
+  - The core unit's Landlock ruleset grants nothing in `/proc` except the helper's own `/proc/<pid>` (`helperReadFiles` resolves `/proc/self` when the rule is created), so a declared command cannot open another process's `environ`.
+  - No privileged root may be `/proc` or inside it, so `priv_read_file` refuses every `/proc` path with `path_denied`.
+  - **Correction to the premise:** `/proc/*/environ` is not on the built-in read deny list (POLICY §3, `builtinDeny`). The two rules above are what keep it out. The list was not changed.
+  - e2e `TestCoreCannotReadProcessEnvironment` proves it against a root process carrying a canary variable: hidden (`ENOENT`) under `ptraceable`, and refused by Landlock (`EACCES`) under `default`. `TestCoreProtectProc` shows another user's process and a root process both hidden under `ptraceable` and both visible under `default`.
+
+**Findings from the runner:**
+- **apt and `CAP_SETUID`.** The first run's package tests failed with `seteuid 42 failed` when apt switched to `_apt`.
+  - The diagnostics showed the broad instance with `CAP_SETUID` in its bounding set but not in its permitted and effective sets.
+  - Cause: systemd's `keep_seccomp_privileges` path (`exec-invoke.c`, 257 and 259) drops `CAP_SETUID` after the user change when `User=` is set (`uid_is_valid(uid)`) and the unit has seccomp filters. `ProtectClock=` and `ProtectKernelModules=` install filters.
+  - The broad unit had `User=root` only because it shared lines with the core unit; §5.2 never listed it. It is removed, and the service still runs as root.
+  - The core unit keeps `User=root`, with no `CAP_SETUID` in its bounding set anyway.
+- **gitleaks** flagged an invented OpenSSH key block in the fake apt-get (commit `414d9bb`). The session's attempt to rewrite the pushed commit was denied (force push). The fixture now assembles the block at run time, and the one line is ignored by its exact fingerprint in `.gitleaksignore`, following the existing convention.
+
+**Verified at the source** (systemd v257 and v259 man pages and source; apt 3.0.3 and 3.1.16 source; Linux `fs/proc`; the D-Bus specification):
+- `ProtectProc=`, `ProcSubset=`, `ProtectClock=`, `TemporaryFileSystem=`, `InaccessiblePaths=`, `PrivateNetwork=`: identical man text in 257 and 259.
+- `ProtectClock=`'s `DeviceAllow=char-rtc r` is added only where a device policy is already in force (`unit_patch_contexts()`). So the broad unit (`DevicePolicy=auto`, no `DeviceAllow=`) keeps access to every device.
+- The §5.2 directives all exist unchanged in both versions.
+- apt:
+  - `CommandLine::Parse` ends option parsing at `--`, and `GetCommand` finds the command word before it.
+  - `pkgSimulate` prints `Inst name [current] (candidate release)`, `Remv|Purg name [current]` and `Conf …`.
+  - `-s` sets `Debug::NoLocking` (`apt-get(8)`: "Locking will be disabled").
+  - The lock messages come from `fileutl.cc`, `debsystem.cc` and `acquire.cc`.
+  - `DPkg::Lock::Timeout` covers only the dpkg lock, not the lists lock `update` takes; hence the helper's own bounded retry.
+- `dpkg-deb --root-owner-group --build`; flat `file:` sources with `[trusted=yes]` and an unsigned Release file.
+- D-Bus: the header `yyyyuua(yv)`, field codes and types, alignment, 8-byte header padding, EXTERNAL with the hex of the decimal uid, and the 128 MiB limit (the client accepts at most 64 KiB).
+
+**Local apt repository (e2e).**
+- `setup.sh` stops and masks the apt timers, unattended-upgrades and PackageKit, waits for any running apt or dpkg, and moves the image's sources aside on the disposable VM.
+- It adds only `deb [trusted=yes] file:/srv/e2e-apt ./` and builds invented packages with `dpkg-deb`: `example-hello` 1.0 and 1.1 (recommends `example-extra`), `example-extra`, and `example-other` (on no allow-list).
+- The tests write the flat index themselves (`aptRepo`): the .debs, a `Packages` file from `dpkg-deb -f` plus Filename/Size/SHA256, and an unsigned `Release` with a strictly newer Date. So upgrade can add 1.1 later. No internet is used.
+- The cases:
+  - update; install preview (only `example-hello`, while a control simulation with recommends lists `example-extra`); `example-other` and `example-extra` refused; install; remove preview; remove;
+  - upgrade refused with `allow_upgrade: false`; with it true, preview then upgrade from 1.0 to 1.1;
+  - a held `lock-frontend` (fcntl) gives `exec_failed` within the bound, and the install works once the lock is released.
+
+**`priv_power` tested without rebooting.**
+- The test runtime-masks `reboot.target` and `poweroff.target`, and refuses to go on unless systemd reports `LoadState=masked` for both.
+- `priv_power reboot` must then be `exec_failed` naming `org.freedesktop.systemd1.UnitMasked`. systemd checks for a masked unit in the transaction, after authorization, so this proves the call reached PID 1 and was authorized.
+- Control: the same `StartUnit` call from an unprivileged account (`busctl` as `svc-other`) is refused by authorization itself, not by the mask.
+- The helper's journal line comes from a `shell-mcp-privd-broad@` instance, at WARN.
+
+**`systemd-analyze security`** (runner: ubuntu-26.04, systemd 259.5):
+- Core unit: 1.4 "OK" (S1c: 1.6), the same on all three runner runs of this PR (`ProtectProc=invisible` and `ptraceable` score alike). New threshold `E2E_SECURITY_MAX`: **1.4**, the measured value with no slack.
+- Broad unit, for information only (root-equivalent by design): 8.1 "EXPOSED".
+
+**Runner images:** GitHub's runner-images list has no Ubuntu image newer than `ubuntu-26.04` (there is also `ubuntu-26.04-arm`); `ubuntu-latest` is still 24.04.
+
+**Tests (committed first, shown failing):**
+- A `7087dfd`: `TestSandboxRefusal`, `TestCodesClosedSet`, `TestForwardHelperSelfCheckCodes/helper_sandbox_unavailable`.
+- B `9396610`: `TestServiceDirectives`, `TestSyscallFilterWithoutCapabilities`, `TestProtectProcRelaxedOnlyForCAPKILL`, `TestNeverPrivateUsersOrRootDirectory`, `TestVarRunMustBeRun`.
+- C `9d80e4e`:
+  - policy: `TestLoadExample`, `TestBroadCommands`, `TestBroadCapabilities`, `TestPackages`, `TestPower`;
+  - units: `TestBroad*`;
+  - ops: `TestWrongUnitRefusedBy{Core,Broad}`, `TestUnitEnvironment`, `TestBroadCapabilitySet*`;
+  - `TestUnitsBroad`, shown failing before the CLI change.
+- D `2d1c179`: `TestRouting*`.
+- E `414d9bb`: `TestArgs`, `TestValidName`, `TestParseSimulation`, `TestLockHeld`, `TestRun*`, `TestPkg*`.
+- F `018a47b`: `TestCall*`, `TestReadMessageStrict`, `TestPower*`.
+- G `6eadb91`: `TestExamplePrivilegedPolicy`.
+- Runner fixes `c359afa`: `ptraceable`, and no `User=` in the broad unit.
+- The e2e cases are two-sided within each run.
+- The zero-bytes-before-authentication invariant (`TestNoRequestByteReadBeforeChecksPass`) gained the missing-unit case and stays green.
+
+**Fuzzing (60 s each, golang container, no crashers):** `FuzzParse` (privd policy) 737,073 execs; `FuzzParseSimulation` (new) 30,352,325; `FuzzReadMessage` (D-Bus, new) 64,759,655; `FuzzExecBroad` (gate routing label, new) 14,422,171; `FuzzDecodeResponse` (the code set grew) 35,460,173.
+
+**Alternatives rejected:**
+- `InaccessiblePaths=/run`: the unit fails to start on systemd 257.
+- `ProtectProc=invisible`: hides nothing from a root:root helper.
+- A non-zero primary group for the helper: it would change the group of every file the helper creates.
+- `Manager.Reboot()`: skips the orderly stop and cannot be intercepted, so it is untestable without a reboot.
+- `reboot(2)`: unclean.
+- `systemctl reboot` as a built-in exec: the logind path, inhibitors, more moving parts.
+- A third-party D-Bus module: a new dependency.
+- Relying on `DPkg::Lock::Timeout`: it does not cover the lists lock.
+- Letting the gate read the privileged policy to route: the helper is authoritative instead.
+- A `unit` label on every privileged request: only `priv_exec` needs it.
+
+**Deferred / follow-ups:**
+- S4c: the `shell_priv_*` tools. That includes how the server learns a command's unit for the `priv_exec` label, the power tool, and using the package previews in approvals.
+- D-021's wording, now that power uses the broad unit (maintainer).
+- Whether to add `/proc/*/environ` to the built-in read deny list as defence in depth (a POLICY §3 change; maintainer).
+- Kernel and kernel-module packages cannot be installed through the broad unit (`ProtectKernelModules=`, `ProtectKernelTunables=`); documented in PRIVILEGED §5.2.
+- ABI 9 socket rules: no runner has ABI 9 yet.
+
+**Versions:**
+- **Go:** 1.27.1 at the start of the session (newest stable then; `go get -u` changed nothing). While the PR was open, Go 1.27.2 (a security release; Trivy failed the image on stdlib CVE-2026-78667 and CVE-2026-78669, fixed in it) and new module releases arrived. The PR therefore bumps Go to 1.27.2 (`go.mod`, the builder image by digest) and refreshes the modules: x/crypto v0.58.0, x/sync v0.24.0, x/sys v0.49.0. `deps-current` passes.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Tools:** golangci-lint v2.14.0 (newest); govulncheck v1.9.0, Trivy v0.76.0, Grype v0.120.1 (bumped to their newest releases).
+- **Dependencies added:** none; the D-Bus client uses the standard library.
+- **Reference sources:** systemd v257 (70bae76) and v259 (9ca4334); apt 3.0.3 (Debian 13) and 3.1.16.
+
+### 2026-10-15 — /proc entries on the built-in read deny list; D-021 names priv_power (PR #6 follow-up)
+**Decision:** Two maintainer requests on PR #6. They settle two items the S1d entry deferred.
+- **D-021** (plan.md §2) now says the broad unit serves package management, commands declared `unit: broad` and the built-in power operation (`priv_power`). That matches the session's maintainer decision to run `priv_power` in the broad unit.
+- **`/proc/*/environ`, `/proc/*/mem` and `/proc/kcore`** are on the built-in read deny list (POLICY §3, `builtinDeny`). This is defence in depth behind two rules that already kept them out:
+  - Landlock grants the core unit nothing in `/proc` but the helper's own `/proc/<pid>`.
+  - No root may be or be inside `/proc`.
+
+  The gate and the helper both build their deny matcher from that list, built-in patterns first. Untouched: `/proc/<pid>/status`, `/proc/meminfo`, `/proc/<pid>/cmdline` (the gate's native ops read them itself, never from a request).
+- **Refusals name the rule.**
+  - fsx's deny refusal was "path is denied by policy". It is now "path is denied by the built-in read deny list rule "<pattern>"" for a built-in rule, and "path is denied by the policy's paths.deny[N]" for a policy rule.
+  - A policy rule is never named by its value: the privileged policy is root-only, and nothing from it reaches the wire. The gate's own patterns are already in its `policy` op.
+  - New `pathx.Matcher.Covering` returns the first covering pattern and its index. `fsx.Config.BuiltinDeny` says how many leading patterns are built-in; the gate and the helper set it to `len(BuiltinDeny())`.
+
+**Proof that the list refuses on its own** (maintainer request: with the root and Landlock checks bypassed):
+- The end-to-end test build (`-tags shellmcp_e2e_bypass`, never released) already skips the helper's Landlock. It now also skips fsx's forbidden-root check (`bypassForbiddenRoots`, `internal/gate/fsx/bypass.go`). `TestNoForbiddenRootBypassInThisBuild` checks the normal build, and the CI and ci-local cross-builds fail if a built binary carries the tag.
+- `TestBuiltinDenyRefusesProcSecretsWithRootChecksBypassed` (tagged) builds an fsx with `/proc` as a root directly, bypassing the policy's root rule; unit tests run without Landlock. The control `stat /proc/self/status` succeeds, so the root checks really are out of the way.
+- `stat` and `read_file` of `/proc/self/environ`, `/proc/1/environ`, `/proc/self/mem` and `/proc/kcore` are then each `path_denied`, with the message naming the deny rule.
+- CI's `go` job and `scripts/ci-local.sh` gained a step that runs the tagged fsx tests (`go test -race -tags shellmcp_e2e_bypass ./internal/gate/fsx/`).
+- Untagged tests:
+  - `TestBuiltinDenyCoversProcSecrets` (the list, with negative controls);
+  - `TestGatePolicyDeniesProcSecrets` and `TestHelperPolicyDeniesProcSecrets` (each loader's matcher);
+  - `TestMatcherCovering`;
+  - `TestDenyRefusalNamesTheRule` (fsx, a policy rule's value never in the message);
+  - `TestGateDenyRefusalNamesBuiltinRule` and `TestHelperDenyRefusalNamesTheRule` (through each component's op).
+
+  All were committed first and shown failing (`c88e364`).
+
+**Alternatives rejected:**
+- Naming every rule by its pattern: it would put values from the root-only privileged policy on the wire.
+- A new build tag for the fsx bypass: the existing end-to-end test build is exactly "root and Landlock checks bypassed", and it already has the release guards.
+- Also denying `/proc/*/task/*/environ` and `…/mem`: not requested. The same two rules keep them out; left for the maintainer.
+
+**Versions:** unchanged from the S1d entry (Go 1.27.2; x/crypto v0.58.0, x/sync v0.24.0, x/sys v0.49.0; govulncheck v1.9.0). No dependency added.
+
+### 2026-10-15 — Per-thread /proc environ and mem on the built-in read deny list (PR #6 follow-up)
+**Decision:** At the maintainer's request, `/proc/*/task/*/environ` and `/proc/*/task/*/mem` join the per-process forms on the built-in read deny list (POLICY §3, `builtinDeny`). The gate and the helper apply them alike. Without them, a thread's own directory exposes the same environment and memory: `/proc/*/environ` does not cover `/proc/<pid>/task/<tid>/environ`, since no ancestor of that path matches.
+
+**Proof, same pattern as the per-process entries** (the tests were committed first and shown failing):
+- `TestBuiltinDenyCoversProcSecrets` covers the per-thread paths, and `/proc/*/task/*/status` and `…/cmdline` stay allowed.
+- `TestGatePolicyDeniesProcSecrets` and `TestHelperPolicyDeniesProcSecrets` cover each loader's matcher.
+- The tagged `TestBuiltinDenyRefusesProcSecretsWithRootChecksBypassed` runs with root checks and Landlock out of the way. The control `stat /proc/self/task/<tid>/status` succeeds.
+- Before the change, that tagged test read `/proc/self/task/<tid>/environ` and `…/mem` successfully (two-sided). After it, both are `path_denied`, naming the rules `/proc/*/task/*/environ` and `/proc/*/task/*/mem`.
+
+**Noted, not changed:** `TestChildRlimits` (`internal/gate/execx`, unchanged since S1) failed once in a local `-race` run and passed five times on its own. The child's limits are applied with `prlimit` just after `Start()`, so a fast child can read its limits first. This is a pre-existing timing flake, left for a separate change.
+
+**Versions:** unchanged (Go 1.27.2). No dependency added.

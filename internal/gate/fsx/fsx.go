@@ -39,6 +39,9 @@ type Config struct {
 	WriteRoots []string
 	// Deny applies to every operation, on requested and real paths.
 	Deny *pathx.Matcher
+	// BuiltinDeny is how many of Deny's leading patterns are the built-in read
+	// deny list (the rest are the policy's paths.deny, in order).
+	BuiltinDeny int
 	// Protected applies to every write, on requested and real paths.
 	Protected *pathx.Matcher
 	Limits    Limits

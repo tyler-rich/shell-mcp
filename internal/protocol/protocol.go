@@ -81,6 +81,13 @@ const (
 	// CodeHelperCapabilitiesBroad: the capability bounding set is broader
 	// than the unit declares.
 	CodeHelperCapabilitiesBroad = "helper_capabilities_broad"
+	// CodeHelperSandboxUnavailable: the helper could not apply its Landlock
+	// sandbox in the core unit under sandbox.landlock: required (distinct from
+	// the gate's own CodeSandboxUnavailable).
+	CodeHelperSandboxUnavailable = "helper_sandbox_unavailable"
+	// CodeHelperWrongUnit: the operation belongs to the other unit's helper
+	// instance (core or broad); it was not executed.
+	CodeHelperWrongUnit = "helper_wrong_unit"
 )
 
 // Codes lists every gate error code.
@@ -91,7 +98,8 @@ var Codes = []string{
 	CodeHelperUnavailable, CodeHelperRefused, CodeBackupFailed, CodeExecFailed, CodeTimeout,
 	CodeVerifyFailed, CodeInstallInsecure, CodeInternal,
 	CodeHelperInstallInsecure, CodeHelperPolicyInvalid, CodeHelperPolicyMismatch,
-	CodeHelperClientUIDMismatch, CodeHelperCapabilitiesBroad,
+	CodeHelperClientUIDMismatch, CodeHelperCapabilitiesBroad, CodeHelperSandboxUnavailable,
+	CodeHelperWrongUnit,
 }
 
 // Gate operations (ARCHITECTURE §4.3).
@@ -145,6 +153,12 @@ const (
 	OpPrivPkgInstall     = "priv_pkg_install"
 	OpPrivPkgUpgrade     = "priv_pkg_upgrade"
 	OpPrivPkgRemove      = "priv_pkg_remove"
+	// Read-tier previews: the same transaction simulated (apt-get -s).
+	OpPrivPkgInstallPreview = "priv_pkg_install_preview"
+	OpPrivPkgUpgradePreview = "priv_pkg_upgrade_preview"
+	OpPrivPkgRemovePreview  = "priv_pkg_remove_preview"
+	// OpPrivPower asks systemd to reboot or power off (broad unit).
+	OpPrivPower = "priv_power"
 )
 
 // PrivOps lists every privileged operation.
@@ -152,6 +166,7 @@ var PrivOps = []string{
 	OpPrivReadFile, OpPrivListDir, OpPrivStat, OpPrivWriteFile, OpPrivMkdir, OpPrivChown,
 	OpPrivChmod, OpPrivCopy, OpPrivMove, OpPrivListBackups, OpPrivRestoreBackup, OpPrivDelete,
 	OpPrivExec, OpPrivPkgUpdateIndex, OpPrivPkgInstall, OpPrivPkgUpgrade, OpPrivPkgRemove,
+	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPower,
 }
 
 // Request is one gate or helper request.

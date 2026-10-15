@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 	"github.com/tyler-rich/shell-mcp/internal/privd/selfcheck"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
 )
@@ -43,8 +44,11 @@ var auditedArgs = map[string]bool{
 	"path": true, "source": true, "destination": true, "owner": true, "group": true, "mode": true,
 	"recursive": true, "overwrite": true, "parents": true, "create": true, "command_id": true,
 	"cwd": true, "id": true, "limit": true, "max_bytes": true, "offset": true, "tail_lines": true,
-	"include_hidden": true, "max_output_bytes": true,
+	"include_hidden": true, "max_output_bytes": true, "action": true, "unit": true,
 }
+
+// maxAuditList bounds a logged list (package names).
+const maxAuditList = 20
 
 func sanitizeArgs(raw []byte) map[string]any {
 	out := map[string]any{}
@@ -58,6 +62,16 @@ func sanitizeArgs(raw []byte) map[string]any {
 			var list []jsontext.Value
 			if json.Unmarshal(v, &list) == nil {
 				out["arg_count"] = len(list)
+			}
+		case k == "packages" && v.Kind() == '[':
+			// Package names are identifiers the policy allow-lists, not content.
+			var list []string
+			if json.Unmarshal(v, &list) == nil {
+				names := make([]string, 0, min(len(list), maxAuditList))
+				for _, n := range list[:min(len(list), maxAuditList)] {
+					names = append(names, auditText(n))
+				}
+				out["packages"] = names
 			}
 		case !auditedArgs[k]:
 		case v.Kind() == '"':
@@ -142,6 +156,10 @@ func (s *server) auditRequest(resp *protocol.Response) {
 	pri := 6
 	if resp.Error != nil {
 		l.Outcome, pri = resp.Error.Code, 5
+	}
+	if s.unit == policy.UnitBroad {
+		// Everything the broad unit serves is root-equivalent (PRIVILEGED §8).
+		pri = 4
 	}
 	s.writeAudit(pri, l)
 }

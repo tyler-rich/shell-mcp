@@ -44,10 +44,14 @@ git:
 
 # Forwarding of priv_* operations to the privileged helper. The helper's
 # own policy decides what root may do; this only enables asking it, and
-# caps the tier. The sockets are always under /run/shell-mcp/.
+# caps the tier. The sockets are always under /run/shell-mcp/: the core
+# unit's, and the broad unit's for package operations, power and commands
+# the privileged policy declares unit: broad (omit broad_socket if the
+# helper has no broad unit).
 privileged:
   enabled: true
   socket: /run/shell-mcp/privd.sock
+  broad_socket: /run/shell-mcp/privd-broad.sock
   max_tier: operator
 
 redact:

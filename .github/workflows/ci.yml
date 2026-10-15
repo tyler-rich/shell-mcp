@@ -18,9 +18,9 @@ concurrency:
 
 env:
   GOLANGCI_LINT_VERSION: v2.14.0
-  GOVULNCHECK_VERSION: v1.8.0
-  TRIVY_VERSION: v0.74.0
-  GRYPE_VERSION: v0.119.0
+  GOVULNCHECK_VERSION: v1.9.0
+  TRIVY_VERSION: v0.76.0
+  GRYPE_VERSION: v0.120.1
   GOTOOLCHAIN: local
 
 jobs:
@@ -97,6 +97,12 @@ jobs:
         run: |
           go test -race -count=1 -v ./... 2>&1 | tee /tmp/go-test.log
           test "${PIPESTATUS[0]}" -eq 0
+      # The end-to-end test build skips fsx's forbidden-root check, so these
+      # tests prove the built-in read deny list refuses on its own.
+      - name: go test -race (test build, fsx)
+        env:
+          SHELL_MCP_REQUIRE_SECURE_TMP: "1"
+        run: go test -race -count=1 -v -tags shellmcp_e2e_bypass ./internal/gate/fsx/
       # Kernel-dependent tests, listed so that a skip is visible, with the
       # all-thread Landlock path this entry exercised.
       - name: sandbox tests that ran on this runner
@@ -237,9 +243,10 @@ jobs:
     permissions:
       contents: read
     env:
-      # Set from the first run on this image (ARCHIVE §14, S1c): the job fails
-      # if systemd-analyze security rates the helper's unit worse.
-      E2E_SECURITY_MAX: "1.6"
+      # The core unit's measured score on this image (ARCHIVE §14, S1d; S1c was
+      # 1.6): the job fails if systemd-analyze security rates it worse. The
+      # broad unit's score is recorded, not enforced (root-equivalent by design).
+      E2E_SECURITY_MAX: "1.4"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -303,7 +310,8 @@ jobs:
             [ "$r" = PASS ] || fail=1
             echo "| $t | $r |" >>"$table"
           done <"$RUNNER_TEMP/e2e.tests"
-          grep -o 'E2E_EXPOSURE=[0-9.]*' "$log" | sed 's/^E2E_EXPOSURE=/- systemd-analyze security exposure: /' >>"$table" || true
+          grep -o 'E2E_EXPOSURE=[0-9.]*' "$log" | sed 's/^E2E_EXPOSURE=/- systemd-analyze security exposure (core unit): /' >>"$table" || true
+          grep -o 'E2E_EXPOSURE_BROAD=[0-9.]*' "$log" | sed 's/^E2E_EXPOSURE_BROAD=/- systemd-analyze security exposure (broad unit, root-equivalent by design, information only): /' >>"$table" || true
           echo "- threshold (E2E_SECURITY_MAX): $E2E_SECURITY_MAX" >>"$table"
           tee -a "$GITHUB_STEP_SUMMARY" <"$table"
           if grep -qE -- '--- (SKIP|FAIL)' "$log"; then fail=1; fi

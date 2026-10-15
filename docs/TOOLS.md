@@ -77,6 +77,9 @@ All run as root through the helper (`docs/PRIVILEGED.md`); paths, owners, modes,
 | `shell_priv_install_packages` | `priv_pkg_install` | `target`, `packages: list[str] (1..20)` | **yes** — preview: simulated transaction | Allow-listed names only. |
 | `shell_priv_upgrade_packages` | `priv_pkg_upgrade` | `target` | **yes** — preview: simulated transaction | Only if the policy allows upgrades. |
 | `shell_priv_remove_packages` | `priv_pkg_remove` | `target`, `packages` | **yes** — preview: simulated transaction | Destructive; allow-listed names only. |
+| `shell_priv_reboot_host` | `priv_power` | `target`, `action` (`reboot` or `poweroff`) | **yes** — preview: the action and the unit systemd will start | Destructive; only actions the policy's `power` section allows; systemd starts `reboot.target` or `poweroff.target` (an orderly shutdown). |
+
+The package tools' previews are the helper's read-tier `priv_pkg_install_preview`, `priv_pkg_upgrade_preview` and `priv_pkg_remove_preview` (`apt-get -s`); `priv_exec` for a broad-unit command carries `unit: broad` so the gate can route it (PRIVILEGED §6).
 
 ## Not in v1
 

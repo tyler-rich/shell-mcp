@@ -15,6 +15,7 @@ package policy
 
 import (
 	"os"
+	"slices"
 
 	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/pathx"
@@ -75,6 +76,7 @@ type Policy struct {
 	BackupsKeep int
 	Commands    []Command
 	Packages    Packages
+	Power       Power
 	// Capabilities is the core unit's bounding set: BaseCapabilities plus
 	// every capability a core-unit command declares, sorted by number.
 	Capabilities []string
@@ -158,14 +160,41 @@ type Command struct {
 	Templates []template.Template
 }
 
-// Packages is the packages section (parsed and validated; S1d enables it).
+// Packages is the packages section (the apt operations, broad unit).
 type Packages struct {
-	Enabled          bool
+	Enabled bool
+	// AptGet is the resolved apt-get binary (set when Enabled).
+	AptGet           string
 	Manager          string
 	Install          []string
 	Remove           []string
 	AllowUpdateIndex bool
 	AllowUpgrade     bool
+}
+
+// Power is the power section (the built-in priv_power operation).
+type Power struct {
+	Allowed     []string // reboot | poweroff
+	Acknowledge string
+}
+
+// UsesBroad reports whether the policy uses the broad unit (PRIVILEGED §5.2):
+// packages enabled, a command declared unit: broad, or power. Only then is
+// the broad unit generated.
+func (p *Policy) UsesBroad() bool {
+	if p.Packages.Enabled || len(p.Power.Allowed) > 0 {
+		return true
+	}
+	return slices.ContainsFunc(p.Commands, func(c Command) bool { return c.Unit == UnitBroad })
+}
+
+// BroadProtectClock reports whether the broad unit keeps ProtectClock=yes:
+// it does unless a broad-unit command declares CAP_SYS_TIME, the only
+// directive a capability may relax there (PRIVILEGED §5.2).
+func (p *Policy) BroadProtectClock() bool {
+	return !slices.ContainsFunc(p.Commands, func(c Command) bool {
+		return c.Unit == UnitBroad && slices.Contains(c.Capabilities, "CAP_SYS_TIME")
+	})
 }
 
 // Finding is one item check-policy reports for review.
@@ -208,6 +237,10 @@ type LoadOptions struct {
 	// HelperExecutable is the resolved path of the running helper binary;
 	// it joins the never list.
 	HelperExecutable string
+	// AptGet is the apt-get binary package operations run (production:
+	// /usr/bin/apt-get); it is resolved and ownership-checked when packages
+	// are enabled.
+	AptGet string
 	// SystemBinDirs are the directories the binary identity check scans;
 	// nil means the gate's defaults. Tests set their own.
 	SystemBinDirs []string

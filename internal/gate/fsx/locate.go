@@ -143,8 +143,15 @@ func (f *FS) roots(write bool) []string {
 // checkPath applies the deny list (and for writes the protected set) to a
 // path, including its ancestors.
 func (f *FS) checkPath(p string, write bool) *Error {
-	if f.cfg.Deny.Covers(p) {
-		return errf(protocol.CodePathDenied, "path is denied by policy")
+	if i, pattern, ok := f.cfg.Deny.Covering(p); ok {
+		// Name the rule: a built-in one by its pattern (the built-in list is
+		// public, POLICY §3); a policy one only by its paths.deny index, since
+		// the privileged policy is root-only and its values never reach the
+		// wire.
+		if i < f.cfg.BuiltinDeny {
+			return errf(protocol.CodePathDenied, "path is denied by the built-in read deny list rule %q", pattern)
+		}
+		return errf(protocol.CodePathDenied, "path is denied by the policy's paths.deny[%d]", i-f.cfg.BuiltinDeny)
 	}
 	if write && f.cfg.Protected.Covers(p) {
 		return errf(protocol.CodePathDenied, "path is protected and never writable")
@@ -194,8 +201,8 @@ func (f *FS) locate(p string, write bool) (*loc, error) {
 		l.close()
 		return nil, mapErr(err)
 	}
-	if l.rootReal == "/" || pathx.Within("/proc", l.rootReal) || pathx.Within("/sys", l.rootReal) ||
-		pathx.Within("/dev", l.rootReal) || pathx.Within("/run", l.rootReal) {
+	if !bypassForbiddenRoots && (l.rootReal == "/" || pathx.Within("/proc", l.rootReal) || pathx.Within("/sys", l.rootReal) ||
+		pathx.Within("/dev", l.rootReal) || pathx.Within("/run", l.rootReal)) {
 		l.close()
 		return nil, errf(protocol.CodePathDenied, "root resolves to a forbidden location")
 	}

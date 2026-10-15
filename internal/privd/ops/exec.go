@@ -7,6 +7,7 @@ import (
 	"encoding/json/jsontext"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
+	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
 	"github.com/tyler-rich/shell-mcp/internal/template"
 )
@@ -18,6 +19,11 @@ type execArgs struct {
 	Args           []string `json:"args"`
 	Cwd            string   `json:"cwd"`
 	MaxOutputBytes int      `json:"max_output_bytes"`
+	// Unit is the routing label the server supplies so that the gate can
+	// pick the socket (the gate cannot read the privileged policy): "",
+	// "core" or "broad". The helper decides by the command's declared unit;
+	// a label that disagrees with this instance is refused.
+	Unit string `json:"unit"`
 }
 
 type execData struct {
@@ -58,9 +64,22 @@ func (s *server) exec(raw jsontext.Value) (data any, warns []string, failure err
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
 	}
+	switch policy.Unit(a.Unit) {
+	case "", policy.UnitCore, policy.UnitBroad:
+	default:
+		return nil, nil, errf(protocol.CodeBadRequest, "unit must be core or broad")
+	}
 	c, ok := s.p.Command(a.CommandID)
 	if !ok {
 		return nil, nil, errf(protocol.CodePolicyDenied, "command_id is not declared in the privileged policy")
+	}
+	// The unit before anything else about the command: a command declared for
+	// the other unit, or a request labelled for it, never runs here.
+	if c.Unit != s.unit {
+		return nil, nil, s.wrongUnit(c.Unit)
+	}
+	if a.Unit != "" && policy.Unit(a.Unit) != s.unit {
+		return nil, nil, s.wrongUnit(policy.Unit(a.Unit))
 	}
 	// The command's tier is checked before anything else about the request.
 	if c.Tier > s.p.MaxTier {
