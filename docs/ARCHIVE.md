@@ -864,7 +864,7 @@ The trampoline runs from execx's `init`. The Go runtime locks the main goroutine
 3. It writes one "accepted" byte.
 4. It `chdir`s to the command's directory.
 5. It lowers each limit to min(current, wanted), soft and hard, with `syscall.Setrlimit`.
-6. It marks fd 3 close-on-exec and `syscall.Exec`s the command.
+6. It marks every descriptor from 3 up close-on-exec with `close_range(3, ~0U, CLOSE_RANGE_CLOEXEC)`, which needs Linux 5.11 and fails closed without it. That covers the control socket and anything the gate or helper inherited without the flag. Then it `syscall.Exec`s the command, which gets exactly fd 0–2.
 
 The parent reads EOF after the accepted byte when the exec succeeded. A failed chdir, setrlimit or execve sends a 4-byte errno; `Run` returns `ErrStart` with the errno's name, as os/exec did (`ENOENT`, `EACCES`, `EINVAL` for a NUL). No accepted byte means the trampoline refused or died first; that is `ErrStart` "the exec trampoline did not start the command".
 
@@ -884,7 +884,7 @@ The parent reads EOF after the accepted byte when the exec succeeded. A failed c
 **How the sandbox's inheritance was verified.** The trampoline is a child of the gate or helper after `no_new_privs`, Landlock and the MPTCP seccomp filter are applied. All three persist across fork and execve, and nothing in the trampoline touches them. The tests check the command itself, after both execs:
 - `TestIntegrationSandboxTrampoline` runs a declared command through the real gate and sandbox (CI: Landlock ABI 7 psx and ABI 8 TSYNC, `required`). It checks `NoNewPrivs: 1`, `Seccomp: 2`, a read outside every root refused with `EACCES`, core 0/0, bounded open files and processes, `pdeathsig=9`, its own process group, and no extra descriptor. The existing Landlock, TCP, MPTCP and signal-scope integration tests also run through the trampoline now.
 - e2e `TestHelperExecTrampoline` checks root commands in the core and broad units: limits, `pdeathsig`, process group and descriptors, plus `NoNewPrivs: 1` and `Seccomp: 2` in the core unit.
-- `TestCommandProcessAttributes` (execx) checks `pdeathsig=9`, process group, `SigBlk` 0, and no descriptor beyond 0–2. Go ≥ 1.25 keeps `/sys/fs/cgroup/cpu.max` open (close-on-exec) where it is readable, at the lowest free descriptor, so that file at fd 3 is accepted and also shows fd 3 was free.
+- `TestCommandProcessAttributes` (execx) checks `pdeathsig=9`, process group, `SigBlk` 0, and no descriptor beyond 0–2. Go ≥ 1.25 keeps `/sys/fs/cgroup/cpu.max` open (close-on-exec) where it is readable, at the lowest free descriptor, so that file at fd 3 is accepted and also shows fd 3 was free. `TestCommandGetsNoInheritedDescriptor` gives the test process a pipe without close-on-exec: a child os/exec starts directly holds it (control), the command does not. With `close_range` replaced by a close-on-exec flag on fd 3 alone, the test fails ("the command inherited descriptors: [7:10000:pipe:[…]]").
 
 **The binary must be executable inside the sandbox.** Under Landlock the gate and helper must be able to execute their own binary. The documented paths (`/usr/local/bin/shell-mcp-gate`, `/usr/local/libexec/shell-mcp-privd`) are under `/usr`, which both rulesets already grant read+execute, so **no Landlock rule was added**. A gate outside the read+execute directories gets a `check-policy` WARN, and so does a helper outside them with core-unit commands (POLICY §4a, PRIVILEGED §5.1). The tests grant the harness binary's directory through `system_read_exec` the way production's `/usr` rule does.
 
@@ -910,6 +910,11 @@ Process-level tests start the test binary directly for the argument, environment
 Both raise the test's own soft limits to the hard limits first, so an unlimited child cannot pass by accident, and fail if no limit could tell them apart. On the trampoline both pass, the race guard with 0 of 400.
 
 **Fuzzing:** `FuzzDecodeConfig` (new): whatever the decoder accepts re-encodes to the same bytes. 60 s in the golang container: 34,730,937 execs, no crashers.
+
+**CI findings on this PR (first run), fixed before review:**
+- **Inherited descriptors reached commands.** On both runner images the test process holds two pipes without close-on-exec (fds 142 and 145, from the runner's job environment). os/exec passes such descriptors to every child, so the old engine leaked them to commands too. The trampoline now marks every descriptor from 3 up close-on-exec (step 6). sshd and systemd start the gate and the helper with clean descriptor tables, so production was not exposed through them, but the engine no longer depends on that.
+- **The core unit hides `/proc/self` from commands.** Its Landlock ruleset grants only the helper's own `/proc/<pid>`. The probe therefore reads `no_new_privs` and the seccomp mode with `prctl(PR_GET_NO_NEW_PRIVS)` and `prctl(PR_GET_SECCOMP)`, not from `/proc`.
+- **Slow trampoline in one test.** `TestRunLockWait` (apt lock retry) allowed 300 ms for at least two attempts. Each attempt now starts through the race-built test binary as trampoline, which took about 440 ms on the runner. Its lock wait is now 2 s, with an 8 s ceiling. The production helper binary is not race-built.
 
 **Alternatives rejected:**
 - `prlimit` from the parent with a pre-exec pause (a pipe the child blocks on): os/exec has no hook to block in.
