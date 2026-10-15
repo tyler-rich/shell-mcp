@@ -190,7 +190,7 @@ func TestSyscallFilterWithoutCapabilities(t *testing.T) {
 	want(t, d, "[Service]CapabilityBoundingSet", "CAP_CHOWN CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_FOWNER")
 	want(t, d, "[Service]ReadWritePaths", "/var/lib/shell-mcp/backups")
 	want(t, d, "[Service]RuntimeMaxSec", "930")
-	want(t, d, "[Service]ProtectProc", "invisible")
+	want(t, d, "[Service]ProtectProc", "ptraceable")
 	want(t, d, "[Service]ProcSubset", "pid")
 	want(t, d, "[Service]TemporaryFileSystem", "/run:ro")
 }
@@ -240,16 +240,19 @@ func TestRefusesWhatTheCoreUnitCannotHold(t *testing.T) {
 	}
 }
 
-// ProtectProc=invisible hides other users' processes from the core unit;
-// only a core-unit command that declares CAP_KILL relaxes it to default,
-// because signalling a process means finding it in /proc first.
+// ProtectProc=ptraceable hides from the core unit every process it may not
+// ptrace — other users' processes, since it has no CAP_SYS_PTRACE. Not
+// invisible: the kernel exempts procfs's gid= group (0 by default) from
+// that check, and the helper runs as root:root. Only a core-unit command
+// that declares CAP_KILL relaxes it to default, because signalling a
+// process means finding it in /proc first.
 func TestProtectProcRelaxedOnlyForCAPKILL(t *testing.T) {
 	for name, c := range map[string]struct {
 		caps []string
 		want string
 	}{
-		"no capability": {nil, "invisible"},
-		"CAP_SYS_BOOT":  {[]string{"CAP_SYS_BOOT"}, "invisible"},
+		"no capability": {nil, "ptraceable"},
+		"CAP_SYS_BOOT":  {[]string{"CAP_SYS_BOOT"}, "ptraceable"},
 		"CAP_KILL":      {[]string{"CAP_KILL"}, "default"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -362,7 +365,6 @@ func TestBroadServiceDirectives(t *testing.T) {
 	want(t, d, s+"StandardError", "journal")
 	want(t, d, s+"SyslogIdentifier", "shell-mcp-privd")
 	want(t, d, s+"Environment", "SHELL_MCP_PRIVD_POLICY_SHA256="+hash, "SHELL_MCP_PRIVD_CLIENT_UID=60123", "SHELL_MCP_PRIVD_UNIT=broad")
-	want(t, d, s+"User", "root")
 	for _, k := range []string{"NoNewPrivileges", "PrivateTmp", "ProtectKernelModules", "ProtectKernelTunables", "ProtectClock"} {
 		want(t, d, s+k, "yes")
 	}
@@ -370,19 +372,22 @@ func TestBroadServiceDirectives(t *testing.T) {
 	want(t, d, s+"TasksMax", "256")
 	want(t, d, s+"MemoryMax", "1G")
 	want(t, d, "[Unit]CollectMode", "inactive-or-failed")
+	// No User=: the service runs as root anyway, and with User= systemd drops
+	// CAP_SETUID from a unit that has seccomp filters (ProtectClock=,
+	// ProtectKernelModules=), which apt needs to switch to its _apt user.
 	for _, k := range []string{"ProtectSystem", "CapabilityBoundingSet", "PrivateNetwork", "RestrictAddressFamilies", "IPAddressDeny",
-		"RestrictSUIDSGID", "ReadWritePaths", "TemporaryFileSystem", "SystemCallFilter", "PrivateUsers", "RootDirectory"} {
+		"RestrictSUIDSGID", "ReadWritePaths", "TemporaryFileSystem", "SystemCallFilter", "PrivateUsers", "RootDirectory", "User"} {
 		if v, ok := d[s+k]; ok {
 			t.Errorf("the broad unit sets %s=%v, which §5.2 does not list", k, v)
 		}
 	}
-	if n := len(d); n != 18 {
+	if n := len(d); n != 17 {
 		keys := make([]string, 0, n)
 		for k := range d {
 			keys = append(keys, k)
 		}
 		slices.Sort(keys)
-		t.Errorf("%d directives, want 18: %q", n, keys)
+		t.Errorf("%d directives, want 17: %q", n, keys)
 	}
 }
 
@@ -411,7 +416,7 @@ func TestBroadProtectClockOnlyForCAPSYSTIME(t *testing.T) {
 	p := broadPolicy()
 	p.Commands = []policy.Command{{ID: "k", Unit: policy.UnitBroad, Capabilities: []string{"CAP_KILL"}}}
 	p.Capabilities = append([]string(nil), policy.BaseCapabilities...)
-	want(t, directives(t, generate(t, p).Service), "[Service]ProtectProc", "invisible")
+	want(t, directives(t, generate(t, p).Service), "[Service]ProtectProc", "ptraceable")
 }
 
 // Both sockets stay well under the 108-byte sun_path limit (unix(7)).
