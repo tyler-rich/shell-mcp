@@ -354,11 +354,14 @@ func show(t *testing.T, unit, prop string) string {
 }
 
 // ProtectProc=ptraceable hides from core-unit commands every process they
-// may not ptrace: other users' processes, since the unit has no
-// CAP_SYS_PTRACE. Root-owned processes (same uid) stay visible. A core-unit
-// command declaring CAP_KILL turns it to default, and the other user's
-// process is seen. (Not invisible: the kernel exempts procfs's gid= group,
-// gid 0 by default, from that mode's check, and the helper is root:root.)
+// may not ptrace. That is every process outside the helper's own Landlock
+// domain: other users' processes (the unit has no CAP_SYS_PTRACE) and
+// root-owned ones too, because Landlock refuses ptrace access in every mode,
+// procfs's read mode included, to a process outside the caller's domain
+// (hook_ptrace_access_check, security/landlock/task.c). A core-unit command
+// declaring CAP_KILL turns it to default, and both are seen. (Not
+// invisible: the kernel exempts procfs's gid= group, gid 0 by default, from
+// that mode's check, and the helper is root:root.)
 func TestCoreProtectProc(t *testing.T) {
 	other := strconv.Itoa(sleeperAs(t, svcOther))
 	root := strconv.Itoa(sleeperAs(t, 0))
@@ -373,27 +376,29 @@ func TestCoreProtectProc(t *testing.T) {
 	if got := show(t, "shell-mcp-privd@e2e.service", "ProcSubset"); got != "pid" {
 		t.Fatalf("ProcSubset=%s", got)
 	}
-	if got := privExec(t, "probe-visible", "", "visible", other); got != "ENOENT" {
-		t.Fatalf("another user's process with ProtectProc=ptraceable: %q, want ENOENT", got)
-	}
-	if got := privExec(t, "probe-visible", "", "visible", root); got != "VISIBLE" {
-		t.Fatalf("a root process with ProtectProc=ptraceable: %q, want VISIBLE (same uid)", got)
+	for name, pid := range map[string]string{"another user's": other, "a root": root} {
+		if got := privExec(t, "probe-visible", "", "visible", pid); got != "ENOENT" {
+			t.Fatalf("%s process with ProtectProc=ptraceable: %q, want ENOENT", name, got)
+		}
 	}
 	installPolicy(t, "privileged-cap-kill.yaml")
 	if got := show(t, "shell-mcp-privd@e2e.service", "ProtectProc"); got != "default" {
 		t.Fatalf("with CAP_KILL, ProtectProc=%s", got)
 	}
-	if got := privExec(t, "probe-visible", "", "visible", other); got != "VISIBLE" {
-		t.Fatalf("with CAP_KILL: %q, want VISIBLE", got)
+	for name, pid := range map[string]string{"another user's": other, "a root": root} {
+		if got := privExec(t, "probe-visible", "", "visible", pid); got != "VISIBLE" {
+			t.Fatalf("%s process with CAP_KILL: %q, want VISIBLE", name, got)
+		}
 	}
 }
 
-// A root process's environment stays out of reach although root processes
-// are visible to the core unit: the core unit's Landlock ruleset grants no
-// /proc beyond the helper's own /proc/<pid>, so a declared command cannot
-// open another process's environ, and no privileged root may be or be
-// inside /proc, so priv_read_file refuses it. Outside the unit, root reads
-// it (the control). Both hold with ProtectProc=default (CAP_KILL) too.
+// Another root process's environment stays out of reach of the core unit.
+// With ProtectProc=ptraceable the process is not even visible (ENOENT);
+// with ProtectProc=default (a core CAP_KILL) it is visible, and the core
+// unit's Landlock ruleset — no /proc grant beyond the helper's own
+// /proc/<pid> — refuses opening its environ (EACCES). priv_read_file refuses
+// every /proc path in both cases, because no privileged root may be or be
+// inside /proc. Outside the unit, root reads it (the control).
 func TestCoreCannotReadProcessEnvironment(t *testing.T) {
 	c := exec.CommandContext(t.Context(), "/usr/bin/sleep", "120")
 	c.Env = []string{"E2E_ENV_CANARY=invented-e2e-value"}
@@ -405,18 +410,18 @@ func TestCoreCannotReadProcessEnvironment(t *testing.T) {
 	if out := strings.TrimSpace(run(t, probeBin, "read-environ", pid)); !strings.HasPrefix(out, "READ:") || !strings.HasSuffix(out, " CANARY") {
 		t.Fatalf("control: %s", out)
 	}
-	check := func(when string) {
+	check := func(when, want string) {
 		t.Helper()
-		if got := privExec(t, "probe-environ", "", "read-environ", pid); got != "EACCES" {
-			t.Fatalf("%s: a core-unit command read another root process's environment: %q", when, got)
+		if got := privExec(t, "probe-environ", "", "read-environ", pid); got != want {
+			t.Fatalf("%s: a core-unit command reading another root process's environment got %q, want %s", when, got, want)
 		}
 		for _, p := range []string{"/proc/" + pid + "/environ", "/proc/1/environ"} {
 			wantGate(t, svcShell, "priv_read_file", map[string]any{"path": p}, "path_denied")
 		}
 	}
-	check("ProtectProc=ptraceable")
+	check("ProtectProc=ptraceable", "ENOENT")
 	installPolicy(t, "privileged-cap-kill.yaml")
-	check("ProtectProc=default")
+	check("ProtectProc=default (Landlock alone)", "EACCES")
 }
 
 // A broad-unit command declaring CAP_SYS_TIME turns ProtectClock= off in
