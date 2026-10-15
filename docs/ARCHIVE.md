@@ -848,7 +848,7 @@ Each entry sets `SHELL_MCP_REQUIRE_LANDLOCK_ABI` to its kernel's ABI, so every k
 
 **Versions:** unchanged (Go 1.27.2). No dependency added.
 
-### 2026-10-15 — Child rlimits in force before the first instruction: the exec trampoline (PR #n, branch fix/execx-rlimit-race)
+### 2026-10-15 — Child rlimits in force before the first instruction: the exec trampoline (PR #14, branch fix/execx-rlimit-race)
 **The race:** since S1, `execx` applied the child limits with `prlimit(2)` after `cmd.Start()` returned: `RLIMIT_CORE=0`, `RLIMIT_NOFILE` ≤ 1024, and `RLIMIT_NPROC` = the uid's tasks + 256, the fork-bomb guard. os/exec has no hook between fork and execve, and Start returns only after the child's execve. So the command was already running, and could fork or dump core, before the limits landed. `RLIMIT_NPROC` came last, after a `/proc` scan of a few milliseconds, which widened the window. `TestChildRlimits` failed once in a local run (`nproc must be bounded: "18446744073709551615/18446744073709551615"`, recorded in the S1d follow-up). The helper's root exec (`priv_exec`, apt-get) uses the same engine, so it had the same race.
 
 **Decision: a re-exec trampoline.** `execx.Run` now starts `Spec.Trampoline` instead of the command. That is the running gate or helper binary, the path the caller already resolved and ownership-checked (`ops.Options.Executable`, checked by the gate's install check and the helper's `selfcheck.Binary`). It is started with:
