@@ -18,12 +18,12 @@ func TestBuiltinDenyCoversProcSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{"/proc/1/environ", "/proc/self/environ", "/proc/4242/mem", "/proc/self/mem", "/proc/kcore"} {
+	for _, p := range []string{"/proc/1/environ", "/proc/self/environ", "/proc/4242/mem", "/proc/self/mem", "/proc/kcore", "/proc/1/task/1/environ", "/proc/self/task/4242/environ", "/proc/1/task/7/mem", "/proc/self/task/4242/mem"} {
 		if !m.Covers(p) {
 			t.Errorf("%s is not on the built-in read deny list", p)
 		}
 	}
-	for _, p := range []string{"/proc/1/status", "/proc/meminfo", "/proc/self/cmdline"} {
+	for _, p := range []string{"/proc/1/status", "/proc/meminfo", "/proc/self/cmdline", "/proc/1/task/1/status", "/proc/self/task/4242/cmdline"} {
 		if m.Covers(p) {
 			t.Errorf("%s is denied, but only environ, mem and kcore are", p)
 		}
@@ -34,7 +34,7 @@ func TestBuiltinDenyCoversProcSecrets(t *testing.T) {
 func TestGatePolicyDeniesProcSecrets(t *testing.T) {
 	f := newFixture(t)
 	p := f.mustLoad(t, "version: 1\nmax_tier: read\n")
-	for _, d := range []string{"/proc/1/environ", "/proc/self/mem", "/proc/kcore"} {
+	for _, d := range []string{"/proc/1/environ", "/proc/self/mem", "/proc/kcore", "/proc/1/task/1/environ", "/proc/1/task/1/mem"} {
 		if !p.Paths.Deny.Covers(d) {
 			t.Errorf("the gate's deny list does not cover %s", d)
 		}

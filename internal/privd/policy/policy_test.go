@@ -702,7 +702,7 @@ func TestPower(t *testing.T) {
 func TestHelperPolicyDeniesProcSecrets(t *testing.T) {
 	f := newFixture(t)
 	p := f.mustLoad(t, head)
-	for _, d := range []string{"/proc/1/environ", "/proc/self/mem", "/proc/kcore"} {
+	for _, d := range []string{"/proc/1/environ", "/proc/self/mem", "/proc/kcore", "/proc/1/task/1/environ", "/proc/1/task/1/mem"} {
 		if !p.Paths.Deny.Covers(d) {
 			t.Errorf("the helper's deny list does not cover %s", d)
 		}

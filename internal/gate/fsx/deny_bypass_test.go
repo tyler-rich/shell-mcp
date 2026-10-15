@@ -4,6 +4,8 @@ package fsx
 
 import (
 	"errors"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -38,11 +40,18 @@ func TestBuiltinDenyRefusesProcSecretsWithRootChecksBypassed(t *testing.T) {
 	if _, err := f.Stat("/proc/self/status"); err != nil {
 		t.Fatalf("control: /proc/self/status: %v", err)
 	}
+	task := "/proc/self/task/" + strconv.Itoa(os.Getpid())
+	if _, err := f.Stat(task + "/status"); err != nil {
+		t.Fatalf("control: %s/status: %v", task, err)
+	}
 	for p, rule := range map[string]string{
 		"/proc/self/environ": "/proc/*/environ",
 		"/proc/1/environ":    "/proc/*/environ",
 		"/proc/self/mem":     "/proc/*/mem",
 		"/proc/kcore":        "/proc/kcore",
+		// The per-thread forms (the main thread's id is the process id).
+		task + "/environ": "/proc/*/task/*/environ",
+		task + "/mem":     "/proc/*/task/*/mem",
 	} {
 		for op, call := range map[string]func() error{
 			"stat":      func() error { _, err := f.Stat(p); return err },
