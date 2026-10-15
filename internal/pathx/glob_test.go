@@ -150,3 +150,26 @@ func TestGlobAnchored(t *testing.T) {
 		}
 	}
 }
+
+// Covering names the first pattern that covers a path (itself or an
+// ancestor), by its index and as written, so a refusal can say which rule
+// applied.
+func TestMatcherCovering(t *testing.T) {
+	m, err := NewMatcher([]string{"/etc/shadow*", "/proc/*/environ", "/srv/app/secrets/**"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for p, want := range map[string]int{"/proc/1/environ": 1, "/proc/self/environ": 1, "/etc/shadow-": 0, "/srv/app/secrets/a/b": 2} {
+		i, pat, ok := m.Covering(p)
+		if !ok || i != want || pat != m.Patterns()[want] {
+			t.Errorf("Covering(%q) = %d %q %v, want %d", p, i, pat, ok, want)
+		}
+	}
+	if _, _, ok := m.Covering("/proc/1/status"); ok {
+		t.Error("an uncovered path was covered")
+	}
+	var nilM *Matcher
+	if _, _, ok := nilM.Covering("/x"); ok {
+		t.Error("a nil matcher covered a path")
+	}
+}

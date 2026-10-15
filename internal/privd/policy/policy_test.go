@@ -696,3 +696,15 @@ func TestPower(t *testing.T) {
 		t.Errorf("power under max_tier operator is not warned: %q", low.Warnings)
 	}
 }
+
+// A loaded privileged policy's deny list carries the /proc entries of the
+// built-in read deny list too (POLICY §3).
+func TestHelperPolicyDeniesProcSecrets(t *testing.T) {
+	f := newFixture(t)
+	p := f.mustLoad(t, head)
+	for _, d := range []string{"/proc/1/environ", "/proc/self/mem", "/proc/kcore"} {
+		if !p.Paths.Deny.Covers(d) {
+			t.Errorf("the helper's deny list does not cover %s", d)
+		}
+	}
+}

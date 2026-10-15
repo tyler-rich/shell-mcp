@@ -223,3 +223,6 @@ func (m *Matcher) MayContain(dir string, anchoredOnly bool) bool {
 	}
 	return false
 }
+
+// Covering (stub).
+func (m *Matcher) Covering(p string) (index int, pattern string, ok bool) { return 0, "", false }
