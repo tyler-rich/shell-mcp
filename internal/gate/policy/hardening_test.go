@@ -143,3 +143,20 @@ func TestGTFOBinsListShape(t *testing.T) {
 		}
 	}
 }
+
+// TestGateBinaryOutsideExecDirsWarns: the gate starts every command by
+// re-executing its own binary (the execx trampoline), so check-policy warns
+// when the sandbox would not let it execute that binary.
+func TestGateBinaryOutsideExecDirsWarns(t *testing.T) {
+	f := newFixture(t)
+	want := "the gate binary " + f.gate + " is outside the sandbox's read+execute directories"
+	has := func(p *policy.Policy) bool {
+		return slices.ContainsFunc(p.Warnings, func(w string) bool { return strings.HasPrefix(w, want) })
+	}
+	if p := f.mustLoad(t, minimal); !has(p) {
+		t.Fatalf("outside: warnings %q", p.Warnings)
+	}
+	if p := f.mustLoad(t, minimal+"sandbox:\n  system_read_exec: [{GATEDIR}]\n"); has(p) {
+		t.Fatalf("granted: warnings %q", p.Warnings)
+	}
+}

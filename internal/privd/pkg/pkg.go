@@ -246,9 +246,11 @@ const DefaultRetry = 2 * time.Second
 // Runner runs apt-get through the helper's exec engine (execve, new
 // process group, output caps, SIGTERM→SIGKILL at the deadline).
 type Runner struct {
-	AptGet    string
-	Env       []string
-	MaxOutput int
+	AptGet string
+	// Trampoline is the running helper binary (execx.Spec.Trampoline).
+	Trampoline string
+	Env        []string
+	MaxOutput  int
 	// LockWait bounds how long a held lock is waited for.
 	LockWait time.Duration
 	// Retry is the pause between attempts (0 means DefaultRetry).
@@ -279,7 +281,7 @@ func (r *Runner) Run(ctx context.Context, timeout time.Duration, args []string) 
 		if remaining <= 0 {
 			return res, fmt.Errorf("%w (waited %v)", ErrLockHeld, res.LockWait.Round(time.Second))
 		}
-		er, err := execx.Run(ctx, &execx.Spec{Path: r.AptGet, Args: args, Env: r.Env, Dir: "/", Timeout: remaining, MaxOutput: r.MaxOutput})
+		er, err := execx.Run(ctx, &execx.Spec{Path: r.AptGet, Trampoline: r.Trampoline, Args: args, Env: r.Env, Dir: "/", Timeout: remaining, MaxOutput: r.MaxOutput})
 		if err != nil {
 			return res, err
 		}

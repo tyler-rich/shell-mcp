@@ -19,6 +19,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -136,6 +137,32 @@ func main() {
 			_ = c.Close()
 		}
 		report(err, "CONNECTED")
+	case "procattrs":
+		// What a command inherits from how it was started: open
+		// descriptors above stderr (with their type; checked first, before
+		// this program opens anything), its parent-death signal, whether
+		// it leads its process group, and its blocked signals.
+		var fds []string
+		for fd := 3; fd < 1024; fd++ {
+			var st unix.Stat_t
+			if unix.Fstat(fd, &st) == nil {
+				target, _ := os.Readlink("/proc/self/fd/" + strconv.Itoa(fd))
+				fds = append(fds, fmt.Sprintf("%d:%o:%s", fd, st.Mode&unix.S_IFMT, target))
+			}
+		}
+		var sig int32
+		_ = unix.Prctl(unix.PR_GET_PDEATHSIG, uintptr(unsafe.Pointer(&sig)), 0, 0, 0)
+		pgid, _ := unix.Getpgid(0)
+		fmt.Printf("fds=%s\n", strings.Join(fds, ","))
+		fmt.Printf("pdeathsig=%d\n", sig)
+		fmt.Printf("pgid_is_pid=%v\n", pgid == os.Getpid())
+		// The main thread's mask, as execve left it (Go keeps it).
+		b, _ := os.ReadFile("/proc/self/status")
+		for _, l := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(l, "SigBlk:") {
+				fmt.Println(strings.ReplaceAll(l, "\t", " "))
+			}
+		}
 	case "rlimits":
 		for _, r := range []struct {
 			name string

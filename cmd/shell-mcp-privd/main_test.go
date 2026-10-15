@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 	"github.com/tyler-rich/shell-mcp/internal/privd/units"
@@ -251,5 +252,17 @@ func TestUnitsBroad(t *testing.T) {
 		if !strings.Contains(so.String(), s) {
 			t.Errorf("output lacks %q: %s", s, so.String())
 		}
+	}
+}
+
+// TestTrampolineIsNotACommand: the exec trampoline runs only from execx's
+// init, when it is exactly argv[1] of a process started with an empty
+// environment and its control socket (internal/gate/execx). The helper's
+// argv is fixed by its generated unit and starts with serve; as a command
+// name the trampoline argument is unknown and nothing is served.
+func TestTrampolineIsNotACommand(t *testing.T) {
+	var so, se bytes.Buffer
+	if code := run([]string{execx.TrampolineArg}, &so, &se); code != 2 || so.Len() != 0 || !strings.Contains(se.String(), "unknown command") {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, so.String(), se.String())
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -26,9 +27,32 @@ var (
 	probeDir  string
 	probeOnce sync.Once
 	probe     string
+	// self is this test binary; execx's init makes it the trampoline.
+	self string
 )
 
+// relayEnv makes this test binary start the trampoline itself, passing on
+// the fd 3 it inherited: the trampoline's peer is then not its parent.
+const relayEnv = "EXECX_TEST_RELAY"
+
 func TestMain(m *testing.M) {
+	if exe, err := os.Executable(); err == nil {
+		self, _ = filepath.EvalSymlinks(exe)
+	}
+	if os.Getenv(relayEnv) == "1" {
+		cmd := exec.CommandContext(context.Background(), self, execx.TrampolineArg) //nolint:gosec // G204: this test binary
+		cmd.Env = []string{}
+		cmd.Stderr = os.Stderr
+		cmd.ExtraFiles = []*os.File{os.NewFile(3, "relayed")}
+		if err := cmd.Run(); err != nil {
+			var ee *exec.ExitError
+			if errors.As(err, &ee) {
+				os.Exit(ee.ExitCode())
+			}
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	d, err := os.MkdirTemp("", "execx-probe")
 	if err != nil {
 		panic(err)
@@ -58,6 +82,9 @@ func run(t *testing.T, s *execx.Spec) execx.Result {
 	}
 	if s.Env == nil {
 		s.Env = execx.Environment("/nonexistent-home")
+	}
+	if s.Trampoline == "" {
+		s.Trampoline = self
 	}
 	r, err := execx.Run(context.Background(), s)
 	if err != nil {
@@ -307,7 +334,7 @@ func childLimitsError(out []byte) error {
 func TestChildRlimitsBeforeFirstInstruction(t *testing.T) {
 	p := probePath(t)
 	requireDiscriminating(t, raiseOwnLimits(t))
-	r, err := execx.RunWithStartDelay(context.Background(), &execx.Spec{Path: p, Args: []string{"rlimits"},
+	r, err := execx.RunWithStartDelay(context.Background(), &execx.Spec{Path: p, Trampoline: self, Args: []string{"rlimits"},
 		Env: execx.Environment("/nonexistent-home"), Timeout: 10 * time.Second, MaxOutput: 1 << 20}, 300*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -333,7 +360,7 @@ func TestChildRlimitsNeverRace(t *testing.T) {
 	for range workers {
 		wg.Go(func() {
 			for range next {
-				r, err := execx.Run(context.Background(), &execx.Spec{Path: p, Args: []string{"rlimits"},
+				r, err := execx.Run(context.Background(), &execx.Spec{Path: p, Trampoline: self, Args: []string{"rlimits"},
 					Env: execx.Environment("/nonexistent-home"), Timeout: 10 * time.Second, MaxOutput: 1 << 20})
 				if err == nil {
 					err = childLimitsError(r.Stdout)
@@ -359,12 +386,171 @@ func TestChildRlimitsNeverRace(t *testing.T) {
 	}
 }
 
+// startTrampoline runs this test binary directly with args, env and, when
+// fd3 is not nil, fd3 as fd 3, as something other than Run would start the
+// trampoline. It returns the exit status and stderr.
+func startTrampoline(t *testing.T, args, env []string, fd3 *os.File) (code int, stderr string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, self, args...) //nolint:gosec // G204: this test binary
+	cmd.Env = env
+	if fd3 != nil {
+		cmd.ExtraFiles = []*os.File{fd3}
+	}
+	var errBuf strings.Builder
+	cmd.Stderr = &errBuf
+	err := cmd.Run()
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("trampoline run: %v (stderr %q)", err, errBuf.String())
+	}
+	return ee.ExitCode(), errBuf.String()
+}
+
+// socketEnd returns one end of an AF_UNIX socketpair of type typ made by
+// this process; both ends stay open until cleanup.
+func socketEnd(t *testing.T, typ int) *os.File {
+	t.Helper()
+	fds, err := unix.Socketpair(unix.AF_UNIX, typ|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := os.NewFile(uintptr(fds[0]), "a"), os.NewFile(uintptr(fds[1]), "b")
+	t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
+	return b
+}
+
+// TestTrampolineRefusesOutsiders: the trampoline runs only as Run starts
+// it. Each way of starting it otherwise is refused before it reads
+// anything, with exit status TrampolineRefused and the reason on stderr.
+// (A terminal on fd 0–2 is covered by TestTrampolineRefusal, which needs
+// no terminal.)
+func TestTrampolineRefusesOutsiders(t *testing.T) {
+	marker := execx.TrampolineArg
+	good := socketEnd(t, unix.SOCK_STREAM)
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pr.Close(); _ = pw.Close() }()
+	dgram := socketEnd(t, unix.SOCK_DGRAM)
+	for _, c := range []struct {
+		name string
+		args []string
+		env  []string
+		fd3  *os.File
+		want string
+	}{
+		{"extra argument", []string{marker, "serve"}, []string{}, good, "it takes exactly one argument"},
+		{"environment", []string{marker}, []string{"SSH_ORIGINAL_COMMAND=x"}, good, "it must be started with an empty environment"},
+		{"no fd 3", []string{marker}, []string{}, nil, "fd 3 is not"},
+		{"pipe as fd 3", []string{marker}, []string{}, pr, "fd 3 is not a Unix stream socket"},
+		{"datagram socket as fd 3", []string{marker}, []string{}, dgram, "fd 3 is not a Unix stream socket"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			code, stderr := startTrampoline(t, c.args, c.env, c.fd3)
+			if code != execx.TrampolineRefused || !strings.Contains(stderr, "refusing to run the internal exec trampoline: "+c.want) {
+				t.Fatalf("exit %d, stderr %q; want %d and %q", code, stderr, execx.TrampolineRefused, c.want)
+			}
+		})
+	}
+	t.Run("fd 3 from another process", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, self)
+		cmd.Env = []string{relayEnv + "=1"}
+		cmd.ExtraFiles = []*os.File{good}
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		var ee *exec.ExitError
+		if !errors.As(err, &ee) || ee.ExitCode() != execx.TrampolineRefused || !strings.Contains(stderr.String(), "fd 3's peer is not the parent process") {
+			t.Fatalf("relayed: %v, stderr %q", err, stderr.String())
+		}
+	})
+}
+
+// TestCommandCannotReachTrampoline: a command Run starts can run the gate's
+// own binary with the trampoline argument, but it has neither an empty
+// environment nor the control descriptor (fd 3 is close-on-exec), so the
+// trampoline refuses.
+func TestCommandCannotReachTrampoline(t *testing.T) {
+	r := run(t, &execx.Spec{Path: self, Args: []string{execx.TrampolineArg}})
+	if r.ExitCode == nil || *r.ExitCode != execx.TrampolineRefused || !strings.Contains(string(r.Stderr), "empty environment") {
+		t.Fatalf("with the command environment: %+v, stderr %q", r.ExitCode, r.Stderr)
+	}
+	r = run(t, &execx.Spec{Path: self, Args: []string{execx.TrampolineArg}, Env: []string{}})
+	if r.ExitCode == nil || *r.ExitCode != execx.TrampolineRefused || !strings.Contains(string(r.Stderr), "fd 3 is not") {
+		t.Fatalf("with an empty environment: %+v, stderr %q", r.ExitCode, r.Stderr)
+	}
+}
+
+// TestCommandProcessAttributes: the command keeps what the trampoline was
+// started with: Pdeathsig=SIGKILL across both execs, its own process group,
+// no blocked signals, and no descriptor beyond stdin, stdout and stderr
+// (the control socket does not leak). The one descriptor allowed is the Go
+// runtime's own: since Go 1.25 it keeps /sys/fs/cgroup/cpu.max open
+// (close-on-exec) where the cgroup filesystem is readable, and it takes the
+// lowest free descriptor, so it sitting at fd 3 also shows fd 3 was free.
+func TestCommandProcessAttributes(t *testing.T) {
+	p := probePath(t)
+	r := run(t, &execx.Spec{Path: p, Args: []string{"procattrs"}})
+	got := lines(r.Stdout)
+	want := []string{"pdeathsig=9", "pgid_is_pid=true", "SigBlk: 0000000000000000"}
+	if len(got) != 4 || !strings.HasPrefix(got[0], "fds=") || !slices.Equal(got[1:], want) {
+		t.Fatalf("attributes:\n%s\nwant fds=… and:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if fds := strings.TrimPrefix(got[0], "fds="); fds != "" {
+		for _, fd := range strings.Split(fds, ",") {
+			if !strings.HasPrefix(fd, "3:100000:/sys/fs/cgroup/") {
+				t.Fatalf("the command has a descriptor it was not given: %s (all: %s)", fd, fds)
+			}
+		}
+	}
+}
+
+// TestTrampolineStartErrors: failures between the trampoline and the
+// command's first instruction are start errors with the errno, as they
+// were when os/exec started the command itself.
+func TestTrampolineStartErrors(t *testing.T) {
+	p := probePath(t)
+	notExec := filepath.Join(t.TempDir(), "not-executable")
+	if err := os.WriteFile(notExec, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		spec execx.Spec
+		want string
+	}{
+		{"missing command", execx.Spec{Path: "/nonexistent/binary"}, "ENOENT"},
+		{"missing directory", execx.Spec{Path: p, Args: []string{"pwd"}, Dir: "/nonexistent-dir"}, "ENOENT"},
+		{"not executable", execx.Spec{Path: notExec}, "EACCES"},
+		{"no trampoline", execx.Spec{Path: p, Trampoline: "relative"}, "no exec trampoline"},
+		{"missing trampoline", execx.Spec{Path: p, Trampoline: "/nonexistent/trampoline"}, "ENOENT"},
+		{"NUL in an argument", execx.Spec{Path: p, Args: []string{"echo", "a\x00b"}}, "EINVAL"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := c.spec
+			s.Timeout, s.MaxOutput, s.Env = 10*time.Second, 1<<20, execx.Environment("/")
+			if s.Trampoline == "" {
+				s.Trampoline = self
+			}
+			_, err := execx.Run(context.Background(), &s)
+			if !errors.Is(err, execx.ErrStart) || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err %v, want ErrStart with %q", err, c.want)
+			}
+		})
+	}
+}
+
 func TestStartFailure(t *testing.T) {
-	_, err := execx.Run(context.Background(), &execx.Spec{Path: "/nonexistent/binary", Timeout: time.Second, MaxOutput: 10, Env: execx.Environment("/")})
+	_, err := execx.Run(context.Background(), &execx.Spec{Path: "/nonexistent/binary", Trampoline: self, Timeout: time.Second, MaxOutput: 10, Env: execx.Environment("/")})
 	if !errors.Is(err, execx.ErrStart) {
 		t.Fatalf("err %v", err)
 	}
-	if _, err := execx.Run(context.Background(), &execx.Spec{Path: "relative", Timeout: time.Second, MaxOutput: 10}); !errors.Is(err, execx.ErrStart) {
+	if _, err := execx.Run(context.Background(), &execx.Spec{Path: "relative", Trampoline: self, Timeout: time.Second, MaxOutput: 10}); !errors.Is(err, execx.ErrStart) {
 		t.Fatalf("relative path: %v", err)
 	}
 }

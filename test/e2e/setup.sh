@@ -173,6 +173,10 @@ commands:
     path: /usr/local/bin/example-probe
     tier: read
     templates: [["echo", "{regex:^[a-z-]+\$}"]]
+  - id: probe-attrs
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["rlimits"], ["procattrs"], ["status"]]
   - id: probe-read-outside
     path: /usr/local/bin/example-probe
     tier: read
@@ -209,6 +213,8 @@ $2    templates:
       - ["unix-connect", "{enum:/run/dbus/system_bus_socket|/var/run/dbus/system_bus_socket|/run/shell-mcp-e2e.sock}"]
       - ["abstract-connect", "{regex:^[a-z0-9-]{1,64}\$}"]
       - ["status"]
+      - ["rlimits"]
+      - ["procattrs"]
 power:
   allowed: [reboot]
   acknowledge: "e2e: priv_power is called only with reboot.target and poweroff.target runtime-masked"

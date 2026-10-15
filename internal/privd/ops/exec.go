@@ -106,12 +106,13 @@ func (s *server) exec(raw jsontext.Value) (data any, warns []string, failure err
 		maxOut = a.MaxOutputBytes
 	}
 	res, err := execx.Run(context.Background(), &execx.Spec{
-		Path:      c.Resolved,
-		Args:      args,
-		Env:       execx.Environment(execHome),
-		Dir:       dir,
-		Timeout:   s.timeout(),
-		MaxOutput: maxOut,
+		Trampoline: s.o.Executable,
+		Path:       c.Resolved,
+		Args:       args,
+		Env:        execx.Environment(execHome),
+		Dir:        dir,
+		Timeout:    s.timeout(),
+		MaxOutput:  maxOut,
 	})
 	if err != nil {
 		return nil, nil, err

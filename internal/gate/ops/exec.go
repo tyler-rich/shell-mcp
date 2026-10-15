@@ -105,13 +105,14 @@ func (s *server) exec(raw jsontext.Value) (data any, warns []string, failure err
 	}
 
 	res, err := execx.Run(context.Background(), &execx.Spec{
-		Path:      c.Resolved,
-		Args:      args,
-		Env:       execx.Environment(s.p.ServiceHome),
-		Dir:       dir,
-		Stdin:     stdin,
-		Timeout:   s.timeout(),
-		MaxOutput: maxOut,
+		Trampoline: s.o.Executable,
+		Path:       c.Resolved,
+		Args:       args,
+		Env:        execx.Environment(s.p.ServiceHome),
+		Dir:        dir,
+		Stdin:      stdin,
+		Timeout:    s.timeout(),
+		MaxOutput:  maxOut,
 	})
 	if err != nil {
 		return nil, nil, err

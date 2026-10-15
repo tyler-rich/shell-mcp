@@ -2,18 +2,21 @@
 
 // Package execx is the gate's (and the helper's) execve engine: an absolute
 // path, an exact argv and environment, a new process group with
-// Pdeathsig=SIGKILL, per-child rlimits, bounded stdin, capped output on two
-// pipes, and SIGTERM→SIGKILL on the process group at the timeout. It never
-// uses a shell or a PATH search, and it inherits nothing from the caller's
-// environment.
+// Pdeathsig=SIGKILL, per-child rlimits in force before the command's first
+// instruction (applied by a re-exec trampoline, trampoline.go), bounded
+// stdin, capped output on two pipes, and SIGTERM→SIGKILL on the process
+// group at the timeout. It never uses a shell or a PATH search, and it
+// inherits nothing from the caller's environment.
 package execx
 
 import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,6 +56,11 @@ type Spec struct {
 	Lookahead   int           // 0 means DefaultLookahead
 	HardCeiling int64         // 0 means DefaultHardCeiling
 	KillGrace   time.Duration // 0 means DefaultKillGrace
+
+	// Trampoline is the absolute path of the running binary (the gate or
+	// the helper, resolved and ownership-checked by the caller). The
+	// command is started through it; see trampoline.go.
+	Trampoline string
 }
 
 // Result reports what happened. Stdout and Stderr hold at most
@@ -149,6 +157,9 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	if !filepath.IsAbs(s.Path) {
 		return Result{}, fmt.Errorf("%w: path is not absolute", ErrStart)
 	}
+	if !filepath.IsAbs(s.Trampoline) {
+		return Result{}, fmt.Errorf("%w: no exec trampoline", ErrStart)
+	}
 	if s.Lookahead == 0 {
 		s.Lookahead = DefaultLookahead
 	}
@@ -166,13 +177,28 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	if env == nil {
 		env = []string{}
 	}
+	cfg, err := encodeConfig(&trampolineConfig{Path: s.Path, Argv: append([]string{s.Path}, s.Args...), Env: env, Dir: dir, Limits: childLimits()})
+	if err != nil {
+		return Result{}, startError(err)
+	}
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return Result{}, startError(err)
+	}
+	ctl := os.NewFile(uintptr(fds[0]), "execx-control")
+	defer func() { _ = ctl.Close() }()
+	childCtl := os.NewFile(uintptr(fds[1]), "execx-control")
 	ctx, cancel := context.WithTimeout(ctx, s.Timeout)
 	defer cancel()
 
-	// An absolute path: exec.CommandContext does no PATH lookup.
-	cmd := exec.CommandContext(ctx, s.Path, s.Args...) //nolint:gosec // G204: the path is resolved and ownership-checked at policy load and the argv matched a policy template; no shell is involved
-	cmd.Env = env
-	cmd.Dir = dir
+	// The trampoline (this binary, resolved and ownership-checked by the
+	// caller) applies the child limits to itself and then execve(2)s
+	// s.Path, which gets argv, environment and directory from the control
+	// socket; see trampoline.go. Both paths are absolute: no PATH lookup.
+	cmd := exec.CommandContext(ctx, s.Trampoline, TrampolineArg) //nolint:gosec // G204: the trampoline is the running binary, resolved and ownership-checked by the caller; the command's path was resolved and ownership-checked at policy load and its argv matched a policy template; no shell is involved
+	cmd.Env = []string{}
+	cmd.Dir = "/"
+	cmd.ExtraFiles = []*os.File{childCtl}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
 
 	var pgid atomic.Int64
@@ -197,19 +223,21 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	cmd.WaitDelay = s.KillGrace
 
 	start := time.Now()
-	if err := cmd.Start(); err != nil {
-		var errno syscall.Errno
-		if errors.As(err, &errno) {
-			return Result{}, fmt.Errorf("%w: %s", ErrStart, unix.ErrnoName(errno))
-		}
-		return Result{}, fmt.Errorf("%w", ErrStart)
+	err = cmd.Start()
+	_ = childCtl.Close()
+	if err != nil {
+		return Result{}, startError(err)
 	}
-	pid := cmd.Process.Pid
-	pgid.Store(int64(pid)) // Setpgid: the child leads its own group
+	pgid.Store(int64(cmd.Process.Pid)) // Setpgid: the child leads its own group
 	if h != nil && h.afterStart != nil {
 		h.afterStart()
 	}
-	applyChildRlimits(pid)
+	if err := handshake(ctl, cfg); err != nil {
+		// The command never ran; only the trampoline is in the group.
+		killGroup(syscall.SIGKILL)
+		_ = cmd.Wait()
+		return Result{}, err
+	}
 	_ = cmd.Wait()
 	killGroup(syscall.SIGKILL)
 
@@ -234,29 +262,59 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	return r, nil
 }
 
-// applyChildRlimits lowers the child's limits with prlimit(2) right after
-// it started (os/exec has no pre-exec hook, and setting them on the gate
-// itself would also constrain the gate's own threads): no core dumps,
-// RLIMIT_NOFILE ≤ ChildNofile, and RLIMIT_NPROC = the service user's
-// current task count + ChildExtraTasks. RLIMIT_NPROC counts every task of
-// the real uid, so a fixed value would fail concurrent gates; relative to
-// the current count it bounds what one command can add. Lowering needs no
-// privilege; failures (the child already exited) are ignored.
-func applyChildRlimits(pid int) {
-	_ = unix.Prlimit(pid, unix.RLIMIT_CORE, &unix.Rlimit{Cur: 0, Max: 0}, nil)
-	lowerTo(pid, unix.RLIMIT_NOFILE, ChildNofile)
+// childLimits are the limits the trampoline puts in force before the
+// command's first instruction (setting them on the gate itself would also
+// constrain the gate's own threads): no core dumps, RLIMIT_NOFILE ≤
+// ChildNofile, and RLIMIT_NPROC = the service user's current task count +
+// ChildExtraTasks. RLIMIT_NPROC counts every task of the real uid, so a
+// fixed value would fail concurrent gates; relative to the current count it
+// bounds what one command can add. Each is only ever lowered, which needs no
+// privilege.
+func childLimits() []childLimit {
+	l := []childLimit{{Resource: unix.RLIMIT_CORE, Max: 0}, {Resource: unix.RLIMIT_NOFILE, Max: ChildNofile}}
 	if n := userTasks(os.Getuid()); n > 0 {
-		lowerTo(pid, unix.RLIMIT_NPROC, n+ChildExtraTasks)
+		l = append(l, childLimit{Resource: unix.RLIMIT_NPROC, Max: n + ChildExtraTasks})
 	}
+	return l
 }
 
-func lowerTo(pid, res int, v uint64) {
-	var cur unix.Rlimit
-	if err := unix.Prlimit(pid, res, nil, &cur); err != nil {
-		return
+// handshake sends the encoded command to the trampoline, closes the
+// sending direction, and reads the outcome: the accepted byte then EOF when
+// the execve succeeded (fd 3 is close-on-exec), the accepted byte and an
+// errno when the command could not be started, and nothing when the
+// trampoline refused or died first.
+func handshake(ctl *os.File, cfg []byte) error {
+	refused := fmt.Errorf("%w: the exec trampoline did not start the command", ErrStart)
+	if _, err := ctl.Write(cfg); err != nil {
+		return refused
 	}
-	nl := unix.Rlimit{Cur: min(cur.Cur, v), Max: min(cur.Max, v)}
-	_ = unix.Prlimit(pid, res, &nl, nil)
+	rc, err := ctl.SyscallConn()
+	if err != nil {
+		return refused
+	}
+	var serr error
+	if cerr := rc.Control(func(fd uintptr) { serr = unix.Shutdown(int(fd), unix.SHUT_WR) }); cerr != nil || serr != nil {
+		return refused
+	}
+	st, err := io.ReadAll(io.LimitReader(ctl, 8))
+	switch {
+	case err != nil || len(st) == 0 || st[0] != statusAccepted:
+		return refused
+	case len(st) == 1:
+		return nil
+	case len(st) == 5:
+		return startError(syscall.Errno(binary.LittleEndian.Uint32(st[1:])))
+	}
+	return refused
+}
+
+// startError is ErrStart with the errno's name when there is one.
+func startError(err error) error {
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		return fmt.Errorf("%w: %s", ErrStart, unix.ErrnoName(errno))
+	}
+	return fmt.Errorf("%w", ErrStart)
 }
 
 // userTasks counts the tasks (threads) whose real uid is uid, from

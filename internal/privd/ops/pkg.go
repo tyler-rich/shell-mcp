@@ -150,11 +150,12 @@ func (s *server) pkgOp(raw jsontext.Value, op pkg.Op, simulate bool) (data any, 
 	}
 	timeout := s.timeout()
 	r := pkg.Runner{
-		AptGet:    pp.AptGet,
-		Env:       pkg.Env(execHome),
-		MaxOutput: s.p.Limits.MaxOutputBytes,
-		LockWait:  min(maxLockWait, timeout/2),
-		Retry:     s.o.PkgLockRetry,
+		AptGet:     pp.AptGet,
+		Trampoline: s.o.Executable,
+		Env:        pkg.Env(execHome),
+		MaxOutput:  s.p.Limits.MaxOutputBytes,
+		LockWait:   min(maxLockWait, timeout/2),
+		Retry:      s.o.PkgLockRetry,
 	}
 	res, err := r.Run(context.Background(), timeout, args)
 	if errors.Is(err, pkg.ErrLockHeld) {

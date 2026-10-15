@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -531,5 +532,50 @@ func TestPowerReachesSystemd(t *testing.T) {
 	refused := strings.Contains(string(out), "ccess denied") || strings.Contains(string(out), "nteractive authentication required")
 	if err == nil || strings.Contains(string(out), "masked") || !refused {
 		t.Fatalf("unprivileged StartUnit: %v %q", err, out)
+	}
+}
+
+// TestHelperExecTrampoline: the helper starts root commands by re-executing
+// its own binary inside the unit (internal/gate/execx's trampoline), in
+// both units. The command has the child limits from its first instruction
+// (core dumps off, open files bounded), keeps Pdeathsig=SIGKILL and its own
+// process group, and holds no descriptor it was not given; in the core
+// unit it is also under no_new_privs and the seccomp filters.
+func TestHelperExecTrampoline(t *testing.T) {
+	for _, c := range []struct{ command, unit string }{{"probe-attrs", ""}, {"probe-broad", "broad"}} {
+		t.Run(c.command, func(t *testing.T) {
+			lim := map[string]string{}
+			for _, l := range strings.Split(privExec(t, c.command, c.unit, "rlimits"), "\n") {
+				k, v, _ := strings.Cut(l, "=")
+				lim[k] = v
+			}
+			if lim["core"] != "0/0" {
+				t.Fatalf("core %q", lim["core"])
+			}
+			cur, maxv, _ := strings.Cut(lim["nofile"], "/")
+			if n, err := strconv.Atoi(cur); err != nil || n > 1024 {
+				t.Fatalf("nofile %q", lim["nofile"])
+			}
+			if n, err := strconv.Atoi(maxv); err != nil || n > 1024 {
+				t.Fatalf("nofile %q", lim["nofile"])
+			}
+			attrs := strings.Split(privExec(t, c.command, c.unit, "procattrs"), "\n")
+			if len(attrs) != 4 || attrs[1] != "pdeathsig=9" || attrs[2] != "pgid_is_pid=true" {
+				t.Fatalf("attributes:\n%s", strings.Join(attrs, "\n"))
+			}
+			// The Go runtime keeps /sys/fs/cgroup/cpu.max open where it can
+			// read it; nothing else may be open.
+			if fds := strings.TrimPrefix(attrs[0], "fds="); fds != "" && (strings.Contains(fds, ",") || !strings.HasPrefix(fds, "3:100000:/sys/fs/cgroup/")) {
+				t.Fatalf("the command has descriptors it was not given: %s", attrs[0])
+			}
+			if c.unit == "" {
+				status := strings.Split(privExec(t, c.command, c.unit, "status"), "\n")
+				for _, want := range []string{"NoNewPrivs: 1", "Seccomp: 2"} {
+					if !slices.Contains(status, want) {
+						t.Fatalf("core command status lacks %q:\n%s", want, strings.Join(status, "\n"))
+					}
+				}
+			}
+		})
 	}
 }

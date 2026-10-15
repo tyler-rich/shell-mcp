@@ -341,7 +341,7 @@ func TestRedact(t *testing.T) {
 }
 
 func cmdPolicy(extra string) string {
-	return "version: 1\nmax_tier: destructive\nsandbox:\n  system_read_exec: [{BIN}]\ncommands:\n" + extra
+	return "version: 1\nmax_tier: destructive\nsandbox:\n  system_read_exec: [{BIN}, {GATEDIR}]\ncommands:\n" + extra
 }
 
 func TestCommands(t *testing.T) {
