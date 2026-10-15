@@ -17,9 +17,10 @@ import (
 // testBypassTag marks this test build (-tags shellmcp_e2e_bypass).
 const testBypassTag = true
 
-// The built-in read deny list refuses /proc/*/environ, /proc/*/mem and
-// /proc/kcore on its own (POLICY §3), as defence in depth behind Landlock
-// and the rule that no root may be /proc. This test build skips fsx's
+// The built-in read deny list refuses /proc/*/environ, /proc/*/mem, their
+// per-thread forms /proc/*/task/*/{environ,mem}, and /proc/kcore on its own
+// (POLICY §3), as defence in depth behind Landlock and the rule that no
+// root may be /proc. This test build skips fsx's
 // forbidden-root check, the policy's root rule is bypassed by building the
 // configuration directly with /proc as a root, and unit tests run without
 // Landlock: the control shows /proc is then readable, and each path is

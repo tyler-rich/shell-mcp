@@ -834,3 +834,16 @@ Each entry sets `SHELL_MCP_REQUIRE_LANDLOCK_ABI` to its kernel's ABI, so every k
 - Also denying `/proc/*/task/*/environ` and `…/mem`: not requested. The same two rules keep them out; left for the maintainer.
 
 **Versions:** unchanged from the S1d entry (Go 1.27.2; x/crypto v0.58.0, x/sync v0.24.0, x/sys v0.49.0; govulncheck v1.9.0). No dependency added.
+
+### 2026-10-15 — Per-thread /proc environ and mem on the built-in read deny list (PR #6 follow-up)
+**Decision:** At the maintainer's request, `/proc/*/task/*/environ` and `/proc/*/task/*/mem` join the per-process forms on the built-in read deny list (POLICY §3, `builtinDeny`). The gate and the helper apply them alike. Without them, a thread's own directory exposes the same environment and memory: `/proc/*/environ` does not cover `/proc/<pid>/task/<tid>/environ`, since no ancestor of that path matches.
+
+**Proof, same pattern as the per-process entries** (the tests were committed first and shown failing):
+- `TestBuiltinDenyCoversProcSecrets` covers the per-thread paths, and `/proc/*/task/*/status` and `…/cmdline` stay allowed.
+- `TestGatePolicyDeniesProcSecrets` and `TestHelperPolicyDeniesProcSecrets` cover each loader's matcher.
+- The tagged `TestBuiltinDenyRefusesProcSecretsWithRootChecksBypassed` runs with root checks and Landlock out of the way. The control `stat /proc/self/task/<tid>/status` succeeds.
+- Before the change, that tagged test read `/proc/self/task/<tid>/environ` and `…/mem` successfully (two-sided). After it, both are `path_denied`, naming the rules `/proc/*/task/*/environ` and `/proc/*/task/*/mem`.
+
+**Noted, not changed:** `TestChildRlimits` (`internal/gate/execx`, unchanged since S1) failed once in a local `-race` run and passed five times on its own. The child's limits are applied with `prlimit` just after `Start()`, so a fast child can read its limits first. This is a pre-existing timing flake, left for a separate change.
+
+**Versions:** unchanged (Go 1.27.2). No dependency added.
