@@ -800,3 +800,37 @@ Each entry sets `SHELL_MCP_REQUIRE_LANDLOCK_ABI` to its kernel's ABI, so every k
 - **Tools:** golangci-lint v2.14.0 (newest); govulncheck v1.9.0, Trivy v0.76.0, Grype v0.120.1 (bumped to their newest releases).
 - **Dependencies added:** none; the D-Bus client uses the standard library.
 - **Reference sources:** systemd v257 (70bae76) and v259 (9ca4334); apt 3.0.3 (Debian 13) and 3.1.16.
+
+### 2026-10-15 — /proc entries on the built-in read deny list; D-021 names priv_power (PR #6 follow-up)
+**Decision:** Two maintainer requests on PR #6. They settle two items the S1d entry deferred.
+- **D-021** (plan.md §2) now says the broad unit serves package management, commands declared `unit: broad` and the built-in power operation (`priv_power`). That matches the session's maintainer decision to run `priv_power` in the broad unit.
+- **`/proc/*/environ`, `/proc/*/mem` and `/proc/kcore`** are on the built-in read deny list (POLICY §3, `builtinDeny`). This is defence in depth behind two rules that already kept them out:
+  - Landlock grants the core unit nothing in `/proc` but the helper's own `/proc/<pid>`.
+  - No root may be or be inside `/proc`.
+
+  The gate and the helper both build their deny matcher from that list, built-in patterns first. Untouched: `/proc/<pid>/status`, `/proc/meminfo`, `/proc/<pid>/cmdline` (the gate's native ops read them itself, never from a request).
+- **Refusals name the rule.**
+  - fsx's deny refusal was "path is denied by policy". It is now "path is denied by the built-in read deny list rule "<pattern>"" for a built-in rule, and "path is denied by the policy's paths.deny[N]" for a policy rule.
+  - A policy rule is never named by its value: the privileged policy is root-only, and nothing from it reaches the wire. The gate's own patterns are already in its `policy` op.
+  - New `pathx.Matcher.Covering` returns the first covering pattern and its index. `fsx.Config.BuiltinDeny` says how many leading patterns are built-in; the gate and the helper set it to `len(BuiltinDeny())`.
+
+**Proof that the list refuses on its own** (maintainer request: with the root and Landlock checks bypassed):
+- The end-to-end test build (`-tags shellmcp_e2e_bypass`, never released) already skips the helper's Landlock. It now also skips fsx's forbidden-root check (`bypassForbiddenRoots`, `internal/gate/fsx/bypass.go`). `TestNoForbiddenRootBypassInThisBuild` checks the normal build, and the CI and ci-local cross-builds fail if a built binary carries the tag.
+- `TestBuiltinDenyRefusesProcSecretsWithRootChecksBypassed` (tagged) builds an fsx with `/proc` as a root directly, bypassing the policy's root rule; unit tests run without Landlock. The control `stat /proc/self/status` succeeds, so the root checks really are out of the way.
+- `stat` and `read_file` of `/proc/self/environ`, `/proc/1/environ`, `/proc/self/mem` and `/proc/kcore` are then each `path_denied`, with the message naming the deny rule.
+- CI's `go` job and `scripts/ci-local.sh` gained a step that runs the tagged fsx tests (`go test -race -tags shellmcp_e2e_bypass ./internal/gate/fsx/`).
+- Untagged tests:
+  - `TestBuiltinDenyCoversProcSecrets` (the list, with negative controls);
+  - `TestGatePolicyDeniesProcSecrets` and `TestHelperPolicyDeniesProcSecrets` (each loader's matcher);
+  - `TestMatcherCovering`;
+  - `TestDenyRefusalNamesTheRule` (fsx, a policy rule's value never in the message);
+  - `TestGateDenyRefusalNamesBuiltinRule` and `TestHelperDenyRefusalNamesTheRule` (through each component's op).
+
+  All were committed first and shown failing (`c88e364`).
+
+**Alternatives rejected:**
+- Naming every rule by its pattern: it would put values from the root-only privileged policy on the wire.
+- A new build tag for the fsx bypass: the existing end-to-end test build is exactly "root and Landlock checks bypassed", and it already has the release guards.
+- Also denying `/proc/*/task/*/environ` and `…/mem`: not requested. The same two rules keep them out; left for the maintainer.
+
+**Versions:** unchanged from the S1d entry (Go 1.27.2; x/crypto v0.58.0, x/sync v0.24.0, x/sys v0.49.0; govulncheck v1.9.0). No dependency added.
