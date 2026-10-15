@@ -237,9 +237,10 @@ jobs:
     permissions:
       contents: read
     env:
-      # Set from the first run on this image (ARCHIVE §14, S1c): the job fails
-      # if systemd-analyze security rates the helper's unit worse.
-      E2E_SECURITY_MAX: "1.6"
+      # The core unit's measured score on this image (ARCHIVE §14, S1d; S1c was
+      # 1.6): the job fails if systemd-analyze security rates it worse. The
+      # broad unit's score is recorded, not enforced (root-equivalent by design).
+      E2E_SECURITY_MAX: "1.4"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
