@@ -176,7 +176,7 @@ commands:
   - id: probe-attrs
     path: /usr/local/bin/example-probe
     tier: read
-    templates: [["rlimits"], ["procattrs"], ["status"]]
+    templates: [["rlimits"], ["procattrs"]]
   - id: probe-read-outside
     path: /usr/local/bin/example-probe
     tier: read

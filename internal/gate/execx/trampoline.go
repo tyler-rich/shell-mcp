@@ -316,7 +316,11 @@ func trampoline() int {
 			return fail(err)
 		}
 	}
-	if _, err := unix.FcntlInt(trampolineFD, unix.F_SETFD, unix.FD_CLOEXEC); err != nil {
+	// Every descriptor above stderr is close-on-exec: the control socket,
+	// and anything the gate or helper itself inherited without the flag
+	// (os/exec passes such descriptors on). The command gets exactly fd
+	// 0–2. CLOSE_RANGE_CLOEXEC needs Linux 5.11; without it nothing runs.
+	if err := unix.CloseRange(trampolineFD, ^uint(0), unix.CLOSE_RANGE_CLOEXEC); err != nil {
 		return fail(err)
 	}
 	return fail(syscall.Exec(c.Path, c.Argv, c.Env)) //nolint:gosec // G204: the command Run sent over the checked control socket: a path resolved and ownership-checked at policy load, an argv matched to a policy template; no shell

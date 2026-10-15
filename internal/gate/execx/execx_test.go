@@ -486,33 +486,73 @@ func TestCommandCannotReachTrampoline(t *testing.T) {
 	}
 }
 
+// procAttrs parses the probe's "procattrs" output (key=value lines).
+func procAttrs(out []byte) map[string]string {
+	a := map[string]string{}
+	for _, l := range lines(out) {
+		k, v, _ := strings.Cut(l, "=")
+		a[k] = v
+	}
+	return a
+}
+
+// extraFDs returns the descriptors in a "fds=" value other than the Go
+// runtime's own: since Go 1.25 the runtime keeps /sys/fs/cgroup/cpu.max open
+// (close-on-exec) where the cgroup filesystem is readable, at the lowest free
+// descriptor, so finding it at fd 3 also shows fd 3 was free.
+func extraFDs(fds string) []string {
+	var extra []string
+	for _, fd := range strings.Split(fds, ",") {
+		if fd != "" && !strings.HasPrefix(fd, "3:100000:/sys/fs/cgroup/") {
+			extra = append(extra, fd)
+		}
+	}
+	return extra
+}
+
 // TestCommandProcessAttributes: the command keeps what the trampoline was
 // started with: Pdeathsig=SIGKILL across both execs, its own process group,
 // no blocked signals, and no descriptor beyond stdin, stdout and stderr
-// (the control socket does not leak). The one descriptor allowed is the Go
-// runtime's own: since Go 1.25 it keeps /sys/fs/cgroup/cpu.max open
-// (close-on-exec) where the cgroup filesystem is readable, and it takes the
-// lowest free descriptor, so it sitting at fd 3 also shows fd 3 was free.
+// (the control socket does not leak).
 func TestCommandProcessAttributes(t *testing.T) {
 	p := probePath(t)
-	r := run(t, &execx.Spec{Path: p, Args: []string{"procattrs"}})
-	got := lines(r.Stdout)
-	want := []string{"pdeathsig=9", "pgid_is_pid=true", "SigBlk: 0000000000000000"}
-	if len(got) != 4 || !strings.HasPrefix(got[0], "fds=") || !slices.Equal(got[1:], want) {
-		t.Fatalf("attributes:\n%s\nwant fds=… and:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	a := procAttrs(run(t, &execx.Spec{Path: p, Args: []string{"procattrs"}}).Stdout)
+	if a["pdeathsig"] != "9" || a["pgid_is_pid"] != "true" || a["sigblk"] != "0000000000000000" {
+		t.Fatalf("attributes %v", a)
 	}
-	if fds := strings.TrimPrefix(got[0], "fds="); fds != "" {
-		for _, fd := range strings.Split(fds, ",") {
-			if !strings.HasPrefix(fd, "3:100000:/sys/fs/cgroup/") {
-				t.Fatalf("the command has a descriptor it was not given: %s (all: %s)", fd, fds)
-			}
-		}
+	if extra := extraFDs(a["fds"]); len(extra) > 0 {
+		t.Fatalf("the command has descriptors it was not given: %v", extra)
 	}
 }
 
-// TestTrampolineStartErrors: failures between the trampoline and the
-// command's first instruction are start errors with the errno, as they
-// were when os/exec started the command itself.
+// TestCommandGetsNoInheritedDescriptor: a descriptor the gate itself holds
+// without close-on-exec (inherited from whatever started it) does not reach
+// the command; os/exec alone would pass it on.
+func TestCommandGetsNoInheritedDescriptor(t *testing.T) {
+	p := probePath(t)
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pr.Close(); _ = pw.Close() }()
+	if _, err = unix.FcntlInt(pw.Fd(), unix.F_SETFD, 0); err != nil {
+		t.Fatal(err)
+	}
+	leaked := strconv.Itoa(int(pw.Fd())) + ":"
+	// Control: a child os/exec starts directly inherits it.
+	out, err := exec.CommandContext(context.Background(), p, "procattrs").Output() //nolint:gosec // G204: the test probe
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(procAttrs(out)["fds"], leaked) {
+		t.Fatalf("control: the direct child does not hold fd %s: %s", leaked, out)
+	}
+	a := procAttrs(run(t, &execx.Spec{Path: p, Args: []string{"procattrs"}}).Stdout)
+	if extra := extraFDs(a["fds"]); len(extra) > 0 {
+		t.Fatalf("the command inherited descriptors: %v", extra)
+	}
+}
+
 func TestTrampolineStartErrors(t *testing.T) {
 	p := probePath(t)
 	notExec := filepath.Join(t.TempDir(), "not-executable")

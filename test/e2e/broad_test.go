@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -559,22 +558,21 @@ func TestHelperExecTrampoline(t *testing.T) {
 			if n, err := strconv.Atoi(maxv); err != nil || n > 1024 {
 				t.Fatalf("nofile %q", lim["nofile"])
 			}
-			attrs := strings.Split(privExec(t, c.command, c.unit, "procattrs"), "\n")
-			if len(attrs) != 4 || attrs[1] != "pdeathsig=9" || attrs[2] != "pgid_is_pid=true" {
-				t.Fatalf("attributes:\n%s", strings.Join(attrs, "\n"))
+			a := map[string]string{}
+			for _, l := range strings.Split(privExec(t, c.command, c.unit, "procattrs"), "\n") {
+				k, v, _ := strings.Cut(l, "=")
+				a[k] = v
+			}
+			if a["pdeathsig"] != "9" || a["pgid_is_pid"] != "true" {
+				t.Fatalf("attributes %v", a)
+			}
+			if c.unit == "" && (a["nnp"] != "1" || a["seccomp"] != "2") {
+				t.Fatalf("core command: attributes %v", a)
 			}
 			// The Go runtime keeps /sys/fs/cgroup/cpu.max open where it can
 			// read it; nothing else may be open.
-			if fds := strings.TrimPrefix(attrs[0], "fds="); fds != "" && (strings.Contains(fds, ",") || !strings.HasPrefix(fds, "3:100000:/sys/fs/cgroup/")) {
-				t.Fatalf("the command has descriptors it was not given: %s", attrs[0])
-			}
-			if c.unit == "" {
-				status := strings.Split(privExec(t, c.command, c.unit, "status"), "\n")
-				for _, want := range []string{"NoNewPrivs: 1", "Seccomp: 2"} {
-					if !slices.Contains(status, want) {
-						t.Fatalf("core command status lacks %q:\n%s", want, strings.Join(status, "\n"))
-					}
-				}
+			if fds := a["fds"]; fds != "" && (strings.Contains(fds, ",") || !strings.HasPrefix(fds, "3:100000:/sys/fs/cgroup/")) {
+				t.Fatalf("the command has descriptors it was not given: %s", fds)
 			}
 		})
 	}

@@ -153,16 +153,23 @@ func main() {
 		var sig int32
 		_ = unix.Prctl(unix.PR_GET_PDEATHSIG, uintptr(unsafe.Pointer(&sig)), 0, 0, 0)
 		pgid, _ := unix.Getpgid(0)
+		// prctl, not /proc: a sandbox may hide /proc/self.
+		nnp, _ := unix.PrctlRetInt(unix.PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0)
+		seccomp, _ := unix.PrctlRetInt(unix.PR_GET_SECCOMP, 0, 0, 0, 0)
 		fmt.Printf("fds=%s\n", strings.Join(fds, ","))
 		fmt.Printf("pdeathsig=%d\n", sig)
 		fmt.Printf("pgid_is_pid=%v\n", pgid == os.Getpid())
+		fmt.Printf("nnp=%d\n", nnp)
+		fmt.Printf("seccomp=%d\n", seccomp)
 		// The main thread's mask, as execve left it (Go keeps it).
+		sigblk := "unreadable"
 		b, _ := os.ReadFile("/proc/self/status")
 		for _, l := range strings.Split(string(b), "\n") {
-			if strings.HasPrefix(l, "SigBlk:") {
-				fmt.Println(strings.ReplaceAll(l, "\t", " "))
+			if v, ok := strings.CutPrefix(l, "SigBlk:"); ok {
+				sigblk = strings.TrimSpace(v)
 			}
 		}
+		fmt.Printf("sigblk=%s\n", sigblk)
 	case "rlimits":
 		for _, r := range []struct {
 			name string

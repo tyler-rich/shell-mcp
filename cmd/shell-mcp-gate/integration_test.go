@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -106,7 +105,6 @@ commands:
     templates:
       - ["read-outside"]
       - ["nnp"]
-      - ["status"]
       - ["procattrs"]
       - ["rlimits"]
       - ["mptcp"]
@@ -438,12 +436,6 @@ func TestIntegrationSandboxFilesystem(t *testing.T) {
 func TestIntegrationSandboxTrampoline(t *testing.T) {
 	needABI(t, 1)
 	g := newGate(t)
-	status := strings.Split(strings.TrimSpace(g.exec([]string{"status"}, nil).Stdout), "\n")
-	for _, want := range []string{"NoNewPrivs: 1", "Seccomp: 2"} {
-		if !slices.Contains(status, want) {
-			t.Fatalf("child status lacks %q:\n%s", want, strings.Join(status, "\n"))
-		}
-	}
 	if d := g.exec([]string{"read-outside"}, nil); strings.TrimSpace(d.Stdout) != "EACCES" {
 		t.Fatalf("read outside every root: %q", d.Stdout)
 	}
@@ -463,14 +455,18 @@ func TestIntegrationSandboxTrampoline(t *testing.T) {
 			t.Fatalf("%s must be bounded: %q", k, lim[k])
 		}
 	}
-	attrs := strings.Split(strings.TrimSpace(g.exec([]string{"procattrs"}, nil).Stdout), "\n")
-	if len(attrs) != 4 || !slices.Equal(attrs[1:3], []string{"pdeathsig=9", "pgid_is_pid=true"}) {
-		t.Fatalf("attributes:\n%s", strings.Join(attrs, "\n"))
+	a := map[string]string{}
+	for _, l := range strings.Split(strings.TrimSpace(g.exec([]string{"procattrs"}, nil).Stdout), "\n") {
+		k, v, _ := strings.Cut(l, "=")
+		a[k] = v
+	}
+	if a["nnp"] != "1" || a["seccomp"] != "2" || a["pdeathsig"] != "9" || a["pgid_is_pid"] != "true" {
+		t.Fatalf("attributes %v", a)
 	}
 	// The Go runtime's own cgroup file is the only descriptor a Go command
 	// may hold, and only where the sandbox lets it read /sys.
-	if fds := strings.TrimPrefix(attrs[0], "fds="); fds != "" && (strings.Contains(fds, ",") || !strings.HasPrefix(fds, "3:100000:/sys/fs/cgroup/")) {
-		t.Fatalf("the command has descriptors it was not given: %s", attrs[0])
+	if fds := a["fds"]; fds != "" && (strings.Contains(fds, ",") || !strings.HasPrefix(fds, "3:100000:/sys/fs/cgroup/")) {
+		t.Fatalf("the command has descriptors it was not given: %s", fds)
 	}
 }
 

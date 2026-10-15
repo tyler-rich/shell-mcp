@@ -210,16 +210,19 @@ func TestRunLockWait(t *testing.T) {
 	if err != nil || res.ExitCode == nil || *res.ExitCode != 0 || res.Attempts != 3 || len(calls(t, log)) != 3 || res.LockWait <= 0 {
 		t.Fatalf("run %+v %v, %d calls", res, err, len(calls(t, log)))
 	}
+	// The lock wait leaves room for a few attempts: each run starts through
+	// the exec trampoline, here this race-built test binary, which starts
+	// far slower than the helper does.
 	for _, mode := range []string{"lockforever", "listslock"} {
 		mbin, mlog := fake(t, mode)
-		mr := pkg.Runner{AptGet: mbin, Trampoline: trampoline(t), Env: pkg.Env("/root"), MaxOutput: 4096, LockWait: 300 * time.Millisecond, Retry: 50 * time.Millisecond}
+		mr := pkg.Runner{AptGet: mbin, Trampoline: trampoline(t), Env: pkg.Env("/root"), MaxOutput: 4096, LockWait: 2 * time.Second, Retry: 50 * time.Millisecond}
 		start := time.Now()
 		mres, merr := mr.Run(context.Background(), 10*time.Second, []string{"-q", "update"})
 		if !errors.Is(merr, pkg.ErrLockHeld) || mres.Attempts < 2 {
 			t.Fatalf("%s: %+v %v", mode, mres, merr)
 		}
-		if d := time.Since(start); d > 3*time.Second {
-			t.Fatalf("%s: waited %v past a 300ms lock wait", mode, d)
+		if d := time.Since(start); d > 8*time.Second {
+			t.Fatalf("%s: waited %v past a 2s lock wait", mode, d)
 		}
 		if n := len(calls(t, mlog)); n != mres.Attempts {
 			t.Fatalf("%s: %d calls, %d attempts", mode, n, mres.Attempts)
