@@ -353,31 +353,70 @@ func show(t *testing.T, unit, prop string) string {
 	return strings.TrimSpace(run(t, "systemctl", "show", "-p", prop, "--value", unit))
 }
 
-// ProtectProc=invisible hides other users' processes from core-unit
-// commands (the helper is root but has no CAP_SYS_PTRACE); a core-unit
-// command declaring CAP_KILL turns it to default, and the process is seen.
+// ProtectProc=ptraceable hides from core-unit commands every process they
+// may not ptrace: other users' processes, since the unit has no
+// CAP_SYS_PTRACE. Root-owned processes (same uid) stay visible. A core-unit
+// command declaring CAP_KILL turns it to default, and the other user's
+// process is seen. (Not invisible: the kernel exempts procfs's gid= group,
+// gid 0 by default, from that mode's check, and the helper is root:root.)
 func TestCoreProtectProc(t *testing.T) {
-	pid := strconv.Itoa(sleeperAs(t, svcOther))
-	if out := strings.TrimSpace(run(t, probeBin, "visible", pid)); out != "VISIBLE" {
-		t.Fatalf("control: %s", out)
+	other := strconv.Itoa(sleeperAs(t, svcOther))
+	root := strconv.Itoa(sleeperAs(t, 0))
+	for _, pid := range []string{other, root} {
+		if out := strings.TrimSpace(run(t, probeBin, "visible", pid)); out != "VISIBLE" {
+			t.Fatalf("control %s: %s", pid, out)
+		}
 	}
-	if got := show(t, "shell-mcp-privd@e2e.service", "ProtectProc"); got != "invisible" {
+	if got := show(t, "shell-mcp-privd@e2e.service", "ProtectProc"); got != "ptraceable" {
 		t.Fatalf("ProtectProc=%s", got)
 	}
 	if got := show(t, "shell-mcp-privd@e2e.service", "ProcSubset"); got != "pid" {
 		t.Fatalf("ProcSubset=%s", got)
 	}
-	if got := privExec(t, "probe-visible", "", "visible", pid); got != "ENOENT" {
-		t.Logf("core unit process status:\n%s", privExec(t, "probe-visible", "", "status"))
-		t.Fatalf("with ProtectProc=invisible: %q, want ENOENT", got)
+	if got := privExec(t, "probe-visible", "", "visible", other); got != "ENOENT" {
+		t.Fatalf("another user's process with ProtectProc=ptraceable: %q, want ENOENT", got)
+	}
+	if got := privExec(t, "probe-visible", "", "visible", root); got != "VISIBLE" {
+		t.Fatalf("a root process with ProtectProc=ptraceable: %q, want VISIBLE (same uid)", got)
 	}
 	installPolicy(t, "privileged-cap-kill.yaml")
 	if got := show(t, "shell-mcp-privd@e2e.service", "ProtectProc"); got != "default" {
 		t.Fatalf("with CAP_KILL, ProtectProc=%s", got)
 	}
-	if got := privExec(t, "probe-visible", "", "visible", pid); got != "VISIBLE" {
+	if got := privExec(t, "probe-visible", "", "visible", other); got != "VISIBLE" {
 		t.Fatalf("with CAP_KILL: %q, want VISIBLE", got)
 	}
+}
+
+// A root process's environment stays out of reach although root processes
+// are visible to the core unit: the core unit's Landlock ruleset grants no
+// /proc beyond the helper's own /proc/<pid>, so a declared command cannot
+// open another process's environ, and no privileged root may be or be
+// inside /proc, so priv_read_file refuses it. Outside the unit, root reads
+// it (the control). Both hold with ProtectProc=default (CAP_KILL) too.
+func TestCoreCannotReadProcessEnvironment(t *testing.T) {
+	c := exec.CommandContext(t.Context(), "/usr/bin/sleep", "120")
+	c.Env = []string{"E2E_ENV_CANARY=invented-e2e-value"}
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Process.Kill(); _ = c.Wait() })
+	pid := strconv.Itoa(c.Process.Pid)
+	if out := strings.TrimSpace(run(t, probeBin, "read-environ", pid)); !strings.HasPrefix(out, "READ:") || !strings.HasSuffix(out, " CANARY") {
+		t.Fatalf("control: %s", out)
+	}
+	check := func(when string) {
+		t.Helper()
+		if got := privExec(t, "probe-environ", "", "read-environ", pid); got != "EACCES" {
+			t.Fatalf("%s: a core-unit command read another root process's environment: %q", when, got)
+		}
+		for _, p := range []string{"/proc/" + pid + "/environ", "/proc/1/environ"} {
+			wantGate(t, svcShell, "priv_read_file", map[string]any{"path": p}, "path_denied")
+		}
+	}
+	check("ProtectProc=ptraceable")
+	installPolicy(t, "privileged-cap-kill.yaml")
+	check("ProtectProc=default")
 }
 
 // A broad-unit command declaring CAP_SYS_TIME turns ProtectClock= off in

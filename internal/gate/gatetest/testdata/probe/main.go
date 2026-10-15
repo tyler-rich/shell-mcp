@@ -109,6 +109,15 @@ func main() {
 				}
 			}
 		}
+	case "read-environ":
+		// Another process's environment: reports only its size and whether
+		// the e2e canary is in it, never the content.
+		b, err := os.ReadFile("/proc/" + args[0] + "/environ")
+		canary := ""
+		if strings.Contains(string(b), "E2E_ENV_CANARY=") {
+			canary = " CANARY"
+		}
+		report(err, fmt.Sprintf("READ:%d%s", len(b), canary))
 	case "visible":
 		// Whether /proc shows the process (ProtectProc=, hidepid).
 		_, err := os.Stat("/proc/" + args[0])

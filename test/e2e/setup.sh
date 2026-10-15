@@ -188,7 +188,11 @@ $1    templates: [["signal", "{int:2-4194304}"]]
   - id: probe-visible
     path: /usr/local/bin/example-probe
     tier: read
-    templates: [["visible", "{int:1-4194304}"], ["status"]]
+    templates: [["visible", "{int:1-4194304}"]]
+  - id: probe-environ
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["read-environ", "{int:1-4194304}"]]
   - id: probe-unix
     path: /usr/local/bin/example-probe
     tier: read
