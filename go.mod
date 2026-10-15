@@ -1,6 +1,6 @@
 module github.com/tyler-rich/shell-mcp
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/landlock-lsm/go-landlock v0.10.1
