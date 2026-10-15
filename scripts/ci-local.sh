@@ -15,14 +15,19 @@ cd "$(dirname "$0")/.."
 # Windows-style path for docker under Git Bash, plain path elsewhere.
 repo="$({ pwd -W 2>/dev/null || pwd; })"
 
-# --- Pinned images -----------------------------------------------------------
+# --- Pinned image and tools ----------------------------------------------------
 # The Go image is read from the Dockerfile's builder stage, so Dependabot's
 # docker updates move CI-local, CI and the image build together.
 go_image="$(awk 'toupper($1) == "FROM" && $2 ~ /^golang:/ { print $2; exit }' Dockerfile)"
-# golangci-lint: keep in step with `version:` in .github/workflows/ci.yml.
-lint_image="golangci/golangci-lint:v2.14.0@sha256:ad862ba6b3798cbe0fd9fd7408d498fd74fbd2623a92406b2fd3898faf0bf98f"
-# govulncheck runs from its module at a pinned version (verified by the Go
-# checksum database); keep in step with ci.yml.
+# golangci-lint and govulncheck run from their modules at pinned versions,
+# built by `go run` in the Go image above and verified by their go.sum and
+# the Go checksum database; keep them in step with GOLANGCI_LINT_VERSION and
+# GOVULNCHECK_VERSION in ci.yml. Building golangci-lint with the Go image means
+# the Go that loads this module for linting is always the Go the tests use: a
+# prebuilt golangci-lint image bundles its own Go, and with GOTOOLCHAIN=local
+# that Go cannot load the module once go.mod's go line moves past it.
+# deps-current checks both pins and that the lint step runs this way.
+golangci_lint_version="v2.14.0"
 govulncheck_version="v1.9.0"
 
 if [[ "$go_image" != *@sha256:* ]]; then
@@ -56,7 +61,7 @@ common=(
 	-v "$cache_volume:/cache" -v "$repo:/src:ro" -w /src
 )
 in_go() { docker run "${common[@]}" "$go_image" "$@"; }
-in_lint() { docker run "${common[@]}" "$lint_image" "$@"; }
+in_lint() { in_go go run "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$golangci_lint_version" "$@"; }
 
 # --- Steps ----------------------------------------------------------------------
 names=()
@@ -120,8 +125,8 @@ cross_build() { # cross_build <goarch>
 step "gofmt" "" gofmt_check
 step "go vet" "" in_go go vet ./...
 step "go vet (e2e, bypass tags)" "" in_go sh -c "go vet -tags e2e ./test/e2e/ && go vet -tags shellmcp_e2e_bypass ./internal/privd/... ./cmd/shell-mcp-privd/"
-step "golangci-lint" "" in_lint golangci-lint run ./...
-step "golangci-lint (e2e, bypass tags)" "" in_lint golangci-lint run --build-tags=e2e,shellmcp_e2e_bypass ./...
+step "golangci-lint" "" in_lint run ./...
+step "golangci-lint (e2e, bypass tags)" "" in_lint run --build-tags=e2e,shellmcp_e2e_bypass ./...
 step "go test -race" "" in_go go test -race -count=1 ./...
 step "go test -race (test build, fsx)" "" in_go go test -race -count=1 -tags shellmcp_e2e_bypass ./internal/gate/fsx/
 step "govulncheck" "" in_go go run "golang.org/x/vuln/cmd/govulncheck@$govulncheck_version" ./...
