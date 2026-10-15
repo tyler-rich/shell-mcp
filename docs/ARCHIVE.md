@@ -847,3 +847,22 @@ Each entry sets `SHELL_MCP_REQUIRE_LANDLOCK_ABI` to its kernel's ABI, so every k
 **Noted, not changed:** `TestChildRlimits` (`internal/gate/execx`, unchanged since S1) failed once in a local `-race` run and passed five times on its own. The child's limits are applied with `prlimit` just after `Start()`, so a fast child can read its limits first. This is a pre-existing timing flake, left for a separate change.
 
 **Versions:** unchanged (Go 1.27.2). No dependency added.
+
+### 2026-10-15 — ci-local lints with golangci-lint built in the Go image (PR #n, branch chore/ci-local-lint)
+**Decision:** `scripts/ci-local.sh` no longer runs the prebuilt `golangci/golangci-lint` image. It runs `go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$golangci_lint_version` inside the digest-pinned Go image the tests use (`in_go`), the same way govulncheck already runs. The version variable is kept equal to `GOLANGCI_LINT_VERSION` in `ci.yml`. Both lint steps stay: default tags, and `--build-tags=e2e,shellmcp_e2e_bypass`.
+- **deps-current** reads the golangci-lint pin from the new `golangci_lint_version="vX.Y.Z"` line, and still compares it with `ci.yml` and the newest stable release.
+- **New deps-current check:** it fails when ci-local's lint toolchain is older than go.mod's go/toolchain line. That Go is the Dockerfile's golang builder image, so the check reads the version from that image's tag. It also fails when the lint step does not run this way: `in_lint` must be exactly the `go run` line, `in_go` must run the Go image read from the Dockerfile, and every `golangci-lint` step must use `in_lint`.
+- **Self-test:** two new cases, both shown failing against the old script (`7886614`). A Go image older than go.mod (`golang:1.26.0-…`) fails, and so does a lint step pointed back at a prebuilt image. The golangci-lint pin case uses the new variable. A scratch-copy setup failure now counts as a test failure, so a format change cannot make a case pass vacuously, and the remaining cases still run. 12/12 pass.
+
+**Why:** the image `golangci/golangci-lint:v2.14.0` bundles Go 1.27.1. ci-local sets `GOTOOLCHAIN=local`, so once go.mod moved to `go 1.27.2` lint stopped with "go.mod requires go >= 1.27.2 (running go 1.27.1; GOTOOLCHAIN=local)". Building golangci-lint with the Go image ties the lint toolchain to the test toolchain. Dependabot's docker updates move that image together with go.mod's Go, and the module download is verified by golangci-lint's go.sum and the Go checksum database. This also retires the manual image-digest bump recorded in the S0 entries.
+
+**CI** is unchanged. golangci-lint-action runs the pinned version's prebuilt binary, and packages are loaded through the `go` command that setup-go installs from go.mod. golangci-lint's own check compares only language versions (`version.Lang` of its build Go against go.mod's `M.m`, `pkg/goutil/version.go` at v2.14.0), so a patch-level difference passes it there.
+
+**Alternatives rejected:**
+- Waiting for a golangci-lint image built with Go 1.27.2: lint would stay broken until then and break again at the next Go patch.
+- Dropping `GOTOOLCHAIN=local` in the lint container: the toolchain would be downloaded instead of pinned by the image digest.
+- A `tool` directive for golangci-lint: it would put the linter's large dependency graph into this module's go.mod and deps-current scope.
+
+**Deferred / follow-ups:** none.
+
+**Versions:** Go 1.27.2 (newest stable per go.dev; `deps-current` reports every in-scope module current). Direct modules unchanged: go-landlock v0.10.1, go-sdk v1.8.0, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0. Tools: golangci-lint v2.14.0, govulncheck v1.9.0. No dependency added.
