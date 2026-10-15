@@ -15,7 +15,7 @@ var builtinDeny = []string{
 	// Other processes' environment and memory, and the kernel's memory image:
 	// defence in depth behind Landlock and the rule that no root may be or be
 	// inside /proc (POLICY §3).
-	"/proc/*/environ", "/proc/*/mem", "/proc/kcore",
+	"/proc/*/environ", "/proc/*/mem", "/proc/*/task/*/environ", "/proc/*/task/*/mem", "/proc/kcore",
 }
 
 // builtinProtected is the built-in protected set (POLICY §3). The gate
