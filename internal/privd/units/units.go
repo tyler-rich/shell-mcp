@@ -280,7 +280,8 @@ func Broad(p *policy.Policy) (Files, error) {
 
 // protectProc is the core unit's ProtectProc=: ptraceable, which hides every
 // process the unit may not ptrace — other users' processes, since it has no
-// CAP_SYS_PTRACE (root-owned processes, same uid, stay visible) — or
+// CAP_SYS_PTRACE, and, under the helper's Landlock domain, every process
+// outside that domain, root-owned ones included — or
 // default when a core-unit command declares CAP_KILL, because signalling a
 // process requires seeing it. Not invisible: the kernel exempts procfs's
 // gid= group from that mode's check (has_pid_permissions(), fs/proc/base.c),
