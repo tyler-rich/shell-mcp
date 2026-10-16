@@ -99,3 +99,30 @@ func TestAuditLineCarriesRequestID(t *testing.T) {
 		t.Errorf("refusal line lacks an empty id: %q", l)
 	}
 }
+
+// TestAuditLineCarriesCeiling: the gate's audit line records the request's
+// tier ceiling, for an op that ran, for one the ceiling refused, and as
+// empty for a request refused before it was read.
+func TestAuditLineCarriesCeiling(t *testing.T) {
+	f := newFixture(t, "operator")
+	next := f.auditTo(t)
+	f.ok("hello", m{}, nil)
+	if l := next(); !strings.Contains(l, `"ceiling":"destructive"`) {
+		t.Errorf("line lacks the request's ceiling: %q", l)
+	}
+	if r := f.callAt("operator", "stat", m{"path": f.write}); !r.OK {
+		t.Fatalf("stat at ceiling operator: %+v", r.Error)
+	}
+	if l := next(); !strings.Contains(l, `"ceiling":"operator"`) || !strings.Contains(l, `"outcome":"ok"`) {
+		t.Errorf("line lacks ceiling operator: %q", l)
+	}
+	f.deniedAt("read", "write_file", m{"path": filepath.Join(f.write, "c.txt"), "content_b64": ""}, "ceiling read")
+	if l := next(); !strings.Contains(l, `"ceiling":"read"`) || !strings.Contains(l, `"outcome":"tier_denied"`) {
+		t.Errorf("refusal line lacks ceiling read: %q", l)
+	}
+	f.opts.Identity.UID = 0
+	f.fail("hello", m{}, "install_insecure")
+	if l := next(); !strings.Contains(l, `"ceiling":""`) {
+		t.Errorf("a request refused before it was read must log an empty ceiling: %q", l)
+	}
+}

@@ -35,6 +35,8 @@ type Deps struct {
 	MaxOutputBytes int
 	// Redactor holds the built-in rules and SHELL_MCP_REDACT_PATTERNS.
 	Redactor *redact.Redactor
+	// ApprovalTiers is SHELL_MCP_APPROVAL_TIERS.
+	ApprovalTiers []string
 }
 
 // Catalogue returns the registry of every tool this binary knows, each with
