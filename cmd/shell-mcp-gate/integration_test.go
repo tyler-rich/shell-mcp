@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
@@ -82,11 +83,15 @@ type gate struct {
 	env                                                []string
 }
 
+// {GATEDIR} is the harness binary's directory. The gate starts every
+// command by re-executing its own binary (execx's trampoline), so the
+// sandbox must let it execute itself; in production it is under /usr, which
+// the default read+execute rules cover.
 const integrationPolicy = `version: 1
 max_tier: {TIER}
 sandbox:
   landlock: {MODE}
-  system_read_exec: [{BIN}]
+  system_read_exec: [{BIN}, {GATEDIR}]
 {PORTS}limits:
   max_output_bytes: 65536
 paths:
@@ -100,6 +105,8 @@ commands:
     templates:
       - ["read-outside"]
       - ["nnp"]
+      - ["procattrs"]
+      - ["rlimits"]
       - ["mptcp"]
       - ["echo", "{regex:^[a-z0-9 -]+$}"]
       - ["echo", "{path:read}"]
@@ -141,12 +148,12 @@ func newGate(t *testing.T) *gate {
 
 func (g *gate) policy(tier, mode, ports string) {
 	y := strings.NewReplacer("{TIER}", tier, "{MODE}", mode, "{PORTS}", ports,
-		"{R}", g.read, "{W}", g.write, "{BIN}", g.bin).Replace(integrationPolicy)
+		"{R}", g.read, "{W}", g.write, "{BIN}", g.bin, "{GATEDIR}", buildDir).Replace(integrationPolicy)
 	gatetest.WriteFile(g.t, g.pol, y, 0o644)
 }
 
 func (g *gate) rawPolicy(y string) {
-	gatetest.WriteFile(g.t, g.pol, strings.NewReplacer("{R}", g.read, "{W}", g.write, "{BIN}", g.bin).Replace(y), 0o644)
+	gatetest.WriteFile(g.t, g.pol, strings.NewReplacer("{R}", g.read, "{W}", g.write, "{BIN}", g.bin, "{GATEDIR}", buildDir).Replace(y), 0o644)
 }
 
 type resp struct {
@@ -418,6 +425,51 @@ func TestIntegrationSandboxFilesystem(t *testing.T) {
 	}
 }
 
+// TestIntegrationSandboxTrampoline: a declared command, started by the real
+// gate through its exec trampoline (the gate binary re-executing itself
+// inside the sandbox), still carries everything the gate applied before
+// reading the request, plus the child limits from before its first
+// instruction: no_new_privs, the seccomp filter, the Landlock domain (the
+// probe cannot read a file outside every root), core 0/0, open files and
+// processes bounded, Pdeathsig=SIGKILL, its own process group, and no
+// descriptor beyond stdin, stdout and stderr.
+func TestIntegrationSandboxTrampoline(t *testing.T) {
+	needABI(t, 1)
+	g := newGate(t)
+	if d := g.exec([]string{"read-outside"}, nil); strings.TrimSpace(d.Stdout) != "EACCES" {
+		t.Fatalf("read outside every root: %q", d.Stdout)
+	}
+	lim := map[string]string{}
+	for _, l := range strings.Split(strings.TrimSpace(g.exec([]string{"rlimits"}, nil).Stdout), "\n") {
+		k, v, _ := strings.Cut(l, "=")
+		lim[k] = v
+	}
+	if lim["core"] != "0/0" {
+		t.Fatalf("core %q", lim["core"])
+	}
+	for _, k := range []string{"nofile", "nproc"} {
+		c, m, _ := strings.Cut(lim[k], "/")
+		cur, err1 := strconv.ParseUint(c, 10, 64)
+		maxv, err2 := strconv.ParseUint(m, 10, 64)
+		if err1 != nil || err2 != nil || cur > 1<<22 || maxv > 1<<22 {
+			t.Fatalf("%s must be bounded: %q", k, lim[k])
+		}
+	}
+	a := map[string]string{}
+	for _, l := range strings.Split(strings.TrimSpace(g.exec([]string{"procattrs"}, nil).Stdout), "\n") {
+		k, v, _ := strings.Cut(l, "=")
+		a[k] = v
+	}
+	if a["nnp"] != "1" || a["seccomp"] != "2" || a["pdeathsig"] != "9" || a["pgid_is_pid"] != "true" {
+		t.Fatalf("attributes %v", a)
+	}
+	// The Go runtime's own cgroup file is the only descriptor a Go command
+	// may hold, and only where the sandbox lets it read /sys.
+	if fds := a["fds"]; fds != "" && (strings.Contains(fds, ",") || !strings.HasPrefix(fds, "3:100000:/sys/fs/cgroup/")) {
+		t.Fatalf("the command has descriptors it was not given: %s", fds)
+	}
+}
+
 // requireMPTCPEnv: CI sets it so the MPTCP tests fail, never skip, when the
 // control case cannot open an MPTCP socket on the runner's kernel.
 const requireMPTCPEnv = "SHELL_MCP_REQUIRE_MPTCP"
@@ -597,7 +649,7 @@ func TestIntegrationServiceOps(t *testing.T) {
 	g := newGate(t)
 	sc := gatetest.BuildFakeSys(t, g.bin, "systemctl", "")
 	jc := gatetest.BuildFakeSys(t, g.bin, "journalctl", "")
-	g.rawPolicy("version: 1\nmax_tier: read\nsandbox:\n  landlock: " + defaultMode() + "\n  system_read_exec: [{BIN}]\n" +
+	g.rawPolicy("version: 1\nmax_tier: read\nsandbox:\n  landlock: " + defaultMode() + "\n  system_read_exec: [{BIN}, {GATEDIR}]\n" +
 		"services:\n  status: [\"example-*.service\"]\njournal:\n  units: [\"example-*.service\"]\n")
 	env := []string{"HARNESS_SYSTEMCTL=" + sc, "HARNESS_JOURNALCTL=" + jc}
 	g.want(g.call("service_status", m{"unit": "example-app.service"}, env...), "")
@@ -610,6 +662,7 @@ max_tier: operator
 sandbox:
   landlock: {MODE}
   tcp_connect_ports: [{PORTS}]
+  system_read_exec: [{GATEDIR}]
 paths:
   read: [{R}]
   write: [{W}]
@@ -677,5 +730,17 @@ func TestIntegrationGitPullUnlistedPort(t *testing.T) {
 	g.want(g.call("git_pull", m{"repo": repo}, env...), "")
 	if head() == before {
 		t.Fatal("control: the pull with the port listed did not move HEAD")
+	}
+}
+
+// TestIntegrationTrampolineNotFromSSHCommand: what an SSH client asks to
+// run arrives only as SSH_ORIGINAL_COMMAND, which the forced command never
+// executes: the gate refuses any request that comes with one, so asking for
+// the exec trampoline gets install_insecure and nothing runs.
+func TestIntegrationTrampolineNotFromSSHCommand(t *testing.T) {
+	g := newGate(t)
+	r := g.want(g.call("hello", m{}, "SSH_ORIGINAL_COMMAND="+execx.TrampolineArg), "install_insecure")
+	if !strings.Contains(r.Error.Message, "SSH_ORIGINAL_COMMAND") {
+		t.Fatalf("refusal %q", r.Error.Message)
 	}
 }

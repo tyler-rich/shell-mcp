@@ -153,3 +153,43 @@ func BuildFakeSys(t testing.TB, dir, name, logPath string) string {
 	t.Helper()
 	return Build(t, "internal/gate/gatetest/testdata/fakesys", dir, name, nil, "-ldflags", "-X main.logPath="+logPath)
 }
+
+// Self returns this test binary's resolved path. Every binary that imports
+// execx can serve as its exec trampoline, test binaries included.
+func Self(t testing.TB) string {
+	t.Helper()
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	if err != nil {
+		t.Fatalf("own executable: %v", err)
+	}
+	return exe
+}
+
+// LinkSelf puts this test binary at dst (a hard link, or a copy across
+// file systems), so that a fixture's gate or helper binary is a real binary
+// that execx can use as its trampoline.
+func LinkSelf(t testing.TB, dst string) {
+	t.Helper()
+	src := Self(t)
+	if err := os.Link(src, dst); err == nil {
+		// The gate and the helper refuse a group- or other-writable binary;
+		// go test may leave its binary 0775.
+		if err := os.Chmod(dst, 0o755); err != nil { //nolint:gosec // G302: an executable fixture
+			t.Fatal(err)
+		}
+		return
+	}
+	b, err := os.ReadFile(src) //nolint:gosec // G304: this test binary
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, b, 0o755); err != nil { //nolint:gosec // G306: an executable fixture
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dst, 0o755); err != nil { //nolint:gosec // G302: an executable fixture, exact mode (not subject to umask)
+		t.Fatal(err)
+	}
+}

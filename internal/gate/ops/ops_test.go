@@ -87,7 +87,9 @@ func newFixture(t *testing.T, tier string) *fixture {
 	for _, p := range []string{f.write, f.secrets, f.bin, f.home, filepath.Join(f.read, "deploy")} {
 		gatetest.Mkdir(t, p, 0o755)
 	}
-	gatetest.WriteFile(t, f.exe, "invented", 0o755)
+	gatetest.Mkdir(t, filepath.Dir(f.exe), 0o755)
+	// The gate binary is this test binary: execx starts commands through it.
+	gatetest.LinkSelf(t, f.exe)
 	gatetest.WriteFile(t, filepath.Join(f.read, "hello.txt"), "hello\nAuthorization: Bearer abc.def\n", 0o644)
 	gatetest.WriteFile(t, filepath.Join(f.secrets, "token"), "TOPSECRET", 0o644)
 	f.probe = gatetest.BuildProbe(t, f.bin, "probe", "/nonexistent")

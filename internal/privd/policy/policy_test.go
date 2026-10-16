@@ -708,3 +708,26 @@ func TestHelperPolicyDeniesProcSecrets(t *testing.T) {
 		}
 	}
 }
+
+// TestHelperBinaryOutsideExecDirsWarns: the helper starts every command by
+// re-executing its own binary (the execx trampoline), and the core unit's
+// Landlock ruleset grants execute only under /usr, /bin, /sbin, /lib,
+// /lib64 and on the declared commands; check-policy warns when the helper
+// binary is elsewhere and core-unit commands are declared.
+func TestHelperBinaryOutsideExecDirsWarns(t *testing.T) {
+	f := newFixture(t)
+	want := "the helper binary " + f.helper + " is outside the core unit's read+execute directories"
+	has := func(p *policy.Policy) bool {
+		return slices.ContainsFunc(p.Warnings, func(w string) bool { return strings.HasPrefix(w, want) })
+	}
+	if p := f.mustLoad(t, withCommand(cmd("x", "{BIN}/example-tool", ""))); !has(p) {
+		t.Fatalf("core command: warnings %q", p.Warnings)
+	}
+	if p := f.mustLoad(t, head); has(p) {
+		t.Fatalf("no command: warnings %q", p.Warnings)
+	}
+	f.opts.HelperExecutable = "/usr/local/libexec/shell-mcp-privd"
+	if p := f.mustLoad(t, withCommand(cmd("x", "{BIN}/example-tool", ""))); has(p) {
+		t.Fatalf("under /usr: warnings %q", p.Warnings)
+	}
+}

@@ -533,3 +533,47 @@ func TestPowerReachesSystemd(t *testing.T) {
 		t.Fatalf("unprivileged StartUnit: %v %q", err, out)
 	}
 }
+
+// TestHelperExecTrampoline: the helper starts root commands by re-executing
+// its own binary inside the unit (internal/gate/execx's trampoline), in
+// both units. The command has the child limits from its first instruction
+// (core dumps off, open files bounded), keeps Pdeathsig=SIGKILL and its own
+// process group, and holds no descriptor it was not given; in the core
+// unit it is also under no_new_privs and the seccomp filters.
+func TestHelperExecTrampoline(t *testing.T) {
+	for _, c := range []struct{ command, unit string }{{"probe-attrs", ""}, {"probe-broad", "broad"}} {
+		t.Run(c.command, func(t *testing.T) {
+			lim := map[string]string{}
+			for _, l := range strings.Split(privExec(t, c.command, c.unit, "rlimits"), "\n") {
+				k, v, _ := strings.Cut(l, "=")
+				lim[k] = v
+			}
+			if lim["core"] != "0/0" {
+				t.Fatalf("core %q", lim["core"])
+			}
+			cur, maxv, _ := strings.Cut(lim["nofile"], "/")
+			if n, err := strconv.Atoi(cur); err != nil || n > 1024 {
+				t.Fatalf("nofile %q", lim["nofile"])
+			}
+			if n, err := strconv.Atoi(maxv); err != nil || n > 1024 {
+				t.Fatalf("nofile %q", lim["nofile"])
+			}
+			a := map[string]string{}
+			for _, l := range strings.Split(privExec(t, c.command, c.unit, "procattrs"), "\n") {
+				k, v, _ := strings.Cut(l, "=")
+				a[k] = v
+			}
+			if a["pdeathsig"] != "9" || a["pgid_is_pid"] != "true" {
+				t.Fatalf("attributes %v", a)
+			}
+			if c.unit == "" && (a["nnp"] != "1" || a["seccomp"] != "2") {
+				t.Fatalf("core command: attributes %v", a)
+			}
+			// The Go runtime keeps /sys/fs/cgroup/cpu.max open where it can
+			// read it; nothing else may be open.
+			if fds := a["fds"]; fds != "" && (strings.Contains(fds, ",") || !strings.HasPrefix(fds, "3:100000:/sys/fs/cgroup/")) {
+				t.Fatalf("the command has descriptors it was not given: %s", fds)
+			}
+		})
+	}
+}

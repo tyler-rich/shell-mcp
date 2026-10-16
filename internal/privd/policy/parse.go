@@ -213,6 +213,7 @@ func parse(data []byte, files []string, opts *LoadOptions) (*Policy, error) {
 	v.packages(p, raw.Packages)
 	v.power(p, raw.Power)
 	v.capabilities(p)
+	v.selfExec(p)
 
 	if len(v.errs) > 0 {
 		return nil, errors.Join(v.errs...)
@@ -895,4 +896,19 @@ func broadCapabilityEffect(cp string) string {
 		return "; the broad unit drops ProtectClock=yes"
 	}
 	return "; the broad unit already has it"
+}
+
+// selfExec warns when the helper binary is outside the core unit's
+// read+execute directories while core-unit commands are declared: the
+// helper starts every command by re-executing itself as the exec
+// trampoline, and the core unit's Landlock ruleset grants execute only on
+// those directories and the declared command binaries.
+func (v *validator) selfExec(p *Policy) {
+	e := v.opts.HelperExecutable
+	if e == "" || !slices.ContainsFunc(p.Commands, func(c Command) bool { return c.Unit == UnitCore }) {
+		return
+	}
+	if _, ok := pathx.Longest(gpolicy.DefaultReadExec(), e); !ok {
+		v.warn("the helper binary %s is outside the core unit's read+execute directories; under Landlock no core-unit command can start (install it under /usr)", e)
+	}
 }

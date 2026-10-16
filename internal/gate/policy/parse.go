@@ -193,7 +193,7 @@ func parse(data []byte, files []string, opts *LoadOptions) (*Policy, error) {
 	v.privileged(p, raw.Privileged)
 	v.redact(p, raw.Redact)
 	v.commands(p, raw.Commands, opts)
-	v.roots(p)
+	v.roots(p, opts)
 
 	if len(v.errs) > 0 {
 		return nil, errors.Join(v.errs...)
@@ -737,8 +737,14 @@ func (v *validator) resolveCommand(field string, rc *rawCommand, opts *LoadOptio
 }
 
 // roots emits warnings that need the whole policy.
-func (v *validator) roots(p *Policy) {
+func (v *validator) roots(p *Policy, opts *LoadOptions) {
 	execDirs := append(DefaultReadExec(), p.Sandbox.SystemReadExec...)
+	// The gate starts every command (policy commands, git, systemctl,
+	// journalctl) by re-executing itself as the exec trampoline, so under
+	// Landlock it must be able to execute its own binary.
+	if _, ok := pathx.Longest(execDirs, opts.GateExecutable); opts.GateExecutable != "" && !ok {
+		v.warn("the gate binary %s is outside the sandbox's read+execute directories; under Landlock no command, git, systemctl or journalctl operation can start (install it under /usr, or add its directory to sandbox.system_read_exec)", opts.GateExecutable)
+	}
 	for _, c := range p.Commands {
 		if _, ok := pathx.Longest(execDirs, c.Resolved); !ok {
 			v.warn("commands[%s]: %s is outside the sandbox's read+execute directories; add its directory to sandbox.system_read_exec", c.ID, c.Resolved)

@@ -894,3 +894,109 @@ Against the old script, 6 of 15 checks failed: no labels, so no run id, and no r
 - Relying on `--rm` alone: it does not cover an interrupted client.
 
 **Versions:** unchanged (Go 1.27.2; golangci-lint v2.14.0; govulncheck v1.9.0). No dependency added.
+
+### 2026-10-15 — Child rlimits in force before the first instruction: the exec trampoline (PR #14, branch fix/execx-rlimit-race)
+**The race:** since S1, `execx` applied the child limits with `prlimit(2)` after `cmd.Start()` returned: `RLIMIT_CORE=0`, `RLIMIT_NOFILE` ≤ 1024, and `RLIMIT_NPROC` = the uid's tasks + 256, the fork-bomb guard. os/exec has no hook between fork and execve, and Start returns only after the child's execve. So the command was already running, and could fork or dump core, before the limits landed. `RLIMIT_NPROC` came last, after a `/proc` scan of a few milliseconds, which widened the window. `TestChildRlimits` failed once in a local run (`nproc must be bounded: "18446744073709551615/18446744073709551615"`, recorded in the S1d follow-up). The helper's root exec (`priv_exec`, apt-get) uses the same engine, so it had the same race.
+
+**Decision: a re-exec trampoline.** `execx.Run` now starts `Spec.Trampoline` instead of the command. That is the running gate or helper binary, the path the caller already resolved and ownership-checked (`ops.Options.Executable`, checked by the gate's install check and the helper's `selfcheck.Binary`). It is started with:
+- argv exactly `[binary, "shell-mcp-execx-trampoline-v1"]`;
+- an empty environment and cwd `/`;
+- one end of an `AF_UNIX` stream `socketpair(2)` as fd 3. The pair is `SOCK_CLOEXEC`; os/exec dup2s it to fd 3 in this child only.
+
+The process group, `Pdeathsig=SIGKILL`, the stdin pipe, the output caps and the timeout handling are unchanged.
+
+The trampoline runs from execx's `init`. The Go runtime locks the main goroutine to the main thread during package initialisation, so `execve` happens on the thread os/exec set `Pdeathsig` on. Its steps:
+1. It checks how it was started (refusals below).
+2. It reads the command from fd 3 until the parent's `shutdown(SHUT_WR)`. The format is binary: length-prefixed byte strings, so argv and paths need not be UTF-8, which JSON could not carry faithfully. It is bounded at 8 MiB, 65,536 items and 16 limits, and decoded strictly: exact consumption, no NUL, absolute path and dir, argv[0] equal to the path, `NAME=value` env, resource < `RLIM_NLIMITS`.
+3. It writes one "accepted" byte.
+4. It `chdir`s to the command's directory.
+5. It lowers each limit to min(current, wanted), soft and hard, with `syscall.Setrlimit`.
+6. It marks every descriptor from 3 up close-on-exec with `close_range(3, ~0U, CLOSE_RANGE_CLOEXEC)`, which needs Linux 5.11 and fails closed without it. That covers the control socket and anything the gate or helper inherited without the flag. Then it `syscall.Exec`s the command, which gets exactly fd 0–2.
+
+The parent reads EOF after the accepted byte when the exec succeeded. A failed chdir, setrlimit or execve sends a 4-byte errno; `Run` returns `ErrStart` with the errno's name, as os/exec did (`ENOENT`, `EACCES`, `EINVAL` for a NUL). No accepted byte means the trampoline refused or died first; that is `ErrStart` "the exec trampoline did not start the command".
+
+**Why this mechanism:**
+- **Alternatives fail.**
+  - Setting the limits on the gate itself would bound the gate's own threads; rlimits are per process.
+  - A cgroup (`CLONE_INTO_CGROUP`) needs a delegated cgroup the service user does not have.
+  - ptrace, a shell or a PTY are forbidden.
+  - Go's `SysProcAttr` has no rlimit field. The only rlimit os/exec restores in the child is Go's saved `RLIMIT_NOFILE`.
+- **Verified at the source:**
+  - `getrlimit(2)` (man7.org, covering `setrlimit` and `prlimit`): limits are per-process attributes, preserved across `execve(2)`; an unprivileged process may lower its hard limit; `RLIMIT_NPROC` is not enforced for root or with `CAP_SYS_ADMIN`/`CAP_SYS_RESOURCE` (unchanged for the helper).
+  - `execve(2)`: limits and descriptors survive except close-on-exec ones; under `no_new_privs` set-user-ID bits are ignored.
+  - `PR_SET_PDEATHSIG(2const)`: the setting is preserved across `execve` except for set-user-ID/set-group-ID or file-capability binaries (the gate binary is neither). The signal follows the thread that created the process, which is why the exec must happen on the main thread.
+  - `unix(7)`: `SO_PEERCRED` on a socketpair gives the credentials at the time of `socketpair(2)`, which are the parent's.
+  - Go 1.27.2 `syscall/rlimit.go` and `exec_unix.go`: `syscall.Exec` restores the soft `RLIMIT_NOFILE` saved at startup unless `syscall.Setrlimit(RLIMIT_NOFILE)` was called. So the trampoline uses `syscall.Setrlimit`, never `x/sys/unix`; with `unix.Setrlimit` the command would get the original soft limit back. `runtime/proc.go`: `lockOSThread()` around `doInit`.
+
+**How the sandbox's inheritance was verified.** The trampoline is a child of the gate or helper after `no_new_privs`, Landlock and the MPTCP seccomp filter are applied. All three persist across fork and execve, and nothing in the trampoline touches them. The tests check the command itself, after both execs:
+- `TestIntegrationSandboxTrampoline` runs a declared command through the real gate and sandbox (CI: Landlock ABI 7 psx and ABI 8 TSYNC, `required`). It checks `NoNewPrivs: 1`, `Seccomp: 2`, a read outside every root refused with `EACCES`, core 0/0, bounded open files and processes, `pdeathsig=9`, its own process group, and no extra descriptor. The existing Landlock, TCP, MPTCP and signal-scope integration tests also run through the trampoline now.
+- e2e `TestHelperExecTrampoline` checks root commands in the core and broad units: limits, `pdeathsig`, process group and descriptors, plus `NoNewPrivs: 1` and `Seccomp: 2` in the core unit.
+- `TestCommandProcessAttributes` (execx) checks `pdeathsig=9`, process group, `SigBlk` 0, and no descriptor beyond 0–2. Go ≥ 1.25 keeps `/sys/fs/cgroup/cpu.max` open (close-on-exec) where it is readable, at the lowest free descriptor, so that file at fd 3 is accepted and also shows fd 3 was free. `TestCommandGetsNoInheritedDescriptor` gives the test process a pipe without close-on-exec: a child os/exec starts directly holds it (control), the command does not. With `close_range` replaced by a close-on-exec flag on fd 3 alone, the test fails ("the command inherited descriptors: [7:10000:pipe:[…]]").
+
+**The binary must be executable inside the sandbox.** Under Landlock the gate and helper must be able to execute their own binary. The documented paths (`/usr/local/bin/shell-mcp-gate`, `/usr/local/libexec/shell-mcp-privd`) are under `/usr`, which both rulesets already grant read+execute, so **no Landlock rule was added**. A gate outside the read+execute directories gets a `check-policy` WARN, and so does a helper outside them with core-unit commands (POLICY §4a, PRIVILEGED §5.1). The tests grant the harness binary's directory through `system_read_exec` the way production's `/usr` rule does.
+
+**Refusal paths** (exit 125, one line on stderr, nothing read). Each is tested:
+- **Arguments:** anything but exactly `[binary, marker]`; dispatch requires the marker as argv[1].
+- **Environment:** a non-empty environment.
+- **Thread:** not the main thread.
+- **Terminal:** a terminal on fd 0, 1 or 2.
+- **fd 3:** missing; not a socket; not an `AF_UNIX` `SOCK_STREAM` socket (a pipe, a datagram pair); or a peer that is not the parent process (a relay that passes on an inherited socket), runs as another uid, or is pid 1.
+
+Process-level tests start the test binary directly for the argument, environment, missing-fd, pipe, datagram and relayed-peer cases. The terminal, thread and uid cases are unit tests against fakes, because no test allocates a terminal.
+
+**Reachability:** nothing outside `Run` can reach the trampoline:
+- `TestCommandCannotReachTrampoline`: a command that runs the gate binary with the marker has the command's environment and no control socket (fd 3 is close-on-exec), so it is refused.
+- `TestTrampolineIsNotACommand` (gate and helper): as a subcommand the marker is unknown (exit 2).
+- `TestIntegrationTrampolineNotFromSSHCommand`: an SSH client's requested command arrives only as `SSH_ORIGINAL_COMMAND`, which the gate refuses outright.
+- The forced command's and the units' argv are fixed by `authorized_keys` and the generated unit.
+
+**Tests (committed first, shown failing):** `60ba400` added a test-only hook (`hooks.afterStart`, reached only through `export_test.go`) that pauses the parent right after the start.
+- `TestChildRlimitsBeforeFirstInstruction` (300 ms pause) failed 5/5 on the old engine: core, nofile and nproc all unlimited.
+- `TestChildRlimitsNeverRace` (400 runs, 4 at a time, no pause) failed in 64–88 of 400 runs per attempt on the old engine.
+
+Both raise the test's own soft limits to the hard limits first, so an unlimited child cannot pass by accident, and fail if no limit could tell them apart. On the trampoline both pass, the race guard with 0 of 400.
+
+**Fuzzing:** `FuzzDecodeConfig` (new): whatever the decoder accepts re-encodes to the same bytes. 60 s in the golang container: 34,730,937 execs, no crashers.
+
+**CI findings on this PR (first run), fixed before review:**
+- **Inherited descriptors reached commands.** On both runner images the test process holds two pipes without close-on-exec (fds 142 and 145, from the runner's job environment). os/exec passes such descriptors to every child, so the old engine leaked them to commands too. The trampoline now marks every descriptor from 3 up close-on-exec (step 6). sshd and systemd start the gate and the helper with clean descriptor tables, so production was not exposed through them, but the engine no longer depends on that.
+- **The core unit hides `/proc/self` from commands.** Its Landlock ruleset grants only the helper's own `/proc/<pid>`. The probe therefore reads `no_new_privs` and the seccomp mode with `prctl(PR_GET_NO_NEW_PRIVS)` and `prctl(PR_GET_SECCOMP)`, not from `/proc`.
+- **Slow trampoline in one test.** `TestRunLockWait` (apt lock retry) allowed 300 ms for at least two attempts. Each attempt now starts through the race-built test binary as trampoline, which took about 440 ms on the runner. Its lock wait is now 2 s, with an 8 s ceiling. The production helper binary is not race-built.
+
+**Alternatives rejected:**
+- `prlimit` from the parent with a pre-exec pause (a pipe the child blocks on): os/exec has no hook to block in.
+- A fixed `RLIMIT_NPROC` on the gate.
+- A separate trampoline binary: one more trust anchor to install, check and keep in step. The running binary is already resolved and ownership-checked.
+- Passing the command on the command line or in the environment: it would be visible in `/proc/<pid>/cmdline` and `environ`, and an outsider could supply it.
+- JSON for the command: it cannot carry non-UTF-8 argv faithfully.
+- Granting Landlock execute on the running binary's path: not needed at the documented install paths, and it would change POLICY §4a.
+
+**Deferred / follow-ups:** none.
+
+**Versions:** Go 1.27.2 (newest stable; `deps-current` passes). Direct modules unchanged: go-landlock v0.10.1, go-sdk v1.8.0, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0. Tools: golangci-lint v2.14.0, govulncheck v1.9.0. No dependency added.
+
+### 2026-10-16 — The exec trampoline refuses a privileged exec (AT_SECURE) (PR #14 follow-up)
+**Decision (maintainer request):** the trampoline also refuses, right after the argument check and before anything else, when `AT_SECURE` in its auxiliary vector is non-zero, or when the vector cannot be read or lacks the entry.
+- **Source of the value.** It comes from `unix.Auxv()` (x/sys v0.49.0, `auxv.go`), which returns the vector the Go runtime received from the kernel through `runtime.getAuxv`. No `/proc` read is involved, which matters because the helper's core unit hides `/proc/self` from its children.
+- **The tag** is 23 (`linux/auxvec.h`; Go's `runtime/os_linux.go` uses the same `_AT_SECURE = 23`).
+- **The refusal** is "it gained privileges when executed (AT_SECURE)", with exit 125 and nothing read, like the other refusals.
+
+**Why this is what makes the marker safe for local users:**
+- **The other checks prove only the shape of the start.** One argument, an empty environment, the main thread, no terminal, and an fd 3 that is a Unix stream socket whose peer is the parent under the same uid. They prove the trampoline was started *the way Run starts it*, not *by the gate*.
+- **A local user can produce exactly that shape.** Any local user who can execute the gate binary can make a socketpair, start the binary with the marker and an empty environment, and send it a command.
+- **That gains them nothing while no privilege changes.** The trampoline then runs as that user, with that user's privileges, and runs a command they could have run themselves. That holds while the binary is installed as documented: `root:root 0755`, no set-user-ID or set-group-ID bit, no file capabilities.
+- **AT_SECURE closes the remaining case.** Per `getauxval(3)` (man7.org), it is non-zero when the exec was of a set-user-ID or set-group-ID binary, gained capabilities from file capabilities, or an LSM asked for secure mode. If the gate or helper binary ever carried such privileges, through a mistaken install or a package, a local user could otherwise have it run an arbitrary command with them. The trampoline now refuses before reading anything.
+- **The real gate and helper are unaffected.** The gate runs as the service user from a plain binary, and the helper runs as root from a plain binary with its real and effective ids equal. e2e `TestHelperExecTrampoline` and every helper `priv_exec` e2e test pass in the core and broad units, so `AT_SECURE` is 0 there.
+
+**Tests:**
+- Committed first and shown failing (`390d990`). The env field and the vector reader came first, without the refusal. The "privileged exec (AT_SECURE)" and "auxiliary vector unreadable" cases of `TestTrampolineRefusal` (fake values) then failed with `refusal "", want "it gained privileges when executed (AT_SECURE)"`.
+- `TestAuxvSecure` reads fake vectors: set, clear, and missing (an error, so a refusal).
+- `TestLiveAuxvNotSecure` is the control: the test binary's own vector reads 0.
+- A real set-user-ID test is not possible on the test hosts (no privilege to install one), so the check is injected.
+
+**Alternatives rejected:**
+- Reading `/proc/self/auxv`: hidden inside the helper's core unit.
+- Comparing real and effective ids: misses file capabilities and LSM-requested secure mode, which `AT_SECURE` covers.
+- A separate marker secret passed by the parent: any local user who can read the binary could reproduce it, so it adds nothing to the AT_SECURE check.
+
+**Versions:** unchanged (Go 1.27.2; x/sys v0.49.0). No dependency added.

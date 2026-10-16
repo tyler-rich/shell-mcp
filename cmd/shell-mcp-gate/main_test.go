@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
 )
 
@@ -121,5 +122,19 @@ func TestPolkitCommand(t *testing.T) {
 	gatetest.WriteFile(t, p, "version: 1\nmax_tier: operator\n", 0o644)
 	if code, out, errb := run("--policy", p, "--user", "nobody"); code != 1 || out != "" || !strings.Contains(errb, "services.control") {
 		t.Fatalf("no control units: %d %q %q", code, out, errb)
+	}
+}
+
+// TestTrampolineIsNotACommand: the exec trampoline runs only from execx's
+// init, when it is exactly argv[1] of a process started with an empty
+// environment and its control socket (internal/gate/execx). The forced
+// command's argv is fixed by authorized_keys and starts with serve; as a
+// command name the trampoline argument is unknown.
+func TestTrampolineIsNotACommand(t *testing.T) {
+	if code, out, errOut := runCmd([]string{execx.TrampolineArg}, ""); code != 2 || out != "" || !strings.Contains(errOut, "unknown command") {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	if code, out, _ := runCmd([]string{"serve", execx.TrampolineArg}, ""); code != 0 || !strings.Contains(out, `"code":"install_insecure"`) {
+		t.Fatalf("as a serve argument: exit %d, stdout %q", code, out)
 	}
 }

@@ -147,7 +147,7 @@ func (r *gitRepo) run(maxOut int, sub ...string) (execx.Result, error) {
 		return execx.Result{}, errf(protocol.CodeTimeout, "git did not finish within the request timeout")
 	}
 	res, err := execx.Run(context.Background(), &execx.Spec{
-		Path: bin, Args: GitArgs(r.real, s.o.TestGitCAFile, sub...), Env: GitEnv(s.p.ServiceHome, r.real),
+		Path: bin, Trampoline: s.o.Executable, Args: GitArgs(r.real, s.o.TestGitCAFile, sub...), Env: GitEnv(s.p.ServiceHome, r.real),
 		Dir: r.real, Timeout: left, MaxOutput: maxOut,
 	})
 	if err != nil {

@@ -154,7 +154,9 @@ func newFixture(t *testing.T, opts ...opt) *fixture {
 	gatetest.WriteFile(t, filepath.Join(f.read, "secrets", "token"), "TOPSECRET", 0o600)
 	gatetest.WriteFile(t, filepath.Join(f.write, "app.conf"), "key: value\n", 0o640)
 	exe := filepath.Join(d, "libexec", "shell-mcp-privd")
-	gatetest.WriteFile(t, exe, "invented helper binary", 0o755)
+	gatetest.Mkdir(t, filepath.Dir(exe), 0o755)
+	// The helper binary is this test binary: execx starts commands through it.
+	gatetest.LinkSelf(t, exe)
 	f.probe = filepath.Join(d, "bin", "example-probe")
 	if _, err := os.Stat(f.probe); err != nil {
 		gatetest.Mkdir(t, filepath.Dir(f.probe), 0o755)
