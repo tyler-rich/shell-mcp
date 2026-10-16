@@ -1000,3 +1000,165 @@ Both raise the test's own soft limits to the hard limits first, so an unlimited 
 - A separate marker secret passed by the parent: any local user who can read the binary could reproduce it, so it adds nothing to the AT_SECURE check.
 
 **Versions:** unchanged (Go 1.27.2; x/sys v0.49.0). No dependency added.
+
+### 2026-10-16 — MCP server core: auth, transport, SSH client, gate client, CLI (PR #TBD, branch feat/server-core)
+**Decision:** Build the server half of plan §5 S2:
+- **Transport and auth** (`internal/transport`, `internal/auth`): the middleware chain in front of the SDK's stateless Streamable HTTP handler; S0's "bearer auth arrives in Session 2" refusal is removed.
+- **SSH client** (`internal/sshx`): typed host-key pins, `HostKeyAlgorithms` derived from the pinned types, an Ed25519 client key, bounded sessions, keepalives and a reconnect backoff.
+- **Gate client** (`internal/gateclient`): the client side of protocol v1.
+- **Envelope** (`internal/envelope`) with the closed server code set; **tools** (`internal/tools`): strict definitions, the audit line, `shell_list_targets` and `shell_get_policy`.
+- **CLI:** `check` connects to every target; `tools` prints the catalogue with schema hashes, under a snapshot test.
+- **Elicitation:** the research below, and a diagnostic tool, `shell_diag_elicit`, behind the `shellmcp_diag` build tag.
+- **End-to-end:** in-process tests against the real gate, and new `e2e-host` cases against the runner's real OpenSSH.
+
+**Why:** S2 scope (plan §5; D-002, D-004, D-005, D-012, D-014; S-01…S-04, S-11). Every guarantee had its test committed first and shown failing: `404d251` (config), `16e7f24` (transport, auth), `0466724` (envelope), `3e5caaa` (sshx), `e7e2b6e` (gateclient), `ee5659f` (tools), `206b540` (cmd), `2517bbb` (diagnostic), `1a7e852` (fuzz corpus). The catalogue snapshot was shown to fail on a changed description and on a changed schema bound (only the schema hash moves).
+
+**Maintainer decision during the session: typed host-key pins.**
+- **The problem.** x/crypto/ssh v0.58.0's default `HostKeyAlgorithms` lists ECDSA before Ed25519, and still includes SHA-1 `ssh-rsa` (`common.go` `defaultHostKeyAlgos`). The client's order wins the negotiation, so a target with ECDSA and Ed25519 host keys and an Ed25519 pin would present ECDSA and fail. A `SHA256:` fingerprint does not say which type the key is, so the algorithms could not be restricted to "what is pinned".
+- **The format.** Each pin is now `<key-type> SHA256:<base64>`, in both `SHELL_MCP_TARGET_HOST_KEYS` and the targets file's `host_keys`. Several pins, of any mix of types, are allowed for rotation. The types are `ssh-ed25519`, `ecdsa-sha2-nistp256`/`384`/`521` and `ssh-rsa`.
+- **The algorithms.** `HostKeyAlgorithms` is derived from the pins only: each type's own algorithm; `ssh-rsa` as `rsa-sha2-512` and `rsa-sha2-256`, never SHA-1. Certificates and DSA are never accepted.
+- **Startup.** An untyped or unknown-type pin fails startup with a one-line reason giving the expected format and how to obtain it: the first word of the host key's `.pub` file and `ssh-keygen -lf <host key>.pub`, or `ssh-keyscan … | ssh-keygen -lf -` verified out of band.
+- **known_hosts:** no support in this PR.
+- **Docs updated:** ARCHITECTURE §2 and §5, SECURITY §7's example, `deploy/` (compose, README, `.env.example`).
+
+**Middleware order and status codes** (ARCHITECTURE §3 updated). Each refusal is `{"error":"<code>"}` with `Content-Type: application/json`, `Cache-Control: no-store` and `nosniff`.
+1. **Body cap, 1 MiB → 413 `request_too_large`.** A declared `Content-Length` over the cap is refused before anything else. Every body is also wrapped in `http.MaxBytesReader`, so a body of unknown length fails while it is read; the SDK then answers 413, which a chunked test proves. Nothing reads a body before authentication, so the cap never makes the server buffer for an unauthenticated client.
+2. **Global per-client rate limit → 429 `rate_limited` with `Retry-After`.** A token bucket of `SHELL_MCP_RATE_LIMIT_PER_MIN` per minute, holding at most that many.
+   - A client is an IPv4 address or an IPv6 /64: one site's allocation, so rotating addresses inside it buys nothing. IPv4-mapped addresses count as IPv4.
+   - The table is bounded at 4096 clients. Refilled (stateless) buckets go first, then the least recently used.
+3. **Host allow-list → 421 `host_not_allowed`.** The match is exact and case-insensitive: no suffix or wildcard matching and no trailing dot. An entry without a port matches any port; an entry with a port (`[::1]:8080`) matches only that port. An empty or malformed `Host` is refused.
+   - Why 421 Misdirected Request: the request reached a server that does not answer for that name, which is exactly the DNS-rebinding case.
+4. **Origin allow-list → 403 `origin_not_allowed`.** A request carrying an `Origin` not on the list is refused, and so is one with several `Origin` headers. An empty list refuses every `Origin`, `null` included.
+   - Why 403: the name was right but the browser context is not allowed.
+   - The check applies in `none` mode on loopback too, the rebinding case.
+5. **Bearer auth → 401 `unauthorized`** with `WWW-Authenticate: Bearer realm="shell-mcp"`. It needs exactly one `Authorization` header, of the form `Bearer <token>`: the scheme is case-insensitive and is followed by exactly one space.
+   - The comparison is constant-time over SHA-256 digests. `config.Secret.Equal` changed, so neither the token's length nor a prefix leaks.
+   - 10 failures by one client within 5 minutes lock that client out with 429 `rate_limited` for 5 minutes. While locked, even a valid token is refused, before it is examined. Both the failure and the lockout are logged at WARN with the client prefix and a fixed reason, never the header.
+   - The failure table has the same 4096 bound; unlocked clients are evicted first.
+6. **SDK handler.** `/healthz` is outside the chain. Every other path is inside it, so an unauthenticated client gets 401 for `/metrics`, `/.well-known/…`, `server/discover` and `initialize` alike, and learns nothing, not even which paths exist.
+- **Verified at the source.** `server/discover` (SEP-2575) and every other method arrive through the same handler (go-sdk v1.8.0 `server.go`, `streamable.go`), so the chain runs before the SDK answers anything.
+
+**`SHELL_MCP_TRUST_PROXY`.** It honours one hop: the address the one trusted proxy in front of the server saw, which is the last entry of the last `X-Forwarded-For` header (the one that proxy appended). Entries before it are written by the client and are never used; an unparsable value falls back to the connection's address. A test shows that prepending a forged entry does not change the client. ARCHITECTURE §5 and `.env.example` now state this.
+
+**Principal.** v1 has one principal per instance: `bearer-token` in bearer mode, `unauthenticated` in `none` mode (stdio, or loopback HTTP). Tools get it from the server, not from the request.
+
+**Host-key handling** (`internal/sshx`):
+- **Verified on every new connection.** The callback accepts a key only if its type and SHA-256 fingerprint equal a pin. A mismatch is `host_key_mismatch` and logs a WARN with the presented and the pinned pins, never key material.
+- **No common host-key algorithm** (the target offers no host key of a pinned type) is `host_key_mismatch` as well ("the target offers no host key of a pinned type"), logged with both algorithm lists.
+- **Other failures.** An auth failure is `auth_failed_ssh`, logged with the client key's fingerprint. Dial and handshake failures, and the connect timeout, are `target_unreachable`.
+- **Auth and requests.** The client authenticates only with the Ed25519 key, restricted to `ssh-ed25519` signatures; `New` refuses another key type. There is no agent, password or keyboard-interactive auth.
+- **The `Session` type** exposes only stdin, stdout, `Start` and `Output` of exactly `shell-mcp-gate/1`, `Wait` and `Close`. PTY, `Setenv`, shell, subsystem and any other command return `ErrForbidden` before anything is sent.
+- **Limits.** At most `SHELL_MCP_SSH_MAX_SESSIONS` sessions per target (a semaphore; waiting past the caller's deadline is `timeout`). One reused connection per target. A `keepalive@openssh.com` every 15 s; a reply not received within 15 s closes the connection.
+- **Backoff.** Reconnects back off from 500 ms, doubling to 30 s. During a backoff the last error is returned without dialling.
+- **`check`.** `VerifiedHostKey` reports the pin the last connection matched, and `check` prints it.
+- **Tests** run against an in-process x/crypto/ssh server (`internal/sshx/sshtest`), which records every auth method, channel and request a client sent:
+  - only public-key auth, `session`, `exec` and keepalives are ever sent;
+  - an Ed25519 pin connects to a server with ECDSA and Ed25519 keys;
+  - a server offering only SHA-1 `ssh-rsa` is refused for an RSA pin, and one offering `rsa-sha2-256` is accepted;
+  - a dropped connection whose next answer presents another key is refused.
+  
+  `TestSSHTestOnlyInTests` keeps `sshtest` out of every non-test file.
+
+**Gate client: early refusals and EPIPE** (`internal/gateclient`):
+- **Request.** The id is a fresh lowercase UUID v4 from crypto/rand. `timeout_ms` is the tool's budget, and the call gives up at budget + 20 s. The 20 s grace covers the gate's own helper grace of 15 s and the SSH round trip. A request over 2 MiB is `validation_error`, and no session is opened for it.
+- **Concurrency.** The response is read on its own goroutine while the request is written, so an answer the gate sends first is already being received. A write error is never the outcome, only logged at DEBUG: if the gate answers and exits before the request is fully written, that answer is returned. The test writes a request far larger than the channel window to a forced command that answers and closes without reading.
+- **Refusal without an id.** A response with an empty id is accepted only as a failure, a rule `protocol.DecodeResponse` already enforces. It is returned with its code, so the gate's install and sandbox refusals and the helper's `helper_*` self-check codes pass through unchanged.
+- **Mapping:**
+  - nothing answered: `gate_unavailable`;
+  - another version, a malformed or non-strict response, or an id other than the request's: `protocol_mismatch`;
+  - over 4 MiB: `too_large` (the read is bounded);
+  - no answer within the budget: `timeout`, with the session closed and its slot released;
+  - SSH failures: the sshx codes.
+- **Real gate.** It is exercised in-process: the gate's harness binary (`gatetest.NewHarnessGate`, new) runs as the forced command, with `SSH_ORIGINAL_COMMAND` set as sshd sets it. A group-writable policy's `install_insecure`, which has no id, passes through.
+
+**Envelope and tools:**
+- **Shapes.** The envelope implements ARCHITECTURE §6 exactly. A success always carries `warnings` (`[]` when empty); a failure carries only `ok`, `target` and `error`. A code outside the closed set becomes `internal`; a message becomes one line of at most 512 bytes.
+- **Gate data.** It is decoded strictly into the server's types, so an unknown field is `protocol_mismatch`: the server never forwards what its output schema does not describe. A real-gate test proves the wire names match, including the gate's untagged limits fields (`DefaultTimeoutS` …), which `shell_get_policy` reports in snake_case.
+- **Arguments.** Tools are installed with the SDK's raw `AddTool`, so this package decodes the arguments. They must be a strict object of known fields (json/v2 `RejectUnknownMembers`). Every failure, a malformed argument included, is an envelope with a code; with the typed `mcp.AddTool` the SDK answers schema failures with free text. Input schemas are closed objects with every property described and bounded (`target`: pattern and `maxLength` 63).
+- **Results.** Results carry `structuredContent` plus the same JSON as one text block, with `isError` for a failure.
+- **Audit line.** One JSON line per call, `"tool call"`, with time, principal, target, tool, sanitized args (a tool declares which: here only `target`), outcome code, exit code and duration. A test proves that tool output (roots, units, commands, remotes) never reaches the log.
+
+**Protocol compatibility, proved with the SDK's own client against the full serve stack:**
+- **2026-07-28** (the default): negotiates 2026-07-28 through `server/discover`. No response carries `Mcp-Session-Id`, and every response is `application/json`.
+- **2025-11-25** (`ClientSessionOptions.ProtocolVersion`): served through `initialize`.
+- **No token, or a wrong one:** cannot connect on either revision.
+- **stdio** with `none` auth: serves the same tools, with `MaxLineLength` set to the 1 MiB body cap. stdio with bearer is refused by config, as before.
+- **Finding:** over stdio the SDK client also negotiates 2026-07-28.
+
+**Elicitation research (H)**, from primary sources on 2026-10-15; a live test by the maintainer will confirm:
+- **Claude Code** (CLI, and the Desktop app's Code tab, which runs Claude Code):
+  - Elicitation since v2.1.76 (2026-03-14). URL mode on 2026-07-28 since v2.1.281, and on 2025-11-25 since v2.1.287.
+  - Its v2 runtime (TypeScript SDK 2.0) tries 2026-07-28 (`server/discover`) and falls back to `initialize`. That is the default for HTTP servers on every install since v2.1.274 (2026-09-17).
+  - It declares `elicitation: {form, url}`. The newest version is v2.1.301 (2026-10-15).
+  - Sources: code.claude.com/docs/en/mcp ("MCP client runtimes", "Respond to MCP elicitation requests"); github.com/anthropics/claude-code CHANGELOG.md. The Code tab reads `~/.claude.json`, `.mcp.json` and `claude_desktop_config.json`; for a duplicate name, `claude_desktop_config.json` wins (code.claude.com/docs/en/desktop).
+- **Claude Desktop chat** (local stdio servers and custom connectors): elicitation is **not confirmed**. Neither the docs nor the changelog (through v2.42304.0, 2026-10-15) mention it. claude.com/docs/connectors/building lists other unsupported capabilities and is silent on elicitation. The 2026-07-28 announcement says support is "rolling out across Claude products soon" (claude.com/blog/bringing-mcp-2026-07-28-to-claude).
+- **mcp-remote 0.15.1** (npm, 2026-10-14; the repository is now github.com/punkpeye/mcp-remote):
+  - Only with `--protocol auto` does it speak 2026-07-28 upstream. It then turns `input_required` into a 2025-style `elicitation/create` towards the stdio client (form mode only) and retries with `inputResponses` and `requestState`.
+  - It asks only if the stdio client declared elicitation. The default `--protocol legacy` passes server-to-client requests through, which a stateless JSON server can never send.
+- **Spec.** In 2026-07-28, elicitation travels as an `InputRequiredResult` (MRTR), and clients must declare `elicitation` in `_meta.io.modelcontextprotocol/clientCapabilities` on each request. In 2025-11-25, it is a server-to-client `elicitation/create`, declared at `initialize`, and over Streamable HTTP it can travel only on SSE.
+- **Consequence for D-006** (unchanged: it still fails closed): Claude Code can approve. Desktop chat's path depends on whether Desktop declares and renders elicitation, and needs mcp-remote with `--protocol auto`. The PR body holds the table for the maintainer's live results.
+
+**The diagnostic build:**
+- **The tool.** `internal/tools/diag.go` is built only with `-tags shellmcp_diag`. `diag_off.go` (`!shellmcp_diag`) registers nothing and sets `DiagBuild = false`.
+- **Behaviour.** With elicitation declared, the first call returns `inputRequests` with one form question (a boolean) and a fixed `requestState`. The retry reports the action, the answer and whether the state was echoed unchanged. Without it, the tool says so and asks nothing.
+- **What the tagged tests record (SDK client):** over HTTP on 2026-07-28, accept and decline both round-trip, and a client without a handler is told it cannot approve. Over HTTP on 2025-11-25 no elicitation is possible; the session is synthesized, as S0 found. Over stdio it works.
+- **Kept out of releases:**
+  - Nothing in the Dockerfile or release path passes the tag.
+  - CI's and ci-local's cross-builds fail a binary whose `go version -m` shows `shellmcp_diag`.
+  - `TestNoDiagnosticToolInThisBuild` fails if a normal build lists a `shell_diag_` tool or a version marked as diagnostic.
+  - A diagnostic build says so in `version` and logs a WARN at start.
+  - CI vets, lints and tests the tag, and cross-builds the Windows diagnostic binary, so the maintainer's local test keeps working.
+
+**End-to-end** (`e2e-host`):
+- **The test sshd.** `setup.sh` starts a second sshd, on 127.0.0.1:2222 only, as a transient unit. It has its own `sshd_config` (SECURITY §5 directives, `UsePAM yes`, `StrictModes yes`, checked with `sshd -t`), Ed25519 and ECDSA host keys, and a root-owned keys file. The keys file holds two keys, each with `restrict,from=…,command="…shell-mcp-gate serve --policy /etc/shell-mcp/gate.yaml --principal e2e-ssh"`: one from 127.0.0.1, one from 192.0.2.1 (TEST-NET-1).
+- **The new tests:**
+  - each pinned type (Ed25519 and ECDSA) reaches the installed gate (`hello`, principal `e2e-ssh`);
+  - a wrong fingerprint, and a pin of a type the target lacks, are `host_key_mismatch`;
+  - the key used outside its `from=` is `auth_failed_ssh`;
+  - sshd refuses a PTY to the restricted key, and any requested command still runs only the gate;
+  - `shell-mcp check` succeeds against the real stack and fails with `host_key_mismatch` on a wrong pin.
+- **CI.** The job installs `openssh-server` if the image lacks it, before `setup.sh` moves the apt sources aside, and builds `shell-mcp` too.
+- **Locally.** Where sshd is absent (the local systemd image), the tests skip, and they fail under `E2E_REQUIRE_ALL`. A failed sshd start does not abort `setup.sh`, so the other local tests still run.
+
+**Fuzzing (60 s each, golang container):**
+- `FuzzParseHostKeyPin`: 27,771,772 execs.
+- `FuzzHostAllowed`: 11,884,414 execs, no crashers.
+- **Finding.** The first `FuzzParseHostKeyPin` run found that `config.ValidFingerprint` (S0) accepted a fingerprint with an embedded newline: Go's base64 decoder skips `\r` and `\n`. It failed closed, since the pin could never equal a real fingerprint. A fingerprint must now also re-encode to itself (`6f538d1`); the crasher is in the corpus.
+
+**Session notes:**
+- **Interrupted test run.** A hung test run was interrupted, and its labelled container was left running. It was removed by this session's label (`shell-mcp.session=s2-server-core`), the only container carrying it.
+- **Stray local commands.** A shell quoting mistake (a nested heredoc) ended an edit command early. The rest of that edit's lines, `setup.sh` steps meant for the e2e VM, ran in the workstation's Git Bash instead. Every one failed (no `sshd`, `systemd-run`, `ss` or `journalctl`; `install` rejected the user `root`), and nothing was created or changed; this was checked. Edits since then go through files, not nested heredocs.
+
+**Verified at the source:**
+- **go-sdk v1.8.0:**
+  - `Server.AddTool` (raw): no input validation; `Content`, `StructuredContent` and `IsError` are the caller's.
+  - The typed `AddTool` answers schema failures with free text.
+  - `CallToolResult.InputRequests` and `RequestState`; `CallToolParamsRaw.InputResponses`; `ServerRequest.ClientCapabilities`, `ProtocolVersion` and `ClientInfo`.
+  - `StreamableHTTPOptions` (stateless, JSON responses, the SDK's own body cap and Host check); `IOTransport.MaxLineLength`.
+  - The client's `server/discover`-then-`initialize` negotiation and `ClientSessionOptions.ProtocolVersion`.
+- **x/crypto v0.58.0:** `defaultHostKeyAlgos` and `supportedHostKeyAlgos`; `ClientConfig.HostKeyAlgorithms` (`handshake.go`); `AlgorithmNegotiationError`; `NewSignerWithAlgorithms`; `OpenChannelError`; the client-auth error text.
+- **Go's `encoding/base64`:** the decoder ignores `\r` and `\n`.
+- **jsonschema-go v0.4.3:** `For` treats `omitzero` and `omitempty` fields as optional.
+- **OpenSSH on the runner:** checked by `sshd -t` and the e2e job. The job summary records `sshd -V`.
+
+**Alternatives rejected:**
+- Probing one key family per connection and caching the matched type (maintainer chose typed pins).
+- known_hosts support (not in this PR).
+- The left-most `X-Forwarded-For` entry: the client writes it.
+- Reading the body before auth to enforce the cap: it buffers for unauthenticated clients.
+- `golang.org/x/time/rate` for the limiter: the standard library suffices, and the bounded table is ours either way.
+- The SDK's typed `AddTool`: its validation errors are not envelopes.
+- Including gate data fields the server does not know.
+- Exec of the forced command inside `sshtest`: os/exec stays in `_test.go` files.
+
+**Deferred / follow-ups:**
+- **S3:** the read tools, and the full end-to-end harness.
+- **S4b:** approval binding, which will use the MRTR shape the diagnostic exercises. Per the research, pre-2026-07-28 HTTP clients cannot elicit.
+- **Maintainer:** run the diagnostic with Claude Code (Desktop Code tab) and with Claude Desktop chat through mcp-remote (`--protocol auto`), and record the results.
+- **Later:** a `docs/CLIENTS.md` (S5) with the confirmed client setup.
+
+**Versions:**
+- **Go:** 1.27.2, the newest stable per go.dev. `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing, and `deps-current` reports every in-scope module current.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0, and `github.com/google/jsonschema-go` v0.4.3. jsonschema-go was already in go.mod as an indirect dependency of the SDK; it is now direct, because tools build their schemas with it.
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.14.0, govulncheck v1.9.0.
