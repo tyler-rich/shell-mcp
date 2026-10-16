@@ -82,7 +82,8 @@ func opTable() map[string]opSpec {
 
 // privTiers are the helper's op tiers (PRIVILEGED §6). priv_exec is per
 // command and the gate cannot know the helper's command tiers; it is
-// checked as read here and the helper enforces its own tier (S1c).
+// checked as read here, and the helper checks the command's tier against
+// its max_tier and the forwarded ceiling.
 var privTiers = map[string]policy.Tier{
 	protocol.OpPrivReadFile: policy.TierRead, protocol.OpPrivListDir: policy.TierRead,
 	protocol.OpPrivStat: policy.TierRead, protocol.OpPrivListBackups: policy.TierRead,
@@ -119,17 +120,40 @@ func (s *server) dispatch() *protocol.Response {
 		return s.errResp(errf(protocol.CodeUnknownOp, "operation is not available in this gate version"))
 	}
 	// Tier first, before any other processing.
-	if spec.tier > s.p.MaxTier {
-		return s.errResp(errf(protocol.CodeTierDenied, "operation tier %s exceeds the policy's max_tier %s", spec.tier, s.p.MaxTier))
+	if err := s.within("operation", spec.tier, s.p.MaxTier, "max_tier"); err != nil {
+		return s.errResp(err)
 	}
 	data, warnings, err := spec.run(s, s.req.Args)
 	return s.result(data, warnings, err)
 }
 
+// within is the tier check: tier must not exceed min(limit, the request's
+// ceiling). limit is the policy's (named by field); the ceiling is the
+// calling tool's tier, so a server mistake or a policy edit between two
+// requests cannot run anything above the tool's tier. A refusal names the
+// limit that applied, or both when they are equal.
+func (s *server) within(what string, tier, limit policy.Tier, field string) error {
+	ceiling, err := policy.ParseTier(s.req.Ceiling)
+	if err != nil {
+		// DecodeRequest accepts only the three tier names.
+		return errf(protocol.CodeBadRequest, "ceiling is missing or not read, operator or destructive")
+	}
+	switch {
+	case tier <= limit && tier <= ceiling:
+		return nil
+	case ceiling < limit:
+		return errf(protocol.CodeTierDenied, "%s tier %s exceeds the request's ceiling %s", what, tier, ceiling)
+	case limit < ceiling:
+		return errf(protocol.CodeTierDenied, "%s tier %s exceeds the policy's %s %s", what, tier, field, limit)
+	}
+	return errf(protocol.CodeTierDenied, "%s tier %s exceeds the policy's %s %s and the request's ceiling %s", what, tier, field, limit, ceiling)
+}
+
 // priv checks privileged forwarding at the gate before anything is sent:
-// a known op, forwarding enabled, and the op's tier within both
-// privileged.max_tier and max_tier. The helper re-checks everything
-// against its own policy.
+// a known op, forwarding enabled, and the op's tier within
+// privileged.max_tier, max_tier and the request's ceiling. The ceiling is
+// forwarded unchanged; the helper re-checks everything against its own
+// policy and the same ceiling.
 func (s *server) priv(op string) error {
 	tier, known := privTiers[op]
 	switch {
@@ -137,10 +161,12 @@ func (s *server) priv(op string) error {
 		return errf(protocol.CodeUnknownOp, "operation is not available in this gate version")
 	case !s.p.Privileged.Enabled:
 		return errf(protocol.CodePrivilegedDisabled, "privileged forwarding is disabled in this gate policy")
-	case tier > s.p.Privileged.MaxTier || tier > s.p.MaxTier:
-		return errf(protocol.CodeTierDenied, "operation tier %s exceeds the policy's privileged.max_tier %s", tier, s.p.Privileged.MaxTier)
 	}
-	return nil
+	limit, field := s.p.Privileged.MaxTier, "privileged.max_tier"
+	if s.p.MaxTier < limit {
+		limit, field = s.p.MaxTier, "max_tier"
+	}
+	return s.within("operation", tier, limit, field)
 }
 
 func (s *server) result(data any, warnings []string, err error) *protocol.Response {

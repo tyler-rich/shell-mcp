@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -14,10 +13,10 @@ import (
 )
 
 // shell_run_read_command: a policy command of tier read, through the gate's
-// exec op. The gate enforces its policy's max_tier, not this tool's tier,
-// so the tool first reads the command's tier from the gate's policy and
-// runs only read commands; the gate still matches the templates, resolves
-// the placeholders and refuses anything above max_tier. There is no stdin.
+// exec op. The request carries this tool's tier (read) as its ceiling, so
+// the gate refuses a command above read in the same check that applies its
+// max_tier, before anything runs; it also matches the templates and
+// resolves the placeholders. There is no stdin.
 
 const (
 	maxArgs     = 64   // template.MaxTokens
@@ -116,19 +115,6 @@ func runReadCommand(d *Deps) Tool {
 			if e != nil {
 				return envelope.Failure[CommandOutput](in.Target, e)
 			}
-			// The command's tier, from the gate's own policy.
-			pol := fetch[summaryWire](ctx, d, in.Target, protocol.OpPolicy, nil, d.budget())
-			if !pol.OK {
-				return envelope.Failure[CommandOutput](pol.Target, pol.Error)
-			}
-			i := slices.IndexFunc(pol.Data.Commands, func(c Command) bool { return c.ID == in.CommandID })
-			if i < 0 {
-				return envelope.Failure[CommandOutput](pol.Target, envelope.Errorf(protocol.CodePolicyDenied, "command_id is not declared in the policy"))
-			}
-			if tier := pol.Data.Commands[i].Tier; tier != "read" {
-				return envelope.Failure[CommandOutput](pol.Target, envelope.Errorf(protocol.CodeTierDenied,
-					"command %s has tier %s; this tool runs only read-tier commands", in.CommandID, tier))
-			}
 			w := execArgsWire{CommandID: in.CommandID, Args: in.Args, Cwd: in.Cwd}
 			if w.Args == nil {
 				w.Args = []string{}
@@ -136,7 +122,7 @@ func runReadCommand(d *Deps) Tool {
 			if in.MaxOutputBytes != nil {
 				w.MaxOutputBytes = *in.MaxOutputBytes
 			}
-			ex := fetch[execWire](ctx, d, pol.Target, protocol.OpExec, w, budget)
+			ex := fetch[execWire](ctx, d, in.Target, protocol.OpExec, w, budget)
 			if !ex.OK {
 				return envelope.Failure[CommandOutput](ex.Target, ex.Error)
 			}
@@ -149,9 +135,8 @@ func runReadCommand(d *Deps) Tool {
 			env.Exec = &envelope.Exec{ExitCode: x.ExitCode, Signal: x.Signal, TimedOut: x.TimedOut,
 				StdoutTruncated: out.StdoutTruncated, StderrTruncated: out.StderrTruncated}
 			env.Gate = ex.Gate
-			env.Warnings = slices.Concat(pol.Warnings, ex.Warnings)
-			if ex.Gate == nil || ex.Gate.PolicySHA256 != pol.Data.SHA256 {
-				env.Warnings = append(env.Warnings, "the policy changed between the tier check and the run; the gate still enforced its own max_tier")
+			if len(ex.Warnings) > 0 {
+				env.Warnings = ex.Warnings
 			}
 			return env
 		},

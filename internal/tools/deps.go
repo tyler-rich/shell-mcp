@@ -111,9 +111,25 @@ func (d *Deps) resolve(name string) (config.Target, *envelope.Error) {
 	return d.Targets[i], nil
 }
 
-// call sends one gate request to target. A transport or protocol failure is
+// ceilingKey carries the calling tool's tier in a handler's context.
+type ceilingKey struct{}
+
+// withCeiling marks ctx with the tier of the tool handling the call (define
+// does this for every tool). Every gate request made under ctx carries
+// that tier as its ceiling, so the gate and the helper refuse anything
+// above the tool's tier in the same check as their max_tier.
+func withCeiling(ctx context.Context, t Tier) context.Context {
+	return context.WithValue(ctx, ceilingKey{}, t)
+}
+
+// call sends one gate request to target at the ceiling ctx carries; a
+// context without one sends nothing. A transport or protocol failure is
 // the returned error; a gate failure is a response with ok false.
 func (d *Deps) call(ctx context.Context, target, op string, args any, budget time.Duration) (*protocol.Response, *envelope.Error) {
+	ceiling, _ := ctx.Value(ceilingKey{}).(Tier)
+	if !ceiling.valid() {
+		return nil, envelope.Errorf("internal", "the gate request has no tier ceiling")
+	}
 	var o gateclient.Opener
 	ok := false
 	if d.Opener != nil {
@@ -122,7 +138,7 @@ func (d *Deps) call(ctx context.Context, target, op string, args any, budget tim
 	if !ok || d.Gate == nil {
 		return nil, envelope.Errorf(envelope.CodeTargetUnreachable, "no SSH client for the target")
 	}
-	resp, err := d.Gate.Call(ctx, o, op, args, budget)
+	resp, err := d.Gate.Call(ctx, o, op, ceiling.String(), args, budget)
 	if err != nil {
 		return nil, envelope.AsError(err)
 	}
@@ -143,9 +159,9 @@ type ProbeResult struct {
 	Privileged Privileged    `json:"privileged"`
 }
 
-// Probe calls the target's gate hello (shell-mcp check).
+// Probe calls the target's gate hello (shell-mcp check), a read request.
 func Probe(ctx context.Context, d *Deps, target string) (*ProbeResult, *envelope.Error) {
-	resp, e := d.call(ctx, target, protocol.OpHello, nil, d.budget())
+	resp, e := d.call(withCeiling(ctx, TierRead), target, protocol.OpHello, nil, d.budget())
 	if e != nil {
 		return nil, e
 	}

@@ -66,9 +66,10 @@ func (s *server) exec(raw jsontext.Value) (data any, warns []string, failure err
 	if !ok {
 		return nil, nil, errf(protocol.CodePolicyDenied, "command_id is not declared in the policy")
 	}
-	// The command's tier is checked before anything else about the request.
-	if c.Tier > s.p.MaxTier {
-		return nil, nil, errf(protocol.CodeTierDenied, "command tier %s exceeds the policy's max_tier %s", c.Tier, s.p.MaxTier)
+	// The command's tier is checked before anything else about the request,
+	// against max_tier and the request's ceiling.
+	if err := s.within("command", c.Tier, s.p.MaxTier, "max_tier"); err != nil {
+		return nil, nil, err
 	}
 	if len(a.Args) > template.MaxTokens {
 		return nil, nil, errf(protocol.CodeBadRequest, "at most %d arguments", template.MaxTokens)

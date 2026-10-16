@@ -53,7 +53,7 @@ func TestRealGateHelloAndPolicy(t *testing.T) {
 	g := gatetest.NewHarnessGate(t, "test-principal", "")
 	c, _ := target(t, forced(t, g), 4)
 	cl := newClient()
-	resp, err := cl.Call(t.Context(), c, protocol.OpHello, nil, 10*time.Second)
+	resp, err := cl.Call(t.Context(), c, protocol.OpHello, "read", nil, 10*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,12 +65,12 @@ func TestRealGateHelloAndPolicy(t *testing.T) {
 	if !resp.OK || json.Unmarshal(resp.Data, &hello) != nil || hello.Protocol != 1 || hello.Principal != "test-principal" || hello.MaxTier != "read" {
 		t.Fatalf("hello: %+v %s", resp, resp.Data)
 	}
-	resp, err = cl.Call(t.Context(), c, protocol.OpPolicy, nil, 10*time.Second)
+	resp, err = cl.Call(t.Context(), c, protocol.OpPolicy, "read", nil, 10*time.Second)
 	if err != nil || !resp.OK {
 		t.Fatalf("policy: %+v %v", resp, err)
 	}
 	// An op above the policy's max_tier: the gate's own code, with the id.
-	resp, err = cl.Call(t.Context(), c, protocol.OpWriteFile, map[string]any{"path": filepath.Join(g.Read, "x"), "content_b64": ""}, 10*time.Second)
+	resp, err = cl.Call(t.Context(), c, protocol.OpWriteFile, "operator", map[string]any{"path": filepath.Join(g.Read, "x"), "content_b64": ""}, 10*time.Second)
 	if err != nil || resp.OK || resp.Error.Code != protocol.CodeTierDenied || resp.ID == "" {
 		t.Fatalf("write above max_tier: %+v %v", resp, err)
 	}
@@ -83,7 +83,7 @@ func TestRealGateRefusalBeforeRequestPassesThrough(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, _ := target(t, forced(t, g), 1)
-	resp, err := newClient().Call(t.Context(), c, protocol.OpHello, nil, 10*time.Second)
+	resp, err := newClient().Call(t.Context(), c, protocol.OpHello, "read", nil, 10*time.Second)
 	if err != nil {
 		t.Fatalf("refusal became a transport error: %v", err)
 	}

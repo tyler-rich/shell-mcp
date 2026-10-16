@@ -489,11 +489,12 @@ func TestReadToolRunReadCommand(t *testing.T) {
 	})
 }
 
-// gateExec sends one exec request straight to the gate with the read key.
+// gateExec sends one exec request straight to the gate with the read key,
+// at ceiling operator (the read policy's max_tier).
 func gateExec(t *testing.T, id string, args []string) *protocol.Response {
 	t.Helper()
 	c := sshClient(t, []config.HostKey{hostPin(t, "ssh_host_ed25519_key.pub")}, clientKey(t, "e2e-client-key-read"))
-	resp, err := gateclient.New(gateclient.Options{}).Call(t.Context(), c, protocol.OpExec,
+	resp, err := gateclient.New(gateclient.Options{}).Call(t.Context(), c, protocol.OpExec, protocol.TierOperator,
 		map[string]any{"command_id": id, "args": args}, 20*time.Second)
 	if err != nil {
 		t.Fatal(err)

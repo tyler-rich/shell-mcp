@@ -71,9 +71,12 @@ func (p Profile) maxTier() Tier {
 }
 
 // Tool is one registrable tool: its definition and a function that adds it,
-// with its handler, to an MCP server.
+// with its handler, to an MCP server. Tier, when set, is the ceiling its
+// handler sends with every gate request (define sets it); Register refuses
+// to register the tool at any other tier.
 type Tool struct {
 	Def     *mcp.Tool
+	Tier    Tier
 	Install func(*mcp.Server)
 }
 
@@ -110,6 +113,9 @@ func (r *Registry) Register(tool Tool, tier Tier, privileged bool) error {
 	}
 	if !tier.valid() {
 		return fmt.Errorf("tools: %s: invalid tier %s", name, tier)
+	}
+	if tool.Tier != 0 && tool.Tier != tier {
+		return fmt.Errorf("tools: %s: defined at tier %s, registered at %s", name, tool.Tier, tier)
 	}
 	if privileged != strings.HasPrefix(name, privPrefix) {
 		return fmt.Errorf("tools: %s: privileged tools, and only they, are named %s*", name, privPrefix)

@@ -39,6 +39,9 @@ const (
 	TierDestructive = gpolicy.TierDestructive
 )
 
+// ParseTier parses read | operator | destructive.
+func ParseTier(s string) (Tier, error) { return gpolicy.ParseTier(s) }
+
 // LandlockMode is sandbox.landlock.
 type LandlockMode = gpolicy.LandlockMode
 
