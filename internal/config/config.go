@@ -65,6 +65,7 @@ type Config struct {
 	AllowedHosts         []string
 	AllowedOrigins       []string
 	TrustProxy           bool
+	TrustedProxies       []netip.Prefix // stub
 	RateLimitPerMin      int
 	Targets              []Target
 	DefaultTarget        string

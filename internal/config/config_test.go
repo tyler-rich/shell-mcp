@@ -787,3 +787,48 @@ func TestSSHKeyValueNeverInErrorsOrCheckOutput(t *testing.T) {
 		}
 	}
 }
+
+func TestTrustedProxiesParsed(t *testing.T) {
+	env := baseEnv(t)
+	cfg := mustLoad(t, env)
+	if len(cfg.TrustedProxies) != 0 {
+		t.Fatalf("default trusted proxies %v, want none", cfg.TrustedProxies)
+	}
+	env["SHELL_MCP_TRUSTED_PROXIES"] = "192.0.2.1, 198.51.100.0/24,2001:db8::1 , 2001:db8:1::/48, ::ffff:203.0.113.5"
+	cfg = mustLoad(t, env)
+	want := []string{"192.0.2.1/32", "198.51.100.0/24", "2001:db8::1/128", "2001:db8:1::/48", "203.0.113.5/32"}
+	if len(cfg.TrustedProxies) != len(want) {
+		t.Fatalf("trusted proxies %v", cfg.TrustedProxies)
+	}
+	for i, p := range cfg.TrustedProxies {
+		if p.String() != want[i] {
+			t.Fatalf("entry %d = %s, want %s", i, p, want[i])
+		}
+	}
+	eff, _ := json.Marshal(cfg.Effective())
+	if !strings.Contains(string(eff), `"trusted_proxies":["192.0.2.1/32","198.51.100.0/24"`) {
+		t.Fatalf("effective config: %s", eff)
+	}
+}
+
+func TestTrustedProxiesInvalid(t *testing.T) {
+	for _, v := range []string{"not-an-ip", "192.0.2.0/33", "192.0.2.1/24", "0.0.0.0/0", "::/0", "fe80::1%eth0", "192.0.2.1:8080", "2001:db8::1/64"} {
+		t.Run(v, func(t *testing.T) {
+			env := baseEnv(t)
+			env["SHELL_MCP_TRUSTED_PROXIES"] = "192.0.2.1," + v
+			_, err := Load(lookupFrom(env))
+			var cerr *Error
+			if !errors.As(err, &cerr) || !strings.HasPrefix(cerr.Reason, fmt.Sprintf("SHELL_MCP_TRUSTED_PROXIES: %q ", v)) || strings.Contains(cerr.Reason, "\n") {
+				t.Fatalf("reason %v", err)
+			}
+		})
+	}
+}
+
+func TestTrustProxyVariableReplaced(t *testing.T) {
+	for _, v := range []string{"true", "false"} {
+		env := baseEnv(t)
+		env["SHELL_MCP_TRUST_PROXY"] = v
+		wantReason(t, env, "SHELL_MCP_TRUST_PROXY was replaced by SHELL_MCP_TRUSTED_PROXIES: a comma list of the proxies' IP addresses or CIDR prefixes (empty: X-Forwarded-For is never used)")
+	}
+}

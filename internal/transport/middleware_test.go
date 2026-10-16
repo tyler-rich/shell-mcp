@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -101,6 +102,8 @@ type req struct {
 	chunked                                        bool
 	noAuth                                         bool
 	emptyHost                                      bool
+	// extraXFF adds further X-Forwarded-For headers after headers\'.
+	extraXFF []string
 }
 
 func (e *env) do(r *req) *result {
@@ -151,6 +154,9 @@ func (e *env) do(r *req) *result {
 	hr.Header.Set("MCP-Protocol-Version", "2025-11-25")
 	for k, v := range r.headers {
 		hr.Header.Set(k, v)
+	}
+	for _, v := range r.extraXFF {
+		hr.Header.Add("X-Forwarded-For", v)
 	}
 	rec := httptest.NewRecorder()
 	e.h.ServeHTTP(rec, hr)
@@ -442,31 +448,81 @@ func TestAuthFailuresOutsideWindowDoNotCount(t *testing.T) {
 	}
 }
 
-func TestTrustProxy(t *testing.T) {
+func xff(vals ...string) map[string]string {
+	if len(vals) == 1 {
+		return map[string]string{"X-Forwarded-For": vals[0]}
+	}
+	return map[string]string{"X-Forwarded-For": strings.Join(vals, ", ")}
+}
+
+// TestXForwardedForIgnoredWithoutTrustedProxies: by default the header is
+// never honoured; every request counts against its own peer address.
+func TestXForwardedForIgnoredWithoutTrustedProxies(t *testing.T) {
 	cfg := bearerConfig(t)
 	cfg.RateLimitPerMin = 1
-	proxy := "192.0.2.1:4000"
-	xff := func(v string) map[string]string { return map[string]string{"X-Forwarded-For": v} }
-
-	// Off: X-Forwarded-For is ignored; every request is the proxy's.
 	e := newEnv(t, cfg)
-	_ = e.do(&req{remote: proxy, headers: xff("198.51.100.1")})
-	e.wantRefused(e.do(&req{remote: proxy, headers: xff("198.51.100.2")}), http.StatusTooManyRequests, bodyRateLimited)
+	peer := "192.0.2.1:4000"
+	_ = e.do(&req{remote: peer, headers: xff("198.51.100.1")})
+	e.wantRefused(e.do(&req{remote: peer, headers: xff("198.51.100.2")}), http.StatusTooManyRequests, bodyRateLimited)
+}
 
-	// On: the entry the proxy appended (the last one) is the client.
-	cfg.TrustProxy = true
+// TestSpoofedXForwardedForFromNonProxyPeerIgnored: with a trusted proxy
+// configured, a request from any other address is limited and locked out by
+// its own peer address, whatever X-Forwarded-For it carries.
+func TestSpoofedXForwardedForFromNonProxyPeerIgnored(t *testing.T) {
+	cfg := bearerConfig(t)
+	cfg.RateLimitPerMin = 2
+	cfg.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")}
+	e := newEnv(t, cfg)
+	attacker := "192.0.2.66:5000"
+	for i := range 2 {
+		if res := e.do(&req{remote: attacker, headers: xff(fmt.Sprintf("198.51.100.%d", 10+i))}); res.StatusCode != http.StatusOK {
+			t.Fatalf("request %d: %d", i, res.StatusCode)
+		}
+	}
+	e.wantRefused(e.do(&req{remote: attacker, headers: xff("198.51.100.99")}), http.StatusTooManyRequests, bodyRateLimited)
+
+	// The auth lockout, too, is by peer address.
+	cfg.RateLimitPerMin = 1000
 	e = newEnv(t, cfg)
-	if res := e.do(&req{remote: proxy, headers: xff("203.0.113.9, 198.51.100.1")}); res.StatusCode != http.StatusOK {
+	for i := range 10 {
+		e.wantRefused(e.do(&req{remote: attacker, noAuth: true, headers: xff(fmt.Sprintf("203.0.113.%d", i))}), http.StatusUnauthorized, bodyUnauthorized)
+	}
+	e.wantRefused(e.do(&req{remote: attacker, headers: xff("203.0.113.200")}), http.StatusTooManyRequests, bodyRateLimited)
+	if !strings.Contains(e.logs.String(), "192.0.2.66") || strings.Contains(e.logs.String(), "203.0.113.") {
+		t.Fatalf("the lockout is not by peer address: %s", e.logs.String())
+	}
+}
+
+// TestTrustedProxyLastEntryUsed: from a listed proxy, the client is the
+// last entry (the one that proxy appended); leftmost entries are never used.
+func TestTrustedProxyLastEntryUsed(t *testing.T) {
+	cfg := bearerConfig(t)
+	cfg.RateLimitPerMin = 1
+	cfg.TrustedProxies = []netip.Prefix{netip.MustParsePrefix("192.0.2.0/29"), netip.MustParsePrefix("2001:db8:ff::1/128")}
+	e := newEnv(t, cfg)
+	proxy := "192.0.2.3:4000"
+	if res := e.do(&req{remote: proxy, headers: xff("203.0.113.9", "198.51.100.1")}); res.StatusCode != http.StatusOK {
 		t.Fatalf("first client: %d", res.StatusCode)
 	}
-	// A client cannot escape by prepending a forged entry.
-	e.wantRefused(e.do(&req{remote: proxy, headers: xff("203.0.113.10, 198.51.100.1")}), http.StatusTooManyRequests, bodyRateLimited)
-	if res := e.do(&req{remote: proxy, headers: xff("198.51.100.2")}); res.StatusCode != http.StatusOK {
-		t.Fatalf("second client: %d", res.StatusCode)
+	// Same appended entry, forged leftmost entries: the same client.
+	e.wantRefused(e.do(&req{remote: proxy, headers: xff("203.0.113.10", "203.0.113.11", "198.51.100.1")}), http.StatusTooManyRequests, bodyRateLimited)
+	// The leftmost entry of the first request is not a client either: its
+	// own budget is untouched.
+	if res := e.do(&req{remote: proxy, headers: xff("203.0.113.9")}); res.StatusCode != http.StatusOK {
+		t.Fatalf("the leftmost entry was used as a client: %d", res.StatusCode)
 	}
-	// Unparsable: the connection's own address.
-	if res := e.do(&req{remote: proxy, headers: xff("not-an-ip")}); res.StatusCode != http.StatusOK {
-		t.Fatalf("garbage XFF: %d", res.StatusCode)
+	// Several headers: the last entry of the last one.
+	if res := e.do(&req{remote: proxy, headers: map[string]string{"X-Forwarded-For": "198.51.100.1"}, extraXFF: []string{"198.51.100.2"}}); res.StatusCode != http.StatusOK {
+		t.Fatalf("last header's entry: %d", res.StatusCode)
+	}
+	// An IPv6 proxy from the list.
+	if res := e.do(&req{remote: "[2001:db8:ff::1]:443", headers: xff("198.51.100.3")}); res.StatusCode != http.StatusOK {
+		t.Fatalf("IPv6 proxy: %d", res.StatusCode)
+	}
+	// An unparsable appended entry: the proxy's own address.
+	if res := e.do(&req{remote: proxy, headers: xff("198.51.100.4", "not-an-ip")}); res.StatusCode != http.StatusOK {
+		t.Fatalf("unparsable entry: %d", res.StatusCode)
 	}
 	e.wantRefused(e.do(&req{remote: proxy}), http.StatusTooManyRequests, bodyRateLimited)
 }
