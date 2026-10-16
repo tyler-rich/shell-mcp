@@ -139,17 +139,20 @@ cross_build() { # cross_build <goarch>
 		go version -m /tmp/\$c | grep -q 'CGO_ENABLED=0' || { echo \"\$c was built with cgo\" >&2; exit 1; }
 		# The helper's e2e bypass build must never be what ships.
 		if go version -m /tmp/\$c | grep -q shellmcp_e2e_bypass; then echo \"\$c was built with the e2e bypass tag\" >&2; exit 1; fi
+		# Nor the server's elicitation diagnostic build.
+		if go version -m /tmp/\$c | grep -q shellmcp_diag; then echo \"\$c was built with the diagnostic tag\" >&2; exit 1; fi
 		echo \"built \$c linux/$1 (CGO_ENABLED=0)\"
 	done"
 }
 
 step "gofmt" "" gofmt_check
 step "go vet" "" in_go go vet ./...
-step "go vet (e2e, bypass tags)" "" in_go sh -c "go vet -tags e2e ./test/e2e/ && go vet -tags shellmcp_e2e_bypass ./internal/privd/... ./cmd/shell-mcp-privd/"
+step "go vet (e2e, bypass, diagnostic tags)" "" in_go sh -c "go vet -tags e2e ./test/e2e/ && go vet -tags shellmcp_e2e_bypass ./internal/privd/... ./cmd/shell-mcp-privd/ && go vet -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/"
 step "golangci-lint" "" in_lint run ./...
-step "golangci-lint (e2e, bypass tags)" "" in_lint run --build-tags=e2e,shellmcp_e2e_bypass ./...
+step "golangci-lint (e2e, bypass, diagnostic tags)" "" in_lint run --build-tags=e2e,shellmcp_e2e_bypass,shellmcp_diag ./...
 step "go test -race" "" in_go go test -race -count=1 ./...
 step "go test -race (test build, fsx)" "" in_go go test -race -count=1 -tags shellmcp_e2e_bypass ./internal/gate/fsx/
+step "go test -race (diagnostic build, server)" "" in_go sh -c "go test -race -count=1 -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/ && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -tags shellmcp_diag -o /tmp/shell-mcp-diag.exe ./cmd/shell-mcp"
 step "govulncheck" "" in_go go run "golang.org/x/vuln/cmd/govulncheck@$govulncheck_version" ./...
 step "build linux/amd64" "" cross_build amd64
 step "build linux/arm64" "" cross_build arm64

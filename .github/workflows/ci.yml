@@ -67,10 +67,12 @@ jobs:
       - name: go vet
         run: |
           go vet ./...
-          # Files built only with a tag: the e2e suite and the helper's e2e
-          # bypass build (never released).
+          # Files built only with a tag: the e2e suite, the helper's e2e
+          # bypass build and the server's elicitation diagnostic build (none
+          # ever released).
           go vet -tags e2e ./test/e2e/
           go vet -tags shellmcp_e2e_bypass ./internal/privd/... ./cmd/shell-mcp-privd/
+          go vet -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
@@ -79,7 +81,7 @@ jobs:
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
-          args: --build-tags=e2e,shellmcp_e2e_bypass
+          args: --build-tags=e2e,shellmcp_e2e_bypass,shellmcp_diag
       # SHELL_MCP_REQUIRE_SECURE_TMP: tests fail (never skip) without a
       # trustworthy TMPDIR. SHELL_MCP_REQUIRE_LANDLOCK_ABI: each entry's
       # kernel ABI, so every sandbox test up to it (network rules from 4,
@@ -103,6 +105,14 @@ jobs:
         env:
           SHELL_MCP_REQUIRE_SECURE_TMP: "1"
         run: go test -race -count=1 -v -tags shellmcp_e2e_bypass ./internal/gate/fsx/
+      # The elicitation diagnostic build (shellmcp_diag): built and tested
+      # here so the maintainer's local diagnostic works; never released.
+      - name: go test -race (diagnostic build, server)
+        env:
+          SHELL_MCP_REQUIRE_SECURE_TMP: "1"
+        run: |
+          go test -race -count=1 -v -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -tags shellmcp_diag -o /tmp/shell-mcp-diag.exe ./cmd/shell-mcp
       # Kernel-dependent tests, listed so that a skip is visible, with the
       # all-thread Landlock path this entry exercised.
       - name: sandbox tests that ran on this runner
@@ -126,6 +136,8 @@ jobs:
               go version -m "/tmp/$c-$arch" | grep -q 'CGO_ENABLED=0' || { echo "$c was built with cgo" >&2; exit 1; }
               # The helper's e2e bypass build must never be what ships.
               if go version -m "/tmp/$c-$arch" | grep -q shellmcp_e2e_bypass; then echo "$c was built with the e2e bypass tag" >&2; exit 1; fi
+              # Nor the server's elicitation diagnostic build.
+              if go version -m "/tmp/$c-$arch" | grep -q shellmcp_diag; then echo "$c was built with the diagnostic tag" >&2; exit 1; fi
               echo "built $c linux/$arch (CGO_ENABLED=0)"
             done
           done
