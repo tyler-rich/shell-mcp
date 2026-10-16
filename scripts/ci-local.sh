@@ -27,7 +27,7 @@ go_image="$(awk 'toupper($1) == "FROM" && $2 ~ /^golang:/ { print $2; exit }' Do
 # prebuilt golangci-lint image bundles its own Go, and with GOTOOLCHAIN=local
 # that Go cannot load the module once go.mod's go line moves past it.
 # deps-current checks both pins and that the lint step runs this way.
-golangci_lint_version="v2.14.0"
+golangci_lint_version="v2.15.0"
 govulncheck_version="v1.9.0"
 
 if [[ "$go_image" != *@sha256:* ]]; then
