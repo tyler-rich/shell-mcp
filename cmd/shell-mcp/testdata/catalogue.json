@@ -1,5 +1,101 @@
 [
   {
+    "name": "shell_find_files",
+    "title": "Find files",
+    "tier": "read",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Find files"
+    },
+    "description": "Searches a directory tree with bounded depth and results, by name glob, type and modification age.",
+    "input_schema_sha256": "73347b5a7fc4f3cccd23f814d45ca52a136efd4617b5cabbdc76ac3c72c79547",
+    "output_schema_sha256": "22866528a8abe997d7383a8b0dad7e4c74b13b34a038f54b1dc17da709621831"
+  },
+  {
+    "name": "shell_get_disk_usage",
+    "title": "Get disk usage",
+    "tier": "read",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Get disk usage"
+    },
+    "description": "Returns each mounted filesystem's type, size, used and available bytes and inode counts.",
+    "input_schema_sha256": "b900df38a774f2c137c964a22523166ae76ee82e62305e1b3bb021e51b0ab90b",
+    "output_schema_sha256": "f9fc236e468202229269fbf5bfa6cee30457629f9ecb575b0b75047a00899e2b"
+  },
+  {
+    "name": "shell_get_git_diff",
+    "title": "Get git diff",
+    "tier": "read",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Get git diff"
+    },
+    "description": "Returns a repository's uncommitted or staged changes as a unified diff, redacted and size-capped.",
+    "input_schema_sha256": "349c09678cdf88f71ac05c5d5f7aa287c9679a78970b026a0f0a709dd6072b8b",
+    "output_schema_sha256": "b13f90ccd8fcd9df4ca752f312a9bbbdea669678be03d584d49334fb9f6a18b0"
+  },
+  {
+    "name": "shell_get_git_log",
+    "title": "Get git log",
+    "tier": "read",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Get git log"
+    },
+    "description": "Returns a repository's most recent commits: hash, author name, date and subject.",
+    "input_schema_sha256": "6d0336f0e879641d0e965996d8e13e963a67f3baef405751e13c4c86541d7c20",
+    "output_schema_sha256": "2fa084eccfc0ddb6793eb87b15dca2519f6078eb568997290c673880d04ca773"
+  },
+  {
+    "name": "shell_get_git_status",
+    "title": "Get git status",
+    "tier": "read",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Get git status"
+    },
+    "description": "Returns a repository's branch, HEAD, upstream, ahead/behind counts and changed or untracked paths.",
+    "input_schema_sha256": "9dbc919b9fd8c5ff28d099b276495e716a9eae82e94cef40aba0a8dd4b5a5f72",
+    "output_schema_sha256": "6cb85b5189474e20cb62473113e99187a4d9d5d3a3941ef4171405edf9d1a85e"
+  },
+  {
+    "name": "shell_get_journal",
+    "title": "Get journal",
+    "tier": "read",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Get journal"
+    },
+    "description": "Returns the most recent journal lines of one systemd unit, optionally by time range and priority, redacted and size-capped.",
+    "input_schema_sha256": "d26bf059e509305ae4d8492c48f58b376cd32d733539e8526f92bbc598e8c764",
+    "output_schema_sha256": "0611e01739260b861dccc861949ec2dc69d3853480cd3b0455de27a5f9c81927"
+  },
+  {
     "name": "shell_get_policy",
     "title": "Get target policy",
     "tier": "read",
@@ -16,6 +112,102 @@
     "output_schema_sha256": "7d06337ead3da5c5c6d931936be043589557ab1d4af84aa4ad1bf08dfa28c958"
   },
   {
+    "name": "shell_get_service_status",
+    "title": "Get service status",
+    "tier": "read",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Get service status"
+    },
+    "description": "Returns a systemd unit's load, active and sub state, main PID, timestamps, memory, restart count and unit file state.",
+    "input_schema_sha256": "49692754fef3194d5f076d4da7ba96d3660b900c882f751f0a6bf63717b678c2",
+    "output_schema_sha256": "93e6b8311f52ab6e0259db22773a029929e683e5a6e85e61bdade241e6d03d5e"
+  },
+  {
+    "name": "shell_get_system_info",
+    "title": "Get system info",
+    "tier": "read",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Get system info"
+    },
+    "description": "Returns the target's OS release, kernel, hostname, uptime, load averages, memory and CPU count.",
+    "input_schema_sha256": "42809bf68a1fbfc1ec56832b0e720e986e33781f27d916d7d9a1e9ebc2696207",
+    "output_schema_sha256": "ed6a2797858d3900dc884c23f9ff20e3968109bc78413971998417b4bcf5ad18"
+  },
+  {
+    "name": "shell_inspect_certificate",
+    "title": "Inspect certificate",
+    "tier": "read",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Inspect certificate"
+    },
+    "description": "Parses every certificate in a PEM or DER file and returns subject, issuer, names, validity, days remaining, key and fingerprint; files holding a private key are refused.",
+    "input_schema_sha256": "8784bd247132b86c34b82659bdcf02722cff3b92da6647b34525d81986bdced4",
+    "output_schema_sha256": "ab951640e0db789a136fb6d2870e02cf0b35524081c7ae47388ed11375f3a850"
+  },
+  {
+    "name": "shell_list_directory",
+    "title": "List directory",
+    "tier": "read",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "List directory"
+    },
+    "description": "Lists a directory's entries with type, size, mode, owner, group and modification time; symlink targets are reported, not followed.",
+    "input_schema_sha256": "3eef6630375e4baf3ebeb68c3a08e71c2cf8002ee64b922b6b8cc481b69e85f5",
+    "output_schema_sha256": "284ccdf701e86f9b2a9416d09bf4f15a2d6906ce162264ea3d6a8edeb017a755"
+  },
+  {
+    "name": "shell_list_processes",
+    "title": "List processes",
+    "tier": "read",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "List processes"
+    },
+    "description": "Lists the target's processes with user, state, memory, CPU time, start time and a redacted command line, filtered and sorted.",
+    "input_schema_sha256": "351dc7189c123dfc904c4f77559ab471f1d503f8069f83b49ade5079161c2ac4",
+    "output_schema_sha256": "86cf66b16d4150da2400e2b96ee42a2a524e932230c2e42480e3fa53332cdb49"
+  },
+  {
+    "name": "shell_list_services",
+    "title": "List services",
+    "tier": "read",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "List services"
+    },
+    "description": "Lists the target's loaded service units that its policy allows, with load, active and sub state.",
+    "input_schema_sha256": "222f8e8be45453b414ae139610f03989a64d030ffe7b35c4799b33e83129f8bc",
+    "output_schema_sha256": "d95dd922b27ae6c7e9804aefbb80cc80a027a51cd6deaa97e0110a46db8a40e9"
+  },
+  {
     "name": "shell_list_targets",
     "title": "List targets",
     "tier": "read",
@@ -30,5 +222,53 @@
     "description": "Lists the configured SSH targets with their name, host, port and user, without contacting them.",
     "input_schema_sha256": "cd1a463c46d6264134447db17a8c3c7abe5b9a2488c6d759fea66da1f96b133e",
     "output_schema_sha256": "8617c2ef25c7f1a0e8352910bdb435e4dcec34f55413ac3138c284f413a480fd"
+  },
+  {
+    "name": "shell_read_file",
+    "title": "Read file",
+    "tier": "read",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Read file"
+    },
+    "description": "Reads a bounded part of a text file, or its last lines, redacted; a binary file returns only its size and SHA-256.",
+    "input_schema_sha256": "55e5493879c1e0bd1be44dbda29e3430c4600e6294b9ee1c018a9c29773ca5b6",
+    "output_schema_sha256": "c1d53a1021aab2f2f0f9339e00e2d15d8c31061dbc137b256cb5bd34b9ed700d"
+  },
+  {
+    "name": "shell_run_read_command",
+    "title": "Run read command",
+    "tier": "read",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Run read command"
+    },
+    "description": "Runs a read-tier command declared in the target policy with arguments matching one of its templates, and returns its exit status and redacted, size-capped output.",
+    "input_schema_sha256": "590715efe716d349a69a5f0214a3312c08d76f9f6b018d00c7475b4a75fbe483",
+    "output_schema_sha256": "0f128ad826c1b9e1c1532826832e027902534bda0837da3890c3b77173a51636"
+  },
+  {
+    "name": "shell_stat_path",
+    "title": "Stat path",
+    "tier": "read",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Stat path"
+    },
+    "description": "Returns one path's type, size, mode, owner, group and modification time without following a final symlink, whose target is reported.",
+    "input_schema_sha256": "8784bd247132b86c34b82659bdcf02722cff3b92da6647b34525d81986bdced4",
+    "output_schema_sha256": "86435fb795786e7bc96d78f626e9d93da3f8b28bdf49b2e33ee82c89c0896cbc"
   }
 ]

@@ -30,7 +30,10 @@ type spec[In, Out any] struct {
 	// audit returns the arguments that may be logged: ids, paths and unit
 	// names only, never content.
 	audit func(In) map[string]any
-	run   func(ctx context.Context, req *mcp.CallToolRequest, in In) envelope.Envelope[Out]
+	// summary describes a success in one line for the text block: counts
+	// and flags only, never a string that came from the host or the caller.
+	summary func(*Out) string
+	run     func(ctx context.Context, req *mcp.CallToolRequest, in In) envelope.Envelope[Out]
 }
 
 // validator is implemented by inputs with checks beyond their types.
@@ -83,7 +86,7 @@ func define[In, Out any](d *Deps, s spec[In, Out]) Tool {
 			}
 		}
 		d.audit(ctx, s.name, env.Target, auditArgs, outcome(env.OK, env.Error), env.Exec, time.Since(start))
-		return result(env)
+		return result(env, summarize(env, s.summary))
 	}
 	return Tool{Def: def, Install: func(srv *mcp.Server) { srv.AddTool(def, handler) }}
 }
@@ -114,18 +117,35 @@ func outcome(ok bool, e *envelope.Error) string {
 	return e.Code
 }
 
-// result is the tool result: the envelope as structuredContent and the same
-// JSON as the one text block; isError for a failure.
-func result[Out any](env envelope.Envelope[Out]) (*mcp.CallToolResult, error) {
+// summarize is the text block's first line: "ok: <summary>" or
+// "error: <code>". It never carries host or caller text, so a client that
+// shows only the first line shows nothing a host could have written.
+func summarize[Out any](env envelope.Envelope[Out], f func(*Out) string) string {
+	switch {
+	case !env.OK && env.Error != nil:
+		return "error: " + env.Error.Code
+	case !env.OK:
+		return "error: internal"
+	case f == nil || env.Data == nil:
+		return "ok"
+	}
+	return "ok: " + f(env.Data)
+}
+
+// result is the tool result: the envelope as structuredContent, and a text
+// block of the summary line followed by the same JSON (clients that pass
+// only text to the model still see the data); isError for a failure.
+func result[Out any](env envelope.Envelope[Out], summary string) (*mcp.CallToolResult, error) {
 	b, err := stdjson.Marshal(env)
 	if err != nil {
 		env = envelope.Failure[Out](env.Target, envelope.Errorf("internal", "the result could not be encoded"))
+		summary = "error: internal"
 		if b, err = stdjson.Marshal(env); err != nil {
 			return nil, err
 		}
 	}
 	return &mcp.CallToolResult{
-		Content:           []mcp.Content{&mcp.TextContent{Text: string(b)}},
+		Content:           []mcp.Content{&mcp.TextContent{Text: summary + "\n" + string(b)}},
 		StructuredContent: stdjson.RawMessage(b), // the SDK sends RawMessage unchanged
 		IsError:           !env.OK,
 	}, nil

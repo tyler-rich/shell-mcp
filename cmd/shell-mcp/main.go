@@ -29,6 +29,7 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/config"
 	"github.com/tyler-rich/shell-mcp/internal/envelope"
 	"github.com/tyler-rich/shell-mcp/internal/gateclient"
+	"github.com/tyler-rich/shell-mcp/internal/redact"
 	"github.com/tyler-rich/shell-mcp/internal/sshx"
 	"github.com/tyler-rich/shell-mcp/internal/tools"
 	"github.com/tyler-rich/shell-mcp/internal/transport"
@@ -224,6 +225,9 @@ func newDeps(cfg *config.Config, logger *slog.Logger) (*tools.Deps, func(), erro
 		Principal:      principal,
 		Logger:         logger,
 		DefaultTimeout: cfg.DefaultTimeout,
+		MaxTimeout:     cfg.MaxTimeout,
+		MaxOutputBytes: cfg.MaxOutputBytes,
+		Redactor:       redact.New(cfg.RedactPatterns),
 	}
 	return d, pool.Close, nil
 }

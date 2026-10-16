@@ -47,6 +47,21 @@ func Catalogue(d *Deps) (*Registry, error) {
 	}{
 		{listTargets(d), TierRead},
 		{getPolicy(d), TierRead},
+		{getSystemInfo(d), TierRead},
+		{getDiskUsage(d), TierRead},
+		{listProcesses(d), TierRead},
+		{getServiceStatus(d), TierRead},
+		{listServices(d), TierRead},
+		{getJournal(d), TierRead},
+		{listDirectory(d), TierRead},
+		{statPath(d), TierRead},
+		{readFile(d), TierRead},
+		{findFiles(d), TierRead},
+		{inspectCertificate(d), TierRead},
+		{getGitStatus(d), TierRead},
+		{getGitLog(d), TierRead},
+		{getGitDiff(d), TierRead},
+		{runReadCommand(d), TierRead},
 	} {
 		if err := r.Register(reg.tool, reg.tier, false); err != nil {
 			return nil, err

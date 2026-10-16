@@ -538,8 +538,8 @@ func TestReadToolsCallTheirOp(t *testing.T) {
 					t.Fatalf("data %v", d)
 				}
 			}},
-		{"shell_get_journal", map[string]any{"unit": "example-app.service", "lines": 50, "since": "-1h", "until": "2026-10-01T00:00:00Z", "priority": "err"},
-			[]string{"journal"}, `{"lines":50,"priority":"err","since":"-1h","unit":"example-app.service","until":"2026-10-01T00:00:00Z"}`,
+		{"shell_get_journal", map[string]any{"unit": "example-app.service", "lines": 50, "since": "2026-09-01T00:00:00Z", "until": "-1h", "priority": "err"},
+			[]string{"journal"}, `{"lines":50,"priority":"err","since":"2026-09-01T00:00:00Z","unit":"example-app.service","until":"-1h"}`,
 			func(t *testing.T, env map[string]any) {
 				if d := data(t, env); !strings.Contains(d["output"].(string), "started") || d["truncated"] != false {
 					t.Fatalf("data %v", d)
