@@ -1476,6 +1476,7 @@ The message says approval arrives in a later release. Read tools are never guard
   - an all-digit SHA fixture made the uppercase-hash case a no-op, so the fixture now has letters;
   - the "no content" check now looks at the envelope, not the MCP result, whose own field is called `content`.
 - **The catalogue snapshot** was shown failing against the new catalogue (eight added rows, no existing row changed), then regenerated.
+- **Fuzzing:** `FuzzModeAgreesWithGate` (new, 60 s in the golang container, 13,013,363 execs, no crashers): the server's mode check accepts exactly the strings `fsx.ParseMode` can parse, so it never refuses a mode the gate would take, and the bit rules stay the gate's.
 
 **End-to-end** (`e2e-host`, `test/e2e/operator_tools_test.go`):
 - **The setup.** The tools go through the real `shell-mcp` (stdio, `operator` profile), the test sshd and the installed gate. `setup.sh` adds `/etc/shell-mcp/gate-operator.yaml` and a fourth client key (principal `e2e-operator`). The policy has:
