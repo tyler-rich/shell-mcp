@@ -30,8 +30,11 @@ const (
 )
 
 // Auth-failure limits (S-03): MaxFailures failures by one client within
-// FailureWindow lock that client out for Lockout. While locked, every request
-// from it is refused with 429 before its token is looked at.
+// FailureWindow lock that client out for Lockout. A failure counts only when
+// the request presented a credential that did not authenticate (a wrong
+// token, another scheme, a malformed value, several Authorization headers);
+// a request without an Authorization header does not count. While locked,
+// every request from it is refused with 429 before its token is looked at.
 const (
 	MaxFailures   = 10
 	FailureWindow = 5 * time.Minute
@@ -101,7 +104,7 @@ func (m *Middleware) Handler(next http.Handler) http.Handler {
 			return
 		}
 		if reason := m.check(r); reason != "" {
-			m.fail(key, now, reason)
+			m.fail(key, now, reason, reason != reasonMissing)
 			w.Header().Set("WWW-Authenticate", `Bearer realm="shell-mcp"`)
 			Refuse(w, http.StatusUnauthorized, CodeUnauthorized)
 			return
@@ -110,6 +113,14 @@ func (m *Middleware) Handler(next http.Handler) http.Handler {
 	})
 }
 
+// reasonMissing is the failure reason of a request without any
+// Authorization header. It is the one failure that does not count toward
+// the lockout: the lockout stops token guessing, and a request that
+// presents nothing guesses nothing (clients probe OAuth discovery without
+// credentials before they connect). Such requests still get the 401 and
+// still pass the global per-client rate limit.
+const reasonMissing = "missing"
+
 // check returns "" for a request carrying exactly one Authorization header
 // of the form "Bearer <token>" (scheme case-insensitive, one space) whose
 // token equals the configured one, else a fixed reason for the log.
@@ -117,7 +128,7 @@ func (m *Middleware) check(r *http.Request) string {
 	vals := r.Header.Values("Authorization")
 	switch len(vals) {
 	case 0:
-		return "missing"
+		return reasonMissing
 	case 1:
 	default:
 		return "several Authorization headers"
@@ -141,7 +152,14 @@ func (m *Middleware) lockedFor(key netip.Prefix, now time.Time) time.Duration {
 	return 0
 }
 
-func (m *Middleware) fail(key netip.Prefix, now time.Time, reason string) {
+// fail logs an authentication failure and, when counts is set (a credential
+// was presented and did not authenticate), records it toward the lockout.
+func (m *Middleware) fail(key netip.Prefix, now time.Time, reason string, counts bool) {
+	client := key.String()
+	m.cfg.Logger.Warn("authentication failed", "client", client, "reason", reason, "counts_toward_lockout", counts)
+	if !counts {
+		return
+	}
 	m.mu.Lock()
 	rec, ok := m.failures[key]
 	if !ok {
@@ -162,8 +180,6 @@ func (m *Middleware) fail(key netip.Prefix, now time.Time, reason string) {
 	}
 	m.mu.Unlock()
 
-	client := key.String()
-	m.cfg.Logger.Warn("authentication failed", "client", client, "reason", reason)
 	if locked {
 		m.cfg.Logger.Warn("client locked out after repeated authentication failures",
 			"client", client, "failures", MaxFailures, "window_s", int(FailureWindow.Seconds()), "lockout_s", int(Lockout.Seconds()))
