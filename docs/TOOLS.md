@@ -83,6 +83,8 @@ The package tools' previews are the helper's read-tier `priv_pkg_install_preview
 
 ## Not in v1
 
+A diagnostic tool, `shell_diag_elicit` (asks a harmless yes/no question through elicitation and reports what the client did), exists only in a binary built with the `shellmcp_diag` tag for local client testing; release builds and the image never contain it, and CI fails a cross-built binary that carries the tag.
+
 Package managers other than apt, streaming/follow modes, file upload/download of binaries, archive extraction, container tools (use a container-manager MCP), anything in `docs/SECURITY.md` §4.
 
 ## Error contract

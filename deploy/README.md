@@ -38,7 +38,7 @@ docker run -d --name shell-mcp \
   ghcr.io/tyler-rich/shell-mcp:0.0.1
 ```
 
-`docker run --rm ghcr.io/tyler-rich/shell-mcp:0.0.1 check` (with the same environment and mounts) validates the configuration and prints it with the token shown only as a length and the key only as its fingerprint.
+`docker run --rm ghcr.io/tyler-rich/shell-mcp:0.0.1 check` (with the same environment and mounts) validates the configuration, connects to every target, verifies its host key and calls the gate's `hello`, and prints the result: the configuration with the token shown only as a length and the key only as its fingerprint, then per target the verified host-key pin, gate version, protocol, principal, policy hash, `max_tier`, sandbox status and the profile's tools that target can serve. It exits non-zero if any target fails.
 
 ## Docker Compose
 
