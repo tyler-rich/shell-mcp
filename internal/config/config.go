@@ -91,9 +91,21 @@ type Target struct {
 	Host     string
 	Port     int
 	User     string
-	HostKeys []string
+	HostKeys []HostKey
 	Key      *PrivateKey
 }
+
+// HostKey is one pinned host key: its type and its SHA-256 fingerprint.
+type HostKey struct {
+	Type        string
+	Fingerprint string
+}
+
+// String returns the pin as configured: "<key-type> SHA256:<base64>".
+func (h HostKey) String() string { return h.Type + " " + h.Fingerprint }
+
+// HostKeyPinFormat ends the reason for a malformed pin. (stub)
+const HostKeyPinFormat = ""
 
 // Load reads the configuration from lookup (and the files it names) and
 // validates it against the fail-closed rules in docs/SECURITY.md §6.
@@ -508,9 +520,13 @@ func (l *loader) buildTarget(ft *fileTarget, sharedKey *PrivateKey) (Target, err
 	if key == nil {
 		return Target{}, errorf("%s: no SSH private key (set SHELL_MCP_SSH_KEY, SHELL_MCP_SSH_KEY_FILE or key_file)", id)
 	}
+	pins := make([]HostKey, 0, len(ft.HostKeys))
+	for _, fp := range ft.HostKeys {
+		pins = append(pins, HostKey{Fingerprint: fp})
+	}
 	return Target{
 		Name: ft.Name, Host: ft.Host, Port: ft.Port, User: ft.User,
-		HostKeys: slices.Clone(ft.HostKeys), Key: key,
+		HostKeys: pins, Key: key,
 	}, nil
 }
 

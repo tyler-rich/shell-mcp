@@ -26,6 +26,9 @@ const testToken = "tok-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGH" // 48 chars
 
 var testFingerprint = "SHA256:" + base64.RawStdEncoding.EncodeToString(make([]byte, 32))
 
+// testPin is a typed host-key pin: "<key-type> SHA256:<base64>".
+var testPin = "ssh-ed25519 " + testFingerprint
+
 type testKey struct {
 	pem  string
 	seed []byte
@@ -59,7 +62,7 @@ func baseEnv(t *testing.T) map[string]string {
 		"SHELL_MCP_TARGET_NAME":      "app-host",
 		"SHELL_MCP_TARGET_HOST":      "target-a.example.test",
 		"SHELL_MCP_TARGET_USER":      "svc-shell",
-		"SHELL_MCP_TARGET_HOST_KEYS": testFingerprint,
+		"SHELL_MCP_TARGET_HOST_KEYS": testPin,
 		"SHELL_MCP_SSH_KEY":          newEd25519Key(t).pem,
 	}
 }
@@ -183,20 +186,79 @@ func TestRuleTargetWithoutHostKey(t *testing.T) {
 	wantReason(t, env, `target "app-host": no pinned host key`)
 }
 
-func TestRuleTargetBadFingerprint(t *testing.T) {
-	for _, fp := range []string{
+func TestRuleTargetBadHostKeyPin(t *testing.T) {
+	for _, pin := range []string{
+		testFingerprint, // untyped: the type is not declared
 		"MD5:aa:bb",
-		"SHA256:",
-		"SHA256:not base64!",
-		"SHA256:" + base64.RawStdEncoding.EncodeToString(make([]byte, 20)), // wrong length
-		"sha256:" + base64.RawStdEncoding.EncodeToString(make([]byte, 32)),
+		"ssh-ed25519 MD5:aa:bb",
+		"ssh-ed25519 SHA256:",
+		"ssh-ed25519 SHA256:not base64!",
+		"ssh-ed25519 SHA256:" + base64.RawStdEncoding.EncodeToString(make([]byte, 20)), // wrong length
+		"ssh-ed25519 sha256:" + base64.RawStdEncoding.EncodeToString(make([]byte, 32)),
+		"ssh-dss " + testFingerprint,                         // DSA: never
+		"ssh-ed25519-cert-v01@openssh.com " + testFingerprint, // certificates: never
+		"rsa-sha2-256 " + testFingerprint,                    // a signature algorithm, not a key type
+		"ED25519 " + testFingerprint,                         // ssh-keygen's label, not the key type
+		"ssh-ed25519  " + testFingerprint + " extra",
+		testFingerprint + " ssh-ed25519",
 	} {
-		t.Run(fp, func(t *testing.T) {
+		t.Run(pin, func(t *testing.T) {
 			env := baseEnv(t)
-			env["SHELL_MCP_TARGET_HOST_KEYS"] = testFingerprint + "," + fp
-			wantReason(t, env, fmt.Sprintf(`target "app-host": host key %q is not a SHA256:<base64> fingerprint`, fp))
+			env["SHELL_MCP_TARGET_HOST_KEYS"] = testPin + "," + pin
+			wantReason(t, env, fmt.Sprintf(`target "app-host": host key %q %s`, pin, HostKeyPinFormat))
 		})
 	}
+}
+
+func TestHostKeyPinsParsed(t *testing.T) {
+	types := []string{"ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "ssh-rsa"}
+	pins := make([]string, 0, len(types))
+	for i, typ := range types {
+		pins = append(pins, typ+" SHA256:"+base64.RawStdEncoding.EncodeToString(bytes32(byte(i))))
+	}
+	env := baseEnv(t)
+	env["SHELL_MCP_TARGET_HOST_KEYS"] = strings.Join(pins, ", ")
+	cfg, err := Load(lookupFrom(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.Targets[0].HostKeys
+	if len(got) != len(types) {
+		t.Fatalf("host keys = %v", got)
+	}
+	for i, hk := range got {
+		if hk.Type != types[i] || hk.Fingerprint != "SHA256:"+base64.RawStdEncoding.EncodeToString(bytes32(byte(i))) || hk.String() != pins[i] {
+			t.Fatalf("pin %d = %+v (%q), want %q", i, hk, hk.String(), pins[i])
+		}
+	}
+	eff, err := json.Marshal(cfg.Effective())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(eff), `"host_keys":["`+pins[0]+`"`) {
+		t.Fatalf("effective config does not show typed pins: %s", eff)
+	}
+}
+
+func TestHostKeyPinsInTargetsFile(t *testing.T) {
+	env := targetsEnv(t, validTargetsYAML(t, ""))
+	cfg, err := Load(lookupFrom(env))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hk := cfg.Targets[0].HostKeys; len(hk) != 1 || hk[0].Type != "ssh-ed25519" || hk[0].Fingerprint != testFingerprint {
+		t.Fatalf("host keys = %+v", hk)
+	}
+	untyped := strings.Replace(validTargetsYAML(t, ""), testPin, testFingerprint, 1)
+	wantReason(t, targetsEnv(t, untyped), fmt.Sprintf(`target "app-host": host key %q %s`, testFingerprint, HostKeyPinFormat))
+}
+
+func bytes32(b byte) []byte {
+	out := make([]byte, 32)
+	for i := range out {
+		out[i] = b
+	}
+	return out
 }
 
 func TestRuleTargetWithoutKey(t *testing.T) {
@@ -416,7 +478,7 @@ func validTargetsYAML(t *testing.T, extra string) string {
     user: svc-shell
     host_keys: [%q]
     key_file: %s
-%s`, testFingerprint, keyPath, extra)
+%s`, testPin, keyPath, extra)
 }
 
 func targetsEnv(t *testing.T, yaml string) map[string]string {

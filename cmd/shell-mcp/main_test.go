@@ -120,7 +120,7 @@ func testEnv(t *testing.T) (env map[string]string, seed []byte) {
 		"SHELL_MCP_TARGET_NAME":      "app-host",
 		"SHELL_MCP_TARGET_HOST":      "target-a.example.test",
 		"SHELL_MCP_TARGET_USER":      "svc-shell",
-		"SHELL_MCP_TARGET_HOST_KEYS": "SHA256:" + base64.RawStdEncoding.EncodeToString(make([]byte, 32)),
+		"SHELL_MCP_TARGET_HOST_KEYS": "ssh-ed25519 SHA256:" + base64.RawStdEncoding.EncodeToString(make([]byte, 32)),
 		"SHELL_MCP_SSH_KEY":          string(pem.EncodeToMemory(block)),
 	}, priv.Seed()
 }

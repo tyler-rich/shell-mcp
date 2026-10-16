@@ -76,7 +76,7 @@ func (c *Config) Effective() Effective {
 	for _, t := range c.Targets {
 		e.Targets = append(e.Targets, EffectiveTarget{
 			Name: t.Name, Host: t.Host, Port: t.Port, User: t.User,
-			HostKeys: nonNil(t.HostKeys), KeyFingerprint: t.Key.Fingerprint(),
+			HostKeys: hostKeyStrings(t.HostKeys), KeyFingerprint: t.Key.Fingerprint(),
 		})
 	}
 	return e
@@ -87,4 +87,12 @@ func nonNil(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+func hostKeyStrings(pins []HostKey) []string {
+	out := make([]string, 0, len(pins))
+	for _, p := range pins {
+		out = append(out, p.String())
+	}
+	return out
 }
