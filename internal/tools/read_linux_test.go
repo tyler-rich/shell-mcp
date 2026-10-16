@@ -24,6 +24,8 @@ import (
 // The read tools against the real gate (its test harness as the forced
 // command): every native and git op the container can run, decoded
 // strictly, so a wire field the server does not describe fails here. The
+// declared commands use the gate's test probe, not a coreutils binary: on
+// Ubuntu 26.04 coreutils is a multi-call binary the identity check refuses. The
 // systemd ops need a real systemd and run in the e2e-host job; here their
 // policy refusal is checked. Everything is an invented fixture.
 
@@ -31,7 +33,7 @@ const readPolicy = `version: 1
 max_tier: operator
 sandbox:
   landlock: {MODE}
-  system_read_exec: [{GATEDIR}]
+  system_read_exec: [{GATEDIR}, {BIN}]
 paths:
   read: [{R}]
 git:
@@ -39,14 +41,14 @@ git:
     - path: {R}/repo
       remote: https://git.example.test/example-app.git
 commands:
-  - id: kernel-name
-    path: /usr/bin/uname
+  - id: probe-echo
+    path: {BIN}/probe
     tier: read
-    templates: [["-s"]]
-  - id: kernel-machine
-    path: /usr/bin/uname
+    templates: [["echo", "{regex:^[a-z-]+$}"]]
+  - id: probe-operator
+    path: {BIN}/probe
     tier: operator
-    templates: [["-m"]]
+    templates: [["echo", "operator"]]
 `
 
 func writeTestCert(t *testing.T, p string) {
@@ -65,7 +67,9 @@ func writeTestCert(t *testing.T, p string) {
 }
 
 func TestReadToolsAgainstRealGate(t *testing.T) {
-	g := gatetest.NewHarnessGate(t, "readonly-test", readPolicy)
+	bin := gatetest.SecureDir(t)
+	gatetest.BuildProbe(t, bin, "probe", "/nonexistent")
+	g := gatetest.NewHarnessGate(t, "readonly-test", strings.ReplaceAll(readPolicy, "{BIN}", bin))
 	r := g.Read
 	gatetest.Mkdir(t, filepath.Join(r, "tree", "sub"), 0o755)
 	gatetest.WriteFile(t, filepath.Join(r, "tree", "sub", "file.txt"), "one\ntwo\nthree\n", 0o644)
@@ -138,8 +142,8 @@ func TestReadToolsAgainstRealGate(t *testing.T) {
 	if d := data(t, ok("shell_get_git_diff", map[string]any{"repo": repo})); !strings.Contains(d["diff"].(string), "+a: 2") {
 		t.Fatalf("git diff %v", d)
 	}
-	env := ok("shell_run_read_command", map[string]any{"command_id": "kernel-name", "args": []string{"-s"}})
-	if data(t, env)["stdout"] != "Linux\n" || env["exec"].(map[string]any)["exit_code"] != 0.0 {
+	env := ok("shell_run_read_command", map[string]any{"command_id": "probe-echo", "args": []string{"echo", "hello"}})
+	if data(t, env)["stdout"] != "hello\n" || env["exec"].(map[string]any)["exit_code"] != 0.0 {
 		t.Fatalf("exec %v", env)
 	}
 
@@ -151,6 +155,6 @@ func TestReadToolsAgainstRealGate(t *testing.T) {
 	refused("shell_get_service_status", map[string]any{"unit": "example-app.service"}, "policy_denied", "services.status")
 	refused("shell_list_services", map[string]any{}, "policy_denied", "services.status")
 	refused("shell_get_journal", map[string]any{"unit": "example-app.service"}, "policy_denied", "journal")
-	refused("shell_run_read_command", map[string]any{"command_id": "kernel-machine", "args": []string{"-m"}}, "tier_denied", "")
-	refused("shell_run_read_command", map[string]any{"command_id": "kernel-name", "args": []string{"-a"}}, "template_mismatch", "")
+	refused("shell_run_read_command", map[string]any{"command_id": "probe-operator", "args": []string{"echo", "operator"}}, "tier_denied", "")
+	refused("shell_run_read_command", map[string]any{"command_id": "probe-echo", "args": []string{"echo", "Hello"}}, "template_mismatch", "")
 }

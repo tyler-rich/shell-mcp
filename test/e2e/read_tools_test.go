@@ -83,19 +83,26 @@ func randomHex(n int) string {
 	return hex.EncodeToString(b)
 }
 
-// readFixtures makes the test-time fixtures once.
+// readFixtures makes the test-time fixtures once. The sshd check (a bare
+// TCP connect) runs once too: sshd's PerSourcePenalties counts each
+// connection that never authenticates against its source, and a check per
+// call made 127.0.0.1 refused for the tests that follow.
 func readFixtures(t *testing.T) {
 	t.Helper()
-	needSSHD(t)
 	fixtureOnce.Do(func() {
+		// Failed until it finishes: a t.Fatal or t.Skip inside stops it early.
+		fixtureErr = "the fixture setup did not finish (see the first read tool test)"
 		defer func() {
 			if r := recover(); r != nil {
 				fixtureErr = fmt.Sprint(r)
 			}
 		}()
+		needSSHD(t)
 		if err := makeFixtures(t); err != nil {
 			fixtureErr = err.Error()
+			return
 		}
+		fixtureErr = ""
 	})
 	if fixtureErr != "" {
 		t.Fatalf("read fixtures: %s", fixtureErr)
@@ -236,7 +243,7 @@ func callTool(t *testing.T, name string, args map[string]any) map[string]any {
 	if res.IsError == (env["ok"] == true) {
 		t.Fatalf("%s: isError %v, envelope %v", name, res.IsError, env)
 	}
-	t.Logf("%s %v -> %s", name, args, firstLine(tc.Text))
+	t.Logf("%s -> %s", name, firstLine(tc.Text)) // never the arguments: one carries the run's token
 	return env
 }
 

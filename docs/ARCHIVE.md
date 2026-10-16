@@ -1355,6 +1355,11 @@ The lockout exists to stop token guessing, and a request without a credential gu
 - **Later, for the maintainer:** an `exec` argument that makes the gate refuse a command above a caller-given tier would remove the run-command race (protocol change; maintainer's call).
 - **S5 (CLIENTS.md):** confirm how each client renders the summary-plus-JSON text block.
 
+**Found by the first CI run:**
+- **The e2e sshd refused 127.0.0.1.** The read-tool helper first checked the test sshd with a bare TCP connect on every call. sshd_config(5) PerSourcePenalties (on by default) adds `noauth` (1 s) for each connection that closes before trying to authenticate, and refuses the source once 15 s have accrued. After about 30 calls, every later handshake from 127.0.0.1 was reset, which broke the S2 SSH tests that run afterwards. The check now runs once, in the fixture setup. The whole suite makes about 9 unauthenticated connections, well under the threshold. The fixture setup also now records failure by default, so a stop inside it fails every later read-tool test.
+- **The real-gate test on Ubuntu 26.04.** It declared `/usr/bin/uname` as a command. There, coreutils is the multi-call binary the identity check refuses (the S1c finding behind S-MC), so the whole policy was `install_insecure`. The test now declares the gate's test probe, as the gate's own tests do.
+- **Log hygiene.** The e2e log lines no longer print the call arguments, one of which carries the run's random token.
+
 **Double-check:** `shell_run_read_command` relies on the policy read just before `exec`. A root who edits the policy between the two requests can make an operator command run through the read tool. The gate's `max_tier` still bounds it, and the result warns afterwards.
 
 **Versions:**
