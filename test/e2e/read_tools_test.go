@@ -217,7 +217,12 @@ func server(t *testing.T) *mcp.ClientSession {
 // run's token nowhere in the result or the server's log.
 func callTool(t *testing.T, name string, args map[string]any) map[string]any {
 	t.Helper()
-	cs := server(t)
+	return callOn(t, server(t), &serverLog, name, args)
+}
+
+// callOn is callTool against a given server and its log.
+func callOn(t *testing.T, cs *mcp.ClientSession, serverLog *syncedBuffer, name string, args map[string]any) map[string]any {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
 	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
@@ -254,11 +259,17 @@ func firstLine(s string) string {
 
 func okData(t *testing.T, env map[string]any) map[string]any {
 	t.Helper()
+	return okDataAs(t, env, "e2e-read")
+}
+
+// okDataAs is okData for a gate answering as principal.
+func okDataAs(t *testing.T, env map[string]any, principal string) map[string]any {
+	t.Helper()
 	d, ok := env["data"].(map[string]any)
 	if !ok || env["ok"] != true || env["target"] != "app-host" {
 		t.Fatalf("not a success: %v", env)
 	}
-	if g, _ := env["gate"].(map[string]any); g["principal"] != "e2e-read" {
+	if g, _ := env["gate"].(map[string]any); g["principal"] != principal {
 		t.Fatalf("gate block %v", env["gate"])
 	}
 	return d

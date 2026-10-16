@@ -192,6 +192,57 @@ EOF
 chmod 0644 /etc/shell-mcp/gate-read.yaml
 /usr/local/bin/shell-mcp-gate check-policy --policy /etc/shell-mcp/gate-read.yaml >/dev/null
 
+# The operator tools' policy (operator_tools_test.go), selected by its own
+# SSH key (principal e2e-operator). Two write roots under one read root: a
+# work directory and a directory of repositories. services.control allows
+# stop, which the polkit rule (from gate-rule.yaml) does not, so the tests
+# can show polkit refusing what the gate allows. The git remote is the
+# tests' local HTTPS server on the fixed port 44443 (the only TCP port the
+# sandbox opens); the second repository's origin is something else. max_tier
+# is destructive and it declares a destructive command, so the tests can
+# show the gate running it at ceiling destructive and refusing it at the
+# operator tool's ceiling.
+cat >/etc/shell-mcp/gate-operator.yaml <<EOF
+version: 1
+max_tier: destructive
+sandbox:
+  landlock: $landlock
+  tcp_connect_ports: [44443]
+paths:
+  read: [/srv/example-ops]
+  write: [/srv/example-ops/work, /srv/example-ops/repos]
+services:
+  status: ["example-*.service"]
+  control:
+    units: ["example-app.service"]
+    verbs: [restart, stop]
+git:
+  repos:
+    - path: /srv/example-ops/repos/app
+      remote: https://127.0.0.1:44443/example-ops.git
+    - path: /srv/example-ops/repos/foreign
+      remote: https://127.0.0.1:44443/example-ops.git
+commands:
+  - id: probe-echo
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["echo", "{regex:^[A-Za-z0-9_-]{1,80}\$}"]]
+  - id: probe-stdin
+    path: /usr/local/bin/example-probe
+    tier: operator
+    templates: [["stdin"]]
+  - id: probe-exit
+    path: /usr/local/bin/example-probe
+    tier: operator
+    templates: [["exit", "{int:0-3}"]]
+  - id: probe-destructive
+    path: /usr/local/bin/example-probe
+    tier: destructive
+    templates: [["echo", "destructive"]]
+EOF
+chmod 0644 /etc/shell-mcp/gate-operator.yaml
+/usr/local/bin/shell-mcp-gate check-policy --policy /etc/shell-mcp/gate-operator.yaml >/dev/null
+
 # Static read-tool fixtures: a tree with a directory symlink whose target is
 # absolute (os.Root refuses to follow it), a file on the built-in deny list
 # and one under the policy's deny pattern. Fixtures with token- or key-shaped
@@ -204,6 +255,16 @@ printf 'machine example.test\n' >"$fx/tree/.netrc"
 printf 'denied by the policy\n' >"$fx/tree/private/note.txt"
 chmod 0644 "$fx/tree/sub/file.txt" "$fx/tree/.netrc" "$fx/tree/private/note.txt"
 ln -s "$fx/tree/sub" "$fx/tree/abs-link"
+
+# Operator-tool roots: the service account owns the two write roots; a file
+# in the read root outside them shows a write being refused. The tests make
+# the files and the repositories.
+ox=/srv/example-ops
+rm -rf "$ox"
+install -o root -g root -m 0755 -d "$ox"
+install -o svc-shell -g svc-shell -m 0755 -d "$ox/work" "$ox/repos"
+printf 'read only\n' >"$ox/readonly.txt"
+chmod 0644 "$ox/readonly.txt"
 
 # priv_policy <extra line for probe-signal> <extra line for probe-broad> <allow_upgrade>
 priv_policy() {
@@ -341,13 +402,16 @@ if [ -x /usr/sbin/sshd ]; then
 	ssh-keygen -q -t ed25519 -N '' -C e2e-client -f "$bin/e2e-client-key"
 	ssh-keygen -q -t ed25519 -N '' -C e2e-client-other-from -f "$bin/e2e-client-key-other-from"
 	ssh-keygen -q -t ed25519 -N '' -C e2e-client-read -f "$bin/e2e-client-key-read"
-	chmod 0600 "$bin/e2e-client-key" "$bin/e2e-client-key-other-from" "$bin/e2e-client-key-read"
+	ssh-keygen -q -t ed25519 -N '' -C e2e-client-operator -f "$bin/e2e-client-key-operator"
+	chmod 0600 "$bin/e2e-client-key" "$bin/e2e-client-key-other-from" "$bin/e2e-client-key-read" "$bin/e2e-client-key-operator"
 	forced='command="/usr/local/bin/shell-mcp-gate serve --policy /etc/shell-mcp/gate.yaml --principal e2e-ssh"'
 	forced_read='command="/usr/local/bin/shell-mcp-gate serve --policy /etc/shell-mcp/gate-read.yaml --principal e2e-read"'
+	forced_operator='command="/usr/local/bin/shell-mcp-gate serve --policy /etc/shell-mcp/gate-operator.yaml --principal e2e-operator"'
 	{
 		printf 'restrict,from="127.0.0.1",%s %s\n' "$forced" "$(cut -d' ' -f1,2 "$bin/e2e-client-key.pub")"
 		printf 'restrict,from="192.0.2.1",%s %s\n' "$forced" "$(cut -d' ' -f1,2 "$bin/e2e-client-key-other-from.pub")"
 		printf 'restrict,from="127.0.0.1",%s %s\n' "$forced_read" "$(cut -d' ' -f1,2 "$bin/e2e-client-key-read.pub")"
+		printf 'restrict,from="127.0.0.1",%s %s\n' "$forced_operator" "$(cut -d' ' -f1,2 "$bin/e2e-client-key-operator.pub")"
 	} >"$sd/authorized_keys.d/svc-shell"
 	chmod 0644 "$sd/authorized_keys.d/svc-shell"
 	printf '%s\n' \
