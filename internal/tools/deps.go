@@ -112,3 +112,41 @@ func (d *Deps) budget() time.Duration {
 	}
 	return 30 * time.Second
 }
+
+// ProbeResult is what a target's gate says in its hello.
+type ProbeResult struct {
+	Gate       GateHello     `json:"gate"`
+	Sandbox    SandboxStatus `json:"sandbox"`
+	Privileged Privileged    `json:"privileged"`
+}
+
+// Probe calls the target's gate hello (shell-mcp check).
+func Probe(ctx context.Context, d *Deps, target string) (*ProbeResult, *envelope.Error) {
+	resp, e := d.call(ctx, target, protocol.OpHello, nil, d.budget())
+	if e != nil {
+		return nil, e
+	}
+	h := envelope.FromGate[helloWire](target, resp)
+	if !h.OK {
+		return nil, h.Error
+	}
+	return &ProbeResult{
+		Gate: GateHello{Version: h.Data.GateVersion, Protocol: h.Data.Protocol, Principal: h.Data.Principal,
+			PolicySHA256: h.Data.PolicySHA256, MaxTier: h.Data.MaxTier, Ops: h.Data.Ops},
+		Sandbox: h.Data.Sandbox, Privileged: h.Data.Privileged,
+	}, nil
+}
+
+// EffectiveTools are the names among regs (a profile's tools) that a target
+// whose gate allows maxTier, with privileged forwarding on or off, can
+// serve.
+func EffectiveTools(regs []Registration, maxTier string, privileged bool) []string {
+	limit := map[string]Tier{"read": TierRead, "operator": TierOperator, "destructive": TierDestructive}[maxTier]
+	out := []string{}
+	for _, r := range regs {
+		if r.Tier <= limit && (!r.Privileged || privileged) {
+			out = append(out, r.Tool.Def.Name)
+		}
+	}
+	return out
+}

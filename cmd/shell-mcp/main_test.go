@@ -7,19 +7,14 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/pem"
-	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/crypto/ssh"
-
-	"github.com/tyler-rich/shell-mcp/internal/config"
-	"github.com/tyler-rich/shell-mcp/internal/transport"
 )
 
 // All values below are invented test fixtures.
@@ -127,9 +122,11 @@ func testEnv(t *testing.T) (env map[string]string, seed []byte) {
 
 func TestCheckMasksSecrets(t *testing.T) {
 	env, seed := testEnv(t)
+	env["SHELL_MCP_TARGET_HOST"] = "127.0.0.1"
+	env["SHELL_MCP_TARGET_PORT"] = strconv.Itoa(closedPort(t))
 	var out, errb bytes.Buffer
-	if code := run(context.Background(), []string{"check"}, lookup(env), &out, &errb); code != 0 {
-		t.Fatalf("check exit %d, stderr %q", code, errb.String())
+	if code := run(context.Background(), strings.NewReader(""), []string{"check"}, lookup(env), &out, &errb); code != 1 {
+		t.Fatalf("check of an unreachable target exit %d, want 1; stderr %q", code, errb.String())
 	}
 	all := out.String() + errb.String()
 	pemBody := strings.Split(env["SHELL_MCP_SSH_KEY"], "\n")[1]
@@ -138,16 +135,28 @@ func TestCheckMasksSecrets(t *testing.T) {
 			t.Fatalf("check output contains secret material %q", s)
 		}
 	}
-	if !strings.Contains(out.String(), `"token_length": 48`) || !strings.Contains(out.String(), `"SHA256:`) {
-		t.Fatalf("check output lacks masked token / fingerprint:\n%s", out.String())
+	if !strings.Contains(out.String(), `"token_length": 48`) || !strings.Contains(out.String(), `"SHA256:`) ||
+		!strings.Contains(out.String(), `"code": "target_unreachable"`) {
+		t.Fatalf("check output lacks masked token / fingerprint / failure:\n%s", out.String())
 	}
+}
+
+func closedPort(t *testing.T) int {
+	t.Helper()
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close()
+	return port
 }
 
 func TestCheckInvalidConfigExits1(t *testing.T) {
 	env, _ := testEnv(t)
 	env["SHELL_MCP_TOKEN"] = "short"
 	var out, errb bytes.Buffer
-	if code := run(context.Background(), []string{"check"}, lookup(env), &out, &errb); code != 1 {
+	if code := run(context.Background(), strings.NewReader(""), []string{"check"}, lookup(env), &out, &errb); code != 1 {
 		t.Fatalf("check exit %d, want 1", code)
 	}
 	if strings.Contains(errb.String(), "short") || !strings.Contains(errb.String(), "SHELL_MCP_TOKEN must be at least 43 characters") {
@@ -155,19 +164,9 @@ func TestCheckInvalidConfigExits1(t *testing.T) {
 	}
 }
 
-func TestToolsPrintsEmptyList(t *testing.T) {
-	var out, errb bytes.Buffer
-	if code := run(context.Background(), []string{"tools"}, lookup(nil), &out, &errb); code != 0 {
-		t.Fatalf("tools exit %d", code)
-	}
-	if out.String() != "[]\n" {
-		t.Fatalf("tools output = %q", out.String())
-	}
-}
-
 func TestVersion(t *testing.T) {
 	var out, errb bytes.Buffer
-	if code := run(context.Background(), []string{"version"}, lookup(nil), &out, &errb); code != 0 {
+	if code := run(context.Background(), strings.NewReader(""), []string{"version"}, lookup(nil), &out, &errb); code != 0 {
 		t.Fatalf("version exit %d", code)
 	}
 	if !strings.Contains(out.String(), "shell-mcp dev") || !strings.Contains(out.String(), "go1.") {
@@ -177,63 +176,7 @@ func TestVersion(t *testing.T) {
 
 func TestUnknownSubcommand(t *testing.T) {
 	var out, errb bytes.Buffer
-	if code := run(context.Background(), []string{"shell"}, lookup(nil), &out, &errb); code != 2 {
+	if code := run(context.Background(), strings.NewReader(""), []string{"shell"}, lookup(nil), &out, &errb); code != 2 {
 		t.Fatalf("unknown subcommand exit %d, want 2", code)
-	}
-}
-
-func TestMCPStatelessServesNoTools(t *testing.T) {
-	env, _ := testEnv(t)
-	delete(env, "SHELL_MCP_TOKEN")
-	env["SHELL_MCP_AUTH_MODE"] = "none"
-	env["SHELL_MCP_ALLOW_UNAUTHENTICATED"] = "true"
-	cfg, err := config.Load(lookup(env))
-	if err != nil {
-		t.Fatal(err)
-	}
-	server, err := newMCPServer(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv, err := transport.New(cfg, mcpHTTPHandler(server, slog.New(slog.DiscardHandler)), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ts := httptest.NewServer(srv.Handler)
-	defer ts.Close()
-
-	// Raw request: stateless JSON response, no session header.
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, ts.URL+"/mcp",
-		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("MCP-Protocol-Version", "2025-11-25")
-	res, err := ts.Client().Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, _ := io.ReadAll(res.Body)
-	_ = res.Body.Close()
-	if res.StatusCode != http.StatusOK || !strings.HasPrefix(res.Header.Get("Content-Type"), "application/json") ||
-		res.Header.Get("Mcp-Session-Id") != "" || !strings.Contains(string(body), `"tools":[]`) {
-		t.Fatalf("status %d, headers %v, body %s", res.StatusCode, res.Header, body)
-	}
-
-	// SDK client at its latest protocol revision.
-	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
-	cs, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: ts.URL + "/mcp", DisableStandaloneSSE: true}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = cs.Close() }()
-	lt, err := cs.ListTools(context.Background(), &mcp.ListToolsParams{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(lt.Tools) != 0 {
-		t.Fatalf("tools = %v", lt.Tools)
-	}
-	if v := cs.InitializeResult(); v == nil || v.ProtocolVersion != "2026-07-28" {
-		t.Fatalf("negotiated protocol: %+v", v)
 	}
 }

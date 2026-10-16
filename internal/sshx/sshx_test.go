@@ -145,9 +145,16 @@ func TestEd25519PinConnectsWhenServerAlsoHasECDSA(t *testing.T) {
 	// x/crypto/ssh's default preference puts ECDSA before Ed25519, so an
 	// unrestricted client would be shown the ECDSA key and fail the pin.
 	f := newFixture(t, sshtest.Config{HostKeys: []ssh.Signer{ec, ed}}, pin(t, ed))
-	out, err := run(t.Context(), f.newClient())
+	c := f.newClient()
+	if c.VerifiedHostKey() != "" {
+		t.Fatal("verified before connecting")
+	}
+	out, err := run(t.Context(), c)
 	if err != nil || out != "ok:shell-mcp-gate/1" {
 		t.Fatalf("out %q err %v", out, err)
+	}
+	if c.VerifiedHostKey() != sshtest.Pin(ed) {
+		t.Fatalf("verified %q, want %q", c.VerifiedHostKey(), sshtest.Pin(ed))
 	}
 }
 

@@ -52,12 +52,12 @@ commands:
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	code := run(ctx, os.Args[1:], os.LookupEnv, os.Stdout, os.Stderr)
+	code := run(ctx, os.Stdin, os.Args[1:], os.LookupEnv, os.Stdout, os.Stderr)
 	stop()
 	os.Exit(code)
 }
 
-func run(ctx context.Context, args []string, lookup config.LookupFunc, stdout, stderr io.Writer) int {
+func run(ctx context.Context, _ io.Reader, args []string, lookup config.LookupFunc, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = io.WriteString(stderr, usage)
 		return 2
@@ -277,4 +277,14 @@ func healthcheck(ctx context.Context, url string) int {
 		return 1
 	}
 	return 0
+}
+
+// newHTTPServer (stub).
+func newHTTPServer(cfg *config.Config, logger *slog.Logger) (*http.Server, func(), error) {
+	server, err := newMCPServer(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	srv, err := transport.New(cfg, mcpHTTPHandler(server, logger), &transport.Options{Logger: logger})
+	return srv, func() {}, err
 }

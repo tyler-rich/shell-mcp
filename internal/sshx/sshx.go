@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -68,6 +69,9 @@ type Client struct {
 	backoff     time.Duration
 	nextAttempt time.Time
 	lastErr     *envelope.Error
+
+	// verified is the pin the last verified connection matched.
+	verified atomic.Value
 }
 
 // HostKeyAlgorithms returns the host-key algorithms to offer for pins, in
@@ -162,6 +166,7 @@ var errHostKeyNotPinned = errors.New("sshx: host key not pinned")
 func (c *Client) verifyHostKey(_ string, _ net.Addr, key ssh.PublicKey) error {
 	got := config.HostKey{Type: key.Type(), Fingerprint: ssh.FingerprintSHA256(key)}
 	if slices.Contains(c.target.HostKeys, got) {
+		c.verified.Store(got.String()) // c.mu is held by connection() during the handshake
 		return nil
 	}
 	pinned := make([]string, 0, len(c.target.HostKeys))
@@ -335,6 +340,13 @@ func (c *Client) drop(conn *ssh.Client) {
 	}
 	c.mu.Unlock()
 	_ = conn.Close()
+}
+
+// VerifiedHostKey is the pin ("<type> SHA256:…") the most recent connection
+// was verified against, or "" before any connection succeeded.
+func (c *Client) VerifiedHostKey() string {
+	s, _ := c.verified.Load().(string)
+	return s
 }
 
 func (c *Client) connected() bool {
