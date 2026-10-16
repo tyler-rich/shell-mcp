@@ -202,6 +202,10 @@ type trampolineEnv struct {
 	pid, tid int
 	ppid     int
 	uid      int
+	// atSecure is AT_SECURE from the auxiliary vector (getauxval(3)):
+	// non-zero when this exec gained privileges (set-user-ID or
+	// set-group-ID, file capabilities, or an LSM's decision).
+	atSecure func() (uintptr, error)
 	// isTerminal reports whether fd is a terminal.
 	isTerminal func(fd int) bool
 	// control describes fd 3: whether it is an AF_UNIX stream socket, and
@@ -243,6 +247,13 @@ func liveTrampolineEnv() *trampolineEnv {
 	return &trampolineEnv{
 		args: os.Args, environ: os.Environ(),
 		pid: unix.Getpid(), tid: unix.Gettid(), ppid: unix.Getppid(), uid: unix.Getuid(),
+		atSecure: func() (uintptr, error) {
+			v, err := unix.Auxv()
+			if err != nil {
+				return 0, err
+			}
+			return auxvSecure(v)
+		},
 		isTerminal: func(fd int) bool {
 			_, err := unix.IoctlGetTermios(fd, unix.TCGETS)
 			return err == nil
@@ -324,4 +335,20 @@ func trampoline() int {
 		return fail(err)
 	}
 	return fail(syscall.Exec(c.Path, c.Argv, c.Env)) //nolint:gosec // G204: the command Run sent over the checked control socket: a path resolved and ownership-checked at policy load, an argv matched to a policy template; no shell
+}
+
+// atSecureTag is AT_SECURE (linux/auxvec.h; Go's runtime uses the same).
+const atSecureTag = 23
+
+var errNoATSecure = errors.New("no AT_SECURE in the auxiliary vector")
+
+// auxvSecure returns AT_SECURE from an auxiliary vector (the kernel always
+// supplies it; a vector without it is an error).
+func auxvSecure(auxv [][2]uintptr) (uintptr, error) {
+	for _, kv := range auxv {
+		if kv[0] == atSecureTag {
+			return kv[1], nil
+		}
+	}
+	return 0, errNoATSecure
 }

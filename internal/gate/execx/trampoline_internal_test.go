@@ -20,6 +20,7 @@ func goodEnv() *trampolineEnv {
 	return &trampolineEnv{
 		args: []string{"/usr/local/bin/shell-mcp-gate", TrampolineArg},
 		pid:  4242, tid: 4242, ppid: 4000, uid: 60123,
+		atSecure:   func() (uintptr, error) { return 0, nil },
 		isTerminal: func(int) bool { return false },
 		control: func() (bool, *unix.Ucred, error) {
 			return true, &unix.Ucred{Pid: 4000, Uid: 60123, Gid: 60123}, nil
@@ -43,6 +44,10 @@ func TestTrampolineRefusal(t *testing.T) {
 		{"extra argument", func(e *trampolineEnv) { e.args = append(e.args, "x") }, "exactly one argument"},
 		{"other argument", func(e *trampolineEnv) { e.args[1] = "serve" }, "exactly one argument"},
 		{"environment", func(e *trampolineEnv) { e.environ = []string{"SSH_CONNECTION=x"} }, "empty environment"},
+		{"privileged exec (AT_SECURE)", func(e *trampolineEnv) { e.atSecure = func() (uintptr, error) { return 1, nil } }, "it gained privileges when executed (AT_SECURE)"},
+		{"auxiliary vector unreadable", func(e *trampolineEnv) {
+			e.atSecure = func() (uintptr, error) { return 0, errNoATSecure }
+		}, "it gained privileges when executed (AT_SECURE)"},
 		{"other thread", func(e *trampolineEnv) { e.tid = 4243 }, "main thread"},
 		{"terminal on fd 0", func(e *trampolineEnv) { e.isTerminal = func(fd int) bool { return fd == 0 } }, "fd 0 is a terminal"},
 		{"terminal on fd 1", func(e *trampolineEnv) { e.isTerminal = func(fd int) bool { return fd == 1 } }, "fd 1 is a terminal"},
@@ -200,4 +205,29 @@ func FuzzDecodeConfig(f *testing.F) {
 			t.Fatalf("accepted %x, re-encodes as %x", b, again)
 		}
 	})
+}
+
+// TestAuxvSecure reads AT_SECURE from fake auxiliary vectors: set, clear,
+// and missing (which is an error, so the trampoline refuses).
+func TestAuxvSecure(t *testing.T) {
+	if v, err := auxvSecure([][2]uintptr{{6, 4096}, {atSecureTag, 1}, {0, 0}}); err != nil || v != 1 {
+		t.Fatalf("set: %d %v", v, err)
+	}
+	if v, err := auxvSecure([][2]uintptr{{atSecureTag, 0}, {0, 0}}); err != nil || v != 0 {
+		t.Fatalf("clear: %d %v", v, err)
+	}
+	if _, err := auxvSecure([][2]uintptr{{6, 4096}, {0, 0}}); !errors.Is(err, errNoATSecure) {
+		t.Fatalf("missing: %v", err)
+	}
+}
+
+// TestLiveAuxvNotSecure: control for the AT_SECURE refusal. This test
+// binary is not set-user-ID and has no file capabilities, so the live
+// check reads the vector and finds AT_SECURE clear, which is what lets the
+// trampoline run in every other test.
+func TestLiveAuxvNotSecure(t *testing.T) {
+	v, err := liveTrampolineEnv().atSecure()
+	if err != nil || v != 0 {
+		t.Fatalf("AT_SECURE %d, %v", v, err)
+	}
 }
