@@ -522,3 +522,18 @@ func trackedClients(h http.Handler) int {
 	s := h.(*handler)
 	return s.rate.tracked() + s.auth.Tracked()
 }
+
+// TestRefusedHeaderValuesNeverLogged: a refused Host or Origin is logged by
+// reason and client only; the attacker-controlled value is not.
+func TestRefusedHeaderValuesNeverLogged(t *testing.T) {
+	e := newEnv(t, bearerConfig(t))
+	e.wantRefused(e.do(&req{host: "injected-host.example.test"}), http.StatusMisdirectedRequest, bodyHost)
+	e.wantRefused(e.do(&req{origin: "https://injected-origin.example.test"}), http.StatusForbidden, bodyOrigin)
+	logs := e.logs.String()
+	if strings.Contains(logs, "injected-host") || strings.Contains(logs, "injected-origin") {
+		t.Fatalf("a refused header value reached the log: %s", logs)
+	}
+	if strings.Count(logs, `"reason":"host_not_allowed"`) != 1 || strings.Count(logs, `"reason":"origin_not_allowed"`) != 1 {
+		t.Fatalf("refusals not logged by reason: %s", logs)
+	}
+}
