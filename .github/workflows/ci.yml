@@ -145,6 +145,10 @@ jobs:
         run: bash scripts/deps-current.sh
       - name: deps-current self-test
         run: bash scripts/deps-current_test.sh
+      # ci-local against a fake docker: it may label, list, stop and remove
+      # only its own containers. No container is started here.
+      - name: ci-local self-test
+        run: bash scripts/ci-local_test.sh
 
   gitleaks:
     name: gitleaks
