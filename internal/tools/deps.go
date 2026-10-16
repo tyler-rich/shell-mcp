@@ -14,6 +14,7 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/envelope"
 	"github.com/tyler-rich/shell-mcp/internal/gateclient"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
+	"github.com/tyler-rich/shell-mcp/internal/redact"
 )
 
 // Deps are what tools need at call time. A zero Deps is enough to build the
@@ -27,6 +28,13 @@ type Deps struct {
 	Principal      auth.Principal
 	Logger         *slog.Logger
 	DefaultTimeout time.Duration
+	// MaxTimeout bounds a tool's timeout_seconds (SHELL_MCP_MAX_TIMEOUT).
+	MaxTimeout time.Duration
+	// MaxOutputBytes caps what a tool returns per output stream
+	// (SHELL_MCP_MAX_OUTPUT_BYTES).
+	MaxOutputBytes int
+	// Redactor holds the built-in rules and SHELL_MCP_REDACT_PATTERNS.
+	Redactor *redact.Redactor
 }
 
 // Catalogue returns the registry of every tool this binary knows, each with
