@@ -29,12 +29,12 @@ func (f *fixture) callAt(ceiling, op string, args any) response {
 	return resp
 }
 
-// failAt asserts the refusal's code and that its message contains want.
-func (f *fixture) failAt(ceiling, op string, args any, code, want string) {
+// deniedAt asserts a tier_denied refusal whose message contains want.
+func (f *fixture) deniedAt(ceiling, op string, args any, want string) {
 	f.t.Helper()
 	r := f.callAt(ceiling, op, args)
-	if r.OK || r.Error == nil || r.Error.Code != code || !strings.Contains(r.Error.Message, want) {
-		f.t.Fatalf("%s at ceiling %q = %+v %s, want %s naming %q", op, ceiling, r.Error, r.Data, code, want)
+	if r.OK || r.Error == nil || r.Error.Code != "tier_denied" || !strings.Contains(r.Error.Message, want) {
+		f.t.Fatalf("%s at ceiling %q = %+v %s, want tier_denied naming %q", op, ceiling, r.Error, r.Data, want)
 	}
 }
 
@@ -84,13 +84,13 @@ func TestCeilingBoundsOps(t *testing.T) {
 		}
 	}
 	// max_tier is destructive; the ceiling is the limit that applies.
-	f.failAt("read", "write_file", writeArgs, "tier_denied", "ceiling read")
-	f.failAt("read", "mkdir", m{"path": filepath.Join(f.write, "d")}, "tier_denied", "ceiling read")
-	f.failAt("read", "service_control", m{}, "tier_denied", "ceiling read")
-	f.failAt("operator", "delete", m{"path": filepath.Join(f.write, "y")}, "tier_denied", "ceiling operator")
-	f.failAt("operator", "git_discard", m{}, "tier_denied", "ceiling operator")
+	f.deniedAt("read", "write_file", writeArgs, "ceiling read")
+	f.deniedAt("read", "mkdir", m{"path": filepath.Join(f.write, "d")}, "ceiling read")
+	f.deniedAt("read", "service_control", m{}, "ceiling read")
+	f.deniedAt("operator", "delete", m{"path": filepath.Join(f.write, "y")}, "ceiling operator")
+	f.deniedAt("operator", "git_discard", m{}, "ceiling operator")
 	// Before argument validation, as the max_tier check.
-	f.failAt("read", "write_file", m{"bogus": true}, "tier_denied", "ceiling read")
+	f.deniedAt("read", "write_file", m{"bogus": true}, "ceiling read")
 	absent(t, target)
 	absent(t, filepath.Join(f.write, "d"))
 
@@ -104,7 +104,7 @@ func TestCeilingBoundsOps(t *testing.T) {
 
 	// max_tier read, ceiling destructive: the policy is the limit.
 	f.writePolicy("read", "")
-	f.failAt("destructive", "write_file", writeArgs, "tier_denied", "max_tier read")
+	f.deniedAt("destructive", "write_file", writeArgs, "max_tier read")
 }
 
 // exec: the command's own tier is checked against the same minimum. Here
@@ -114,7 +114,7 @@ func TestCeilingBoundsExec(t *testing.T) {
 	f := newFixture(t, "operator")
 	marker := filepath.Join(f.write, "marker")
 	args := m{"command_id": "probe-op", "args": []string{"write", marker}}
-	f.failAt("read", "exec", args, "tier_denied", "ceiling read")
+	f.deniedAt("read", "exec", args, "ceiling read")
 	absent(t, marker)
 
 	// A read command still runs under ceiling read.
@@ -134,7 +134,7 @@ func TestCeilingBoundsExec(t *testing.T) {
 	}
 	// Ceiling destructive does not lift max_tier: the policy still applies.
 	f.writePolicy("read", "")
-	f.failAt("destructive", "exec", args, "tier_denied", "max_tier read")
+	f.deniedAt("destructive", "exec", args, "max_tier read")
 }
 
 // priv_*: the gate checks the op's tier against min(privileged.max_tier,
@@ -144,8 +144,8 @@ func TestCeilingBoundsExec(t *testing.T) {
 func TestCeilingBoundsPriv(t *testing.T) {
 	f := newFixture(t, "destructive")
 	h := startHelper(t, f, echoID(""))
-	f.failAt("read", "priv_write_file", m{"path": "/etc/example-app/x", "content_b64": "eA=="}, "tier_denied", "ceiling read")
-	f.failAt("operator", "priv_delete", m{"path": "/etc/example-app/x"}, "tier_denied", "ceiling operator")
+	f.deniedAt("read", "priv_write_file", m{"path": "/etc/example-app/x", "content_b64": "eA=="}, "ceiling read")
+	f.deniedAt("operator", "priv_delete", m{"path": "/etc/example-app/x"}, "ceiling operator")
 	if h.dials() != 0 {
 		t.Fatalf("a request above its ceiling reached the helper (%d connections)", h.dials())
 	}
