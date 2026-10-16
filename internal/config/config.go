@@ -787,7 +787,7 @@ func (l *loader) trustedProxies() ([]netip.Prefix, error) {
 	return out, nil
 }
 
-func parseProxy(e string) (netip.Prefix, string) {
+func parseProxy(e string) (p netip.Prefix, reason string) {
 	if !strings.Contains(e, "/") {
 		a, err := netip.ParseAddr(e)
 		if err != nil || a.Zone() != "" {
