@@ -1499,6 +1499,11 @@ The message says approval arrives in a later release. Read tools are never guard
 - **`TestOperatorToolsApprovalGuard`** starts a second server with `SHELL_MCP_APPROVAL_TIERS=operator,destructive`. Every operator tool is refused, the file is not written, and no gate audit line for the principal appears except the read tool's control `stat`.
 - **Helpers.** `callTool`'s checks are now `callOn` for any server, and `okData` is `okDataAs` for any principal.
 
+**Found by CI and the local gate:**
+- **The guard test's journal window.** On the first CI run every operator e2e case passed except `TestOperatorToolsApprovalGuard`. It found a `write_file` gate line and took it for a guarded call. That line was the write test's `notes.txt` write from 0.2 s earlier: `journal()` reads from one second before its start, in whole seconds. The guarded file was never written. The test now waits 2.1 s before its start time, and the next run passed.
+- **A failure in code this PR does not touch.** On the second CI run, `TestIntegrationSandboxTrampoline` (`cmd/shell-mcp-gate`, ubuntu-24.04, Landlock ABI 7) failed once: the probe read `pdeathsig:0` where 9 is expected. That job had passed on the previous commit with the same gate code, and it passed on the rerun of the failed job. The trampoline (`internal/gate/execx`) is unchanged here, so this looks intermittent. It is recorded for the maintainer; nothing was changed for it.
+- **Concurrent runs under one uid.** A local `ci-local.sh` run that overlapped a 60 s fuzz run in another container under the same uid failed exec tests with `newosproc` errno 11. This is the per-child `RLIMIT_NPROC` interaction the S1b entry records. A run on its own passed every step.
+
 **Alternatives rejected:**
 - Refusing setuid and world-writable modes on the server as well: a second copy of the gate's rule, and the e2e case could no longer show the gate refusing.
 - Leaving `content` a plain string: a missing argument would write an empty file.
