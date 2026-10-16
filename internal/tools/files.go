@@ -63,7 +63,7 @@ func (in *listDirIn) validate() *envelope.Error {
 	if e := checkPath("path", in.Path); e != nil {
 		return e
 	}
-	return checkInt("limit", in.Limit, 1, 5000)
+	return checkCount("limit", in.Limit, 5000)
 }
 
 // DirList is shell_list_directory's data.
@@ -138,10 +138,10 @@ func (in *readFileIn) validate() *envelope.Error {
 	case in.Offset != nil && in.TailLines != nil:
 		return invalid("offset and tail_lines are mutually exclusive")
 	}
-	if e := checkInt("max_bytes", in.MaxBytes, 1, maxOutputCeiling); e != nil {
+	if e := checkCount("max_bytes", in.MaxBytes, maxOutputCeiling); e != nil {
 		return e
 	}
-	return checkInt("tail_lines", in.TailLines, 1, 5000)
+	return checkCount("tail_lines", in.TailLines, 5000)
 }
 
 // FileContent is shell_read_file's data. Text is returned as content;
@@ -230,10 +230,10 @@ func (in *findIn) validate() *envelope.Error {
 			return invalid("modified_within must be N followed by s, m, h, d or w (such as 30m or 2d), at most ten years")
 		}
 	}
-	if e := checkInt("max_depth", in.MaxDepth, 1, 32); e != nil {
+	if e := checkCount("max_depth", in.MaxDepth, 32); e != nil {
 		return e
 	}
-	return checkInt("limit", in.Limit, 1, 10000)
+	return checkCount("limit", in.Limit, 10000)
 }
 
 // FindResult is shell_find_files' data.

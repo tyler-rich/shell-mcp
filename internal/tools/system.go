@@ -159,7 +159,7 @@ func (in *processesIn) validate() *envelope.Error {
 	if e := checkFilter("name_contains", in.NameContains); e != nil {
 		return e
 	}
-	return checkInt("limit", in.Limit, 1, 1000)
+	return checkCount("limit", in.Limit, 1000)
 }
 
 // ProcessList is shell_list_processes' data.

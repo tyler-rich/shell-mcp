@@ -79,7 +79,7 @@ func (in *serviceListIn) validate() *envelope.Error {
 	if e := checkFilter("name_contains", in.NameContains); e != nil {
 		return e
 	}
-	return checkInt("limit", in.Limit, 1, 5000)
+	return checkCount("limit", in.Limit, 5000)
 }
 
 // ServiceList is shell_list_services' data.
@@ -155,7 +155,7 @@ func (in *journalIn) validate() *envelope.Error {
 	if e := checkUnit(in.Unit); e != nil {
 		return e
 	}
-	if e := checkInt("lines", in.Lines, 1, 10000); e != nil {
+	if e := checkCount("lines", in.Lines, 10000); e != nil {
 		return e
 	}
 	now := time.Now()

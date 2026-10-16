@@ -88,7 +88,7 @@ func (in *gitLogIn) validate() *envelope.Error {
 	if e := checkPath("repo", in.Repo); e != nil {
 		return e
 	}
-	return checkInt("limit", in.Limit, 1, 200)
+	return checkCount("limit", in.Limit, 200)
 }
 
 // GitLog is shell_get_git_log's data.

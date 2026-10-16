@@ -117,21 +117,21 @@ func makeFixtures(t *testing.T) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil { //nolint:gosec // G306: public certificate
+	if err = os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil { //nolint:gosec // G306: public certificate
 		return err
 	}
 	kd, err := x509.MarshalPKCS8PrivateKey(k)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: kd}), 0o644); err != nil { //nolint:gosec // G306: a throwaway key the gate must refuse to show
+	if err = os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: kd}), 0o644); err != nil { //nolint:gosec // G306: a throwaway key the gate must refuse to show
 		return err
 	}
 
 	// The repository: cloned from a local HTTPS server, one commit behind
 	// its upstream after a fetch over HTTPS, one local commit ahead, and an
 	// uncommitted change carrying the token.
-	if err := os.RemoveAll(readRepo); err != nil {
+	if err = os.RemoveAll(readRepo); err != nil {
 		return err
 	}
 	g := gatetest.NewGitServer(t)
@@ -147,16 +147,17 @@ func makeFixtures(t *testing.T) error {
 	gatetest.Git(t, readRepo, "commit", "-q", "-m", "local example change")
 	gatetest.WriteFile(t, filepath.Join(readRepo, "config.yaml"), "version: 2\ntoken: "+e2eToken+"\n", 0o644)
 	if out, err := exec.CommandContext(t.Context(), "chmod", "-R", "a+rX", readRoot).CombinedOutput(); err != nil {
-		return fmt.Errorf("chmod: %v %s", err, out)
+		return fmt.Errorf("chmod: %w: %s", err, out)
 	}
 
 	// A journal line carrying the token, from a transient unit the read
 	// policy lists.
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
+	//nolint:gosec // G204: fixed argv; the token is this run's random fixture
 	if out, err := exec.CommandContext(ctx, "systemd-run", "--quiet", "--wait", "--collect", "--unit=example-journal.service",
 		"/usr/bin/echo", "example-journal using "+e2eToken).CombinedOutput(); err != nil {
-		return fmt.Errorf("systemd-run: %v %s", err, out)
+		return fmt.Errorf("systemd-run: %w: %s", err, out)
 	}
 	for range 50 {
 		out, _ := exec.CommandContext(ctx, "journalctl", "--no-pager", "-u", "example-journal.service", "-o", "cat").Output()

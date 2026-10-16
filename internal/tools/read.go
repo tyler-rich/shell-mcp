@@ -62,7 +62,7 @@ var (
 	unitRE    = regexp.MustCompile(unitPattern)
 	userRE    = regexp.MustCompile(userPattern)
 	commandRE = regexp.MustCompile(commandPattern)
-	withinRE  = regexp.MustCompile(`^([1-9][0-9]{0,6})([smhdw])$`)
+	withinRE  = regexp.MustCompile(`^([1-9]\d{0,6})([smhdw])$`)
 )
 
 var unitSeconds = map[string]int64{"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 7 * 86400}
@@ -141,9 +141,10 @@ func checkOptPath(field, p string) *envelope.Error {
 	return checkPath(field, p)
 }
 
-func checkInt(field string, v *int, lo, hi int) *envelope.Error {
-	if v != nil && (*v < lo || *v > hi) {
-		return invalid("%s must be %d..%d", field, lo, hi)
+// checkCount: an optional count, when given, is 1..hi.
+func checkCount(field string, v *int, hi int) *envelope.Error {
+	if v != nil && (*v < 1 || *v > hi) {
+		return invalid("%s must be 1..%d", field, hi)
 	}
 	return nil
 }
