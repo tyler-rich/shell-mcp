@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -192,6 +193,9 @@ func TestEveryToolFollowsConventions(t *testing.T) {
 			if !ok || in.Type != "object" || in.AdditionalProperties == nil || in.AdditionalProperties.Not == nil {
 				t.Fatalf("input schema must be a closed object: %#v", def.InputSchema)
 			}
+			if slices.Contains(in.Required, "target") {
+				t.Fatalf("target must be optional: required %v", in.Required)
+			}
 			for p, s := range in.Properties {
 				if s.Description == "" {
 					t.Fatalf("input property %q has no description", p)
@@ -310,11 +314,11 @@ func TestTargetResolution(t *testing.T) {
 		args map[string]any
 		code string
 	}{
-		"several targets, none named": {map[string]any{}, "validation_error"},
-		"unknown target":              {map[string]any{"target": "other-host"}, "unknown_target"},
-		"malformed name":              {map[string]any{"target": "../etc"}, "validation_error"},
-		"wrong type":                  {map[string]any{"target": 7}, "validation_error"},
-		"unknown argument":            {map[string]any{"target": "app-host", "x": 1}, "validation_error"},
+		"several targets, none named":  {map[string]any{}, "validation_error"},
+		"unknown target":               {map[string]any{"target": "other-host"}, "unknown_target"},
+		"malformed name":               {map[string]any{"target": "../etc"}, "validation_error"},
+		"wrong type":                   {map[string]any{"target": 7}, "validation_error"},
+		"unknown argument":             {map[string]any{"target": "app-host", "x": 1}, "validation_error"},
 		"no SSH client for the target": {map[string]any{"target": "app-host"}, "target_unreachable"},
 	} {
 		t.Run(name, func(t *testing.T) {
