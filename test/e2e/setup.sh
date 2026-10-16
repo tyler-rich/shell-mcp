@@ -188,6 +188,10 @@ commands:
     path: /usr/local/bin/example-probe
     tier: operator
     templates: [["echo", "operator"]]
+  - id: probe-sleep
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["ignore-term", "60s"]]
 EOF
 chmod 0644 /etc/shell-mcp/gate-read.yaml
 /usr/local/bin/shell-mcp-gate check-policy --policy /etc/shell-mcp/gate-read.yaml >/dev/null
@@ -298,7 +302,7 @@ commands:
   - id: probe-attrs
     path: /usr/local/bin/example-probe
     tier: read
-    templates: [["rlimits"], ["procattrs"]]
+    templates: [["rlimits"], ["procattrs"], ["ignore-term", "60s"]]
   - id: probe-read-outside
     path: /usr/local/bin/example-probe
     tier: read
@@ -337,6 +341,7 @@ $2    templates:
       - ["status"]
       - ["rlimits"]
       - ["procattrs"]
+      - ["ignore-term", "60s"]
 power:
   allowed: [reboot]
   acknowledge: "e2e: priv_power is called only with reboot.target and poweroff.target runtime-masked"

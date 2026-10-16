@@ -114,6 +114,7 @@ commands:
       - ["bind"]
       - ["signal", "{int:1-4194304}"]
       - ["fork-sleep", "{enum:60s}"]
+      - ["ignore-term", "{enum:60s}"]
       - ["flood", "{int:1-100000000}"]
 `
 
@@ -467,6 +468,35 @@ func TestIntegrationSandboxTrampoline(t *testing.T) {
 	// may hold, and only where the sandbox lets it read /sys.
 	if fds := a["fds"]; fds != "" && (strings.Contains(fds, ",") || !strings.HasPrefix(fds, "3:100000:/sys/fs/cgroup/")) {
 		t.Fatalf("the command has descriptors it was not given: %s", fds)
+	}
+}
+
+// TestIntegrationCommandDiesWithGate: a gate killed while its command runs
+// takes the command with it. The command (sandboxed, started through the
+// trampoline) ignores SIGTERM and would sleep for 60 s; the gate's own
+// timeout is longer still, and nothing else signals it. Only its
+// parent-death signal (SIGKILL, set by os/exec in the trampoline and kept
+// across both execs) can end it within the test's window.
+func TestIntegrationCommandDiesWithGate(t *testing.T) {
+	needABI(t, 1)
+	g := newGate(t)
+	req := `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000002","ceiling":"destructive","op":"exec","args":{"command_id":"probe","args":["ignore-term","60s"]},"timeout_ms":120000}` + "\n"
+	cmd := exec.CommandContext(t.Context(), harness(t), "serve", "--policy", g.pol, "--principal", "test") //nolint:gosec // G204: the test's own harness
+	cmd.Env = append([]string{"PATH=/usr/bin:/bin"}, g.env...)
+	cmd.Stdin = strings.NewReader(req)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	p := gatetest.FindChild(t, cmd.Process.Pid, "ignore-term", "60s")
+	t.Cleanup(p.Kill)
+	p.WaitIgnoring(t, syscall.SIGTERM)
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait()
+	if !p.WaitGone(5 * time.Second) {
+		t.Fatalf("the command (pid %d) outlived the gate that started it", p.Pid)
 	}
 }
 

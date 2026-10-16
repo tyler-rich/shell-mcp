@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
 )
 
 // The broad unit, the apt operations, the core unit's hardening and
@@ -574,6 +576,116 @@ func TestHelperExecTrampoline(t *testing.T) {
 			if fds := a["fds"]; fds != "" && (strings.Contains(fds, ",") || !strings.HasPrefix(fds, "3:100000:/sys/fs/cgroup/")) {
 				t.Fatalf("the command has descriptors it was not given: %s", fds)
 			}
+		})
+	}
+}
+
+// ---- A command does not outlive the gate or the helper that started it ----------
+
+// startGate starts the real gate as svc-shell with one request on stdin and
+// returns it while it runs.
+func startGate(t *testing.T, policy, principal, ceiling, op string, args any) *exec.Cmd {
+	t.Helper()
+	a, _ := json.Marshal(args)
+	req := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":%q,"op":%q,"args":%s,"timeout_ms":30000}`+"\n", newID(), ceiling, op, a)
+	cmd := exec.CommandContext(t.Context(), gateBin, "serve", "--policy", policy, "--principal", principal) //nolint:gosec // G204: the installed gate; policy and principal are this file's constants
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, svcShell)}
+	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin"}
+	cmd.Dir = "/"
+	cmd.Stdin = strings.NewReader(req)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	return cmd
+}
+
+// timespan parses a systemd time span as systemctl show prints it
+// ("1min 30s", "500ms", "infinity").
+func timespan(t *testing.T, s string) time.Duration {
+	t.Helper()
+	if s == "infinity" {
+		return time.Duration(1<<63 - 1)
+	}
+	var d time.Duration
+	for _, f := range strings.Fields(s) {
+		i := strings.IndexFunc(f, func(r rune) bool { return r < '0' || r > '9' })
+		if i <= 0 {
+			t.Fatalf("time span %q", s)
+		}
+		n, _ := strconv.Atoi(f[:i])
+		unit, ok := map[string]time.Duration{"h": time.Hour, "min": time.Minute, "s": time.Second, "ms": time.Millisecond, "us": time.Microsecond}[f[i:]]
+		if !ok {
+			t.Fatalf("time span %q", s)
+		}
+		d += time.Duration(n) * unit
+	}
+	return d
+}
+
+// TestCommandDiesWithGateOrHelper: killing the gate, or the helper in
+// either unit, while a command runs kills the command. The command ignores
+// SIGTERM and would sleep for 60 s; the request's own timeout is 30 s. The
+// gate runs outside any unit, so nothing but the parent-death signal can end
+// its command. When a helper instance dies, systemd stops its unit: it sends
+// the unit's KillSignal (SIGTERM, checked) to what is left and SIGKILL only
+// after TimeoutStopSec (checked to be far longer than the 5 s allowed), with
+// no SIGHUP (checked). Within the window, only the parent-death signal
+// (SIGKILL) ends the command there too.
+func TestCommandDiesWithGateOrHelper(t *testing.T) {
+	sleepArgs := []string{"ignore-term", "60s"}
+	t.Run("gate", func(t *testing.T) {
+		g := startGate(t, "/etc/shell-mcp/gate-read.yaml", "e2e-read", "read", "exec", map[string]any{"command_id": "probe-sleep", "args": sleepArgs})
+		p := gatetest.FindChild(t, g.Process.Pid, sleepArgs...)
+		t.Cleanup(p.Kill)
+		p.WaitIgnoring(t, syscall.SIGTERM)
+		if err := g.Process.Kill(); err != nil {
+			t.Fatal(err)
+		}
+		_ = g.Wait()
+		if !p.WaitGone(5 * time.Second) {
+			t.Fatalf("the command (pid %d) outlived the gate", p.Pid)
+		}
+	})
+	for _, c := range []struct{ command, unit string }{{"probe-attrs", ""}, {"probe-broad", "broad"}} {
+		t.Run("helper-"+c.command, func(t *testing.T) {
+			a := map[string]any{"command_id": c.command, "args": sleepArgs}
+			if c.unit != "" {
+				a["unit"] = c.unit
+			}
+			g := startGate(t, gatePolicy, "e2e", "destructive", "priv_exec", a)
+			p := gatetest.FindChild(t, 0, sleepArgs...)
+			t.Cleanup(p.Kill)
+			p.WaitIgnoring(t, syscall.SIGTERM)
+			helper := p.Parent()
+			if exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", helper)); err != nil || !strings.HasPrefix(filepath.Base(exe), filepath.Base(privdBin)) {
+				t.Fatalf("the command's parent %d is %q (%v), not the helper", helper, exe, err)
+			}
+			cg := strings.TrimSpace(readFile(t, fmt.Sprintf("/proc/%d/cgroup", helper)))
+			unit := filepath.Base(cg[strings.LastIndexByte(cg, ':')+1:])
+			wantPrefix := "shell-mcp-privd@"
+			if c.unit == "broad" {
+				wantPrefix = "shell-mcp-privd-broad@"
+			}
+			if !strings.HasPrefix(unit, wantPrefix) || !strings.HasSuffix(unit, ".service") {
+				t.Fatalf("the helper runs in %q (cgroup %q)", unit, cg)
+			}
+			if got := show(t, unit, "KillSignal"); got != "15" {
+				t.Fatalf("%s KillSignal=%s, want 15 (SIGTERM)", unit, got)
+			}
+			if got := show(t, unit, "SendSIGHUP"); got != "no" {
+				t.Fatalf("%s SendSIGHUP=%s", unit, got)
+			}
+			if got := timespan(t, show(t, unit, "TimeoutStopUSec")); got < 20*time.Second {
+				t.Fatalf("%s TimeoutStopUSec=%v: systemd's own SIGKILL could end the command within the window", unit, got)
+			}
+			if err := syscall.Kill(helper, syscall.SIGKILL); err != nil {
+				t.Fatal(err)
+			}
+			if !p.WaitGone(5 * time.Second) {
+				t.Fatalf("the command (pid %d) outlived the helper in %s", p.Pid, unit)
+			}
+			_ = g.Wait()
 		})
 	}
 }
