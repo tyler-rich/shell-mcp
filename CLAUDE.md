@@ -85,7 +85,8 @@ Stop and ask the maintainer before continuing if you would need to:
 6. Hygiene review (above), then `git push -u origin <branch>`.
 7. `gh pr create --base dev` with the PR template filled. **Do not merge.**
 8. Strip any AI attribution footer from the PR body, then `gh pr view --json body -q .body` and confirm it is gone.
-9. Post the PR link and a **Verification report**: a table with one row per check (command, result, notes) — format, vet, lint, tests, race, vulncheck, fuzz, e2e (if applicable), failing-test evidence, **privacy review** (what you reviewed and that nothing deployment-specific is present; whether the pre-push hook fired), attribution footer check — then 5–10 lines of summary, anything deferred, and anything the maintainer must do by hand.
+9. Check CI once per push, when the run should have finished: read it with `gh pr checks <n>` / `gh run view <id>` (job logs for which tests ran), and again after each later push. Never poll CI in a loop (`gh run watch`, `sleep` loops, scheduled wake-ups) or wait on it indefinitely; if the run is still going, say so and check once more later. The PR is ready only when the finished run on its latest commit is green.
+10. Post the PR link and a **Verification report**: a table with one row per check (command, result, notes) — format, vet, lint, tests, race, vulncheck, fuzz, e2e (if applicable), failing-test evidence, **privacy review** (what you reviewed and that nothing deployment-specific is present; whether the pre-push hook fired), attribution footer check — then 5–10 lines of summary, anything deferred, and anything the maintainer must do by hand.
 
 ## Definitions
 
