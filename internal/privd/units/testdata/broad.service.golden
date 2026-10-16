@@ -25,3 +25,5 @@ ProtectClock=yes
 RuntimeMaxSec=150
 TasksMax=256
 MemoryMax=1G
+KillMode=control-group
+TimeoutStopSec=5

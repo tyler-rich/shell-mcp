@@ -49,3 +49,5 @@ UMask=0077
 RuntimeMaxSec=150
 TasksMax=64
 MemoryMax=256M
+KillMode=control-group
+TimeoutStopSec=5

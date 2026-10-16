@@ -58,6 +58,9 @@ const (
 	DirectoryMode = "0711"
 	// RuntimeSlackS is added to limits.max_timeout_s for RuntimeMaxSec=.
 	RuntimeSlackS = 30
+	// StopTimeoutS is both units' TimeoutStopSec=: how long whatever is left
+	// in a stopping instance's cgroup has after SIGTERM before SIGKILL.
+	StopTimeoutS  = 5
 	documentation = "https://github.com/tyler-rich/shell-mcp/blob/main/docs/PRIVILEGED.md"
 )
 
@@ -215,6 +218,12 @@ func Core(p *policy.Policy) (Files, error) {
 		{"RuntimeMaxSec", strconv.Itoa(p.Limits.MaxTimeoutS + RuntimeSlackS)},
 		{"TasksMax", "64"},
 		{"MemoryMax", "256M"},
+		// A dead instance leaves nothing running for long: systemd sends
+		// SIGTERM to everything left in its cgroup, then SIGKILL after
+		// StopTimeoutS. A command that switched user lost its parent-death
+		// signal, and its own children never had one.
+		{"KillMode", "control-group"},
+		{"TimeoutStopSec", strconv.Itoa(StopTimeoutS)},
 	}...)
 	body, err := Render(lines)
 	if err != nil {
@@ -242,7 +251,8 @@ const (
 // capability bounding set is root's (none of them is written); still
 // NoNewPrivileges=, PrivateTmp=, ProtectKernelModules=,
 // ProtectKernelTunables=, ProtectClock= (off only when a broad command
-// declares CAP_SYS_TIME), RuntimeMaxSec=, TasksMax= and MemoryMax=.
+// declares CAP_SYS_TIME), RuntimeMaxSec=, TasksMax=, MemoryMax=, KillMode=
+// and TimeoutStopSec=.
 func Broad(p *policy.Policy) (Files, error) {
 	if err := check(p); err != nil {
 		return Files{}, err
@@ -269,6 +279,8 @@ func Broad(p *policy.Policy) (Files, error) {
 		{"RuntimeMaxSec", strconv.Itoa(p.Limits.MaxTimeoutS + RuntimeSlackS)},
 		{"TasksMax", BroadTasksMax},
 		{"MemoryMax", BroadMemoryMax},
+		{"KillMode", "control-group"},
+		{"TimeoutStopSec", strconv.Itoa(StopTimeoutS)},
 	}...)
 	body, err := Render(lines)
 	if err != nil {
