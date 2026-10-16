@@ -195,10 +195,10 @@ func TestRuleTargetBadHostKeyPin(t *testing.T) {
 		"ssh-ed25519 SHA256:not base64!",
 		"ssh-ed25519 SHA256:" + base64.RawStdEncoding.EncodeToString(make([]byte, 20)), // wrong length
 		"ssh-ed25519 sha256:" + base64.RawStdEncoding.EncodeToString(make([]byte, 32)),
-		"ssh-dss " + testFingerprint,                         // DSA: never
+		"ssh-dss " + testFingerprint,                          // DSA: never
 		"ssh-ed25519-cert-v01@openssh.com " + testFingerprint, // certificates: never
-		"rsa-sha2-256 " + testFingerprint,                    // a signature algorithm, not a key type
-		"ED25519 " + testFingerprint,                         // ssh-keygen's label, not the key type
+		"rsa-sha2-256 " + testFingerprint,                     // a signature algorithm, not a key type
+		"ED25519 " + testFingerprint,                          // ssh-keygen's label, not the key type
 		"ssh-ed25519 " + testFingerprint + " extra",
 		"ssh-ed25519\t" + testFingerprint,
 		testFingerprint + " ssh-ed25519",
