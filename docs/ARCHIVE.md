@@ -1580,3 +1580,42 @@ The guarantee did not have the race the prompt feared. The test's reading of it 
 - **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+
+### 2026-10-16 — Helper units bound the stop: KillMode=control-group, TimeoutStopSec=5 (PR #20 follow-up)
+**Decision (maintainer request).** Both generated helper units, core and broad, now write `KillMode=control-group` and `TimeoutStopSec=5`. This settles the observation in the entry above.
+
+**Why it is needed:**
+- **A command can lose the parent-death signal.** `Pdeathsig=SIGKILL` covers only the command `execx` starts, and only while it keeps its credentials. A root helper command that changes its user, group or filesystem ids loses it (`kernel/cred.c` `commit_creds`): apt-get switching to `_apt`, or any command that drops privileges.
+- **The command's children never have one.** `copy_process` zeroes it for every new task, so dpkg, maintainer scripts and their children have none.
+- **Before:** if a helper instance died, those processes stayed in the unit's cgroup with only systemd's defaults: `SIGTERM`, then `SIGKILL` after `DefaultTimeoutStopSec` (90 s on the runner). A process that ignored `SIGTERM` ran for 90 s after its helper was gone.
+- **After:** they get `SIGKILL` 5 s after the `SIGTERM`.
+
+**Verified at the source** (`man/systemd.kill.xml` and `man/systemd.service.xml` at tags v257 and v259; the text is the same in both):
+- `KillMode=control-group` kills "all remaining processes in the control group of this unit" on unit stop. The first signal is `SIGTERM` (`KillSignal=`). `SIGKILL` (`FinalKillSignal=`, unless `SendSIGKILL=no`) follows once "the delay configured via the `TimeoutStopSec=` has passed". `control-group` is also the default; it is written so the generated unit states it and a drop-in default cannot change it.
+- `TimeoutStopSec=` "configures the time to wait for the service itself to stop. If it does not terminate in the specified time, it will be forcibly terminated by SIGKILL". It takes unit-less seconds. With no `ExecStop=`, the service gets `SIGTERM` immediately.
+
+**Why 5 s** (the maintainer's value; no reason found at the source for another):
+- **The helper exits at once on SIGTERM.** It installs no `SIGTERM` handler (no `signal.Notify` in `cmd/shell-mcp-privd` or `internal/privd`), so Go's default exits it immediately. The bound therefore applies only to leftovers, never to the helper.
+- **A long apt-get run loses nothing.** It is already gone at the moment the helper dies, because its parent-death signal fires before any stop timeout counts. Only the processes that outlive it, such as dpkg and maintainer scripts, are affected. Under the old default they also got `SIGTERM` at once; they now get `SIGKILL` after 5 s instead of 90 s. dpkg's interrupted-run recovery (`dpkg --configure -a`) is the same either way.
+- **The helper's own command timeout is unchanged.** It is `SIGTERM`, then `SIGKILL` after `DefaultKillGrace` (2 s), and runs inside the instance, independent of systemd.
+
+**`systemd-analyze security`:** neither directive is part of its assessment. e2e `TestSecurityExposure` still enforces `E2E_SECURITY_MAX` (1.4) on the core unit; see the CI result for this PR.
+
+**Who is affected:** a core-unit command cannot switch user at all. Its bounding set has no `CAP_SETUID` or `CAP_SETGID`, and neither is declarable (PRIVILEGED §4). A broad-unit command can, because it runs with root's full set.
+
+**Tests (committed first):**
+- `b1fc625` added `KillMode`/`TimeoutStopSec` to `TestServiceDirectives` and `TestBroadServiceDirectives`. Both failed: `[Service]KillMode = [], want ["control-group"]`, `[Service]TimeoutStopSec = [], want ["5"]`, `41 directives, want 43` and `17 directives, want 19`. The golden files are updated with the fix.
+- e2e `TestHelperStopKillsUserSwitchedCommand` (broad unit) runs the probe's new `drop-ignore-term`: ignore `SIGTERM`, then `setgroups`, `setresgid` and `setresuid` to an invented uid on every thread. The test waits until `/proc/<pid>/status` shows the uid and gid switched and `SIGTERM` ignored, then SIGKILLs the helper instance. It then checks:
+  - **Control:** one second later the command still runs, so no parent-death signal reached it.
+  - **Bound:** it must then be gone within `TimeoutStopSec` + 3 s.
+
+  On `b1fc625`, without the directives, CI failed it as intended. The control held, and then: "the user-switched command (pid 7381) still runs 8s after the helper in shell-mcp-privd-broad@….service died (KillMode=control-group, TimeoutStopUSec=1min 30s)". The Go jobs on both matrix entries failed only `TestServiceDirectives` and `TestBroadServiceDirectives`.
+- **The pdeathsig window changes.** `TestCommandDiesWithGateOrHelper` now allows 2 s, not 5 s: with `TimeoutStopSec=5`, systemd's own `SIGKILL` could otherwise end the helper cases inside the window. The test requires the unit's stop timeout to be at least twice the window.
+
+**Docs:** PRIVILEGED §5.1 and §5.2 list both directives. A new paragraph before §5.3 says why both units set them.
+
+**Alternatives rejected:**
+- **`KillMode=mixed`:** after the main process exits it SIGKILLs the rest at once, with no grace at all. The maintainer chose `control-group` with a short timeout, which gives leftovers 5 s after `SIGTERM`.
+- **A per-command `Pdeathsig` re-arm:** impossible after the command changes its own credentials, and it would not cover its children.
+
+**Versions:** unchanged (Go 1.27.2; modules as above; golangci-lint v2.15.0, govulncheck v1.9.0). No dependency added.
