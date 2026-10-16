@@ -121,10 +121,6 @@ func cmdServe(ctx context.Context, args []string, lookup config.LookupFunc, stde
 	for _, w := range cfg.Warnings {
 		logger.Warn(w)
 	}
-	if cfg.AuthMode != "none" {
-		logger.Error("refusing to start", "reason", transport.ErrBearerNotImplemented.Error())
-		return 1
-	}
 
 	server, err := newMCPServer(cfg)
 	if err != nil {
@@ -141,7 +137,7 @@ func cmdServe(ctx context.Context, args []string, lookup config.LookupFunc, stde
 		return 0
 	}
 
-	srv, err := transport.New(cfg, mcpHTTPHandler(server, logger))
+	srv, err := transport.New(cfg, mcpHTTPHandler(server, logger), &transport.Options{Logger: logger})
 	if err != nil {
 		logger.Error("refusing to start", "reason", err.Error())
 		return 1

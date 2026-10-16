@@ -14,6 +14,9 @@ const masked = "[REDACTED]"
 // it as a fixed mask; only Equal and Len read it.
 type Secret struct{ v string }
 
+// NewSecret wraps v.
+func NewSecret(v string) Secret { return Secret{v: v} }
+
 // Len returns the secret's length in bytes.
 func (s Secret) Len() int { return len(s.v) }
 

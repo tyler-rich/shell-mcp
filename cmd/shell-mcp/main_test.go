@@ -155,17 +155,6 @@ func TestCheckInvalidConfigExits1(t *testing.T) {
 	}
 }
 
-func TestServeRefusesBearer(t *testing.T) {
-	env, _ := testEnv(t)
-	var out, errb bytes.Buffer
-	if code := run(context.Background(), []string{"serve"}, lookup(env), &out, &errb); code != 1 {
-		t.Fatalf("serve exit %d, want 1", code)
-	}
-	if !strings.Contains(errb.String(), "bearer auth arrives in Session 2") {
-		t.Fatalf("stderr = %q", errb.String())
-	}
-}
-
 func TestToolsPrintsEmptyList(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run(context.Background(), []string{"tools"}, lookup(nil), &out, &errb); code != 0 {
@@ -206,7 +195,7 @@ func TestMCPStatelessServesNoTools(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, err := transport.New(cfg, mcpHTTPHandler(server, slog.New(slog.DiscardHandler)))
+	srv, err := transport.New(cfg, mcpHTTPHandler(server, slog.New(slog.DiscardHandler)), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

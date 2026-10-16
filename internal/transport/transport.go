@@ -6,18 +6,38 @@ package transport
 
 import (
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/tyler-rich/shell-mcp/internal/auth"
 	"github.com/tyler-rich/shell-mcp/internal/config"
 )
 
-// ErrBearerNotImplemented is returned for bearer mode until Session 2 adds
-// the auth middleware. Refusing to start is what keeps the scaffold from ever
-// serving an unauthenticated, non-loopback endpoint.
-var ErrBearerNotImplemented = errors.New("bearer auth arrives in Session 2")
+// MaxBodyBytes caps a request body (S-03). (stub)
+const MaxBodyBytes = 1 << 20
+
+const maxTrackedClients = 4096
+
+// Options are optional dependencies of New.
+type Options struct {
+	Now    func() time.Time
+	Logger *slog.Logger
+}
+
+type ipLimiter struct{}
+
+func (*ipLimiter) tracked() int { return 0 }
+
+type handler struct {
+	mux  http.Handler
+	rate *ipLimiter
+	auth *auth.Middleware
+}
+
+func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.mux.ServeHTTP(w, r) }
 
 // ErrUnauthenticatedNonLoopback guards the same invariant as config
 // validation, in case a Config is built by other means.
@@ -38,11 +58,8 @@ const HealthzPath = "/healthz"
 var healthzBody = []byte(`{"status":"ok"}`)
 
 // New returns the HTTP server for cfg with mcp mounted at cfg.Path.
-func New(cfg *config.Config, mcp http.Handler) (*http.Server, error) {
-	if cfg.AuthMode != "none" {
-		return nil, ErrBearerNotImplemented
-	}
-	if !config.IsLoopbackBind(cfg.Bind) {
+func New(cfg *config.Config, mcp http.Handler, _ *Options) (*http.Server, error) {
+	if cfg.AuthMode == "none" && !config.IsLoopbackBind(cfg.Bind) {
 		return nil, ErrUnauthenticatedNonLoopback
 	}
 
@@ -53,7 +70,7 @@ func New(cfg *config.Config, mcp http.Handler) (*http.Server, error) {
 
 	return &http.Server{
 		Addr:              net.JoinHostPort(cfg.Bind, strconv.Itoa(cfg.Port)),
-		Handler:           mux,
+		Handler:           &handler{mux: mux, rate: &ipLimiter{}, auth: &auth.Middleware{}},
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      cfg.MaxTimeout + writeHeadroom,

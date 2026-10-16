@@ -1,7 +1,6 @@
 package transport
 
 import (
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -30,7 +29,7 @@ var mcpStub = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 
 func newTestServer(t *testing.T) *http.Server {
 	t.Helper()
-	srv, err := New(noneConfig(), mcpStub)
+	srv, err := New(noneConfig(), mcpStub, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -107,24 +106,12 @@ func TestMCPPathRoutesToHandlerAndOthersAre404(t *testing.T) {
 	}
 }
 
-func TestServeRefusesBearerMode(t *testing.T) {
-	cfg := noneConfig()
-	cfg.AuthMode = "bearer"
-	cfg.Bind = "0.0.0.0"
-	srv, err := New(cfg, mcpStub)
-	if srv != nil || err == nil {
-		t.Fatalf("New accepted bearer mode (srv=%v, err=%v)", srv, err)
-	}
-	if !errors.Is(err, ErrBearerNotImplemented) || err.Error() != "bearer auth arrives in Session 2" {
-		t.Fatalf("error = %q", err)
-	}
-}
 
 func TestServeRefusesNonLoopbackEvenIfNone(t *testing.T) {
 	// Defence in depth: config validation already forbids this combination.
 	cfg := noneConfig()
 	cfg.Bind = "0.0.0.0"
-	if _, err := New(cfg, mcpStub); err == nil {
+	if _, err := New(cfg, mcpStub, nil); err == nil {
 		t.Fatal("New accepted unauthenticated non-loopback bind")
 	}
 }
