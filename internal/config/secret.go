@@ -1,6 +1,7 @@
 package config
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"fmt"
 	"log/slog"
@@ -23,9 +24,15 @@ func (s Secret) Len() int { return len(s.v) }
 // IsZero reports whether the secret is empty.
 func (s Secret) IsZero() bool { return s.v == "" }
 
-// Equal compares candidate with the secret in constant time.
+// Equal compares candidate with the secret in constant time. Both are
+// hashed with SHA-256 first, so the comparison takes the same time whatever
+// the candidate's length and leaks neither the secret's length nor a prefix.
 func (s Secret) Equal(candidate string) bool {
-	return s.v != "" && subtle.ConstantTimeCompare([]byte(s.v), []byte(candidate)) == 1
+	if s.v == "" {
+		return false
+	}
+	a, b := sha256.Sum256([]byte(s.v)), sha256.Sum256([]byte(candidate))
+	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
 }
 
 // String implements fmt.Stringer.

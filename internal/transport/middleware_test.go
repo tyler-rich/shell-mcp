@@ -96,10 +96,11 @@ const toolsList = `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`
 // req is one request; zero fields take the defaults of a valid call.
 type req struct {
 	method, path, host, origin, remote, auth, body string
-	headers                                         map[string]string
-	contentLength                                   int64
-	chunked                                         bool
-	noAuth                                          bool
+	headers                                        map[string]string
+	contentLength                                  int64
+	chunked                                        bool
+	noAuth                                         bool
+	emptyHost                                      bool
 }
 
 func (e *env) do(r req) *http.Response {
@@ -127,6 +128,9 @@ func (e *env) do(r req) *http.Response {
 	hr.Host = "127.0.0.1:8080"
 	if r.host != "" {
 		hr.Host = r.host
+	}
+	if r.emptyHost {
+		hr.Host = ""
 	}
 	hr.RemoteAddr = "192.0.2.10:51000"
 	if r.remote != "" {
@@ -250,9 +254,10 @@ func TestValidTokenReachesMCP(t *testing.T) {
 func TestHostAllowList(t *testing.T) {
 	e := newEnv(t, bearerConfig(t))
 	for _, h := range []string{"evil.example.test", "mcp.example.test.evil.example.test", "localhost.", "127.0.0.2:8080",
-		"[::1]:9090", "", "MCP.example.test:443x", "user@mcp.example.test"} {
-		e.wantRefused(e.do(req{host: h, headers: map[string]string{}}), http.StatusMisdirectedRequest, bodyHost)
+		"[::1]:9090", "MCP.example.test:443x", "user@mcp.example.test", "localhost:", ":8080"} {
+		e.wantRefused(e.do(req{host: h}), http.StatusMisdirectedRequest, bodyHost)
 	}
+	e.wantRefused(e.do(req{emptyHost: true}), http.StatusMisdirectedRequest, bodyHost)
 	for _, h := range []string{"localhost", "localhost:8080", "127.0.0.1:1234", "MCP.Example.Test", "mcp.example.test:443", "[::1]:8080"} {
 		if res := e.do(req{host: h}); res.StatusCode != http.StatusOK {
 			t.Fatalf("host %q refused: %d %s", h, res.StatusCode, body(t, res))

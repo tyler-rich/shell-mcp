@@ -19,6 +19,9 @@ func noneConfig() *config.Config {
 		Port:       8080,
 		Path:       "/mcp",
 		MaxTimeout: 300 * time.Second,
+		// The config defaults.
+		AllowedHosts:    []string{"localhost", "127.0.0.1"},
+		RateLimitPerMin: 120,
 	}
 }
 
@@ -93,19 +96,22 @@ func TestHealthzBypassesMCPHandler(t *testing.T) {
 func TestMCPPathRoutesToHandlerAndOthersAre404(t *testing.T) {
 	srv := newTestServer(t)
 	rec := httptest.NewRecorder()
-	srv.Handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", strings.NewReader("{}")))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", strings.NewReader("{}"))
+	r.Host = "127.0.0.1:8080"
+	srv.Handler.ServeHTTP(rec, r)
 	if rec.Code != http.StatusTeapot {
 		t.Fatalf("/mcp not routed to MCP handler: %d", rec.Code)
 	}
 	for _, p := range []string{"/", "/mcp/extra", "/healthz/x", "/metrics"} {
 		rec = httptest.NewRecorder()
-		srv.Handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, p, http.NoBody))
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, p, http.NoBody)
+		r.Host = "localhost"
+		srv.Handler.ServeHTTP(rec, r)
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("%s status = %d, want 404", p, rec.Code)
 		}
 	}
 }
-
 
 func TestServeRefusesNonLoopbackEvenIfNone(t *testing.T) {
 	// Defence in depth: config validation already forbids this combination.
