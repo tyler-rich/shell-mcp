@@ -199,7 +199,8 @@ func TestRuleTargetBadHostKeyPin(t *testing.T) {
 		"ssh-ed25519-cert-v01@openssh.com " + testFingerprint, // certificates: never
 		"rsa-sha2-256 " + testFingerprint,                    // a signature algorithm, not a key type
 		"ED25519 " + testFingerprint,                         // ssh-keygen's label, not the key type
-		"ssh-ed25519  " + testFingerprint + " extra",
+		"ssh-ed25519 " + testFingerprint + " extra",
+		"ssh-ed25519\t" + testFingerprint,
 		testFingerprint + " ssh-ed25519",
 	} {
 		t.Run(pin, func(t *testing.T) {
@@ -530,7 +531,7 @@ func TestTargetsFileDuplicateKey(t *testing.T) {
 
 func TestTargetsFileDuplicateTargetName(t *testing.T) {
 	keyPath := writeFile(t, "key2", newEd25519Key(t).pem, 0o600)
-	extra := fmt.Sprintf("  - name: app-host\n    host: target-b.example.test\n    user: svc-shell\n    host_keys: [%q]\n    key_file: %s\n", testFingerprint, keyPath)
+	extra := fmt.Sprintf("  - name: app-host\n    host: target-b.example.test\n    user: svc-shell\n    host_keys: [%q]\n    key_file: %s\n", testPin, keyPath)
 	wantReason(t, targetsEnv(t, validTargetsYAML(t, extra)), `SHELL_MCP_TARGETS_FILE: duplicate target name "app-host"`)
 }
 

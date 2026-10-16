@@ -104,8 +104,30 @@ type HostKey struct {
 // String returns the pin as configured: "<key-type> SHA256:<base64>".
 func (h HostKey) String() string { return h.Type + " " + h.Fingerprint }
 
-// HostKeyPinFormat ends the reason for a malformed pin. (stub)
-const HostKeyPinFormat = ""
+// HostKeyTypes are the host-key types a pin may name (D-012). DSA and
+// certificates are never accepted; an ssh-rsa key is verified with
+// rsa-sha2-512 or rsa-sha2-256 only, never SHA-1 (internal/sshx).
+var HostKeyTypes = []string{
+	ssh.KeyAlgoED25519, ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521, ssh.KeyAlgoRSA,
+}
+
+// HostKeyPinFormat ends the one-line reason for a malformed pin: the
+// expected form and how to obtain it.
+const HostKeyPinFormat = `must be "<key-type> SHA256:<base64>" with key type ssh-ed25519, ` +
+	`ecdsa-sha2-nistp256, ecdsa-sha2-nistp384, ecdsa-sha2-nistp521 or ssh-rsa ` +
+	`(on the target, the key type is the first word of the host key's .pub file and ` +
+	`"ssh-keygen -lf <host key>.pub" prints its fingerprint; or run ` +
+	`"ssh-keyscan -t ed25519 <host> | ssh-keygen -lf -" and verify the fingerprint out of band)`
+
+// ParseHostKeyPin parses "<key-type> SHA256:<base64>": exactly one space,
+// a type from HostKeyTypes and an OpenSSH SHA-256 fingerprint.
+func ParseHostKeyPin(pin string) (HostKey, bool) {
+	typ, fp, ok := strings.Cut(pin, " ")
+	if !ok || !slices.Contains(HostKeyTypes, typ) || !ValidFingerprint(fp) {
+		return HostKey{}, false
+	}
+	return HostKey{Type: typ, Fingerprint: fp}, true
+}
 
 // Load reads the configuration from lookup (and the files it names) and
 // validates it against the fail-closed rules in docs/SECURITY.md §6.
@@ -501,9 +523,14 @@ func (l *loader) buildTarget(ft *fileTarget, sharedKey *PrivateKey) (Target, err
 	if len(ft.HostKeys) > 16 {
 		return Target{}, errorf("%s: at most 16 pinned host keys", id)
 	}
-	for _, fp := range ft.HostKeys {
-		if !ValidFingerprint(fp) {
-			return Target{}, errorf("%s: host key %q is not a SHA256:<base64> fingerprint", id, fp)
+	pins := make([]HostKey, 0, len(ft.HostKeys))
+	for _, raw := range ft.HostKeys {
+		pin, ok := ParseHostKeyPin(raw)
+		if !ok {
+			return Target{}, errorf("%s: host key %q %s", id, raw, HostKeyPinFormat)
+		}
+		if !slices.Contains(pins, pin) {
+			pins = append(pins, pin)
 		}
 	}
 
@@ -519,10 +546,6 @@ func (l *loader) buildTarget(ft *fileTarget, sharedKey *PrivateKey) (Target, err
 	}
 	if key == nil {
 		return Target{}, errorf("%s: no SSH private key (set SHELL_MCP_SSH_KEY, SHELL_MCP_SSH_KEY_FILE or key_file)", id)
-	}
-	pins := make([]HostKey, 0, len(ft.HostKeys))
-	for _, fp := range ft.HostKeys {
-		pins = append(pins, HostKey{Fingerprint: fp})
 	}
 	return Target{
 		Name: ft.Name, Host: ft.Host, Port: ft.Port, User: ft.User,

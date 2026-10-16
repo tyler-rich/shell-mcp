@@ -151,7 +151,7 @@ services:
       SHELL_MCP_TARGET_NAME: app-host
       SHELL_MCP_TARGET_HOST: target-a.example.test
       SHELL_MCP_TARGET_USER: svc-shell
-      SHELL_MCP_TARGET_HOST_KEYS: "SHA256:placeholder"
+      SHELL_MCP_TARGET_HOST_KEYS: "ssh-ed25519 SHA256:placeholder"
       SHELL_MCP_ALLOWED_HOSTS: localhost,127.0.0.1,mcp.example.test
     secrets: [mcp_token, ssh_key]
     security_opt: [no-new-privileges:true]

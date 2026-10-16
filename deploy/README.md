@@ -32,7 +32,7 @@ docker run -d --name shell-mcp \
   -e SHELL_MCP_TARGET_NAME=app-host \
   -e SHELL_MCP_TARGET_HOST=target-a.example.test \
   -e SHELL_MCP_TARGET_USER=svc-shell \
-  -e SHELL_MCP_TARGET_HOST_KEYS=SHA256:placeholder \
+  -e "SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:placeholder" \
   -v "$PWD/secrets/mcp_token:/run/secrets/mcp_token:ro" \
   -v "$PWD/secrets/ssh_key:/run/secrets/ssh_key:ro" \
   ghcr.io/tyler-rich/shell-mcp:0.0.1

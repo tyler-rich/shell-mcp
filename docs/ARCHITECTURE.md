@@ -45,7 +45,7 @@ Python remains viable for the server alone, but one language for all three binar
 | `internal/approval` | D-006: builds the `input_required` result with the elicitation (preview in the message), mints and verifies the HMAC-bound `requestState`, keeps the bounded single-use nonce set, decides whether a tool call needs approval (tier, `priv_*`, `SHELL_MCP_APPROVAL_TIERS`, client capability, fallback). |
 | `internal/auth` | Bearer middleware (constant-time compare over a list, one entry in v1), `Principal{Name, Profile}`. 401 with `WWW-Authenticate: Bearer realm="shell-mcp"` and body `{"error":"unauthorized"}`. |
 | `internal/transport` | HTTP server: body cap → global rate limit → Host/Origin allow-list → auth → SDK handler (stateless Streamable HTTP, JSON responses). `/healthz` outside the chain. Timeouts set on `http.Server` (read header, read, write, idle). |
-| `internal/sshx` | SSH client per target: pinned host keys (fingerprint list and/or known_hosts), Ed25519 signer from file, `HostKeyAlgorithms` restricted to what is pinned, connect timeout, keepalive, max concurrent sessions per target (default 4), reconnect with backoff. No agent, no forwarding, no PTY, no `Setenv`. |
+| `internal/sshx` | SSH client per target: pinned host keys (typed `<key-type> SHA256:` pins; no known_hosts in v1), Ed25519 signer from file, `HostKeyAlgorithms` derived from the pinned key types only, connect timeout, keepalive, max concurrent sessions per target (default 4), reconnect with backoff. No agent, no forwarding, no PTY, no `Setenv`. |
 | `internal/gateclient` | Open a session, request exec `shell-mcp-gate/1`, write one request (≤ 2 MiB), read one response (≤ 4 MiB), enforce the tool's time budget, map gate errors to envelope codes. |
 | `internal/tools` | Registry: `Register(tool, tier)`; at startup registers tiers allowed by the profile minus `SHELL_MCP_DISABLE_TOOLS`. One file per domain. Tools validate inputs, call the gate, shape results — no host logic. |
 | `internal/envelope` | Uniform result builders; the closed error-code set. |
@@ -172,7 +172,7 @@ All variables are read at startup; `*_FILE` reads the value from a file (Docker 
 | `SHELL_MCP_RATE_LIMIT_PER_MIN` | `120` | Per client IP. |
 | `SHELL_MCP_TARGETS_FILE` | — | YAML list of targets (below). Mutually exclusive with the single-target variables. |
 | `SHELL_MCP_TARGET_NAME` / `_HOST` / `_PORT` / `_USER` | — / — / `22` / — | Single-target shorthand for stack-editor deployments. |
-| `SHELL_MCP_TARGET_HOST_KEYS` | *(required)* | Comma list of pinned `SHA256:` fingerprints (list allows rotation). |
+| `SHELL_MCP_TARGET_HOST_KEYS` | *(required)* | Comma list of typed host-key pins, each `<key-type> SHA256:<base64>` (for example `ssh-ed25519 SHA256:…`); several pins of any mix of types allow rotation. Key types: `ssh-ed25519`, `ecdsa-sha2-nistp256`/`384`/`521`, `ssh-rsa`. The SSH client offers only the pinned types (`ssh-rsa` as `rsa-sha2-512`/`rsa-sha2-256`, never SHA-1); DSA and certificates are never accepted. An untyped or unknown-type pin fails startup. On the target the type is the first word of the host key's `.pub` file and `ssh-keygen -lf <host key>.pub` prints the fingerprint; `ssh-keyscan -t <type> <host>` piped to `ssh-keygen -lf -` works too when the result is verified out of band. |
 | `SHELL_MCP_SSH_KEY` / `_FILE` | *(required)* | OpenSSH-format Ed25519 private key, unencrypted. `_FILE` (a mounted secret) is recommended and wins. The plain variable also accepts the single-line standard base64 of the whole key file (recognised by the absence of a `-----BEGIN` header; it must decode to an OpenSSH private key), for environment stores that cannot hold multi-line values. |
 | `SHELL_MCP_DEFAULT_TARGET` | — | Makes `target` optional when several targets exist. |
 | `SHELL_MCP_SSH_CONNECT_TIMEOUT` | `10` | Seconds. |
@@ -193,7 +193,7 @@ targets:
     host: target-a.example.test
     port: 22
     user: svc-shell
-    host_keys: ["SHA256:AAAA…placeholder…"]
+    host_keys: ["ssh-ed25519 SHA256:AAAA…placeholder…"]
     key_file: /run/secrets/ssh_key_app_host
 ```
 
