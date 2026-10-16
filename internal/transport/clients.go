@@ -71,14 +71,19 @@ type ipLimiter struct {
 type bucket struct {
 	tokens float64
 	last   time.Time
+	// refusing is set by the first refusal and cleared by the next allowed
+	// request, so each run of refusals is logged once.
+	refusing bool
 }
 
 func newIPLimiter(perMin int, now func() time.Time) *ipLimiter {
 	return &ipLimiter{rate: float64(perMin) / 60, burst: float64(perMin), now: now, buckets: map[clientID]*bucket{}}
 }
 
-// allow takes one token for c, or reports how long until one is available.
-func (l *ipLimiter) allow(c clientID) (bool, time.Duration) {
+// allow takes one token for c, or reports how long until one is available
+// and whether this refusal starts a run of refusals (the one to log, so a
+// client over its limit cannot fill the log faster than its own rate).
+func (l *ipLimiter) allow(c clientID) (ok bool, wait time.Duration, first bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
@@ -92,9 +97,12 @@ func (l *ipLimiter) allow(c clientID) (bool, time.Duration) {
 	b.last = now
 	if b.tokens >= 1 {
 		b.tokens--
-		return true, 0
+		b.refusing = false
+		return true, 0, false
 	}
-	return false, time.Duration((1 - b.tokens) / l.rate * float64(time.Second))
+	first = !b.refusing
+	b.refusing = true
+	return false, time.Duration((1 - b.tokens) / l.rate * float64(time.Second)), first
 }
 
 // makeRoom keeps the table below maxTrackedClients: buckets that have

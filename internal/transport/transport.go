@@ -90,7 +90,7 @@ func New(cfg *config.Config, mcp http.Handler, opts *Options) (*http.Server, err
 	var chain http.Handler = protected
 	chain = am.Handler(chain)
 	chain = hostOrigin(cfg.AllowedHosts, cfg.AllowedOrigins, clientKey, o.Logger, chain)
-	chain = rateLimit(rate, clientKey, chain)
+	chain = rateLimit(rate, clientKey, o.Logger, chain)
 	chain = bodyCap(chain)
 
 	mux := http.NewServeMux()
@@ -124,9 +124,17 @@ func bodyCap(next http.Handler) http.Handler {
 	})
 }
 
-func rateLimit(l *ipLimiter, key func(*http.Request) clientID, next http.Handler) http.Handler {
+// rateLimit is the global per-client token bucket, applied to every request
+// whatever its credentials. The first refusal of each run is logged at WARN
+// by reason and client, so a 429 from here is told apart from the auth
+// lockout's.
+func rateLimit(l *ipLimiter, key func(*http.Request) clientID, logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if ok, wait := l.allow(key(r)); !ok {
+		c := key(r)
+		if ok, wait, first := l.allow(c); !ok {
+			if first {
+				logger.Warn("request refused", "reason", auth.CodeRateLimited, "client", c.String())
+			}
 			auth.RetryAfter(w, wait)
 			auth.Refuse(w, http.StatusTooManyRequests, auth.CodeRateLimited)
 			return

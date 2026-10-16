@@ -1215,3 +1215,64 @@ Every one failed: no `sshd`, `systemctl`, `systemd-run`, `ss` or `journalctl` on
 - Removing the cgroup exception outright: the probe still uses it.
 
 **Versions:** unchanged (Go 1.27.2; no dependency added).
+
+### 2026-10-16 — Auth lockout counts only wrong credentials; client elicitation results recorded (PR #16, branch fix/auth-lockout)
+**Decision:**
+- **The lockout counts only a presented credential that does not authenticate.** That means an `Authorization` header that is not a matching bearer token, a non-Bearer scheme, a malformed value (an empty value, `Bearer` with no token), or more than one `Authorization` header.
+  - A request with **no** `Authorization` header still gets the same 401, with `WWW-Authenticate: Bearer realm="shell-mcp"` and `{"error":"unauthorized"}`. It is still subject to the global per-client rate limit, but it no longer counts toward the lockout.
+  - While a client is locked, every request from it is refused with 429 before its credential is examined, credential-less ones included, as before.
+  - Status codes and bodies are unchanged. ARCHITECTURE §3, SECURITY §2 (the brute-force row), plan S-03 and the `internal/auth` package doc now say exactly what counts and why.
+- **Logging.** The WARN line `authentication failed` keeps its `reason` (`missing`, `several Authorization headers`, `not a bearer credential`, `invalid token`) and gains `counts_toward_lockout` (bool). Credential-less requests are not counted, but they are still logged.
+- **The global rate limiter now logs.** Until now its 429 was silent, so a log could not tell it from the lockout's 429. It now logs `request refused` with `reason: rate_limited` and the client. It logs once per run of refusals: the first refusal after an allowed request. So a client over its limit adds at most about one line per refill, bounded by `SHELL_MCP_RATE_LIMIT_PER_MIN`, never one line per refused request. The limiter's behaviour (bucket, burst, `Retry-After`, table bound) is unchanged.
+
+**Why:** In the maintainer's live client test on 2026-10-16, mcp-remote 0.15.1 (Claude Desktop's bridge) locked itself out of a freshly started server.
+- Before connecting, it probes OAuth discovery endpoints without credentials. Each probe correctly got 401.
+- Desktop started the bridge twice, and ten credential-less requests arrived. The lockout fired, and the second bridge died on 429.
+- The same rule let anyone sharing a legitimate client's address (a NAT, an IPv6 /64) lock that client out without guessing anything.
+
+The lockout exists to stop token guessing, and a request without a credential guesses nothing. Anyone sharing the address can still lock the client out, but only by presenting ten wrong credentials (SECURITY §2).
+
+**Tests (committed failing first, `08ad87b`):**
+- `TestCredentialLessRequestsDoNotCountTowardLockout`: 20 credential-less requests (MCP POSTs and `/.well-known/oauth-protected-resource` GETs) from one address, then the valid token succeeds. On the old code the 11th request got 429.
+- `TestWrongTokenLockoutControl`: 10 wrong tokens still lock the client out (`Retry-After` ~300 s), and a credential-less request is refused while locked. On the old code it failed only on the new log field: the control behaviour already held.
+- `TestMixedFailuresOnlyWrongCredentialsCount`: 15 credential-less and 9 wrong-token requests, interleaved, cause no lockout; the 10th wrong token then triggers it. On the old code the 11th request got 429.
+- `TestPresentedBadCredentialsCount`: each of `Bearer` with no token, an empty value, `Bearer` plus two spaces, a non-Bearer scheme, a bare token, and two `Authorization` headers locks the client out after 10. On the old code it failed only on the log field.
+- `TestCredentialLessBeyondRateLimitIsTheRateLimiter`: at 5 requests a minute, 5 credential-less 401s, then 5 × 429 from the rate limiter (no `WWW-Authenticate`). The log has exactly one `request refused`/`rate_limited` line for the client and no lockout line, and every failure line says `counts_toward_lockout: false`. After the refill the valid token is served. On the old code there was no rate-limiter line.
+- Existing tests that relied on credential-less requests counting now present a wrong token: the window test, the `X-Forwarded-For` spoofing test's lockout half, and the limiter-memory bound, which now really fills the auth table.
+
+**Elicitation: what the live test showed** (maintainer, 2026-10-16, diagnostic build `shellmcp_diag`; observations, not inferences). These results take the place of the "a live test by the maintainer will confirm" note in the server-core entry's elicitation research.
+- **Claude Code 2.1.299 in the Desktop app's Code tab.**
+  - It used protocol revision 2026-07-28 and declared `elicitation` (form and URL).
+  - Round 2 arrived with the request state echoed unchanged, but the answer was `decline`, within the same second: both tool calls were logged 0 ms apart. The user was shown no question.
+  - The only dialog the user saw was the client's tool-permission prompt (Deny / Always allow).
+  - So approval-gated operations would get `approval_declined` there.
+- **Claude Desktop chat through mcp-remote 0.15.1 `--protocol auto`.**
+  - It connected, but Desktop's own `initialize` declared only `roots` and an `extensions` entry, with no `elicitation`.
+  - So approval-gated operations get `approval_unavailable` there, unless the operator enables `SHELL_MCP_APPROVAL_FALLBACK=confirm-argument`.
+- **Today, approvals reach a human through neither client.** D-006 is unchanged and still fails closed. `docs/TOOLS.md`'s approval section records the table.
+- **plan §5 gains S4b-scope**, a scoping session before S4b, which produces a handoff doc on how approvals reach a human. It covers:
+  - why the Code tab declines automatically, verified at the source (Claude Code docs, changelog, the Code tab's behaviour);
+  - URL-mode elicitation to a server-hosted approval page behind the operator's own sign-in;
+  - the confirm-argument fallback and its weakness;
+  - an out-of-band channel (an approval inbox or a push notification).
+
+  S5's `docs/CLIENTS.md` carries the client matrix forward.
+
+**Alternatives rejected:**
+- Exempting only the OAuth discovery paths from counting. A path list is a guess about one client, and a bare POST to `/mcp` guesses nothing either.
+- Returning something other than 401 for credential-less requests: it changes the documented response, and clients rely on the 401 and `WWW-Authenticate` to learn that a token is needed.
+- A separate, looser counter for credential-less requests. The global per-client limiter already bounds them.
+- Logging every rate-limited refusal: a client over its limit could then write log lines as fast as it can send requests.
+- Resetting the failure count on a successful authentication: not asked for, and it would change the lockout beyond this fix.
+
+**Deferred / follow-ups:**
+- S4b-scope, then S4b. No approval design or code in this PR.
+- OAuth support and OAuth metadata endpoints remain out of scope (plan §6); credential-less discovery probes keep getting 401.
+- S5: `docs/CLIENTS.md` with the client matrix.
+
+**Versions:**
+- **Go:** 1.27.2, still the newest stable per go.dev (go1.27.2, go1.26.9 listed).
+- **Refresh:** `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.14.0, govulncheck v1.9.0.

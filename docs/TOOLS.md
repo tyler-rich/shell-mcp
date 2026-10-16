@@ -10,6 +10,15 @@ Common optional inputs on tools that run a process: `timeout_seconds` (1..`SHELL
 
 **Approval (D-006).** Destructive tools, privileged tools of tier operator or above, and any tier listed in `SHELL_MCP_APPROVAL_TIERS` run in two round trips: the first call returns `input_required` with an elicitation that shows the computed preview and asks the user to approve; the client retries with the user's answer and the bound `requestState`. Declined → `approval_declined`; stale, altered or replayed → `approval_invalid`; client without elicitation → `approval_unavailable` unless the operator set `SHELL_MCP_APPROVAL_FALLBACK=confirm-argument`, in which case (and only then) the tools expose a `confirm` argument.
 
+**Observed client behaviour (live test by the maintainer, 2026-10-16, with the diagnostic build).** These are observations, not inferences. **Today, approvals reach a human through neither client.**
+
+| Client (version) | Protocol revision | Declared | What happened | Consequence for an approval-gated tool (D-006) |
+|---|---|---|---|---|
+| Claude Code 2.1.299, in the Claude Desktop app's Code tab | 2026-07-28 | `elicitation` (form and URL) | Round 2 arrived with the request state echoed unchanged, but the answer was `decline`. It came within the same second: both tool calls were logged 0 ms apart. The user was shown no question. The only dialog the user saw was the client's own tool-permission prompt (Deny / Always allow). | `approval_declined` |
+| Claude Desktop chat through mcp-remote 0.15.1 `--protocol auto` | Desktop to mcp-remote: stdio `initialize`; mcp-remote to the server: `--protocol auto` | Desktop's own `initialize` declared only `roots` and an `extensions` entry, with no `elicitation` | The bridge connected. Desktop declared no elicitation, so it has nothing to show an approval question with. | `approval_unavailable`, or the `confirm` argument if the operator set the fallback |
+
+How approvals should reach a human is the subject of the S4b-scope session (plan §5) before any approval code is written. `docs/CLIENTS.md` (S5) carries this matrix forward.
+
 ## Read tier (profile ≥ `read-only`)
 
 | Tool | Gate op | Inputs | Notes | Session |
