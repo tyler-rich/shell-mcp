@@ -927,3 +927,29 @@ Both raise the test's own soft limits to the hard limits first, so an unlimited 
 **Deferred / follow-ups:** none.
 
 **Versions:** Go 1.27.2 (newest stable; `deps-current` passes). Direct modules unchanged: go-landlock v0.10.1, go-sdk v1.8.0, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0. Tools: golangci-lint v2.14.0, govulncheck v1.9.0. No dependency added.
+
+### 2026-10-16 — The exec trampoline refuses a privileged exec (AT_SECURE) (PR #14 follow-up)
+**Decision (maintainer request):** the trampoline also refuses, right after the argument check and before anything else, when `AT_SECURE` in its auxiliary vector is non-zero, or when the vector cannot be read or lacks the entry.
+- **Source of the value.** It comes from `unix.Auxv()` (x/sys v0.49.0, `auxv.go`), which returns the vector the Go runtime received from the kernel through `runtime.getAuxv`. No `/proc` read is involved, which matters because the helper's core unit hides `/proc/self` from its children.
+- **The tag** is 23 (`linux/auxvec.h`; Go's `runtime/os_linux.go` uses the same `_AT_SECURE = 23`).
+- **The refusal** is "it gained privileges when executed (AT_SECURE)", with exit 125 and nothing read, like the other refusals.
+
+**Why this is what makes the marker safe for local users:**
+- **The other checks prove only the shape of the start.** One argument, an empty environment, the main thread, no terminal, and an fd 3 that is a Unix stream socket whose peer is the parent under the same uid. They prove the trampoline was started *the way Run starts it*, not *by the gate*.
+- **A local user can produce exactly that shape.** Any local user who can execute the gate binary can make a socketpair, start the binary with the marker and an empty environment, and send it a command.
+- **That gains them nothing while no privilege changes.** The trampoline then runs as that user, with that user's privileges, and runs a command they could have run themselves. That holds while the binary is installed as documented: `root:root 0755`, no set-user-ID or set-group-ID bit, no file capabilities.
+- **AT_SECURE closes the remaining case.** Per `getauxval(3)` (man7.org), it is non-zero when the exec was of a set-user-ID or set-group-ID binary, gained capabilities from file capabilities, or an LSM asked for secure mode. If the gate or helper binary ever carried such privileges, through a mistaken install or a package, a local user could otherwise have it run an arbitrary command with them. The trampoline now refuses before reading anything.
+- **The real gate and helper are unaffected.** The gate runs as the service user from a plain binary, and the helper runs as root from a plain binary with its real and effective ids equal. e2e `TestHelperExecTrampoline` and every helper `priv_exec` e2e test pass in the core and broad units, so `AT_SECURE` is 0 there.
+
+**Tests:**
+- Committed first and shown failing (`390d990`). The env field and the vector reader came first, without the refusal. The "privileged exec (AT_SECURE)" and "auxiliary vector unreadable" cases of `TestTrampolineRefusal` (fake values) then failed with `refusal "", want "it gained privileges when executed (AT_SECURE)"`.
+- `TestAuxvSecure` reads fake vectors: set, clear, and missing (an error, so a refusal).
+- `TestLiveAuxvNotSecure` is the control: the test binary's own vector reads 0.
+- A real set-user-ID test is not possible on the test hosts (no privilege to install one), so the check is injected.
+
+**Alternatives rejected:**
+- Reading `/proc/self/auxv`: hidden inside the helper's core unit.
+- Comparing real and effective ids: misses file capabilities and LSM-requested secure mode, which `AT_SECURE` covers.
+- A separate marker secret passed by the parent: any local user who can read the binary could reproduce it, so it adds nothing to the AT_SECURE check.
+
+**Versions:** unchanged (Go 1.27.2; x/sys v0.49.0). No dependency added.
