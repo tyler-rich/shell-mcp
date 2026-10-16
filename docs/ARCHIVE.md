@@ -1001,7 +1001,7 @@ Both raise the test's own soft limits to the hard limits first, so an unlimited 
 
 **Versions:** unchanged (Go 1.27.2; x/sys v0.49.0). No dependency added.
 
-### 2026-10-16 — MCP server core: auth, transport, SSH client, gate client, CLI (PR #TBD, branch feat/server-core)
+### 2026-10-16 — MCP server core: auth, transport, SSH client, gate client, CLI (PR #15, branch feat/server-core)
 **Decision:** Build the server half of plan §5 S2:
 - **Transport and auth** (`internal/transport`, `internal/auth`): the middleware chain in front of the SDK's stateless Streamable HTTP handler; S0's "bearer auth arrives in Session 2" refusal is removed.
 - **SSH client** (`internal/sshx`): typed host-key pins, `HostKeyAlgorithms` derived from the pinned types, an Ed25519 client key, bounded sessions, keepalives and a reconnect backoff.
