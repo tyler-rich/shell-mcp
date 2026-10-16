@@ -561,14 +561,16 @@ func validHost(h string) bool {
 }
 
 // ValidFingerprint reports whether fp is an OpenSSH SHA-256 fingerprint:
-// "SHA256:" followed by the unpadded standard base64 of 32 bytes.
+// "SHA256:" followed by the unpadded standard base64 of 32 bytes, in its
+// canonical form (the decoder skips \r and \n, so the value must also
+// re-encode to itself).
 func ValidFingerprint(fp string) bool {
 	b64, ok := strings.CutPrefix(fp, "SHA256:")
 	if !ok {
 		return false
 	}
 	raw, err := base64.RawStdEncoding.Strict().DecodeString(b64)
-	return err == nil && len(raw) == 32
+	return err == nil && len(raw) == 32 && base64.RawStdEncoding.EncodeToString(raw) == b64
 }
 
 func (l *loader) sharedKey() (*PrivateKey, error) {
