@@ -1031,6 +1031,7 @@ Both raise the test's own soft limits to the hard limits first, so an unlimited 
 4. **Origin allow-list → 403 `origin_not_allowed`.** A request carrying an `Origin` not on the list is refused, and so is one with several `Origin` headers. An empty list refuses every `Origin`, `null` included.
    - Why 403: the name was right but the browser context is not allowed.
    - The check applies in `none` mode on loopback too, the rebinding case.
+   - Both refusals are logged at WARN by reason and client only, never with the `Host` or `Origin` value, which the requester controls. CodeQL (`go/log-injection`, `go/clear-text-logging`) flagged the first version, which logged the values. `TestRefusedHeaderValuesNeverLogged` was committed failing first.
 5. **Bearer auth → 401 `unauthorized`** with `WWW-Authenticate: Bearer realm="shell-mcp"`. It needs exactly one `Authorization` header, of the form `Bearer <token>`: the scheme is case-insensitive and is followed by exactly one space.
    - The comparison is constant-time over SHA-256 digests. `config.Secret.Equal` changed, so neither the token's length nor a prefix leaks.
    - 10 failures by one client within 5 minutes lock that client out with 429 `rate_limited` for 5 minutes. While locked, even a valid token is refused, before it is examined. Both the failure and the lockout are logged at WARN with the client prefix and a fixed reason, never the header.

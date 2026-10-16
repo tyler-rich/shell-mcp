@@ -38,10 +38,9 @@ const HealthzPath = "/healthz"
 
 // Refusal codes written by this package (auth writes its own).
 const (
-	codeTooLarge   = "request_too_large"
-	codeHost       = "host_not_allowed"
-	codeOrigin     = "origin_not_allowed"
-	maxLoggedValue = 128
+	codeTooLarge = "request_too_large"
+	codeHost     = "host_not_allowed"
+	codeOrigin   = "origin_not_allowed"
 )
 
 var healthzBody = []byte(`{"status":"ok"}`)
@@ -139,29 +138,24 @@ func rateLimit(l *ipLimiter, key func(*http.Request) clientID, next http.Handler
 // hostOrigin is the DNS-rebinding defence (S-02), applied whatever the
 // SDK's own defaults are: a Host not on the allow-list is 421 Misdirected
 // Request (this server does not answer for that name); a request carrying
-// an Origin not on the allow-list (or several Origin headers) is 403.
+// an Origin not on the allow-list (or several Origin headers) is 403. A
+// refusal is logged by reason and client only: the header values are the
+// requester's and never reach the log.
 func hostOrigin(hosts, origins []string, key func(*http.Request) clientID, logger *slog.Logger, next http.Handler) http.Handler {
 	allowedHosts := parseHostList(hosts)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !hostAllowed(r.Host, allowedHosts) {
-			logger.Warn("request refused", "reason", codeHost, "client", key(r).String(), "host", truncate(r.Host))
+			logger.Warn("request refused", "reason", codeHost, "client", key(r).String())
 			auth.Refuse(w, http.StatusMisdirectedRequest, codeHost)
 			return
 		}
 		if vals := r.Header.Values("Origin"); len(vals) > 0 && (len(vals) > 1 || !originAllowed(vals[0], origins)) {
-			logger.Warn("request refused", "reason", codeOrigin, "client", key(r).String(), "origin", truncate(vals[0]))
+			logger.Warn("request refused", "reason", codeOrigin, "client", key(r).String())
 			auth.Refuse(w, http.StatusForbidden, codeOrigin)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-func truncate(s string) string {
-	if len(s) > maxLoggedValue {
-		return s[:maxLoggedValue]
-	}
-	return s
 }
 
 // healthz reports liveness only: no version, configuration or target state.
