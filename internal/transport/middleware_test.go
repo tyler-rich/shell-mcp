@@ -101,7 +101,10 @@ type req struct {
 	contentLength                                  int64
 	chunked                                        bool
 	noAuth                                         bool
-	emptyHost                                      bool
+	// authHeaders, when non-nil, are the request's Authorization headers
+	// verbatim (several, or one with an empty value), instead of auth.
+	authHeaders []string
+	emptyHost   bool
 	// extraXFF adds further X-Forwarded-For headers after headers\'.
 	extraXFF []string
 }
@@ -144,6 +147,10 @@ func (e *env) do(r *req) *result {
 	}
 	switch {
 	case r.noAuth:
+	case r.authHeaders != nil:
+		for _, v := range r.authHeaders {
+			hr.Header.Add("Authorization", v)
+		}
 	case r.auth != "":
 		hr.Header.Set("Authorization", r.auth)
 	default:
@@ -435,7 +442,7 @@ func TestAuthFailureLockout(t *testing.T) {
 
 func TestAuthFailuresOutsideWindowDoNotCount(t *testing.T) {
 	e := newEnv(t, bearerConfig(t))
-	bad := req{noAuth: true}
+	bad := req{auth: "Bearer wrong-token-0123456789abcdefghijklmnopqrstuvwxyz"}
 	for range 9 {
 		e.wantRefused(e.do(&bad), http.StatusUnauthorized, bodyUnauthorized)
 	}
@@ -486,7 +493,7 @@ func TestSpoofedXForwardedForFromNonProxyPeerIgnored(t *testing.T) {
 	cfg.RateLimitPerMin = 1000
 	e = newEnv(t, cfg)
 	for i := range 10 {
-		e.wantRefused(e.do(&req{remote: attacker, noAuth: true, headers: xff(fmt.Sprintf("203.0.113.%d", i))}), http.StatusUnauthorized, bodyUnauthorized)
+		e.wantRefused(e.do(&req{remote: attacker, auth: "Bearer wrong", headers: xff(fmt.Sprintf("203.0.113.%d", i))}), http.StatusUnauthorized, bodyUnauthorized)
 	}
 	e.wantRefused(e.do(&req{remote: attacker, headers: xff("203.0.113.200")}), http.StatusTooManyRequests, bodyRateLimited)
 	if !strings.Contains(e.logs.String(), "192.0.2.66") || strings.Contains(e.logs.String(), "203.0.113.") {
@@ -531,7 +538,7 @@ func TestLimiterMemoryIsBounded(t *testing.T) {
 	cfg := bearerConfig(t)
 	e := newEnv(t, cfg)
 	for i := range maxTrackedClients + 500 {
-		_ = e.do(&req{remote: fmt.Sprintf("198.%d.%d.%d:1", 18+(i>>16&1), i>>8&0xff, i&0xff), noAuth: true})
+		_ = e.do(&req{remote: fmt.Sprintf("198.%d.%d.%d:1", 18+(i>>16&1), i>>8&0xff, i&0xff), auth: "Bearer wrong"})
 	}
 	if n := trackedClients(e.h); n > 2*maxTrackedClients {
 		t.Fatalf("tracking %d clients, bound is %d per limiter", n, maxTrackedClients)
