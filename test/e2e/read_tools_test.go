@@ -117,22 +117,22 @@ func makeFixtures(t *testing.T) error {
 	if err != nil {
 		return err
 	}
-	if err = os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); err != nil { //nolint:gosec // G306: public certificate
-		return err
+	if cerr := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o644); cerr != nil { //nolint:gosec // G306: public certificate
+		return cerr
 	}
 	kd, err := x509.MarshalPKCS8PrivateKey(k)
 	if err != nil {
 		return err
 	}
-	if err = os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: kd}), 0o644); err != nil { //nolint:gosec // G306: a throwaway key the gate must refuse to show
-		return err
+	if kerr := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: kd}), 0o644); kerr != nil { //nolint:gosec // G306: a throwaway key the gate must refuse to show
+		return kerr
 	}
 
 	// The repository: cloned from a local HTTPS server, one commit behind
 	// its upstream after a fetch over HTTPS, one local commit ahead, and an
 	// uncommitted change carrying the token.
-	if err = os.RemoveAll(readRepo); err != nil {
-		return err
+	if rerr := os.RemoveAll(readRepo); rerr != nil {
+		return rerr
 	}
 	g := gatetest.NewGitServer(t)
 	ca := filepath.Join(t.TempDir(), "ca.pem")
