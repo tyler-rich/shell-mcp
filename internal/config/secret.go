@@ -88,3 +88,10 @@ func (k *PrivateKey) MarshalText() ([]byte, error) { return []byte(k.Fingerprint
 
 // LogValue implements slog.LogValuer.
 func (k *PrivateKey) LogValue() slog.Value { return slog.StringValue(k.Fingerprint()) }
+
+// PrivateKeyFromSigner wraps a signer that was parsed elsewhere (tests and
+// tools that already hold one). Load enforces the Ed25519 rule for
+// configured keys; the SSH client checks it again.
+func PrivateKeyFromSigner(s ssh.Signer) *PrivateKey {
+	return &PrivateKey{signer: s, fingerprint: ssh.FingerprintSHA256(s.PublicKey())}
+}
