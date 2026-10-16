@@ -133,9 +133,14 @@ func (h *harness) call(name string, args any) (map[string]any, *mcp.CallToolResu
 	if !ok {
 		h.t.Fatalf("content is %T", res.Content[0])
 	}
+	// The text block is a one-line summary, then the same envelope JSON.
+	summary, body, ok := strings.Cut(text.Text, "\n")
 	var fromText map[string]any
-	if err := json.Unmarshal([]byte(text.Text), &fromText); err != nil || fmt.Sprint(fromText) != fmt.Sprint(env) {
-		h.t.Fatalf("text content is not the envelope: %q", text.Text)
+	if !ok || summary == "" || strings.HasPrefix(summary, "{") {
+		h.t.Fatalf("text content does not start with a summary line: %q", text.Text)
+	}
+	if err := json.Unmarshal([]byte(body), &fromText); err != nil || fmt.Sprint(fromText) != fmt.Sprint(env) {
+		h.t.Fatalf("text content after the summary is not the envelope: %q", text.Text)
 	}
 	if res.IsError == (env["ok"] == true) {
 		h.t.Fatalf("isError %v but ok %v", res.IsError, env["ok"])

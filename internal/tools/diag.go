@@ -61,7 +61,7 @@ func registerDiag(r *Registry, d *Deps) error {
 		if res != nil {
 			return res, nil
 		}
-		return result(env)
+		return result(env, summarize[DiagData](env, nil))
 	}
 	return r.Register(Tool{Def: def, Install: func(s *mcp.Server) { s.AddTool(def, handler) }}, TierRead, false)
 }

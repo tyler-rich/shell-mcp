@@ -133,7 +133,7 @@ func TestCheckReportsEachTarget(t *testing.T) {
 		tg.Sandbox == nil || tg.Sandbox.KernelABI != 7 || tg.Sandbox.EffectiveABI != 7 || tg.Sandbox.Mode != "required" {
 		t.Fatalf("target report: %s", raw)
 	}
-	if strings.Join(withoutDiag(tg.Tools), ",") != "shell_get_policy,shell_list_targets" {
+	if strings.Join(withoutDiag(tg.Tools), ",") != readOnlyTools {
 		t.Fatalf("effective tools %v", tg.Tools)
 	}
 	if strings.Contains(raw, testToken) {
@@ -226,7 +226,7 @@ func exercise(t *testing.T, cs *mcp.ClientSession) {
 	for _, tool := range lt.Tools {
 		names = append(names, tool.Name)
 	}
-	if strings.Join(withoutDiag(names), ",") != "shell_get_policy,shell_list_targets" {
+	if strings.Join(withoutDiag(names), ",") != readOnlyTools {
 		t.Fatalf("tools %v", names)
 	}
 	res, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "shell_get_policy", Arguments: map[string]any{}})
@@ -340,6 +340,12 @@ func TestStdioRefusesBearer(t *testing.T) {
 
 // withoutDiag drops the diagnostic build's tool, so these tests hold in
 // both builds.
+// readOnlyTools is the read-only profile's catalogue, sorted.
+const readOnlyTools = "shell_find_files,shell_get_disk_usage,shell_get_git_diff,shell_get_git_log,shell_get_git_status," +
+	"shell_get_journal,shell_get_policy,shell_get_service_status,shell_get_system_info,shell_inspect_certificate," +
+	"shell_list_directory,shell_list_processes,shell_list_services,shell_list_targets,shell_read_file," +
+	"shell_run_read_command,shell_stat_path"
+
 func withoutDiag(names []string) []string {
 	out := []string{}
 	for _, n := range names {

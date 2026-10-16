@@ -14,6 +14,7 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/envelope"
 	"github.com/tyler-rich/shell-mcp/internal/gateclient"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
+	"github.com/tyler-rich/shell-mcp/internal/redact"
 )
 
 // Deps are what tools need at call time. A zero Deps is enough to build the
@@ -27,6 +28,13 @@ type Deps struct {
 	Principal      auth.Principal
 	Logger         *slog.Logger
 	DefaultTimeout time.Duration
+	// MaxTimeout bounds a tool's timeout_seconds (SHELL_MCP_MAX_TIMEOUT).
+	MaxTimeout time.Duration
+	// MaxOutputBytes caps what a tool returns per output stream
+	// (SHELL_MCP_MAX_OUTPUT_BYTES).
+	MaxOutputBytes int
+	// Redactor holds the built-in rules and SHELL_MCP_REDACT_PATTERNS.
+	Redactor *redact.Redactor
 }
 
 // Catalogue returns the registry of every tool this binary knows, each with
@@ -39,6 +47,21 @@ func Catalogue(d *Deps) (*Registry, error) {
 	}{
 		{listTargets(d), TierRead},
 		{getPolicy(d), TierRead},
+		{getSystemInfo(d), TierRead},
+		{getDiskUsage(d), TierRead},
+		{listProcesses(d), TierRead},
+		{getServiceStatus(d), TierRead},
+		{listServices(d), TierRead},
+		{getJournal(d), TierRead},
+		{listDirectory(d), TierRead},
+		{statPath(d), TierRead},
+		{readFile(d), TierRead},
+		{findFiles(d), TierRead},
+		{inspectCertificate(d), TierRead},
+		{getGitStatus(d), TierRead},
+		{getGitLog(d), TierRead},
+		{getGitDiff(d), TierRead},
+		{runReadCommand(d), TierRead},
 	} {
 		if err := r.Register(reg.tool, reg.tier, false); err != nil {
 			return nil, err

@@ -153,6 +153,57 @@ gate_policy '"example-app.service", "example-other.service"' 'restart, reload, s
 gate_policy '"example-app.service"' 'restart, reload' >"$bin/gate-rule.yaml"
 chmod 0644 /etc/shell-mcp/gate.yaml "$bin/gate-rule.yaml"
 
+# The read tools' policy (read_tools_test.go), selected by its own SSH key
+# (principal e2e-read). max_tier is operator and it declares one operator
+# command, so the tests can show that shell_run_read_command, not the gate,
+# refuses it. Its git remote is never contacted: the read ops are local.
+cat >/etc/shell-mcp/gate-read.yaml <<EOF
+version: 1
+max_tier: operator
+sandbox:
+  landlock: $landlock
+paths:
+  read: [/srv/example-app]
+  deny: ["/srv/example-app/tree/private/**"]
+services:
+  status: ["example-*.service"]
+journal:
+  units: ["example-app.service", "example-journal.service"]
+  max_lines: 200
+git:
+  repos:
+    - path: /srv/example-app/repo
+      remote: https://git.example.test/example-app.git
+commands:
+  - id: probe-echo
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["echo", "{regex:^[A-Za-z0-9_-]{1,80}\$}"]]
+  - id: probe-exit
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["exit", "{int:0-3}"]]
+  - id: probe-operator
+    path: /usr/local/bin/example-probe
+    tier: operator
+    templates: [["echo", "operator"]]
+EOF
+chmod 0644 /etc/shell-mcp/gate-read.yaml
+/usr/local/bin/shell-mcp-gate check-policy --policy /etc/shell-mcp/gate-read.yaml >/dev/null
+
+# Static read-tool fixtures: a tree with a directory symlink whose target is
+# absolute (os.Root refuses to follow it), a file on the built-in deny list
+# and one under the policy's deny pattern. Fixtures with token- or key-shaped
+# content, the certificate and the git repository are made by the tests.
+fx=/srv/example-app
+rm -rf "$fx"
+install -o root -g root -m 0755 -d "$fx" "$fx/tree" "$fx/tree/sub" "$fx/tree/private" "$fx/certs"
+printf 'one\ntwo\nthree\n' >"$fx/tree/sub/file.txt"
+printf 'machine example.test\n' >"$fx/tree/.netrc"
+printf 'denied by the policy\n' >"$fx/tree/private/note.txt"
+chmod 0644 "$fx/tree/sub/file.txt" "$fx/tree/.netrc" "$fx/tree/private/note.txt"
+ln -s "$fx/tree/sub" "$fx/tree/abs-link"
+
 # priv_policy <extra line for probe-signal> <extra line for probe-broad> <allow_upgrade>
 priv_policy() {
 	cat <<EOF
@@ -288,11 +339,14 @@ if [ -x /usr/sbin/sshd ]; then
 	ssh-keygen -q -t ecdsa -b 256 -N '' -C e2e-host-ecdsa -f "$sd/ssh_host_ecdsa_key"
 	ssh-keygen -q -t ed25519 -N '' -C e2e-client -f "$bin/e2e-client-key"
 	ssh-keygen -q -t ed25519 -N '' -C e2e-client-other-from -f "$bin/e2e-client-key-other-from"
-	chmod 0600 "$bin/e2e-client-key" "$bin/e2e-client-key-other-from"
+	ssh-keygen -q -t ed25519 -N '' -C e2e-client-read -f "$bin/e2e-client-key-read"
+	chmod 0600 "$bin/e2e-client-key" "$bin/e2e-client-key-other-from" "$bin/e2e-client-key-read"
 	forced='command="/usr/local/bin/shell-mcp-gate serve --policy /etc/shell-mcp/gate.yaml --principal e2e-ssh"'
+	forced_read='command="/usr/local/bin/shell-mcp-gate serve --policy /etc/shell-mcp/gate-read.yaml --principal e2e-read"'
 	{
 		printf 'restrict,from="127.0.0.1",%s %s\n' "$forced" "$(cut -d' ' -f1,2 "$bin/e2e-client-key.pub")"
 		printf 'restrict,from="192.0.2.1",%s %s\n' "$forced" "$(cut -d' ' -f1,2 "$bin/e2e-client-key-other-from.pub")"
+		printf 'restrict,from="127.0.0.1",%s %s\n' "$forced_read" "$(cut -d' ' -f1,2 "$bin/e2e-client-key-read.pub")"
 	} >"$sd/authorized_keys.d/svc-shell"
 	chmod 0644 "$sd/authorized_keys.d/svc-shell"
 	printf '%s\n' \
