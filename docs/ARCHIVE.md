@@ -1523,7 +1523,7 @@ The message says approval arrives in a later release. Read tools are never guard
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.14.0, govulncheck v1.9.0.
 
-### 2026-10-16 — The intermittent pdeathsig:0 was the probe's reading; kill-on-death tests (PR #n, branch fix/trampoline-pdeathsig)
+### 2026-10-16 — The intermittent pdeathsig:0 was the probe's reading; kill-on-death tests (PR #20, branch fix/trampoline-pdeathsig)
 **The failure (S4a entry):** `TestIntegrationSandboxTrampoline` read `pdeathsig:0` once on ubuntu-24.04 (Landlock ABI 7, psx) and passed on rerun. It was treated as a possible race in the parent-death guarantee until proven otherwise.
 
 **Cause: the probe read the value off the main thread.** The command always had `SIGKILL` on its main thread.
