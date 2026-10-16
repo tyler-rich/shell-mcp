@@ -452,7 +452,7 @@ func wrongUnit(t *testing.T, socket, op string, args any) {
 	t.Helper()
 	a, _ := json.Marshal(args)
 	id := newID()
-	out := directTo(t, svcShell, socket, fmt.Sprintf(`{"v":1,"id":%q,"op":%q,"args":%s,"timeout_ms":30000}`+"\n", id, op, a))
+	out := directTo(t, svcShell, socket, fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":%q,"args":%s,"timeout_ms":30000}`+"\n", id, op, a))
 	var r response
 	if err := json.Unmarshal([]byte(out), &r); err != nil || r.code() != "helper_wrong_unit" || r.ID != id {
 		t.Fatalf("%s %s on %s: %q", op, a, socket, out)

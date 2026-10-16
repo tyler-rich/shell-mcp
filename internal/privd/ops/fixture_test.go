@@ -195,7 +195,7 @@ commands:
   - id: probe-op
     path: %s
     tier: operator
-    templates: [["echo", "operator"]]
+    templates: [["echo", "operator"], ["write", "{path:write}"]]
 `, f.uid, f.read, f.write, f.read, f.probe, f.probe)
 	for _, o := range opts {
 		o(f, &y)
@@ -329,7 +329,7 @@ type m = map[string]any
 
 func request(op string, args any) string {
 	a, _ := json.Marshal(args)
-	return fmt.Sprintf(`{"v":1,"id":%q,"op":%q,"args":%s,"timeout_ms":5000}`+"\n", reqID, op, a)
+	return fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":%q,"args":%s,"timeout_ms":5000}`+"\n", reqID, op, a)
 }
 
 func (f *fixture) serve(op string, args any) response {

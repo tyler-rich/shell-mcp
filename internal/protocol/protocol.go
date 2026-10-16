@@ -173,6 +173,7 @@ var PrivOps = []string{
 type Request struct {
 	V         int            `json:"v"`
 	ID        string         `json:"id"`
+	Ceiling   string         `json:"ceiling"`
 	Op        string         `json:"op"`
 	Args      jsontext.Value `json:"args,omitzero"`
 	TimeoutMS int64          `json:"timeout_ms,omitzero"`

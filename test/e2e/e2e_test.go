@@ -185,13 +185,20 @@ func (r *response) code() string {
 	return r.Error.Code
 }
 
-// gate runs the real gate as uid with one request and returns its answer
-// and the request id.
+// gate runs the real gate as uid with one request at ceiling destructive
+// (the policies' max_tier then decides) and returns its answer and the
+// request id.
 func gate(t *testing.T, uid uint32, op string, args any) (resp response, requestID string) {
+	t.Helper()
+	return gateAt(t, uid, "destructive", op, args)
+}
+
+// gateAt is gate with the request's tier ceiling.
+func gateAt(t *testing.T, uid uint32, ceiling, op string, args any) (resp response, requestID string) {
 	t.Helper()
 	id := newID()
 	a, _ := json.Marshal(args)
-	req := fmt.Sprintf(`{"v":1,"id":%q,"op":%q,"args":%s,"timeout_ms":30000}`+"\n", id, op, a)
+	req := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":%q,"op":%q,"args":%s,"timeout_ms":30000}`+"\n", id, ceiling, op, a)
 	cmd := exec.CommandContext(t.Context(), gateBin, "serve", "--policy", gatePolicy, "--principal", "e2e")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, uid)}
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin"}
@@ -486,7 +493,7 @@ func TestHelperWrongPeerRefused(t *testing.T) {
 	start := time.Now()
 	mustGate(t, "priv_stat", map[string]any{"path": "/etc/example-app"}, nil) // control
 	wantGate(t, svcOther, "priv_stat", map[string]any{"path": "/etc/example-app"}, "helper_refused")
-	line := fmt.Sprintf(`{"v":1,"id":%q,"op":"priv_stat","args":{"path":"/etc/example-app"}}`+"\n", newID())
+	line := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":"priv_stat","args":{"path":"/etc/example-app"}}`+"\n", newID())
 	if out := direct(t, svcOther, line); out != "" {
 		t.Fatalf("wrong peer got %q", out)
 	}
@@ -624,7 +631,7 @@ func unitDropIn(t *testing.T, content string) {
 // serves nobody and says so in the journal.
 func TestHelperUnitClientUID(t *testing.T) {
 	line := func() string {
-		return fmt.Sprintf(`{"v":1,"id":%q,"op":"priv_stat","args":{"path":"/etc/example-app"}}`+"\n", newID())
+		return fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":"priv_stat","args":{"path":"/etc/example-app"}}`+"\n", newID())
 	}
 	if out := direct(t, svcShell, line()); !strings.Contains(out, `"ok":true`) { // control
 		t.Fatalf("client_uid got %q", out)
@@ -664,7 +671,7 @@ func TestHelperUnitClientUID(t *testing.T) {
 // from reading the credential paths in InaccessiblePaths=.
 func TestHelperSystemdConfinesWithoutOwnChecks(t *testing.T) {
 	raw := func(op, p string) string {
-		line := fmt.Sprintf(`{"v":1,"id":%q,"op":%q,"args":{"path":%q}}`+"\n", newID(), op, p)
+		line := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":%q,"args":{"path":%q}}`+"\n", newID(), op, p)
 		return direct(t, svcShell, line)
 	}
 	// The production binary has no such operation.
@@ -761,6 +768,50 @@ func TestHelperCapabilityBoundingSet(t *testing.T) {
 	target = sleeper()
 	if got := signal(target.Process.Pid); got != "SIGNALLED" {
 		t.Fatalf("with CAP_KILL: %s, want SIGNALLED", got)
+	}
+}
+
+// The request's tier ceiling reaches the helper unchanged, and the helper
+// applies it to a priv_exec command's own tier: an operator command at
+// ceiling read is refused before it runs, with the policies allowing it.
+// The command would signal a sleeping process (CAP_KILL is declared here),
+// so the process still being alive proves that nothing ran. The gate
+// refuses a fixed-tier op above the ceiling itself, before it connects.
+func TestGateCeilingPrivileged(t *testing.T) {
+	installPolicy(t, "privileged-cap-kill.yaml")
+	c := exec.CommandContext(t.Context(), "/usr/bin/sleep", "120")
+	c.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, svcOther)}
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Process.Kill(); _ = c.Wait() })
+	args := map[string]any{"command_id": "probe-signal", "args": []string{"signal", strconv.Itoa(c.Process.Pid)}}
+
+	start := time.Now()
+	r, id := gateAt(t, svcShell, "read", "priv_exec", args)
+	if r.code() != "tier_denied" || !strings.Contains(r.Error.Message, "ceiling read") {
+		t.Fatalf("operator command at ceiling read: %s %+v", r.code(), r.Error)
+	}
+	findJournal(t, "shell-mcp-privd", start, `"id":"`+id+`"`, `"outcome":"tier_denied"`)
+	if err := c.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("the refused command ran: the target is gone (%v)", err)
+	}
+
+	r, _ = gateAt(t, svcShell, "read", "priv_write_file", map[string]any{"path": "/etc/example-app/ceiling.conf", "content_b64": "eA=="})
+	if r.code() != "tier_denied" || !strings.Contains(r.Error.Message, "ceiling read") {
+		t.Fatalf("priv_write_file at ceiling read: %s %+v", r.code(), r.Error)
+	}
+	if _, err := os.Lstat("/etc/example-app/ceiling.conf"); !os.IsNotExist(err) {
+		t.Fatalf("a write refused at the gate landed: %v", err)
+	}
+
+	// Control: the same command at ceiling operator runs.
+	r, _ = gateAt(t, svcShell, "operator", "priv_exec", args)
+	var ex struct {
+		Stdout string `json:"stdout"`
+	}
+	if !r.OK || json.Unmarshal(r.Data, &ex) != nil || strings.TrimSpace(ex.Stdout) != "SIGNALLED" {
+		t.Fatalf("control at ceiling operator: %+v %s", r.Error, r.Data)
 	}
 }
 
