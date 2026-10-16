@@ -7,7 +7,9 @@
 #   - the golangci-lint or govulncheck version pinned in ci.yml and
 #     scripts/ci-local.sh differs between the two or is older than its newest
 #     stable release;
-#   - go.mod's go/toolchain line is older than the newest stable Go on go.dev.
+#   - go.mod's go/toolchain line is older than the newest stable Go on go.dev;
+#   - scripts/ci-local.sh lints with a Go older than go.mod's go/toolchain
+#     line, or with anything but golangci-lint built in the Go image.
 # Needs go, git and curl. Run from any directory; checks the module containing
 # this script unless DEPS_CURRENT_DIR names another.
 #
@@ -125,7 +127,7 @@ check_tool() {
 }
 
 lint_ci="$(awk '$1 == "GOLANGCI_LINT_VERSION:" { print $2 }' "$ci_yml" 2>/dev/null || true)"
-lint_local="$(sed -n 's#.*golangci/golangci-lint:\(v[0-9.]*\)@.*#\1#p' "$ci_local" 2>/dev/null | head -n1 || true)"
+lint_local="$(sed -n 's/^golangci_lint_version="\(v[0-9.]*\)"$/\1/p' "$ci_local" 2>/dev/null || true)"
 lint_newest="$(git ls-remote --tags --refs https://github.com/golangci/golangci-lint |
 	awk '{ sub("refs/tags/", "", $2); print $2 }' | grep -E "$stable_re" | sort -V | tail -n1 || true)"
 check_tool golangci-lint "$lint_ci" "$lint_local" "$lint_newest"
@@ -160,6 +162,40 @@ elif older "$effective" "$latest"; then
 	fail=1
 else
 	echo "deps-current: go.mod go $go_line (toolchain ${toolchain_line:-implied by go line}) matches newest stable Go $latest"
+fi
+
+# --- golangci-lint toolchain (ci-local) ----------------------------------------
+# ci-local.sh runs with GOTOOLCHAIN=local, so the Go that builds golangci-lint
+# must be able to load this module. It must build golangci-lint with `go run`
+# in the Go image (the Dockerfile's golang builder stage), never use a
+# prebuilt image that bundles its own Go, and that Go must not be older than
+# go.mod's go/toolchain line.
+lint_go_ok=1
+lint_run='in_lint() { in_go go run "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$golangci_lint_version" "$@"; }'
+if ! grep -q -x -F -- "$lint_run" "$ci_local" ||
+	! grep -q -x -F -- 'in_go() { docker run "${common[@]}" "$go_image" "$@"; }' "$ci_local" ||
+	! grep -q '^go_image="$(awk .* Dockerfile)"$' "$ci_local"; then
+	echo "deps-current: FAIL — golangci-lint in $ci_local does not run with the Go image's go (expected: $lint_run, with in_go on the Dockerfile's golang image)"
+	fail=1
+	lint_go_ok=0
+fi
+lint_steps="$(grep -c '^step "golangci-lint' "$ci_local" || true)"
+lint_steps_in_go="$(grep -c '^step "golangci-lint[^"]*" "" in_lint run ' "$ci_local" || true)"
+if [[ "$lint_steps" -eq 0 || "$lint_steps" != "$lint_steps_in_go" ]]; then
+	echo "deps-current: FAIL — golangci-lint in $ci_local does not run with the Go image's go ($lint_steps_in_go of $lint_steps lint steps use in_lint)"
+	fail=1
+	lint_go_ok=0
+fi
+go_image="$(awk 'toupper($1) == "FROM" && $2 ~ /^golang:/ { print $2; exit }' Dockerfile 2>/dev/null || true)"
+lint_go="$(sed -n 's/^golang:\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)[-@].*/\1/p' <<<"$go_image")"
+if [[ -z "$lint_go" ]]; then
+	echo "deps-current: FAIL — cannot read the Go version from the Dockerfile's golang image (got '$go_image')"
+	fail=1
+elif older "$lint_go" "$effective"; then
+	echo "deps-current: FAIL — golangci-lint in $ci_local runs on Go $lint_go, older than go.mod's go $effective"
+	fail=1
+elif [[ "$lint_go_ok" -eq 1 ]]; then
+	echo "deps-current: golangci-lint in $ci_local is built with Go $lint_go (go.mod: $effective)"
 fi
 
 exit "$fail"

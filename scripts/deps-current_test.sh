@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Proves deps-current.sh cannot pass vacuously: on a scratch copy of the
 # module it must fail when a real go.mod requirement is behind its newest
-# release, and when the go line is behind the newest stable Go. Needs go,
-# curl and network access to the module proxy.
+# release, when the go line is behind the newest stable Go, when a CI tool pin
+# is behind or drifts, and when ci-local's golangci-lint runs on a Go older than
+# go.mod's go line. Needs go, curl and network access to the module proxy.
 set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,11 +26,18 @@ expect() { # expect <name> <want-exit> <want-substring> <dir>
 	fi
 }
 
+# setup_failed <what>: a scratch copy could not be prepared; counts as a
+# failure (never a vacuous pass) and the remaining cases still run.
+setup_failed() {
+	echo "FAIL $1"
+	fail=$((fail + 1))
+}
+
 copy() {
 	local dst="$work/$1"
 	mkdir -p "$dst"
 	mkdir -p "$dst/.github/workflows" "$dst/scripts"
-	cp -R "$repo/go.mod" "$repo/go.sum" "$repo/cmd" "$repo/internal" "$dst/"
+	cp -R "$repo/go.mod" "$repo/go.sum" "$repo/Dockerfile" "$repo/cmd" "$repo/internal" "$dst/"
 	cp "$repo/.github/workflows/ci.yml" "$dst/.github/workflows/"
 	cp "$repo/scripts/ci-local.sh" "$dst/scripts/"
 	echo "$dst"
@@ -91,8 +99,12 @@ expect "stable /v2 of a v1 module fails" 1 "github.com/urfave/cli has a stable n
 # 7. A golangci-lint pin older than its newest stable release fails.
 oldlint="$(copy oldlint)"
 sed -i 's/^\(  GOLANGCI_LINT_VERSION: \).*/\1v2.13.2/' "$oldlint/.github/workflows/ci.yml"
-sed -i 's#golangci/golangci-lint:v[0-9.]*@#golangci/golangci-lint:v2.13.2@#' "$oldlint/scripts/ci-local.sh"
-expect "old golangci-lint pin fails" 1 "golangci-lint v2.13.2 is older than the newest stable" "$oldlint"
+sed -i 's/^golangci_lint_version="v[0-9.]*"/golangci_lint_version="v2.13.2"/' "$oldlint/scripts/ci-local.sh"
+if ! grep -q '^golangci_lint_version="v2.13.2"$' "$oldlint/scripts/ci-local.sh"; then
+	setup_failed "could not set the golangci-lint pin in the scratch ci-local.sh"
+else
+	expect "old golangci-lint pin fails" 1 "golangci-lint v2.13.2 is older than the newest stable" "$oldlint"
+fi
 
 # 8. A govulncheck pin older than its newest stable release fails.
 oldvuln="$(copy oldvuln)"
@@ -104,6 +116,27 @@ expect "old govulncheck pin fails" 1 "govulncheck v1.1.4 is older than the newes
 drift="$(copy drift)"
 sed -i 's/^govulncheck_version="v[0-9.]*"/govulncheck_version="v1.1.4"/' "$drift/scripts/ci-local.sh"
 expect "tool pin drift between files fails" 1 "govulncheck is pinned differently" "$drift"
+
+# 10. ci-local's lint step runs on the Dockerfile's Go image; a Go there
+#     older than go.mod's go line fails (with GOTOOLCHAIN=local it cannot load
+#     the module).
+oldlintgo="$(copy oldlintgo)"
+sed -i 's#^\(FROM golang:\)[0-9][0-9.]*-#\11.26.0-#' "$oldlintgo/Dockerfile"
+if ! grep -q '^FROM golang:1.26.0-' "$oldlintgo/Dockerfile"; then
+	setup_failed "could not set the Go image version in the scratch Dockerfile"
+else
+	expect "lint Go older than go.mod fails" 1 "golangci-lint in scripts/ci-local.sh runs on Go 1.26.0, older than go.mod's go" "$oldlintgo"
+fi
+
+# 11. A lint step that runs a prebuilt golangci-lint image (which bundles its
+#     own Go) instead of building it in the Go image fails.
+lintimage="$(copy lintimage)"
+sed -i 's#^in_lint() {.*#in_lint() { docker run "${common[@]}" "golangci/golangci-lint:v2.14.0" golangci-lint "$@"; }#' "$lintimage/scripts/ci-local.sh"
+if ! grep -q '^in_lint() { docker run ' "$lintimage/scripts/ci-local.sh"; then
+	setup_failed "could not point the scratch ci-local.sh lint step at an image"
+else
+	expect "lint step outside the Go image fails" 1 "golangci-lint in scripts/ci-local.sh does not run with the Go image's go" "$lintimage"
+fi
 
 echo "deps-current tests: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]
