@@ -44,12 +44,12 @@ var (
 
 // checkMode: an octal mode string of 3 or 4 digits. Which bits are
 // allowed (no setuid, setgid, sticky or world-write) is the gate's rule.
-func checkMode(field, m string, required bool) *envelope.Error {
+func checkMode(m string, required bool) *envelope.Error {
 	if m == "" && !required {
 		return nil
 	}
 	if !modeRE.MatchString(m) {
-		return invalid("%s must be 3 or 4 octal digits, such as 0640", field)
+		return invalid("mode must be 3 or 4 octal digits, such as 0640")
 	}
 	return nil
 }
@@ -146,7 +146,7 @@ func (in *writeIn) validate() *envelope.Error {
 	if len(*in.Content) > maxWriteCeiling || !utf8.ValidString(*in.Content) {
 		return invalid("content must be UTF-8 text of at most %d bytes", maxWriteCeiling)
 	}
-	if e := checkMode("mode", in.Mode, false); e != nil {
+	if e := checkMode(in.Mode, false); e != nil {
 		return e
 	}
 	if in.ExpectedSHA256 != "" && !sha256RE.MatchString(in.ExpectedSHA256) {
@@ -266,7 +266,7 @@ func (in *mkdirIn) validate() *envelope.Error {
 	if e := checkPath("path", in.Path); e != nil {
 		return e
 	}
-	return checkMode("mode", in.Mode, false)
+	return checkMode(in.Mode, false)
 }
 
 // MakeDirectory is shell_make_directory's data.
@@ -419,7 +419,7 @@ func (in *chmodIn) validate() *envelope.Error {
 	if e := checkPath("path", in.Path); e != nil {
 		return e
 	}
-	return checkMode("mode", in.Mode, true)
+	return checkMode(in.Mode, true)
 }
 
 // SetPermissions is shell_set_permissions' data.

@@ -21,7 +21,7 @@ func FuzzModeAgreesWithGate(f *testing.F) {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
-		serverOK := checkMode("mode", s, true) == nil
+		serverOK := checkMode(s, true) == nil
 		_, err := fsx.ParseMode(s)
 		var fe *fsx.Error
 		gateParses := err == nil || (errors.As(err, &fe) && fe.Code == protocol.CodePolicyDenied)
