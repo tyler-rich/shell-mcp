@@ -73,12 +73,17 @@ func define[In, Out any](d *Deps, s spec[In, Out]) Tool {
 		var args In
 		var env envelope.Envelope[Out]
 		auditArgs := map[string]any{}
-		if e := decodeArgs(req.Params.Arguments, &args); e != nil {
-			env = envelope.Failure[Out]("", e)
-		} else {
-			if s.audit != nil {
-				auditArgs = s.audit(args)
-			}
+		decodeErr := decodeArgs(req.Params.Arguments, &args)
+		if decodeErr == nil && s.audit != nil {
+			auditArgs = s.audit(args)
+		}
+		switch {
+		case d.approvalGuard(s.tier) != nil:
+			// First: whatever the arguments, nothing is sent.
+			env = envelope.Failure[Out]("", d.approvalGuard(s.tier))
+		case decodeErr != nil:
+			env = envelope.Failure[Out]("", decodeErr)
+		default:
 			if v, ok := any(&args).(validator); ok {
 				if e := v.validate(); e != nil {
 					env = envelope.Failure[Out]("", e)

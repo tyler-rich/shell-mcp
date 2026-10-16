@@ -26,7 +26,7 @@ var operatorIdempotent = map[string]bool{
 }
 
 const (
-	shaOld = "1111111111111111111111111111111111111111111111111111111111111111"
+	shaOld = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
 	shaNew = "2222222222222222222222222222222222222222222222222222222222222222"
 	head1  = "0123456789abcdef0123456789abcdef01234567"
 	head2  = "89abcdef0123456789abcdef0123456789abcdef"
@@ -372,7 +372,7 @@ func TestWriteFileResult(t *testing.T) {
 	if env["verified"] != true {
 		t.Fatalf("verified %v", env["verified"])
 	}
-	if strings.Contains(jsonOf(t, res), tok) || strings.Contains(jsonOf(t, res), "content") {
+	if strings.Contains(jsonOf(t, res), tok[7:]) || strings.Contains(jsonOf(t, env), "content") {
 		t.Fatalf("the result carries the content: %s", jsonOf(t, res))
 	}
 

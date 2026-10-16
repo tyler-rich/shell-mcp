@@ -35,8 +35,22 @@ type Deps struct {
 	MaxOutputBytes int
 	// Redactor holds the built-in rules and SHELL_MCP_REDACT_PATTERNS.
 	Redactor *redact.Redactor
-	// ApprovalTiers is SHELL_MCP_APPROVAL_TIERS.
+	// ApprovalTiers is SHELL_MCP_APPROVAL_TIERS: the tiers whose tools need
+	// a human approval (D-006). Until approval exists (S4b), a tool of such
+	// a tier refuses every call with approval_unavailable (approvalGuard).
 	ApprovalTiers []string
+}
+
+// approvalGuard refuses a call that needs approval, because this release
+// cannot collect one: destructive tools always need it, and operator tools
+// when SHELL_MCP_APPROVAL_TIERS lists operator. Nothing is sent to a
+// target. Read tools never need it.
+func (d *Deps) approvalGuard(t Tier) *envelope.Error {
+	if t == TierRead || (t != TierDestructive && !slices.Contains(d.ApprovalTiers, t.String())) {
+		return nil
+	}
+	return envelope.Errorf(envelope.CodeApprovalUnavailable,
+		"SHELL_MCP_APPROVAL_TIERS requires a human approval for %s tools, and approval arrives in a later release; nothing was sent to the target", t)
 }
 
 // Catalogue returns the registry of every tool this binary knows, each with
@@ -64,6 +78,16 @@ func Catalogue(d *Deps) (*Registry, error) {
 		{getGitLog(d), TierRead},
 		{getGitDiff(d), TierRead},
 		{runReadCommand(d), TierRead},
+		{controlService(d), TierOperator},
+		{writeFile(d), TierOperator},
+		{makeDirectory(d), TierOperator},
+		{copyPath(d), TierOperator},
+		{movePath(d), TierOperator},
+		{setPermissions(d), TierOperator},
+		{gitPull(d), TierOperator},
+		// Registered at operator in the operator and admin profiles; its
+		// admin registration at destructive comes with approval (S4b).
+		{runCommand(d), TierOperator},
 	} {
 		if err := r.Register(reg.tool, reg.tier, false); err != nil {
 			return nil, err

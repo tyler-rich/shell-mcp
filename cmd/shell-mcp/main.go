@@ -228,6 +228,7 @@ func newDeps(cfg *config.Config, logger *slog.Logger) (*tools.Deps, func(), erro
 		MaxTimeout:     cfg.MaxTimeout,
 		MaxOutputBytes: cfg.MaxOutputBytes,
 		Redactor:       redact.New(cfg.RedactPatterns),
+		ApprovalTiers:  cfg.ApprovalTiers,
 	}
 	return d, pool.Close, nil
 }

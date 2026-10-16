@@ -1,5 +1,6 @@
 // Package audit writes one syslog audit line per gate request (D-009,
-// S-11): principal, client address, op, sanitized arguments, outcome and
+// S-11): principal, client address, the request's tier ceiling, op,
+// sanitized arguments, outcome and
 // duration. It never records file contents, stdin, command output, command
 // arguments or environment values, and a syslog failure never blocks or
 // fails the request.
@@ -39,7 +40,10 @@ type Record struct {
 	// ID is the request id (a validated lowercase UUID v4; empty when the
 	// request was refused before it was read). It joins this line with the
 	// privileged helper's line for the same forwarded request.
-	ID         string
+	ID string
+	// Ceiling is the request's tier ceiling (empty when the request was
+	// refused before it was read).
+	Ceiling    string
 	Principal  string
 	Client     string
 	Op         string
@@ -64,6 +68,7 @@ func truncate(s string) string {
 
 type line struct {
 	ID         string         `json:"id"`
+	Ceiling    string         `json:"ceiling"`
 	Principal  string         `json:"principal"`
 	Client     string         `json:"client"`
 	Op         string         `json:"op"`
@@ -82,7 +87,7 @@ func Line(r *Record) string {
 		args[truncate(k)] = v
 	}
 	b, err := json.Marshal(line{
-		ID: truncate(r.ID), Principal: truncate(r.Principal), Client: truncate(r.Client), Op: truncate(r.Op),
+		ID: truncate(r.ID), Ceiling: truncate(r.Ceiling), Principal: truncate(r.Principal), Client: truncate(r.Client), Op: truncate(r.Op),
 		Args: args, Outcome: truncate(r.Outcome), DurationMS: r.DurationMS,
 	}, json.Deterministic(true), jsontext.AllowInvalidUTF8(true))
 	if err != nil {
