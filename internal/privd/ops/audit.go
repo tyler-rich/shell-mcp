@@ -21,7 +21,7 @@ import (
 // success, <5> notice for a refused operation, <4> warning for a refused
 // connection (a failed self-check or peer check). The line carries the
 // request id — the gate's audit line for the same id carries the gate
-// principal — the peer's uid and pid, the op, sanitized arguments (paths,
+// principal — the request's tier ceiling, the peer's uid and pid, the op, sanitized arguments (paths,
 // owners, modes, command id, argument count, backup id; never content,
 // command arguments or output), the backups written, the outcome and the
 // duration.
@@ -96,6 +96,7 @@ func sanitizeArgs(raw []byte) map[string]any {
 
 type auditLine struct {
 	ID         string         `json:"id"`
+	Ceiling    string         `json:"ceiling"`
 	PeerUID    *uint32        `json:"peer_uid"`
 	PeerPID    *int32         `json:"peer_pid"`
 	Op         string         `json:"op"`
@@ -151,7 +152,7 @@ func (s *server) auditRequest(resp *protocol.Response) {
 	uid, pid := s.cred.UID, s.cred.PID
 	l := &auditLine{PeerUID: &uid, PeerPID: &pid, Outcome: "ok", BackupIDs: s.ids()}
 	if s.req != nil {
-		l.ID, l.Op, l.Args = s.req.ID, auditText(s.req.Op), sanitizeArgs(s.req.Args)
+		l.ID, l.Ceiling, l.Op, l.Args = s.req.ID, s.req.Ceiling, auditText(s.req.Op), sanitizeArgs(s.req.Args)
 	}
 	pri := 6
 	if resp.Error != nil {

@@ -32,19 +32,48 @@ type runReadIn struct {
 	outputArg
 }
 
-func (in *runReadIn) validate() *envelope.Error {
-	if !commandRE.MatchString(in.CommandID) {
+func (in *runReadIn) validate() *envelope.Error { return checkCommand(in.CommandID, in.Args, in.Cwd) }
+
+// checkCommand checks a command id, its arguments and an optional cwd.
+func checkCommand(id string, args []string, cwd string) *envelope.Error {
+	if !commandRE.MatchString(id) {
 		return invalid("command_id must match %s", commandPattern)
 	}
-	if len(in.Args) > maxArgs {
+	if len(args) > maxArgs {
 		return invalid("args holds at most %d arguments", maxArgs)
 	}
-	for _, a := range in.Args {
+	for _, a := range args {
 		if len(a) > maxArgBytes || strings.ContainsAny(a, "\x00\n\r") {
 			return invalid("each argument is at most %d bytes, without NUL or line breaks", maxArgBytes)
 		}
 	}
-	return checkOptPath("cwd", in.Cwd)
+	return checkOptPath("cwd", cwd)
+}
+
+// boundCommand bounds the inputs both command tools share.
+func boundCommand(s *jsonschema.Schema) {
+	boundCommon(s)
+	strIn(s, "command_id", commandPattern, 63)
+	strIn(s, "cwd", pathPattern, 4096)
+	a := prop(s, "args")
+	a.MaxItems = new(maxArgs)
+	a.Type, a.Types = "array", nil
+	a.Items.MaxLength, a.Items.Pattern = new(maxArgBytes), argPattern
+}
+
+// commandAudit: the command id, the number of arguments (never their
+// values) and the cwd.
+func commandAudit(target, id string, args []string, cwd string) map[string]any {
+	m := map[string]any{"target": target, "command_id": id, "args_count": len(args)}
+	if cwd != "" {
+		m["cwd"] = cwd
+	}
+	return m
+}
+
+func commandSummary(c *CommandOutput) string {
+	return fmt.Sprintf("%s of stdout, %s of stderr", plural(len(c.Stdout), "byte", "bytes"), plural(len(c.Stderr), "byte", "bytes")) +
+		truncated(c.StdoutTruncated || c.StderrTruncated)
 }
 
 // CommandOutput is shell_run_read_command's data; the exit status is in
@@ -86,59 +115,56 @@ func runReadCommand(d *Deps) Tool {
 		title:       "Run read command",
 		description: "Runs a read-tier command declared in the target policy with arguments matching one of its templates, and returns its exit status and redacted, size-capped output.",
 		tier:        TierRead,
-		schema: func(s *jsonschema.Schema) {
-			boundCommon(s)
-			strIn(s, "command_id", commandPattern, 63)
-			strIn(s, "cwd", pathPattern, 4096)
-			a := prop(s, "args")
-			a.MaxItems = new(maxArgs)
-			a.Type, a.Types = "array", nil
-			a.Items.MaxLength, a.Items.Pattern = new(maxArgBytes), argPattern
-		},
-		audit: func(in runReadIn) map[string]any {
-			m := map[string]any{"target": in.Target, "command_id": in.CommandID, "args_count": len(in.Args)}
-			if in.Cwd != "" {
-				m["cwd"] = in.Cwd
-			}
-			return m
-		},
-		summary: func(c *CommandOutput) string {
-			return fmt.Sprintf("%s of stdout, %s of stderr", plural(len(c.Stdout), "byte", "bytes"), plural(len(c.Stderr), "byte", "bytes")) +
-				truncated(c.StdoutTruncated || c.StderrTruncated)
-		},
+		schema:      boundCommand,
+		audit:       func(in runReadIn) map[string]any { return commandAudit(in.Target, in.CommandID, in.Args, in.Cwd) },
+		summary:     commandSummary,
 		run: func(ctx context.Context, _ *mcp.CallToolRequest, in runReadIn) envelope.Envelope[CommandOutput] {
-			budget, e := d.timeoutFor(in.timeoutArg)
-			if e != nil {
-				return envelope.Failure[CommandOutput](in.Target, e)
-			}
-			limit, e := d.outputLimit(in.outputArg)
-			if e != nil {
-				return envelope.Failure[CommandOutput](in.Target, e)
-			}
 			w := execArgsWire{CommandID: in.CommandID, Args: in.Args, Cwd: in.Cwd}
-			if w.Args == nil {
-				w.Args = []string{}
-			}
 			if in.MaxOutputBytes != nil {
 				w.MaxOutputBytes = *in.MaxOutputBytes
 			}
-			ex := fetch[execWire](ctx, d, in.Target, protocol.OpExec, w, budget)
-			if !ex.OK {
-				return envelope.Failure[CommandOutput](ex.Target, ex.Error)
-			}
-			r, x := d.redactor(), ex.Data
-			out := CommandOutput{CommandID: x.CommandID, Argv: x.Argv, Stdout: x.Stdout, Stderr: x.Stderr,
-				StdoutTruncated: capText(r, &x.Stdout, limit) || x.StdoutTruncated,
-				StderrTruncated: capText(r, &x.Stderr, limit) || x.StderrTruncated, DurationMS: x.DurationMS}
-			out.Stdout, out.Stderr = x.Stdout, x.Stderr
-			env := envelope.Success(ex.Target, out)
-			env.Exec = &envelope.Exec{ExitCode: x.ExitCode, Signal: x.Signal, TimedOut: x.TimedOut,
-				StdoutTruncated: out.StdoutTruncated, StderrTruncated: out.StderrTruncated}
-			env.Gate = ex.Gate
-			if len(ex.Warnings) > 0 {
-				env.Warnings = ex.Warnings
-			}
-			return env
+			return d.runExec(ctx, in.Target, &w, in.timeoutArg, in.outputArg)
 		},
 	})
+}
+
+// execRequest is the exec op's arguments as the command tools send them.
+type execRequest interface{ normalize() }
+
+func (w *execArgsWire) normalize() {
+	if w.Args == nil {
+		w.Args = []string{}
+	}
+}
+
+// runExec sends one exec request at the ceiling the context carries and
+// shapes the result: output redacted and capped to the tool's limit, the
+// exit status in the envelope's exec block. A non-zero exit is a success.
+func (d *Deps) runExec(ctx context.Context, target string, w execRequest, ta timeoutArg, oa outputArg) envelope.Envelope[CommandOutput] {
+	budget, e := d.timeoutFor(ta)
+	if e != nil {
+		return envelope.Failure[CommandOutput](target, e)
+	}
+	limit, e := d.outputLimit(oa)
+	if e != nil {
+		return envelope.Failure[CommandOutput](target, e)
+	}
+	w.normalize()
+	ex := fetch[execWire](ctx, d, target, protocol.OpExec, w, budget)
+	if !ex.OK {
+		return envelope.Failure[CommandOutput](ex.Target, ex.Error)
+	}
+	r, x := d.redactor(), ex.Data
+	out := CommandOutput{CommandID: x.CommandID, Argv: x.Argv, DurationMS: x.DurationMS}
+	out.StdoutTruncated = capText(r, &x.Stdout, limit) || x.StdoutTruncated
+	out.StderrTruncated = capText(r, &x.Stderr, limit) || x.StderrTruncated
+	out.Stdout, out.Stderr = x.Stdout, x.Stderr
+	env := envelope.Success(ex.Target, out)
+	env.Exec = &envelope.Exec{ExitCode: x.ExitCode, Signal: x.Signal, TimedOut: x.TimedOut,
+		StdoutTruncated: out.StdoutTruncated, StderrTruncated: out.StderrTruncated}
+	env.Gate = ex.Gate
+	if len(ex.Warnings) > 0 {
+		env.Warnings = ex.Warnings
+	}
+	return env
 }

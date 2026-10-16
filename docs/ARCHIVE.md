@@ -1408,3 +1408,117 @@ The lockout exists to stop token guessing, and a request without a credential gu
 - **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.14.0, govulncheck v1.9.0.
+
+### 2026-10-16 — Operator tools (PR #19, branch feat/operator-tools)
+**Decision:** Implement the operator tier of `docs/TOOLS.md` (plan §5 S4a):
+- **The tools:** `shell_control_service`, `shell_write_file`, `shell_make_directory`, `shell_copy_path`, `shell_move_path`, `shell_set_permissions`, `shell_git_pull` and `shell_run_command`, in `internal/tools/operator.go`.
+- **What each does:** it validates its input, sends one gate request of its op at ceiling `operator` (the S3-fix mechanism: the ceiling is the registered tier) and shapes the result into the envelope.
+- **Registration:** every tool is registered at the operator tier, so it appears in the `operator` and `admin` profiles and not in `read-only`. Each has typed, bounded input and output schemas, `readOnlyHint: false`, `destructiveHint: false`, `openWorldHint: true`, a per-tool `idempotentHint`, a title, a terse description, an audit line and a catalogue-snapshot row.
+- **`shell_run_command`** is registered at `operator` in both profiles; its admin registration at `destructive`, with approval, is S4b's. It shares the exec path with `shell_run_read_command` (`Deps.runExec`).
+- **The gate's and the helper's audit lines record the request's `ceiling`** (the S3-fix follow-up). It is empty when the request was refused before it was read.
+
+**Why:** S4a scope; F-08, F-10, F-11, D-005, D-006, D-008, D-009, D-017. An `operator` deployment can now change state on its hosts, bounded by their policies.
+
+**Idempotency decisions** (TOOLS.md, "Operator tier: what the table leaves open"). The rule is the MCP one: true when repeating the call with the same arguments changes nothing more on the host.
+- **True:** `shell_write_file` (the same content again; with `expected_sha256` a repeat is refused), `shell_make_directory` (a repeat is `exists`), `shell_copy_path` (a repeat is `exists`, or the same copy with `overwrite`), `shell_set_permissions`.
+- **False:** `shell_control_service` (each call acts on the unit again; TOOLS.md already said so), `shell_git_pull` (a later call can fetch new commits), `shell_run_command` (any declared command), and `shell_move_path`. A repeated move finds its source gone, but it is not safe to retry blindly: a source recreated in between would be moved again.
+
+**Write-result shape:**
+- `shell_write_file` returns `path`, `created`, `bytes`, `mode`, `old_sha256` (empty for a new file), `new_sha256`, `lines_old`, `lines_new`, `lines_delta` and `owner_preserved`.
+- `shell_copy_path` returns `source`, `destination`, `created`, `bytes`, `mode`, `sha256` and `old_sha256`.
+- Neither returns content. Both set the envelope's `verified: true`: the gate re-read the file and its SHA-256 matched.
+- The gate already answers a mismatch with `verify_failed`. The server also turns a success whose `verified` is false into `verify_failed`, so an unverified write can never be shown as a success with a warning.
+- `expected_sha256` (64 lowercase hex digits) passes through. The gate refuses with `exists` when the current content has another hash, and `not_found` when the file is missing.
+
+**Inputs:**
+- `content` is a required pointer field, so a missing value is a `validation_error`, not an empty file. An empty string writes an empty file.
+- `content` and `stdin` are UTF-8 text of at most 1 MiB (the highest policy `max_write_bytes` and `max_stdin_bytes`), checked before anything is sent.
+- Modes are 3 or 4 octal digits. Which bits are allowed is the gate's rule (`fsx.checkMode`), so a setuid or world-writable mode reaches the gate and is refused there with `policy_denied`. That keeps one source of truth, and lets e2e show the gate refusing.
+- `timeout_seconds` is accepted by the three tools that start a process on the target, `max_output_bytes` by `shell_run_command`.
+
+**The approval guard.** Approval (D-006) arrives in S4b. Until then `Deps.approvalGuard` refuses with `approval_unavailable`, before validation and whatever the arguments, and sends nothing:
+- every operator tool when `SHELL_MCP_APPROVAL_TIERS` lists `operator`;
+- every destructive tool always (none is registered yet, so this only keeps a future one from running unapproved).
+
+The message says approval arrives in a later release. Read tools are never guarded. With the default (`destructive`) the operator tools run without approval. `main` passes `cfg.ApprovalTiers`; a zero `Deps` (catalogue builds) behaves as the default.
+
+**Audit arguments (server):**
+- `target`;
+- `unit`, `action`;
+- `path`, `mode`, `create`, `parents`, and `content_bytes` (the size, never the content);
+- `source`, `destination`, `overwrite`;
+- `repo`;
+- `command_id`, `args_count`, `cwd`, and `stdin_bytes` (never argument values or stdin).
+
+`expected_sha256` is not logged.
+
+**Audit ceiling (gate and helper).** `audit.Record.Ceiling` in the gate's syslog line, and `ceiling` in the helper's journald line, come from the decoded request; a refusal before the request was read logs `""`. ARCHITECTURE §2 and PRIVILEGED §8 updated.
+
+**Tests (committed failing first, `acfd416`; output in the PR body):**
+- **Server** (`internal/tools/operator_test.go`, fake gate):
+  - registration per profile at tier operator;
+  - annotations with the idempotency table;
+  - schema bounds, with no `content_b64`, `stdin_b64` or `confirm` input;
+  - 36 validation rejections, none reaching the gate;
+  - each tool's exact op, arguments and ceiling `operator`, and the timeout budget;
+  - write and copy results, including `verified: false` becoming `verify_failed`;
+  - the other tools' result shapes;
+  - `shell_run_command` exit codes, redaction and caps;
+  - 17 gate errors passed through;
+  - the approval guard;
+  - summary lines free of host and caller text;
+  - audit arguments without content, stdin or argument values.
+
+  `TestEveryToolSendsItsTierAsCeiling` covers the new tools.
+- **Gate** (`TestAuditLineCarriesCeiling` in `internal/gate/ops`) and **helper** (the same name in `internal/privd/ops`): the ceiling appears for an op that ran, for one the ceiling refused, and (gate) as empty before the request is read.
+- **Three fixes to the failing commit's tests**, made with the implementation:
+  - the ceiling table now uses the operator replies;
+  - an all-digit SHA fixture made the uppercase-hash case a no-op, so the fixture now has letters;
+  - the "no content" check now looks at the envelope, not the MCP result, whose own field is called `content`.
+- **The catalogue snapshot** was shown failing against the new catalogue (eight added rows, no existing row changed), then regenerated.
+- **Fuzzing:** `FuzzModeAgreesWithGate` (new, 60 s in the golang container, 13,013,363 execs, no crashers): the server's mode check accepts exactly the strings `fsx.ParseMode` can parse, so it never refuses a mode the gate would take, and the bit rules stay the gate's.
+
+**End-to-end** (`e2e-host`, `test/e2e/operator_tools_test.go`):
+- **The setup.** The tools go through the real `shell-mcp` (stdio, `operator` profile), the test sshd and the installed gate. `setup.sh` adds `/etc/shell-mcp/gate-operator.yaml` and a fourth client key (principal `e2e-operator`). The policy has:
+  - write roots `/srv/example-ops/work` and `/srv/example-ops/repos` under the read root `/srv/example-ops`;
+  - `services.control` with `stop`, which the polkit rule lacks;
+  - two repositories pinned to `https://127.0.0.1:44443/example-ops.git`, the only TCP port its sandbox opens;
+  - a read, two operator and one destructive command, under `max_tier: destructive`.
+- **The git remote.** A local HTTPS server (`git http-backend` behind `net/http/cgi`) on that fixed port. The gate's git trusts only the system store (no `http.*` repository config and no environment reach it), so the test generates a CA for the run, signs a certificate for 127.0.0.1, and adds the CA to the runner VM's trust store with `update-ca-certificates`. The CA's key never leaves the test process, and the VM is discarded after the job.
+- **The cases.** Each tool is its own top-level test with success and refusal subtests, and every refusal checks that the host did not change:
+  - write: read-back checked on disk (bytes, SHA-256, mode, owner); `expected_sha256` accepted when current and refusing a stale write (`exists`); writes outside the write roots and into `.git/config` (`path_denied`);
+  - mkdir: with and without parents; refused inside `.git` and under a missing parent;
+  - copy: verified; refused over an existing file and outside the roots;
+  - move: refused into `.git`;
+  - chmod: refused for setuid and world-writable modes;
+  - service control: restart (the main PID changes); a unit and a verb outside `services.control` (`policy_denied`); `stop`, refused by polkit (`not_authorized`, the unit stays active);
+  - git pull: a fast-forward to the upstream HEAD; refused on a dirty tree (HEAD unchanged) and a foreign remote;
+  - run command: stdin echoed and never logged, and a non-zero exit;
+  - a destructive command refused at ceiling `operator` (control: the gate runs it at ceiling `destructive`). The gate's journal line records `"ceiling":"operator"`; the write test also finds `write_file` at ceiling `operator`, with no content in the journal.
+- **`TestOperatorToolsListed`** checks the profile's tool list.
+- **`TestOperatorToolsApprovalGuard`** starts a second server with `SHELL_MCP_APPROVAL_TIERS=operator,destructive`. Every operator tool is refused, the file is not written, and no gate audit line for the principal appears except the read tool's control `stat`.
+- **Helpers.** `callTool`'s checks are now `callOn` for any server, and `okData` is `okDataAs` for any principal.
+
+**Found by CI and the local gate:**
+- **The guard test's journal window.** On the first CI run every operator e2e case passed except `TestOperatorToolsApprovalGuard`. It found a `write_file` gate line and took it for a guarded call. That line was the write test's `notes.txt` write from 0.2 s earlier: `journal()` reads from one second before its start, in whole seconds. The guarded file was never written. The test now waits 2.1 s before its start time, and the next run passed.
+- **A failure in code this PR does not touch.** On the second CI run, `TestIntegrationSandboxTrampoline` (`cmd/shell-mcp-gate`, ubuntu-24.04, Landlock ABI 7) failed once: the probe read `pdeathsig:0` where 9 is expected. That job had passed on the previous commit with the same gate code, and it passed on the rerun of the failed job. The trampoline (`internal/gate/execx`) is unchanged here, so this looks intermittent. It is recorded for the maintainer; nothing was changed for it.
+- **Concurrent runs under one uid.** A local `ci-local.sh` run that overlapped a 60 s fuzz run in another container under the same uid failed exec tests with `newosproc` errno 11. This is the per-child `RLIMIT_NPROC` interaction the S1b entry records. A run on its own passed every step.
+
+**Alternatives rejected:**
+- Refusing setuid and world-writable modes on the server as well: a second copy of the gate's rule, and the e2e case could no longer show the gate refusing.
+- Leaving `content` a plain string: a missing argument would write an empty file.
+- Returning `verified` inside `data` instead of the envelope: ARCHITECTURE §6 puts it in the envelope.
+- Registering `shell_run_command` at `destructive` in the admin profile now: that needs approval (S4b).
+- Adding the httptest certificate, whose key is public in Go's source, to the runner's trust store: a per-run CA instead.
+- Writing the e2e policy at test time with a random port: a fixed port lets `setup.sh` run `check-policy` on it.
+
+**Deferred / follow-ups:**
+- **S4b:** approval itself; `shell_run_command`'s admin registration at `destructive`; the destructive tools and the previews. `Deps.approvalGuard` is the place approval replaces.
+- **S4c:** the privileged tools.
+
+**Versions:**
+- **Go:** 1.27.2, still the newest stable per go.dev (go1.27.2, go1.26.9 listed).
+- **Refresh:** `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing, and `scripts/deps-current.sh` reports 13 in-scope modules current.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.14.0, govulncheck v1.9.0.

@@ -149,7 +149,8 @@ func Serve(o *Options, stdin io.Reader, stdout io.Writer) int {
 	return code
 }
 
-// audit sends the request's audit record: principal, client address, op,
+// audit sends the request's audit record: principal, client address, the
+// request's ceiling, op,
 // sanitized arguments (never content), outcome and duration.
 func (s *server) audit(resp *protocol.Response, d time.Duration) {
 	if s.o.Audit == nil {
@@ -158,7 +159,7 @@ func (s *server) audit(resp *protocol.Response, d time.Duration) {
 	r := &audit.Record{Principal: s.gate.Principal, Client: audit.Client(s.o.SSHConnection),
 		Outcome: "ok", DurationMS: d.Milliseconds(), Args: map[string]any{}}
 	if s.req != nil {
-		r.ID, r.Op, r.Args = s.req.ID, s.req.Op, audit.SanitizeArgs(s.req.Op, s.req.Args)
+		r.ID, r.Ceiling, r.Op, r.Args = s.req.ID, s.req.Ceiling, s.req.Op, audit.SanitizeArgs(s.req.Op, s.req.Args)
 	}
 	if resp.Error != nil {
 		r.Outcome = resp.Error.Code

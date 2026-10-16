@@ -38,7 +38,7 @@ var serverOnly = []string{"shell_list_targets", "shell_diag_elicit"}
 // TestEveryToolSendsItsTierAsCeiling: a table over the registry. Each
 // tool's every gate request names exactly the tier it is registered with.
 func TestEveryToolSendsItsTierAsCeiling(t *testing.T) {
-	replies := allReplies()
+	replies := operatorReplies()
 	replies["hello"] = gateReply{data: fakeHello}
 	g := newRecordingGate(replies)
 	h := readHarness(t, g)

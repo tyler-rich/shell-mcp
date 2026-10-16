@@ -121,3 +121,24 @@ func TestCeilingBoundsExec(t *testing.T) {
 	g := newFixture(t, maxTier("read"))
 	g.deniedAt("destructive", "priv_exec", m{"command_id": "probe-op", "args": []string{"echo", "operator"}}, "max_tier read")
 }
+
+// TestAuditLineCarriesCeiling: the helper's audit line records the
+// request's tier ceiling, for an operation that ran and for one the
+// ceiling refused.
+func TestAuditLineCarriesCeiling(t *testing.T) {
+	f := newFixture(t)
+	f.ok("priv_stat", m{"path": f.write}, nil)
+	if l := f.lastAudit(); !strings.Contains(l, `"ceiling":"destructive"`) {
+		t.Errorf("line lacks the request's ceiling: %q", l)
+	}
+	if r := f.serveAt("operator", "priv_stat", m{"path": f.write}); !r.OK {
+		t.Fatalf("priv_stat at ceiling operator: %+v", r.Error)
+	}
+	if l := f.lastAudit(); !strings.Contains(l, `"ceiling":"operator"`) || !strings.Contains(l, `"outcome":"ok"`) {
+		t.Errorf("line lacks ceiling operator: %q", l)
+	}
+	f.deniedAt("read", "priv_mkdir", m{"path": filepath.Join(f.write, "d")}, "ceiling read")
+	if l := f.lastAudit(); !strings.Contains(l, `"ceiling":"read"`) || !strings.Contains(l, `"outcome":"tier_denied"`) {
+		t.Errorf("refusal line lacks ceiling read: %q", l)
+	}
+}

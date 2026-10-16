@@ -1,5 +1,37 @@
 [
   {
+    "name": "shell_control_service",
+    "title": "Control service",
+    "tier": "operator",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Control service"
+    },
+    "description": "Starts, stops, restarts or reloads a systemd unit the target policy allows, and returns the unit's status re-read after the action.",
+    "input_schema_sha256": "aeec4f60a652a052c2114f7a1f0be680643a743e36bdc6bf80099524f1eb6f0a",
+    "output_schema_sha256": "f917dd2a737ca18fd6926876d8125eb2626f6ee506eced28edd8f546e94c7bc9"
+  },
+  {
+    "name": "shell_copy_path",
+    "title": "Copy file",
+    "tier": "operator",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Copy file"
+    },
+    "description": "Copies a regular file to a destination under the target policy's write roots, verified by reading the copy back.",
+    "input_schema_sha256": "bad8a5d484ca57b91d733c801db7a4b4f4e9f7e66fd84a36d9dce4412cd3fef1",
+    "output_schema_sha256": "ba4f9fc0e972f90e4d692e7c7a71f8e4a85158ebc2915fbbe10657d678084b6c"
+  },
+  {
     "name": "shell_find_files",
     "title": "Find files",
     "tier": "read",
@@ -144,6 +176,22 @@
     "output_schema_sha256": "ed6a2797858d3900dc884c23f9ff20e3968109bc78413971998417b4bcf5ad18"
   },
   {
+    "name": "shell_git_pull",
+    "title": "Pull git repository",
+    "tier": "operator",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Pull git repository"
+    },
+    "description": "Fast-forwards a repository listed in the target policy from its pinned remote, refusing uncommitted changes to tracked files and diverged history, and returns the old and new HEAD.",
+    "input_schema_sha256": "9dbc919b9fd8c5ff28d099b276495e716a9eae82e94cef40aba0a8dd4b5a5f72",
+    "output_schema_sha256": "29412ccc89bd68fab85d95e86451918d64b4aa2e963e019be104fd3332d4e279"
+  },
+  {
     "name": "shell_inspect_certificate",
     "title": "Inspect certificate",
     "tier": "read",
@@ -224,6 +272,38 @@
     "output_schema_sha256": "8617c2ef25c7f1a0e8352910bdb435e4dcec34f55413ac3138c284f413a480fd"
   },
   {
+    "name": "shell_make_directory",
+    "title": "Make directory",
+    "tier": "operator",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Make directory"
+    },
+    "description": "Creates a directory, and optionally its missing parents, under the target policy's write roots.",
+    "input_schema_sha256": "cc3024a2900ab861ad15186072fe469fdf51a2d1998d84d9d3443775c244731b",
+    "output_schema_sha256": "dec1de0d64dd4a21bf4486c0ac58b490b380ab227641ff5f42703d3ae8c0bb14"
+  },
+  {
+    "name": "shell_move_path",
+    "title": "Move path",
+    "tier": "operator",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Move path"
+    },
+    "description": "Renames a file or directory within one write root of the target policy (same filesystem only).",
+    "input_schema_sha256": "bad8a5d484ca57b91d733c801db7a4b4f4e9f7e66fd84a36d9dce4412cd3fef1",
+    "output_schema_sha256": "91a9248671fc31638045c8a795edcc4b2bda58485e6f1473c3efd04d5be8ad89"
+  },
+  {
     "name": "shell_read_file",
     "title": "Read file",
     "tier": "read",
@@ -238,6 +318,22 @@
     "description": "Reads a bounded part of a text file, or its last lines, redacted; a binary file returns only its size and SHA-256.",
     "input_schema_sha256": "55e5493879c1e0bd1be44dbda29e3430c4600e6294b9ee1c018a9c29773ca5b6",
     "output_schema_sha256": "c1d53a1021aab2f2f0f9339e00e2d15d8c31061dbc137b256cb5bd34b9ed700d"
+  },
+  {
+    "name": "shell_run_command",
+    "title": "Run command",
+    "tier": "operator",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Run command"
+    },
+    "description": "Runs a read- or operator-tier command declared in the target policy with arguments matching one of its templates and optional standard input, and returns its exit status and redacted, size-capped output.",
+    "input_schema_sha256": "e29bb63a8e83724a9ac55921ca1181fb74e28b3c91260cb87104c51529719ab3",
+    "output_schema_sha256": "0f128ad826c1b9e1c1532826832e027902534bda0837da3890c3b77173a51636"
   },
   {
     "name": "shell_run_read_command",
@@ -256,6 +352,22 @@
     "output_schema_sha256": "0f128ad826c1b9e1c1532826832e027902534bda0837da3890c3b77173a51636"
   },
   {
+    "name": "shell_set_permissions",
+    "title": "Set permissions",
+    "tier": "operator",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Set permissions"
+    },
+    "description": "Sets the permission bits of a file or directory under the target policy's write roots, and returns the old and new mode.",
+    "input_schema_sha256": "a65359ebdbd6150513b588cdf116afd0e7b2a3266e517a506899e0b4313319db",
+    "output_schema_sha256": "4a815ac098cc440a5c309c731266728cbcbd9d24419fe50fafa804bba4ece430"
+  },
+  {
     "name": "shell_stat_path",
     "title": "Stat path",
     "tier": "read",
@@ -270,5 +382,21 @@
     "description": "Returns one path's type, size, mode, owner, group and modification time without following a final symlink, whose target is reported.",
     "input_schema_sha256": "8784bd247132b86c34b82659bdcf02722cff3b92da6647b34525d81986bdced4",
     "output_schema_sha256": "86435fb795786e7bc96d78f626e9d93da3f8b28bdf49b2e33ee82c89c0896cbc"
+  },
+  {
+    "name": "shell_write_file",
+    "title": "Write file",
+    "tier": "operator",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Write file"
+    },
+    "description": "Atomically replaces or creates a text file under the target policy's write roots and verifies it by reading it back, returning the old and new SHA-256 and line counts.",
+    "input_schema_sha256": "c44a1f4ccb8d9e986e28f5b19cc400b39fd0d2a604910e32a38f7126180f9d5d",
+    "output_schema_sha256": "a660f466d7d3eb3531231e02a8635b7e5ac55607e0c47f95af857a0e3f9becf9"
   }
 ]
