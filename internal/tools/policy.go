@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"slices"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -216,7 +217,7 @@ func getPolicy(d *Deps) Tool {
 					Git: s.Git, RedactPatterns: s.Redact, Commands: s.Commands},
 			})
 			out.Gate = sum.Gate
-			out.Warnings = append(hello.Warnings, sum.Warnings...)
+			out.Warnings = slices.Concat(hello.Warnings, sum.Warnings)
 			if h.PolicySHA256 != s.SHA256 {
 				out.Warnings = append(out.Warnings, "the policy changed between the hello and policy requests")
 			}

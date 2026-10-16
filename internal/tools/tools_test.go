@@ -56,15 +56,15 @@ type harness struct {
 
 // sshTarget starts a test SSH server with exec as its forced command and
 // returns the target and its client.
-func sshTarget(t *testing.T, name string, exec sshtest.Exec) (config.Target, *sshx.Client) {
+func sshTarget(t *testing.T, exec sshtest.Exec) (config.Target, *sshx.Client) {
 	t.Helper()
 	hk, ck := sshtest.Ed25519(t), sshtest.Ed25519(t)
 	srv := sshtest.Start(t, sshtest.Config{HostKeys: []ssh.Signer{hk}, ClientKeys: []ssh.PublicKey{ck.PublicKey()}, Exec: exec})
 	host, portStr, _ := net.SplitHostPort(srv.Addr)
 	port, _ := strconv.Atoi(portStr)
 	p, _ := config.ParseHostKeyPin(sshtest.Pin(hk))
-	tg := config.Target{Name: name, Host: host, Port: port, User: "svc-shell", HostKeys: []config.HostKey{p}, Key: config.PrivateKeyFromSigner(ck)}
-	c, err := sshx.New(tg, sshx.Options{})
+	tg := config.Target{Name: "app-host", Host: host, Port: port, User: "svc-shell", HostKeys: []config.HostKey{p}, Key: config.PrivateKeyFromSigner(ck)}
+	c, err := sshx.New(&tg, sshx.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ const fakePolicy = `{"version":1,"max_tier":"read","sha256":"ab12","sandbox":{"l
 "commands":[{"id":"app-version","description":"Show the version","tier":"read","root_equivalent":false,"templates":[["--version"]]}]}`
 
 func TestGetPolicy(t *testing.T) {
-	tg, c := sshTarget(t, "app-host", fakeGate(fakeHello, fakePolicy))
+	tg, c := sshTarget(t, fakeGate(fakeHello, fakePolicy))
 	h := newHarness(t, []config.Target{tg}, map[string]*sshx.Client{"app-host": c}, "")
 	env, _ := h.call("shell_get_policy", map[string]any{}) // one target: target is optional
 	if env["ok"] != true || env["target"] != "app-host" {
@@ -293,7 +293,7 @@ func TestGetPolicy(t *testing.T) {
 }
 
 func TestGetPolicyGateRefusalPassesThrough(t *testing.T) {
-	tg, c := sshTarget(t, "app-host", func(_ context.Context, s *sshtest.Session) uint32 {
+	tg, c := sshTarget(t, func(_ context.Context, s *sshtest.Session) uint32 {
 		_, _ = io.WriteString(s.Stdout, `{"v":1,"id":"","ok":false,"error":{"code":"sandbox_unavailable","message":"Landlock is unavailable"}}`+"\n")
 		return 0
 	})
@@ -338,7 +338,7 @@ func TestTargetResolution(t *testing.T) {
 }
 
 func TestAuditLine(t *testing.T) {
-	tg, c := sshTarget(t, "app-host", fakeGate(fakeHello, fakePolicy))
+	tg, c := sshTarget(t, fakeGate(fakeHello, fakePolicy))
 	h := newHarness(t, []config.Target{tg}, map[string]*sshx.Client{"app-host": c}, "")
 	h.call("shell_get_policy", map[string]any{"target": "app-host"})
 	h.call("shell_get_policy", map[string]any{"target": "missing-host"})

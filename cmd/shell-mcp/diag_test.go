@@ -60,9 +60,9 @@ func answering(action string, answer bool) func(context.Context, *mcp.ElicitRequ
 	}
 }
 
-func diagSession(t *testing.T, ts string, token, version string, handler func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error)) *mcp.ClientSession {
+func diagSession(t *testing.T, ts, version string, handler func(context.Context, *mcp.ElicitRequest) (*mcp.ElicitResult, error)) *mcp.ClientSession {
 	t.Helper()
-	rec := &recorder{token: token, base: http.DefaultTransport}
+	rec := &recorder{token: testToken, base: http.DefaultTransport}
 	client := mcp.NewClient(&mcp.Implementation{Name: "diag-test", Version: "0"}, &mcp.ClientOptions{ElicitationHandler: handler})
 	var opts *mcp.ClientSessionOptions
 	if version != "" {
@@ -79,16 +79,16 @@ func diagSession(t *testing.T, ts string, token, version string, handler func(co
 func TestDiagElicitHTTP20260728(t *testing.T) {
 	env, _ := gateEnv(t, fakeGate)
 	ts := httpStack(t, env)
-	d := callDiag(t, diagSession(t, ts.URL, testToken, "", answering("accept", true)))
+	d := callDiag(t, diagSession(t, ts.URL, "", answering("accept", true)))
 	if d.Round != 2 || d.ProtocolVersion != "2026-07-28" || !d.ElicitationDeclared || d.Action != "accept" || d.Answer == nil || !*d.Answer || !d.RequestStateEchoed {
 		t.Fatalf("accept: %+v", d)
 	}
-	d = callDiag(t, diagSession(t, ts.URL, testToken, "", answering("decline", false)))
+	d = callDiag(t, diagSession(t, ts.URL, "", answering("decline", false)))
 	if d.Round != 2 || d.Action != "decline" || d.Answer != nil {
 		t.Fatalf("decline: %+v", d)
 	}
 	// A client without elicitation is told so, and nothing is asked.
-	d = callDiag(t, diagSession(t, ts.URL, testToken, "", nil))
+	d = callDiag(t, diagSession(t, ts.URL, "", nil))
 	if d.Round != 1 || d.ElicitationDeclared || d.Action != "" {
 		t.Fatalf("no elicitation: %+v", d)
 	}
@@ -99,7 +99,7 @@ func TestDiagElicitHTTP20251125(t *testing.T) {
 	// cannot carry a server-to-client request: no elicitation reaches it.
 	env, _ := gateEnv(t, fakeGate)
 	ts := httpStack(t, env)
-	d := callDiag(t, diagSession(t, ts.URL, testToken, "2025-11-25", answering("accept", true)))
+	d := callDiag(t, diagSession(t, ts.URL, "2025-11-25", answering("accept", true)))
 	if d.Round != 1 || d.ProtocolVersion != "2025-11-25" || d.ElicitationDeclared {
 		t.Fatalf("2025-11-25 over HTTP: %+v", d)
 	}

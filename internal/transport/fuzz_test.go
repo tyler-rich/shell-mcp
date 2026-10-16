@@ -19,11 +19,9 @@ func FuzzHostAllowed(f *testing.F) {
 			return
 		}
 		h := strings.ToLower(host)
-		name, port := h, ""
-		if n, p, err := net.SplitHostPort(h); err == nil {
-			name, port = n, p
-		} else {
-			name = strings.TrimSuffix(strings.TrimPrefix(h, "["), "]")
+		name, port, err := net.SplitHostPort(h)
+		if err != nil {
+			name, port = strings.TrimSuffix(strings.TrimPrefix(h, "["), "]"), ""
 		}
 		switch name {
 		case "localhost", "127.0.0.1", "mcp.example.test":

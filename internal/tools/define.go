@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	stdjson "encoding/json"
-	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"log/slog"
@@ -96,7 +95,7 @@ func decodeArgs(raw stdjson.RawMessage, v any) *envelope.Error {
 	if len(raw) == 0 || string(raw) == "null" {
 		raw = stdjson.RawMessage("{}")
 	}
-	if jsontext.Value(raw).Kind() != '{' {
+	if raw.Kind() != '{' { // json.RawMessage is jsontext.Value (Go 1.27)
 		return envelope.Errorf(envelope.CodeValidationError, "arguments must be a JSON object")
 	}
 	if err := json.Unmarshal(raw, v, json.RejectUnknownMembers(true)); err != nil {
@@ -127,7 +126,7 @@ func result[Out any](env envelope.Envelope[Out]) (*mcp.CallToolResult, error) {
 	}
 	return &mcp.CallToolResult{
 		Content:           []mcp.Content{&mcp.TextContent{Text: string(b)}},
-		StructuredContent: stdjson.RawMessage(b),
+		StructuredContent: stdjson.RawMessage(b), // the SDK sends RawMessage unchanged
 		IsError:           !env.OK,
 	}, nil
 }

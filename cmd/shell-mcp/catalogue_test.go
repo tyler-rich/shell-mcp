@@ -29,7 +29,7 @@ func TestCatalogueSnapshot(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	want, err := os.ReadFile(golden)
+	want, err := os.ReadFile(golden) //nolint:gosec // G304: the fixed snapshot path
 	if err != nil {
 		t.Fatalf("read the snapshot (regenerate with -update): %v", err)
 	}

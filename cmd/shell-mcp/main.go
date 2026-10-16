@@ -414,8 +414,8 @@ func schemaHash(v any) (string, error) {
 		return "", err
 	}
 	var generic any
-	if err := json.Unmarshal(b, &generic); err != nil {
-		return "", err
+	if uerr := json.Unmarshal(b, &generic); uerr != nil {
+		return "", uerr
 	}
 	if b, err = json.Marshal(generic); err != nil {
 		return "", err

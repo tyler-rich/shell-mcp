@@ -56,7 +56,7 @@ func fakeGate(_ context.Context, s *sshtest.Session) uint32 {
 
 // gateEnv is a valid configuration for one target served by an in-process
 // SSH server whose forced command is exec.
-func gateEnv(t *testing.T, exec sshtest.Exec) (map[string]string, ssh.Signer) {
+func gateEnv(t *testing.T, exec sshtest.Exec) (env map[string]string, hostKey ssh.Signer) {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -111,15 +111,14 @@ type checkOut struct {
 	} `json:"targets"`
 }
 
-func runCheck(t *testing.T, env map[string]string) (int, checkOut, string) {
+func runCheck(t *testing.T, env map[string]string) (code int, report checkOut, raw string) {
 	t.Helper()
 	var out, errb bytes.Buffer
-	code := run(t.Context(), strings.NewReader(""), []string{"check"}, lookup(env), &out, &errb)
-	var c checkOut
-	if err := json.Unmarshal(out.Bytes(), &c); err != nil {
+	code = run(t.Context(), strings.NewReader(""), []string{"check"}, lookup(env), &out, &errb)
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
 		t.Fatalf("check output is not JSON: %v\n%s\nstderr: %s", err, out.String(), errb.String())
 	}
-	return code, c, out.String()
+	return code, report, out.String()
 }
 
 func TestCheckReportsEachTarget(t *testing.T) {
@@ -134,7 +133,7 @@ func TestCheckReportsEachTarget(t *testing.T) {
 		tg.Sandbox == nil || tg.Sandbox.KernelABI != 7 || tg.Sandbox.EffectiveABI != 7 || tg.Sandbox.Mode != "required" {
 		t.Fatalf("target report: %s", raw)
 	}
-	if strings.Join(tg.Tools, ",") != "shell_get_policy,shell_list_targets" {
+	if strings.Join(withoutDiag(tg.Tools), ",") != "shell_get_policy,shell_list_targets" {
 		t.Fatalf("effective tools %v", tg.Tools)
 	}
 	if strings.Contains(raw, testToken) {
@@ -227,7 +226,7 @@ func exercise(t *testing.T, cs *mcp.ClientSession) {
 	for _, tool := range lt.Tools {
 		names = append(names, tool.Name)
 	}
-	if strings.Join(names, ",") != "shell_get_policy,shell_list_targets" {
+	if strings.Join(withoutDiag(names), ",") != "shell_get_policy,shell_list_targets" {
 		t.Fatalf("tools %v", names)
 	}
 	res, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "shell_get_policy", Arguments: map[string]any{}})
@@ -337,4 +336,16 @@ func TestStdioRefusesBearer(t *testing.T) {
 	if code != 1 || !strings.Contains(errb.String(), "stdio") {
 		t.Fatalf("exit %d, stderr %q", code, errb.String())
 	}
+}
+
+// withoutDiag drops the diagnostic build's tool, so these tests hold in
+// both builds.
+func withoutDiag(names []string) []string {
+	out := []string{}
+	for _, n := range names {
+		if !strings.HasPrefix(n, "shell_diag_") {
+			out = append(out, n)
+		}
+	}
+	return out
 }

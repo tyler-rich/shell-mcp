@@ -22,7 +22,8 @@ func NewPool(cfg *config.Config, o Options) (*Pool, error) {
 		o.MaxSessions = cfg.SSHMaxSessions
 	}
 	p := &Pool{clients: map[string]*Client{}}
-	for _, t := range cfg.Targets {
+	for i := range cfg.Targets {
+		t := &cfg.Targets[i]
 		c, err := New(t, o)
 		if err != nil {
 			p.Close()

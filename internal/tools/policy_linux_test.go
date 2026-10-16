@@ -45,7 +45,7 @@ func forcedGate(t *testing.T, g *gatetest.HarnessGate) sshtest.Exec {
 
 func TestGetPolicyAgainstRealGate(t *testing.T) {
 	g := gatetest.NewHarnessGate(t, "readonly-test", "")
-	tg, c := sshTarget(t, "app-host", forcedGate(t, g))
+	tg, c := sshTarget(t, forcedGate(t, g))
 	h := newHarness(t, []config.Target{tg}, map[string]*sshx.Client{"app-host": c}, "")
 	env, _ := h.call("shell_get_policy", map[string]any{"target": "app-host"})
 	if env["ok"] != true {

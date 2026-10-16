@@ -11,6 +11,7 @@
 package sshtest
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -162,7 +163,7 @@ func (s *Server) handle(c net.Conn, cfg Config) {
 		PublicKeyCallback: func(_ ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 			s.record("auth:publickey")
 			for _, k := range cfg.ClientKeys {
-				if string(k.Marshal()) == string(key.Marshal()) {
+				if bytes.Equal(k.Marshal(), key.Marshal()) {
 					return &ssh.Permissions{}, nil
 				}
 			}

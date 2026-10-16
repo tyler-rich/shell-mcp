@@ -29,8 +29,8 @@ var ErrForbidden = errors.New("sshx: request not allowed (D-012: no PTY, environ
 const (
 	DefaultMaxSessions       = 4
 	DefaultKeepaliveInterval = 15 * time.Second
-	DefaultBackoffMin        = 500 * time.Millisecond
-	DefaultBackoffMax        = 30 * time.Second
+	DefaultBackoffFirst      = 500 * time.Millisecond
+	DefaultBackoffCeiling    = 30 * time.Second
 	defaultConnectTimeout    = 10 * time.Second
 )
 
@@ -98,8 +98,9 @@ func HostKeyAlgorithms(pins []config.HostKey) []string {
 	return out
 }
 
-// New returns the client for t. It does not connect.
-func New(t config.Target, o Options) (*Client, error) {
+// New returns the client for target. It does not connect.
+func New(target *config.Target, o Options) (*Client, error) {
+	t := *target
 	if o.ConnectTimeout <= 0 {
 		o.ConnectTimeout = defaultConnectTimeout
 	}
@@ -110,10 +111,10 @@ func New(t config.Target, o Options) (*Client, error) {
 		o.KeepaliveInterval = DefaultKeepaliveInterval
 	}
 	if o.BackoffMin <= 0 {
-		o.BackoffMin = DefaultBackoffMin
+		o.BackoffMin = DefaultBackoffFirst
 	}
 	if o.BackoffMax < o.BackoffMin {
-		o.BackoffMax = max(o.BackoffMin, DefaultBackoffMax)
+		o.BackoffMax = max(o.BackoffMin, DefaultBackoffCeiling)
 	}
 	if o.Logger == nil {
 		o.Logger = slog.New(slog.DiscardHandler)

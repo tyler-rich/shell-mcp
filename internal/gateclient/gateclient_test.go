@@ -36,7 +36,7 @@ func target(t *testing.T, exec sshtest.Exec, maxSessions int) (*sshx.Client, *ss
 	host, portStr, _ := net.SplitHostPort(srv.Addr)
 	port, _ := strconv.Atoi(portStr)
 	p, _ := config.ParseHostKeyPin(sshtest.Pin(hk))
-	c, err := sshx.New(config.Target{Name: "app-host", Host: host, Port: port, User: "svc-shell",
+	c, err := sshx.New(&config.Target{Name: "app-host", Host: host, Port: port, User: "svc-shell",
 		HostKeys: []config.HostKey{p}, Key: config.PrivateKeyFromSigner(ck)}, sshx.Options{MaxSessions: maxSessions})
 	if err != nil {
 		t.Fatal(err)
@@ -69,13 +69,12 @@ func okFor(req *protocol.Request) string {
 
 func newClient() *Client { return New(Options{Logger: slog.New(slog.DiscardHandler)}) }
 
-func wantCode(t *testing.T, err error, code string) *envelope.Error {
+func wantCode(t *testing.T, err error, code string) {
 	t.Helper()
 	var e *envelope.Error
 	if !errors.As(err, &e) || e.Code != code {
 		t.Fatalf("error = %v, want code %s", err, code)
 	}
-	return e
 }
 
 func TestRoundTrip(t *testing.T) {
@@ -169,7 +168,7 @@ func TestProtocolVersionMismatch(t *testing.T) {
 		return `{"v":2,"id":"` + req.ID + `","ok":true,"data":{},"warnings":[]}` + "\n"
 	}), 1)
 	_, err := newClient().Call(t.Context(), c, protocol.OpHello, nil, time.Second)
-	e := wantCode(t, err, envelope.CodeProtocolMismatch)
+	e := wantError(t, err, envelope.CodeProtocolMismatch)
 	if !strings.Contains(e.Message, "version") {
 		t.Fatalf("message = %q", e.Message)
 	}
@@ -276,11 +275,20 @@ func TestTransportErrorsPassThrough(t *testing.T) {
 	_ = ln.Close()
 	hk := sshtest.Ed25519(t)
 	p, _ := config.ParseHostKeyPin(sshtest.Pin(hk))
-	dead, err := sshx.New(config.Target{Name: "app-host", Host: "127.0.0.1", Port: addr.Port, User: "svc-shell",
+	dead, err := sshx.New(&config.Target{Name: "app-host", Host: "127.0.0.1", Port: addr.Port, User: "svc-shell",
 		HostKeys: []config.HostKey{p}, Key: config.PrivateKeyFromSigner(sshtest.Ed25519(t))}, sshx.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = newClient().Call(t.Context(), dead, protocol.OpHello, nil, time.Second)
 	wantCode(t, err, envelope.CodeTargetUnreachable)
+}
+
+// wantError is wantCode returning the error, for its message.
+func wantError(t *testing.T, err error, code string) *envelope.Error {
+	t.Helper()
+	wantCode(t, err, code)
+	var e *envelope.Error
+	errors.As(err, &e)
+	return e
 }

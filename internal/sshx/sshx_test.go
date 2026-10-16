@@ -86,7 +86,7 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 
 func (f *fixture) newClient() *Client {
 	f.t.Helper()
-	c, err := New(f.target, f.opts)
+	c, err := New(&f.target, f.opts)
 	if err != nil {
 		f.t.Fatalf("New: %v", err)
 	}
@@ -105,13 +105,12 @@ func run(ctx context.Context, c *Client) (string, error) {
 	return string(out), err
 }
 
-func wantCode(t *testing.T, err error, code string) *envelope.Error {
+func wantCode(t *testing.T, err error, code string) {
 	t.Helper()
 	var e *envelope.Error
 	if !errors.As(err, &e) || e.Code != code {
 		t.Fatalf("error = %v, want code %s", err, code)
 	}
-	return e
 }
 
 func TestHostKeyAlgorithmsFromPins(t *testing.T) {
@@ -182,14 +181,14 @@ func TestWrongAlgorithmRefused(t *testing.T) {
 	// The pin names ECDSA; the target offers only an Ed25519 host key.
 	f := newFixture(t, sshtest.Config{HostKeys: []ssh.Signer{sshtest.Ed25519(t)}}, pin(t, sshtest.ECDSA(t)))
 	_, err := run(t.Context(), f.newClient())
-	e := wantCode(t, err, envelope.CodeHostKeyMismatch)
+	e := wantError(t, err, envelope.CodeHostKeyMismatch)
 	if !strings.Contains(e.Message, "no host key of a pinned type") {
 		t.Fatalf("message = %q", e.Message)
 	}
 }
 
 func TestRSAPinNeverNegotiatesSHA1(t *testing.T) {
-	sha1Only := sshtest.RSA(t, ssh.KeyAlgoRSA) //nolint:staticcheck // the insecure algorithm under test
+	sha1Only := sshtest.RSA(t, ssh.KeyAlgoRSA) // the insecure algorithm under test
 	f := newFixture(t, sshtest.Config{HostKeys: []ssh.Signer{sha1Only}})
 	_, err := run(t.Context(), f.newClient())
 	wantCode(t, err, envelope.CodeHostKeyMismatch)
@@ -271,7 +270,7 @@ func TestClientKeyNotAuthorized(t *testing.T) {
 func TestOnlyEd25519ClientKeys(t *testing.T) {
 	f := newFixture(t, sshtest.Config{HostKeys: []ssh.Signer{sshtest.Ed25519(t)}})
 	f.target.Key = config.PrivateKeyFromSigner(sshtest.ECDSA(t))
-	if _, err := New(f.target, f.opts); err == nil {
+	if _, err := New(&f.target, f.opts); err == nil {
 		t.Fatal("New accepted a non-Ed25519 client key")
 	}
 }
@@ -451,4 +450,13 @@ func TestSSHTestOnlyInTests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// wantError is wantCode returning the error, for its message.
+func wantError(t *testing.T, err error, code string) *envelope.Error {
+	t.Helper()
+	wantCode(t, err, code)
+	var e *envelope.Error
+	errors.As(err, &e)
+	return e
 }
