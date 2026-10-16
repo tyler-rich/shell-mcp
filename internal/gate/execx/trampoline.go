@@ -28,13 +28,17 @@ import (
 // on the main thread, so the execve happens on the thread whose
 // parent-death signal os/exec set.
 //
-// Nothing outside Run can use it: the SSH forced command and the helper's
-// unit fix the argv of the gate and the helper, and the trampoline refuses
-// to run with any other argument, with a terminal on fd 0–2, with an
-// environment, off the main thread, or unless fd 3 is a Unix stream socket
-// whose peer is its parent process under its own uid. A command started
-// through it inherits none of this: fd 3 is close-on-exec and the command
-// gets the environment of its Spec.
+// The SSH forced command and the helper's unit fix the argv of the gate and
+// the helper, so neither a client nor a connection can reach it. The
+// trampoline refuses to run with any other argument, when this exec gained
+// privileges (AT_SECURE: a set-user-ID or set-group-ID binary, file
+// capabilities), with a terminal on fd 0–2, with an environment, off the
+// main thread, or unless fd 3 is a Unix stream socket whose peer is its
+// parent process under its own uid. A local user can still start it that
+// way with the gate binary, and then runs a command as themselves: the
+// AT_SECURE refusal is what keeps it from ever running one with more. A
+// command started through it inherits none of this: fd 3 is close-on-exec
+// and the command gets the environment of its Spec.
 
 // TrampolineArg is the trampoline's only argument.
 const TrampolineArg = "shell-mcp-execx-trampoline-v1"
@@ -215,9 +219,18 @@ type trampolineEnv struct {
 
 // trampolineRefusal returns why the trampoline must not run, or "".
 func trampolineRefusal(e *trampolineEnv) string {
-	switch {
-	case len(e.args) != 2 || e.args[1] != TrampolineArg:
+	if len(e.args) != 2 || e.args[1] != TrampolineArg {
 		return "it takes exactly one argument"
+	}
+	// Every other check below proves only that the trampoline was started
+	// the way Run starts it, which any local user can do with the gate
+	// binary. That gives them nothing while the trampoline runs with their
+	// own privileges; AT_SECURE says this exec gained privileges, and then
+	// nothing may run.
+	if v, err := e.atSecure(); err != nil || v != 0 {
+		return "it gained privileges when executed (AT_SECURE)"
+	}
+	switch {
 	case len(e.environ) != 0:
 		return "it must be started with an empty environment"
 	case e.tid != e.pid:
