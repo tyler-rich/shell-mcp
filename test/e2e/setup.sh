@@ -155,8 +155,9 @@ chmod 0644 /etc/shell-mcp/gate.yaml "$bin/gate-rule.yaml"
 
 # The read tools' policy (read_tools_test.go), selected by its own SSH key
 # (principal e2e-read). max_tier is operator and it declares one operator
-# command, so the tests can show that shell_run_read_command, not the gate,
-# refuses it. Its git remote is never contacted: the read ops are local.
+# command, so the tests can show the gate running it at ceiling operator and
+# refusing it at the read tool's ceiling (read). Its git remote is never
+# contacted: the read ops are local.
 cat >/etc/shell-mcp/gate-read.yaml <<EOF
 version: 1
 max_tier: operator

@@ -169,10 +169,24 @@ var PrivOps = []string{
 	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPower,
 }
 
-// Request is one gate or helper request.
+// Tier names on the wire: a request's ceiling, and max_tier in the gate
+// block and hello (ARCHITECTURE §4.1).
+const (
+	TierRead        = "read"
+	TierOperator    = "operator"
+	TierDestructive = "destructive"
+)
+
+// Ceilings lists every valid request ceiling.
+var Ceilings = []string{TierRead, TierOperator, TierDestructive}
+
+// Request is one gate or helper request. Ceiling is the highest tier the
+// caller may use (the calling tool's tier); the gate and the helper refuse
+// any operation or command above min(their max_tier, Ceiling).
 type Request struct {
 	V         int            `json:"v"`
 	ID        string         `json:"id"`
+	Ceiling   string         `json:"ceiling"`
 	Op        string         `json:"op"`
 	Args      jsontext.Value `json:"args,omitzero"`
 	TimeoutMS int64          `json:"timeout_ms,omitzero"`
@@ -247,6 +261,9 @@ func DecodeRequest(r io.Reader) (*Request, error) {
 	}
 	if !validID(req.ID) {
 		return nil, &DecodeError{CodeBadRequest, "id must be a lowercase UUID v4"}
+	}
+	if !slices.Contains(Ceilings, req.Ceiling) {
+		return nil, &DecodeError{CodeBadRequest, "ceiling is missing or not read, operator or destructive"}
 	}
 	if !validOp(req.Op) {
 		return nil, &DecodeError{CodeBadRequest, "op is missing or malformed"}

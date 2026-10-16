@@ -67,6 +67,9 @@ func define[In, Out any](d *Deps, s spec[In, Out]) Tool {
 	}
 	handler := func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		start := time.Now()
+		// Every gate request this call makes carries the tool's tier as its
+		// ceiling.
+		ctx = withCeiling(ctx, s.tier)
 		var args In
 		var env envelope.Envelope[Out]
 		auditArgs := map[string]any{}
@@ -88,7 +91,7 @@ func define[In, Out any](d *Deps, s spec[In, Out]) Tool {
 		d.audit(ctx, s.name, env.Target, auditArgs, outcome(env.OK, env.Error), env.Exec, time.Since(start))
 		return result(env, summarize(env, s.summary))
 	}
-	return Tool{Def: def, Install: func(srv *mcp.Server) { srv.AddTool(def, handler) }}
+	return Tool{Def: def, Tier: s.tier, Install: func(srv *mcp.Server) { srv.AddTool(def, handler) }}
 }
 
 // decodeArgs strictly decodes the call's arguments: one JSON object of the

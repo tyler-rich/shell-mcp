@@ -81,9 +81,10 @@ func (s *server) exec(raw jsontext.Value) (data any, warns []string, failure err
 	if a.Unit != "" && policy.Unit(a.Unit) != s.unit {
 		return nil, nil, s.wrongUnit(policy.Unit(a.Unit))
 	}
-	// The command's tier is checked before anything else about the request.
-	if c.Tier > s.p.MaxTier {
-		return nil, nil, errf(protocol.CodeTierDenied, "command tier %s exceeds the privileged policy's max_tier %s", c.Tier, s.p.MaxTier)
+	// The command's tier is checked before anything else about the request,
+	// against max_tier and the request's ceiling.
+	if err := s.within("command", c.Tier); err != nil {
+		return nil, nil, err
 	}
 	if len(a.Args) > template.MaxTokens {
 		return nil, nil, errf(protocol.CodeBadRequest, "at most %d arguments", template.MaxTokens)

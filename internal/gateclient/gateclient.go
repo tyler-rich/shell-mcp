@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/tyler-rich/shell-mcp/internal/envelope"
@@ -47,11 +48,13 @@ func New(o Options) *Client {
 	return &Client{o: o}
 }
 
-// Call sends one request for op with args and returns the gate's response,
-// failure or not. budget is sent as timeout_ms; the call gives up budget +
-// Grace after it starts. The error, for transport and protocol failures
-// only, is an *envelope.Error:
-//   - the request over 2 MiB: validation_error, before anything is sent;
+// Call sends one request for op with args at the tier ceiling (read,
+// operator or destructive: the calling tool's tier) and returns the gate's
+// response, failure or not. budget is sent as timeout_ms; the call gives
+// up budget + Grace after it starts. The error, for transport and protocol
+// failures only, is an *envelope.Error:
+//   - no valid ceiling, or the request over 2 MiB: validation_error, before
+//     anything is sent;
 //   - SSH failures: the sshx codes (target_unreachable, host_key_mismatch,
 //     auth_failed_ssh, timeout, gate_unavailable);
 //   - nothing answered: gate_unavailable; no answer in time: timeout;
@@ -63,8 +66,8 @@ func New(o Options) *Client {
 // has no id and is returned as a response with its code. The gate may
 // answer and exit before the request is fully written; the failed write
 // does not hide that answer.
-func (c *Client) Call(ctx context.Context, o Opener, op string, args any, budget time.Duration) (*protocol.Response, error) {
-	id, line, err := encode(op, args, budget)
+func (c *Client) Call(ctx context.Context, o Opener, op, ceiling string, args any, budget time.Duration) (*protocol.Response, error) {
+	id, line, err := encode(op, ceiling, args, budget)
 	if err != nil {
 		return nil, err
 	}
@@ -114,9 +117,12 @@ func (c *Client) Call(ctx context.Context, o Opener, op string, args any, budget
 	}
 }
 
-func encode(op string, args any, budget time.Duration) (id string, line []byte, err error) {
+func encode(op, ceiling string, args any, budget time.Duration) (id string, line []byte, err error) {
+	if !slices.Contains(protocol.Ceilings, ceiling) {
+		return "", nil, envelope.Errorf(envelope.CodeValidationError, "the request has no valid tier ceiling")
+	}
 	id = NewID()
-	req := protocol.Request{V: protocol.Version, ID: id, Op: op, TimeoutMS: budget.Milliseconds()}
+	req := protocol.Request{V: protocol.Version, ID: id, Ceiling: ceiling, Op: op, TimeoutMS: budget.Milliseconds()}
 	if args != nil {
 		if req.Args, err = protocol.Marshal(args); err != nil {
 			return "", nil, envelope.Errorf(envelope.CodeValidationError, "the request arguments cannot be encoded")

@@ -79,7 +79,7 @@ func wantCode(t *testing.T, err error, code string) {
 
 func TestRoundTrip(t *testing.T) {
 	c, _ := target(t, gate(okFor), 4)
-	resp, err := newClient().Call(t.Context(), c, protocol.OpHello, nil, 7*time.Second)
+	resp, err := newClient().Call(t.Context(), c, protocol.OpHello, "read", nil, 7*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestRequestIDsAreFreshUUIDv4(t *testing.T) {
 		return okFor(req)
 	}), 1)
 	for range 20 {
-		if _, err := newClient().Call(t.Context(), c, protocol.OpHello, nil, time.Second); err != nil {
+		if _, err := newClient().Call(t.Context(), c, protocol.OpHello, "read", nil, time.Second); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -118,7 +118,7 @@ func TestRefusalWithoutRequestID(t *testing.T) {
 				_, _ = fmt.Fprintf(s.Stdout, `{"v":1,"id":"","ok":false,"error":{"code":%q,"message":"refused before the request"}}`+"\n", code)
 				return 0
 			}, 1)
-			resp, err := newClient().Call(t.Context(), c, protocol.OpHello, nil, time.Second)
+			resp, err := newClient().Call(t.Context(), c, protocol.OpHello, "read", nil, time.Second)
 			if err != nil {
 				t.Fatalf("an early refusal became a transport error: %v", err)
 			}
@@ -139,7 +139,7 @@ func TestAnswerBeforeRequestFullyWritten(t *testing.T) {
 		return 1
 	}, 1)
 	args := map[string]string{"content_b64": strings.Repeat("A", protocol.MaxRequestBytes-1024)}
-	resp, err := newClient().Call(t.Context(), c, protocol.OpWriteFile, args, time.Second)
+	resp, err := newClient().Call(t.Context(), c, protocol.OpWriteFile, "operator", args, time.Second)
 	if err != nil {
 		t.Fatalf("the early answer was lost: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestResponseIDMismatch(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, _ := target(t, gate(func(*protocol.Request) string { return body + "\n" }), 1)
-			_, err := newClient().Call(t.Context(), c, protocol.OpHello, nil, time.Second)
+			_, err := newClient().Call(t.Context(), c, protocol.OpHello, "read", nil, time.Second)
 			wantCode(t, err, envelope.CodeProtocolMismatch)
 		})
 	}
@@ -167,7 +167,7 @@ func TestProtocolVersionMismatch(t *testing.T) {
 	c, _ := target(t, gate(func(req *protocol.Request) string {
 		return `{"v":2,"id":"` + req.ID + `","ok":true,"data":{},"warnings":[]}` + "\n"
 	}), 1)
-	_, err := newClient().Call(t.Context(), c, protocol.OpHello, nil, time.Second)
+	_, err := newClient().Call(t.Context(), c, protocol.OpHello, "read", nil, time.Second)
 	e := wantError(t, err, envelope.CodeProtocolMismatch)
 	if !strings.Contains(e.Message, "version") {
 		t.Fatalf("message = %q", e.Message)
@@ -177,7 +177,7 @@ func TestProtocolVersionMismatch(t *testing.T) {
 		_, _ = io.WriteString(s.Stdout, `{"v":1,"id":"","ok":false,"error":{"code":"protocol_mismatch","message":"unsupported protocol version"}}`+"\n")
 		return 0
 	}, 1)
-	resp, err := newClient().Call(t.Context(), c, protocol.OpHello, nil, time.Second)
+	resp, err := newClient().Call(t.Context(), c, protocol.OpHello, "read", nil, time.Second)
 	if err != nil || resp.Error.Code != protocol.CodeProtocolMismatch {
 		t.Fatalf("resp %+v err %v", resp, err)
 	}
@@ -196,7 +196,7 @@ func TestMalformedResponses(t *testing.T) {
 				_, _ = io.WriteString(s.Stdout, body)
 				return 0
 			}, 1)
-			_, err := newClient().Call(t.Context(), c, protocol.OpHello, nil, time.Second)
+			_, err := newClient().Call(t.Context(), c, protocol.OpHello, "read", nil, time.Second)
 			wantCode(t, err, envelope.CodeProtocolMismatch)
 		})
 	}
@@ -206,7 +206,7 @@ func TestNoResponse(t *testing.T) {
 	// sshd ran the forced command and it exited without a byte (for example
 	// a missing gate binary): the gate is unavailable.
 	c, _ := target(t, func(context.Context, *sshtest.Session) uint32 { return 127 }, 1)
-	_, err := newClient().Call(t.Context(), c, protocol.OpHello, nil, time.Second)
+	_, err := newClient().Call(t.Context(), c, protocol.OpHello, "read", nil, time.Second)
 	wantCode(t, err, envelope.CodeGateUnavailable)
 }
 
@@ -228,7 +228,7 @@ func TestOversizedResponseIsBounded(t *testing.T) {
 		_ = w.Flush()
 		return 0
 	}, 1)
-	_, err := newClient().Call(t.Context(), c, protocol.OpHello, nil, 2*time.Second)
+	_, err := newClient().Call(t.Context(), c, protocol.OpHello, "read", nil, 2*time.Second)
 	wantCode(t, err, protocol.CodeTooLarge)
 }
 
@@ -240,7 +240,7 @@ func TestTimeBudget(t *testing.T) {
 	}, 1)
 	cl := New(Options{Logger: slog.New(slog.DiscardHandler), Grace: 100 * time.Millisecond})
 	start := time.Now()
-	_, err := cl.Call(t.Context(), c, protocol.OpHello, nil, 100*time.Millisecond)
+	_, err := cl.Call(t.Context(), c, protocol.OpHello, "read", nil, 100*time.Millisecond)
 	wantCode(t, err, envelope.CodeTimeout)
 	if d := time.Since(start); d > 2*time.Second {
 		t.Fatalf("the call took %v with a 200 ms budget", d)
@@ -258,10 +258,39 @@ func TestTimeBudget(t *testing.T) {
 func TestRequestTooLargeIsNotSent(t *testing.T) {
 	c, srv := target(t, gate(okFor), 1)
 	args := map[string]string{"content_b64": strings.Repeat("A", protocol.MaxRequestBytes)}
-	_, err := newClient().Call(t.Context(), c, protocol.OpWriteFile, args, time.Second)
+	_, err := newClient().Call(t.Context(), c, protocol.OpWriteFile, "operator", args, time.Second)
 	wantCode(t, err, envelope.CodeValidationError)
 	if slices.Contains(srv.Events(), "channel:session") {
 		t.Fatal("an oversized request opened a session")
+	}
+}
+
+// TestCeiling: the ceiling goes out as given; a call without a valid one is
+// refused before a session is opened.
+func TestCeiling(t *testing.T) {
+	var got []string
+	c, srv := target(t, gate(func(req *protocol.Request) string {
+		got = append(got, req.Ceiling)
+		return okFor(req)
+	}), 1)
+	for _, ceiling := range protocol.Ceilings {
+		if _, err := newClient().Call(t.Context(), c, protocol.OpHello, ceiling, nil, time.Second); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !slices.Equal(got, []string{"read", "operator", "destructive"}) {
+		t.Fatalf("ceilings sent %v", got)
+	}
+	opened := func() int {
+		return len(slices.DeleteFunc(slices.Clone(srv.Events()), func(e string) bool { return e != "channel:session" }))
+	}
+	before := opened()
+	for _, bad := range []string{"", "admin", "READ"} {
+		_, err := newClient().Call(t.Context(), c, protocol.OpHello, bad, nil, time.Second)
+		wantCode(t, err, envelope.CodeValidationError)
+	}
+	if opened() != before {
+		t.Fatal("a request without a valid ceiling opened a session")
 	}
 }
 
@@ -280,7 +309,7 @@ func TestTransportErrorsPassThrough(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = newClient().Call(t.Context(), dead, protocol.OpHello, nil, time.Second)
+	_, err = newClient().Call(t.Context(), dead, protocol.OpHello, "read", nil, time.Second)
 	wantCode(t, err, envelope.CodeTargetUnreachable)
 }
 

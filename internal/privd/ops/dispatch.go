@@ -111,11 +111,34 @@ func (s *server) dispatch() *protocol.Response {
 		return s.errResp(s.wrongUnit(want))
 	}
 	// Then the tier, before any other processing.
-	if spec.tier > s.p.MaxTier {
-		return s.errResp(errf(protocol.CodeTierDenied, "operation tier %s exceeds the privileged policy's max_tier %s", spec.tier, s.p.MaxTier))
+	if err := s.within("operation", spec.tier); err != nil {
+		return s.errResp(err)
 	}
 	data, warnings, err := spec.run(s, s.req.Args)
 	return s.result(data, warnings, err)
+}
+
+// within is the tier check: tier must not exceed min(the privileged
+// policy's max_tier, the request's ceiling). The ceiling is the calling
+// tool's tier, forwarded by the gate unchanged; the helper applies it
+// itself rather than trusting the gate to have done so. A refusal names
+// the limit that applied, or both when they are equal.
+func (s *server) within(what string, tier policy.Tier) error {
+	ceiling, err := policy.ParseTier(s.req.Ceiling)
+	if err != nil {
+		// DecodeRequest accepts only the three tier names.
+		return errf(protocol.CodeBadRequest, "ceiling is missing or not read, operator or destructive")
+	}
+	limit := s.p.MaxTier
+	switch {
+	case tier <= limit && tier <= ceiling:
+		return nil
+	case ceiling < limit:
+		return errf(protocol.CodeTierDenied, "%s tier %s exceeds the request's ceiling %s", what, tier, ceiling)
+	case limit < ceiling:
+		return errf(protocol.CodeTierDenied, "%s tier %s exceeds the privileged policy's max_tier %s", what, tier, limit)
+	}
+	return errf(protocol.CodeTierDenied, "%s tier %s exceeds the privileged policy's max_tier %s and the request's ceiling %s", what, tier, limit, ceiling)
 }
 
 func (s *server) result(data any, warnings []string, err error) *protocol.Response {

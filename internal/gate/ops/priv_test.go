@@ -108,7 +108,7 @@ func TestForwardRequestUnchanged(t *testing.T) {
 	f := newFixture(t, "destructive")
 	h := startHelper(t, f, echoID(""))
 	args := `{"path":"/etc/example-app/app.conf","content_b64":"eA==","mode":"0640","owner":"root"}`
-	in := `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"priv_write_file","args":` + args + `,"timeout_ms":5000}` + "\n"
+	in := `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"priv_write_file","args":` + args + `,"timeout_ms":5000}` + "\n"
 	r, _ := f.serveRaw(in)
 	if !r.OK || string(r.Data) != `{"from":"helper"}` || len(r.Warnings) != 1 || r.Warnings[0] != "helper warning" {
 		t.Fatalf("forwarded response %+v %s", r.Error, r.Data)
@@ -165,7 +165,7 @@ func TestForwardErrors(t *testing.T) {
 			start := time.Now()
 			// A 300 ms request timeout: the gate gives up at 300 ms plus the
 			// 200 ms grace, long before the silent helper closes.
-			r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"priv_stat","args":{"path":"/etc/example-app"},"timeout_ms":300}` + "\n")
+			r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"priv_stat","args":{"path":"/etc/example-app"},"timeout_ms":300}` + "\n")
 			if r.OK || r.Error == nil || r.Error.Code != c.code {
 				t.Fatalf("got %+v, want %s", r.Error, c.code)
 			}
@@ -294,7 +294,7 @@ func TestForwardHelperSelfCheckCodes(t *testing.T) {
 				msg := "the privileged helper refused to serve: " + code
 				answerUnread(t, f, `{"v":1,"id":"","ok":false,"error":{"code":"`+code+`","message":"`+msg+`"},"warnings":[]}`+"\n", early)
 				for range 3 {
-					r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"priv_stat","args":{"path":"/etc/example-app"},"timeout_ms":2000}` + "\n")
+					r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"priv_stat","args":{"path":"/etc/example-app"},"timeout_ms":2000}` + "\n")
 					if r.OK || r.Error == nil || r.Error.Code != code || r.Error.Message != msg {
 						t.Fatalf("got %+v, want %s", r.Error, code)
 					}

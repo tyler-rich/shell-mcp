@@ -87,7 +87,7 @@ func sshClient(t *testing.T, pins []config.HostKey, key *config.PrivateKey) *ssh
 
 func hello(t *testing.T, c *sshx.Client) (*protocol.Response, error) {
 	t.Helper()
-	return gateclient.New(gateclient.Options{}).Call(t.Context(), c, protocol.OpHello, nil, 20*time.Second)
+	return gateclient.New(gateclient.Options{}).Call(t.Context(), c, protocol.OpHello, protocol.TierRead, nil, 20*time.Second)
 }
 
 func wantSSHCode(t *testing.T, err error, code string) {

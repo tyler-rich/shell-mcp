@@ -119,6 +119,8 @@ func TestRegisterRejectsInvalid(t *testing.T) {
 		{"privileged without priv prefix", tool("shell_chown_path"), TierOperator, true},
 		{"priv prefix not privileged", tool("shell_priv_chown_path"), TierOperator, false},
 		{"not snake case", tool("shell_Read-File"), TierRead, false},
+		// A tool whose handler sends a different ceiling than its registration.
+		{"defined at another tier", Tool{Def: &mcp.Tool{Name: "shell_c_d"}, Tier: TierRead, Install: func(*mcp.Server) {}}, TierOperator, false},
 	}
 	for _, b := range bad {
 		if err := r.Register(b.t, b.tier, b.priv); err == nil {

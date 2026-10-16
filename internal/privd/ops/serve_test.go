@@ -290,9 +290,9 @@ func TestSandboxRefusal(t *testing.T) {
 func TestRequestErrors(t *testing.T) {
 	f := newFixture(t)
 	for in, code := range map[string]string{
-		`{"v":1,"id":"` + reqID + `","op":"priv_stat","op":"priv_stat"}` + "\n": "bad_request",
-		`{"v":2,"id":"` + reqID + `","op":"priv_stat"}` + "\n":                  "protocol_mismatch",
-		`{"v":1,"id":"a","op":"priv_stat"}` + "\n":                              "bad_request",
+		`{"v":1,"id":"` + reqID + `","ceiling":"destructive","op":"priv_stat","op":"priv_stat"}` + "\n": "bad_request",
+		`{"v":2,"id":"` + reqID + `","ceiling":"destructive","op":"priv_stat"}` + "\n":                  "protocol_mismatch",
+		`{"v":1,"id":"a","ceiling":"destructive","op":"priv_stat"}` + "\n":                              "bad_request",
 		"not json\n": "bad_request",
 	} {
 		out, _ := f.serveRaw(in)

@@ -597,7 +597,7 @@ func TestReadToolsCallTheirOp(t *testing.T) {
 				}
 			}},
 		{"shell_run_read_command", map[string]any{"command_id": "app-status", "args": []string{"status", "--json"}, "cwd": "/srv/app", "timeout_seconds": 20},
-			[]string{"policy", "exec"}, `{"args":["status","--json"],"command_id":"app-status","cwd":"/srv/app","max_output_bytes":0}`,
+			[]string{"exec"}, `{"args":["status","--json"],"command_id":"app-status","cwd":"/srv/app","max_output_bytes":0}`,
 			func(t *testing.T, env map[string]any) {
 				d := data(t, env)
 				ex, _ := env["exec"].(map[string]any)
@@ -644,17 +644,16 @@ func TestReadToolsTimeoutBudget(t *testing.T) {
 	}
 }
 
-// TestRunReadCommandTier: only commands whose policy tier is read run; the
-// tier is read from the gate's policy before anything is executed.
+// TestRunReadCommandTier: the tool sends one exec request at ceiling read;
+// the gate's refusals (an undeclared id, a command above the ceiling, a
+// template mismatch) pass through, and the tool never reads the policy
+// itself.
 func TestRunReadCommandTier(t *testing.T) {
 	g := newRecordingGate(allReplies())
 	h := readHarness(t, g)
-	env, _ := h.call("shell_run_read_command", map[string]any{"command_id": "app-restart", "args": []string{"restart"}})
-	if errCode(env) != "tier_denied" || slices.Contains(g.ops(), "exec") {
-		t.Fatalf("operator command: %v (ops %v)", env, g.ops())
-	}
-	env, _ = h.call("shell_run_read_command", map[string]any{"command_id": "app-undeclared"})
-	if errCode(env) != "policy_denied" || slices.Contains(g.ops(), "exec") {
+	g.replies["exec"] = gateReply{code: "policy_denied", msg: "command_id is not declared in the policy"}
+	env, _ := h.call("shell_run_read_command", map[string]any{"command_id": "app-undeclared"})
+	if errCode(env) != "policy_denied" {
 		t.Fatalf("undeclared command: %v (ops %v)", env, g.ops())
 	}
 	// The gate refuses what does not match a template; its code passes through.
@@ -670,13 +669,15 @@ func TestRunReadCommandTier(t *testing.T) {
 	if env["ok"] != true || res.IsError || ex == nil || ex["exit_code"] != 3.0 {
 		t.Fatalf("non-zero exit: %v", env)
 	}
-	// The policy changed between the tier check and the run: a warning.
-	g.mu.Lock()
-	g.sha = "cd34"
-	g.mu.Unlock()
-	env, _ = h.call("shell_run_read_command", map[string]any{"command_id": "app-status", "args": []string{"status", "--json"}})
-	if env["ok"] != true || !strings.Contains(jsonOf(t, env["warnings"]), "policy changed") {
-		t.Fatalf("policy change not reported: %v", env)
+	// One request per call, each an exec at ceiling read: no policy lookup,
+	// so no check-then-run window and no warning about one.
+	for _, q := range g.requests() {
+		if q.Op != "exec" || q.Ceiling != "read" {
+			t.Fatalf("request %s at ceiling %q; want only exec at read", q.Op, q.Ceiling)
+		}
+	}
+	if len(g.requests()) != 3 || strings.Contains(jsonOf(t, env["warnings"]), "policy changed") {
+		t.Fatalf("requests %v, envelope %v", g.ops(), env)
 	}
 }
 

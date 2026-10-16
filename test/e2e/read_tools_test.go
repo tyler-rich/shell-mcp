@@ -473,22 +473,28 @@ func TestReadToolRunReadCommand(t *testing.T) {
 		}
 	})
 	t.Run("refusal_operator_command", func(t *testing.T) {
-		// Control: the gate itself runs the operator command (its max_tier
-		// is operator), so the refusal below is the tool's.
+		// Control: the gate runs the operator command at ceiling operator
+		// (its max_tier is operator), so the refusal below comes from the
+		// read tool's ceiling, checked by the gate in the same step as
+		// max_tier.
 		resp := gateExec(t, "probe-operator", []string{"echo", "operator"})
 		if !resp.OK {
 			t.Fatalf("control: the gate refused the operator command: %+v", resp.Error)
 		}
+		start := time.Now()
 		refusal(t, callTool(t, "shell_run_read_command", map[string]any{"command_id": "probe-operator", "args": []string{"echo", "operator"}}),
-			"tier_denied", "read-tier")
+			"tier_denied", "ceiling read")
+		// The gate refused it (its own audit line), before running anything.
+		findJournal(t, "shell-mcp-gate", start, `"principal":"e2e-read"`, `"op":"exec"`, `"command_id":"probe-operator"`, `"outcome":"tier_denied"`)
 	})
 }
 
-// gateExec sends one exec request straight to the gate with the read key.
+// gateExec sends one exec request straight to the gate with the read key,
+// at ceiling operator (the read policy's max_tier).
 func gateExec(t *testing.T, id string, args []string) *protocol.Response {
 	t.Helper()
 	c := sshClient(t, []config.HostKey{hostPin(t, "ssh_host_ed25519_key.pub")}, clientKey(t, "e2e-client-key-read"))
-	resp, err := gateclient.New(gateclient.Options{}).Call(t.Context(), c, protocol.OpExec,
+	resp, err := gateclient.New(gateclient.Options{}).Call(t.Context(), c, protocol.OpExec, protocol.TierOperator,
 		map[string]any{"command_id": id, "args": args}, 20*time.Second)
 	if err != nil {
 		t.Fatal(err)

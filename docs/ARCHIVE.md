@@ -1368,3 +1368,43 @@ The lockout exists to stop token guessing, and a request without a credential gu
 - **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.14.0, govulncheck v1.9.0.
+
+### 2026-10-16 — Tier ceiling on every gate request; protocol v1 amended in place (PR #18, branch sec/tier-ceiling)
+**Decision:** Every gate and helper request carries a required `ceiling` tier, and the gate and the helper refuse anything above min(their `max_tier`, `ceiling`):
+- **Protocol (ARCHITECTURE §4.1).** `ceiling` is `read`, `operator` or `destructive`. `DecodeRequest` refuses a request without one, with `null`, or with any other value (`admin`, `READ`, a profile name, a number) as `bad_request`, so nothing past the decoder ever sees it. Another version is still `protocol_mismatch` first. No other field or code changed.
+- **Gate.** The dispatcher's tier check is now tier ≤ min(`max_tier`, `ceiling`), still the first check on the request. For `exec`, the command's own tier is checked against the same minimum, right after the command is looked up. For `priv_*` the gate uses min(`privileged.max_tier`, `ceiling`) before it connects, and forwards the request unchanged, ceiling included. The `tier_denied` message names the limit that applied: the policy's field, the request's ceiling, or both when they are equal.
+- **Helper.** After the unit check, the same test against min(privileged `max_tier`, `ceiling`) for operations and for `priv_exec` commands. The gate cannot know a privileged command's tier, so for `priv_exec` the helper's check is the one that counts.
+- **Server.** `define` puts each tool's tier into its handler's context, and `Deps.call` sends it as the ceiling; a context without one sends nothing. `Tool` now records the tier its handler sends, and `Register` refuses to register it at another tier, so "the ceiling is the registered tier" holds by construction. `gateclient.Call` takes the ceiling and refuses an invalid one (`validation_error`) before opening a session. `Probe` (`shell-mcp check`) sends `read`.
+- **`shell_run_read_command`** drops its `policy` request and the "policy changed" warning. It sends one `exec` at ceiling `read`; the gate's refusals (`policy_denied`, `tier_denied`, `template_mismatch`) pass through.
+
+**Why:** S3 left a check-then-run race (S3 entry, "Double-check"): the read tool read a command's tier with one request and ran it with a second, so root editing the policy in between could run an operator command through a read tool. Moving the tool's tier into the request makes the check atomic with `max_tier`, and it covers every tool rather than one. It also makes the server's profile a second enforcement point on the host. It does not defend against a compromised server, which can send any ceiling; the policies stay the boundary for that (POLICY §2, PRIVILEGED §6). The maintainer approved this protocol change in the session prompt.
+
+**Why amend v1 rather than bump to v2:** nothing has been released, so no deployed gate, helper or server speaks v1 without the field. A bump would add a second version string and a compatibility path for peers that cannot exist, and the version check would buy nothing. A pre-amendment peer fails closed: an old server's requests have no ceiling (`bad_request`), and a new server's ceiling is an unknown field to an old gate (`bad_request`). Neither runs anything.
+
+**Correction to the S3 entry:** its "Double-check" race and its deferred "`exec` argument that makes the gate refuse a command above a caller-given tier" are resolved by this change, more generally than proposed (a request-level field for every op, not an `exec` argument).
+
+**Tests (committed failing first, `82bfed2`; output in the PR body):**
+- **Protocol:** a missing, empty, null, unknown, mis-cased, padded, numeric, list or duplicated ceiling is `bad_request`; the three tiers decode. `FuzzDecodeRequest` now requires an accepted request to carry a valid ceiling that survives the round trip, with new seeds; re-run for 60 s.
+- **Gate** (`internal/gate/ops/ceiling_test.go`): a missing or unknown ceiling is `bad_request` without an id, and the operator command's marker file is never created. Built-in ops above the ceiling are refused naming it, before argument validation; under `max_tier: read` with ceiling `destructive` the message names `max_tier`. `exec` of an operator command at ceiling `read` under `max_tier: operator` is `tier_denied` and its marker file does not exist; the same request at ceiling `operator` writes it (control). Before the fix the gate ran it. `priv_*` above the ceiling never reaches the helper, and the ceiling arrives at the helper unchanged.
+- **Helper** (`internal/privd/ops/ceiling_test.go`): the same for operations and `priv_exec` (the fixture's operator command gained a `write` template for the marker).
+- **Server:** a table over the registry checks that every tool's every gate request carries exactly its registered tier; a tool missing from the table fails it. `Probe` sends `read`. `shell_run_read_command` makes one `exec` request and passes the gate's `tier_denied` through; the real-gate test now expects the gate's ceiling message. `Register` refuses a tool defined at another tier. `gateclient` sends the ceiling and refuses an invalid one before a session opens (this last test came with the new parameter, since the old client had none to test).
+- **e2e-host:** `TestReadToolRunReadCommand/refusal_operator_command` expects the gate's `ceiling read` refusal and the gate's own audit line (`exec`, `tier_denied`); the direct gate control runs the command at ceiling `operator`. New `TestGateCeilingPrivileged`: with `CAP_KILL` declared, `priv_exec` of the operator command `probe-signal` at ceiling `read` is refused by the helper (journal line `tier_denied`) and the target process stays alive; `priv_write_file` at ceiling `read` is refused by the gate and writes nothing; the same command at ceiling `operator` signals the target (control). On the failing commit both failed on CI: the old helper ran the command at ceiling `read`, and the read tool refused with its own message.
+- Existing hand-written test requests now carry `"ceiling":"destructive"`, so the policies' `max_tier` decides as before.
+
+**Alternatives rejected:**
+- An `exec`-only argument (the S3 suggestion): it closes one race; a request-level field bounds every op and the helper too.
+- Bumping to protocol v2 (above).
+- Letting the ceiling default to the policy's `max_tier` when absent: that is how the race happens; absent is `bad_request`.
+- Passing the ceiling as an explicit argument at every tool's call site: the context set once in `define`, plus the registration check, cannot drift from the registered tier.
+- Keeping the read tool's policy lookup as a friendlier pre-check: it is the race window, and the gate now says the same thing atomically.
+
+**Deferred / follow-ups:**
+- The gate's and the helper's audit lines do not record the ceiling. The outcome and message already say which limit refused; adding a field is a small change if wanted.
+- **S4a/S4b:** `shell_run_command` is registered at `operator` in the operator profile and, per TOOLS.md, accepts destructive commands in `admin`. Its registered tier in each profile is the ceiling it sends, so that registration decides what it can run.
+
+**Versions:**
+- **Go:** 1.27.2, still the newest stable per go.dev (go1.27.2, go1.26.9 listed).
+- **Refresh:** `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing, and `scripts/deps-current.sh` reports 13 in-scope modules current.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.14.0, govulncheck v1.9.0.

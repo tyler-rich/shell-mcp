@@ -155,6 +155,6 @@ func TestReadToolsAgainstRealGate(t *testing.T) {
 	refused("shell_get_service_status", map[string]any{"unit": "example-app.service"}, "policy_denied", "services.status")
 	refused("shell_list_services", map[string]any{}, "policy_denied", "services.status")
 	refused("shell_get_journal", map[string]any{"unit": "example-app.service"}, "policy_denied", "journal")
-	refused("shell_run_read_command", map[string]any{"command_id": "probe-operator", "args": []string{"echo", "operator"}}, "tier_denied", "")
+	refused("shell_run_read_command", map[string]any{"command_id": "probe-operator", "args": []string{"echo", "operator"}}, "tier_denied", "ceiling read")
 	refused("shell_run_read_command", map[string]any{"command_id": "probe-echo", "args": []string{"echo", "Hello"}}, "template_mismatch", "")
 }
