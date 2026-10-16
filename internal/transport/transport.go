@@ -76,7 +76,7 @@ func New(cfg *config.Config, mcp http.Handler, opts *Options) (*http.Server, err
 			o.Logger = opts.Logger
 		}
 	}
-	clientKey := func(r *http.Request) clientID { return keyOf(clientAddr(r, cfg.TrustProxy || len(cfg.TrustedProxies) > 0)) } // stub: the old boolean
+	clientKey := func(r *http.Request) clientID { return keyOf(clientAddr(r, cfg.TrustedProxies)) }
 	am, err := auth.New(auth.Config{Mode: cfg.AuthMode, Token: cfg.Token, ClientKey: clientKey, Now: o.Now, Logger: o.Logger})
 	if err != nil {
 		return nil, err

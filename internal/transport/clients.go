@@ -3,6 +3,7 @@ package transport
 import (
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -17,28 +18,33 @@ type clientID = netip.Prefix
 // maxTrackedClients bounds each limiter's table.
 const maxTrackedClients = 4096
 
-// clientAddr is the connection's address, or, with SHELL_MCP_TRUST_PROXY,
-// the address the one trusted proxy in front of the server saw: the last
-// entry of the last X-Forwarded-For header, which that proxy appended.
-// Entries before it were written by the client and are never used. An
-// unparsable value falls back to the connection's address.
-func clientAddr(r *http.Request, trustProxy bool) netip.Addr {
-	var addr netip.Addr
+// clientAddr is the connection's peer address. Only when that peer is one
+// of SHELL_MCP_TRUSTED_PROXIES is X-Forwarded-For used, and then only its
+// last entry (of the last header): the one that proxy appended. Entries
+// before it were written by the client and are never used; an unparsable
+// last entry falls back to the peer. A request from any other address
+// counts against its own peer address, whatever headers it carries.
+func clientAddr(r *http.Request, trusted []netip.Prefix) netip.Addr {
+	var peer netip.Addr
 	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
-		addr = ap.Addr()
+		peer = ap.Addr().WithZone("").Unmap()
 	}
-	if trustProxy {
-		if vals := r.Header.Values("X-Forwarded-For"); len(vals) > 0 {
-			last := vals[len(vals)-1]
-			if i := strings.LastIndexByte(last, ','); i >= 0 {
-				last = last[i+1:]
-			}
-			if a, err := netip.ParseAddr(strings.TrimSpace(last)); err == nil {
-				addr = a
-			}
-		}
+	if !peer.IsValid() || !slices.ContainsFunc(trusted, func(p netip.Prefix) bool { return p.Contains(peer) }) {
+		return peer
 	}
-	return addr.WithZone("").Unmap()
+	vals := r.Header.Values("X-Forwarded-For")
+	if len(vals) == 0 {
+		return peer
+	}
+	last := vals[len(vals)-1]
+	if i := strings.LastIndexByte(last, ','); i >= 0 {
+		last = last[i+1:]
+	}
+	a, err := netip.ParseAddr(strings.TrimSpace(last))
+	if err != nil {
+		return peer
+	}
+	return a.WithZone("").Unmap()
 }
 
 func keyOf(a netip.Addr) clientID {

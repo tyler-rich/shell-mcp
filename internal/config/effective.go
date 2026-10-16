@@ -1,5 +1,7 @@
 package config
 
+import "net/netip"
+
 // Effective is the printable form of a Config: secrets are replaced by their
 // length (token) or public-key fingerprint (SSH keys).
 type Effective struct {
@@ -14,7 +16,7 @@ type Effective struct {
 	AllowUnauthenticated bool              `json:"allow_unauthenticated"`
 	AllowedHosts         []string          `json:"allowed_hosts"`
 	AllowedOrigins       []string          `json:"allowed_origins"`
-	TrustProxy           bool              `json:"trust_proxy"`
+	TrustedProxies       []string          `json:"trusted_proxies"`
 	RateLimitPerMin      int               `json:"rate_limit_per_min"`
 	Targets              []EffectiveTarget `json:"targets"`
 	DefaultTarget        string            `json:"default_target"`
@@ -56,7 +58,7 @@ func (c *Config) Effective() Effective {
 		AllowUnauthenticated: c.AllowUnauthenticated,
 		AllowedHosts:         nonNil(c.AllowedHosts),
 		AllowedOrigins:       nonNil(c.AllowedOrigins),
-		TrustProxy:           c.TrustProxy,
+		TrustedProxies:       prefixStrings(c.TrustedProxies),
 		RateLimitPerMin:      c.RateLimitPerMin,
 		Targets:              make([]EffectiveTarget, 0, len(c.Targets)),
 		DefaultTarget:        c.DefaultTarget,
@@ -92,6 +94,14 @@ func nonNil(s []string) []string {
 func hostKeyStrings(pins []HostKey) []string {
 	out := make([]string, 0, len(pins))
 	for _, p := range pins {
+		out = append(out, p.String())
+	}
+	return out
+}
+
+func prefixStrings(ps []netip.Prefix) []string {
+	out := make([]string, 0, len(ps))
+	for _, p := range ps {
 		out = append(out, p.String())
 	}
 	return out
