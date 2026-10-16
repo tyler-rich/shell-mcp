@@ -66,6 +66,10 @@ Defaults: omitted sections allow nothing. An empty policy with `max_tier: read` 
 
 An op or command above `max_tier` is refused with `tier_denied` before any other processing.
 
+**The request's ceiling.** Every request also names a `ceiling` tier (ARCHITECTURE §4.1): the tier of the server tool that sent it, so `shell_run_read_command` sends `read` and an operator tool `operator`. The gate refuses any op or `exec` command whose tier is above **min(`max_tier`, `ceiling`)**, in the same check and at the same point: first, before anything else about the request. A request without a ceiling, or with a value other than `read`, `operator` or `destructive`, is `bad_request`. The ceiling can only lower the limit, never raise it above `max_tier`; the refusal says which limit applied. For `priv_*` ops the gate uses min(`privileged.max_tier`, `ceiling`) and forwards the ceiling unchanged, and the helper applies it again (PRIVILEGED §6).
+
+The ceiling is defence in depth against server mistakes and races — a tool that would otherwise check a command's tier with one request and run it with another, while root edits the policy in between — and it makes the server's profile a second enforcement point on the host. It is not a defence against a compromised server, which can send any ceiling: `max_tier` and the rest of this policy remain the boundary for that, so write them for the worst case as above.
+
 ## 3. Paths
 
 - All roots and requested paths must be absolute and already clean (no `.`/`..` components, no trailing slash except `/` itself, no NUL, ≤ 4096 bytes). The gate rejects unclean input instead of cleaning it.
