@@ -276,6 +276,7 @@ jobs:
         run: |
           out="$RUNNER_TEMP/e2e-bin"
           mkdir -p "$out"
+          go build -trimpath -o "$out/shell-mcp" ./cmd/shell-mcp
           go build -trimpath -o "$out/shell-mcp-gate" ./cmd/shell-mcp-gate
           go build -trimpath -o "$out/shell-mcp-privd" ./cmd/shell-mcp-privd
           go build -trimpath -tags shellmcp_e2e_bypass -o "$out/shell-mcp-privd-bypass" ./cmd/shell-mcp-privd
@@ -290,13 +291,18 @@ jobs:
             echo "- $(systemctl --version | head -n1)"
             echo "- landlock: $(go run ./scripts/probe/landlock 2>&1 | tail -n1)"
           } | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: install polkitd (if the image lacks it)
+      - name: install polkitd and openssh-server (if the image lacks them)
         run: |
-          if ! test -x /usr/lib/polkit-1/polkitd; then
+          missing=""
+          test -x /usr/lib/polkit-1/polkitd || missing="$missing polkitd"
+          test -x /usr/sbin/sshd || missing="$missing openssh-server"
+          if [ -n "$missing" ]; then
             sudo apt-get update
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends polkitd
+            # shellcheck disable=SC2086 # one package per word
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $missing
           fi
           echo "- polkit: $(dpkg-query -W -f='${Package} ${Version}' polkitd)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- OpenSSH (server tests): $(/usr/sbin/sshd -V 2>&1 | head -n1)" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: setup (as root)
         run: |
           sudo install -d -o root -g root -m 0755 /opt/e2e-bin

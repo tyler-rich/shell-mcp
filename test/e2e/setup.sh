@@ -25,7 +25,7 @@ case "$landlock" in required | best-effort) ;; *)
 	exit 2
 	;;
 esac
-for f in shell-mcp-gate shell-mcp-privd shell-mcp-privd-bypass example-probe e2e.test; do
+for f in shell-mcp shell-mcp-gate shell-mcp-privd shell-mcp-privd-bypass example-probe e2e.test; do
 	test -x "$bin/$f" || {
 		echo "missing $bin/$f" >&2
 		exit 2
@@ -262,6 +262,74 @@ systemctl daemon-reload
 systemctl enable --now example-app.service example-other.service
 systemctl enable --now shell-mcp-privd.socket shell-mcp-privd-broad.socket
 systemctl restart polkit.service 2>/dev/null || systemctl restart polkitd.service 2>/dev/null || true
+
+# --- A dedicated test sshd for the server's SSH client ----------------------
+# A second sshd, on 127.0.0.1:2222 only, with its own configuration, host
+# keys and keys file, so the machine's own sshd is untouched. It has an
+# Ed25519 and an ECDSA host key (the client must negotiate the pinned type),
+# and two client keys for svc-shell, each with restrict, from= and the gate
+# as its forced command: one usable from 127.0.0.1, one only from
+# 192.0.2.1 (TEST-NET-1, never this machine). The directives follow
+# SECURITY §5 and are checked with `sshd -t` against this machine's OpenSSH.
+if [ -x /usr/sbin/sshd ]; then
+	sd=/etc/shell-mcp-e2e-sshd
+	install -o root -g root -m 0755 -d "$sd" "$sd/authorized_keys.d"
+	rm -f "$sd"/ssh_host_* "$bin"/e2e-client-key*
+	ssh-keygen -q -t ed25519 -N '' -C e2e-host-ed25519 -f "$sd/ssh_host_ed25519_key"
+	ssh-keygen -q -t ecdsa -b 256 -N '' -C e2e-host-ecdsa -f "$sd/ssh_host_ecdsa_key"
+	ssh-keygen -q -t ed25519 -N '' -C e2e-client -f "$bin/e2e-client-key"
+	ssh-keygen -q -t ed25519 -N '' -C e2e-client-other-from -f "$bin/e2e-client-key-other-from"
+	chmod 0600 "$bin/e2e-client-key" "$bin/e2e-client-key-other-from"
+	forced='command="/usr/local/bin/shell-mcp-gate serve --policy /etc/shell-mcp/gate.yaml --principal e2e-ssh"'
+	{
+		printf 'restrict,from="127.0.0.1",%s %s\n' "$forced" "$(cut -d' ' -f1,2 "$bin/e2e-client-key.pub")"
+		printf 'restrict,from="192.0.2.1",%s %s\n' "$forced" "$(cut -d' ' -f1,2 "$bin/e2e-client-key-other-from.pub")"
+	} >"$sd/authorized_keys.d/svc-shell"
+	chmod 0644 "$sd/authorized_keys.d/svc-shell"
+	printf '%s\n' \
+		'Port 2222' \
+		'ListenAddress 127.0.0.1' \
+		"HostKey $sd/ssh_host_ed25519_key" \
+		"HostKey $sd/ssh_host_ecdsa_key" \
+		'PidFile /run/shell-mcp-e2e-sshd.pid' \
+		"AuthorizedKeysFile $sd/authorized_keys.d/%u" \
+		'AllowUsers svc-shell' \
+		'AuthenticationMethods publickey' \
+		'PubkeyAuthentication yes' \
+		'PasswordAuthentication no' \
+		'KbdInteractiveAuthentication no' \
+		'UsePAM yes' \
+		'StrictModes yes' \
+		'PermitRootLogin no' \
+		'PermitTTY no' \
+		'AllowTcpForwarding no' \
+		'AllowStreamLocalForwarding no' \
+		'AllowAgentForwarding no' \
+		'X11Forwarding no' \
+		'PermitTunnel no' \
+		'PermitUserRC no' \
+		'MaxSessions 8' \
+		'LogLevel VERBOSE' >"$sd/sshd_config"
+	chmod 0644 "$sd/sshd_config"
+	install -o root -g root -m 0755 -d /run/sshd
+	/usr/sbin/sshd -t -f "$sd/sshd_config"
+	systemctl stop shell-mcp-e2e-sshd.service 2>/dev/null || true
+	systemd-run --quiet --unit=shell-mcp-e2e-sshd --collect /usr/sbin/sshd -D -e -f "$sd/sshd_config"
+	for _ in $(seq 1 50); do
+		ss -ltn | grep -q '127.0.0.1:2222 ' && break
+		sleep 0.2
+	done
+	# Not fatal here: the server SSH tests then skip, or fail under
+	# E2E_REQUIRE_ALL (the CI job), and the other tests still run.
+	if ss -ltn | grep -q '127.0.0.1:2222 '; then
+		echo "e2e setup: test sshd on 127.0.0.1:2222 ($(/usr/sbin/sshd -V 2>&1 | head -n1))"
+	else
+		echo "e2e setup: the test sshd did not start" >&2
+		journalctl --no-pager -n 30 -u shell-mcp-e2e-sshd.service >&2 || true
+	fi
+else
+	echo "e2e setup: no /usr/sbin/sshd; the server SSH tests will skip (or fail under E2E_REQUIRE_ALL)"
+fi
 
 echo "e2e setup: done (landlock $landlock)"
 systemctl --version | head -n1

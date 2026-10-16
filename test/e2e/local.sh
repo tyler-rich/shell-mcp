@@ -33,6 +33,7 @@ docker run --rm -u 65532:65532 -e HOME=/tmp -e GOCACHE=/cache/build -e GOMODCACH
 	-v "$cache_volume:/cache" -v "$repo:/src:ro" -w /src "$go_image" sh -c '
 set -e
 out=/cache/e2e-bin
+go build -trimpath -o $out/shell-mcp ./cmd/shell-mcp
 go build -trimpath -o $out/shell-mcp-gate ./cmd/shell-mcp-gate
 go build -trimpath -o $out/shell-mcp-privd ./cmd/shell-mcp-privd
 go build -trimpath -tags shellmcp_e2e_bypass -o $out/shell-mcp-privd-bypass ./cmd/shell-mcp-privd
