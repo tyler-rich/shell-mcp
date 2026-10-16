@@ -1,9 +1,9 @@
 //go:build e2e && linux
 
 // Package e2e runs the gate and the privileged helper against a real
-// systemd, journald and polkit on a disposable machine prepared by
-// setup.sh: the GitHub-hosted runner VM (CI job "e2e-host") or the local
-// systemd test container (local.sh). It is built only with -tags e2e and
+// systemd, journald and polkit on the disposable GitHub-hosted runner VM
+// prepared by setup.sh (CI job "e2e-host"). It is built only with -tags e2e,
+// refuses to run anywhere else before doing anything (package runner), and
 // runs as root; the gate itself always runs as the invented service
 // account.
 //
@@ -32,6 +32,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/tyler-rich/shell-mcp/test/e2e/runner"
 )
 
 // Fixed paths on the machine (setup.sh) and invented test ids.
@@ -60,11 +62,16 @@ func bin() string {
 }
 
 func TestMain(m *testing.M) {
+	// Before anything else: only on a GitHub-hosted Actions runner.
+	if err := runner.Check(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(64)
+	}
 	if os.Getenv("E2E_CLIENT") != "" {
 		os.Exit(client())
 	}
 	if os.Getuid() != 0 {
-		fmt.Println("the e2e tests run as root on a disposable systemd machine prepared by test/e2e/setup.sh")
+		fmt.Println("the e2e tests run as root on the GitHub-hosted runner prepared by test/e2e/setup.sh")
 		os.Exit(1)
 	}
 	os.Exit(m.Run())
@@ -240,7 +247,7 @@ func directTo(t *testing.T, uid uint32, socket, line string) string {
 	}
 	cmd := exec.CommandContext(t.Context(), self) //nolint:gosec // G204: this test binary itself, in client mode
 	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, uid)}
-	cmd.Env = []string{"E2E_CLIENT=send", "E2E_SOCKET=" + socket}
+	cmd.Env = append(runner.Env(), "E2E_CLIENT=send", "E2E_SOCKET="+socket)
 	cmd.Stdin = strings.NewReader(line)
 	out, err := cmd.Output()
 	if err != nil {
@@ -504,7 +511,7 @@ func TestHelperOneInstancePerConnection(t *testing.T) {
 	for range 2 {
 		c := exec.CommandContext(t.Context(), self) //nolint:gosec // G204: this test binary itself, in client mode
 		c.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, svcShell)}
-		c.Env = []string{"E2E_CLIENT=hold"}
+		c.Env = append(runner.Env(), "E2E_CLIENT=hold")
 		if err := c.Start(); err != nil {
 			t.Fatal(err)
 		}

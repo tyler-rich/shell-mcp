@@ -105,6 +105,13 @@ jobs:
         env:
           SHELL_MCP_REQUIRE_SECURE_TMP: "1"
         run: go test -race -count=1 -v -tags shellmcp_e2e_bypass ./internal/gate/fsx/
+      # The end-to-end entry points refuse to run anywhere but a GitHub-hosted
+      # runner, before doing anything (each case runs under env -i, so this
+      # runner's own variables do not leak in).
+      - name: e2e runner-only guards
+        run: |
+          CGO_ENABLED=0 go test -c -trimpath -tags e2e -o "$RUNNER_TEMP/e2e.test" ./test/e2e
+          E2E_TEST_BIN="$RUNNER_TEMP/e2e.test" bash test/e2e/guard_test.sh
       # The elicitation diagnostic build (shellmcp_diag): built and tested
       # here so the maintainer's local diagnostic works; never released.
       - name: go test -race (diagnostic build, server)
@@ -307,10 +314,14 @@ jobs:
         run: |
           sudo install -d -o root -g root -m 0755 /opt/e2e-bin
           sudo install -o root -g root -m 0755 "$RUNNER_TEMP"/e2e-bin/* /opt/e2e-bin/
-          sudo env E2E_BIN=/opt/e2e-bin E2E_LANDLOCK=required bash test/e2e/setup.sh
+          # sudo resets the environment: pass the runner's own GITHUB_ACTIONS
+          # and RUNNER_ENVIRONMENT through, for the runner-only guards of
+          # setup.sh and the e2e test binary.
+          sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" E2E_BIN=/opt/e2e-bin E2E_LANDLOCK=required bash test/e2e/setup.sh
       - name: e2e tests (as root; nothing may skip)
         run: |
-          sudo env E2E_BIN=/opt/e2e-bin E2E_REQUIRE_ALL=1 E2E_SECURITY_MAX="$E2E_SECURITY_MAX" \
+          sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+            E2E_BIN=/opt/e2e-bin E2E_REQUIRE_ALL=1 E2E_SECURITY_MAX="$E2E_SECURITY_MAX" \
             /opt/e2e-bin/e2e.test -test.v -test.count=1 2>&1 | tee "$RUNNER_TEMP/e2e.log"
           test "${PIPESTATUS[0]}" -eq 0
       - name: summary (every test must have run and passed)
@@ -319,7 +330,10 @@ jobs:
           log="$RUNNER_TEMP/e2e.log"
           table="$RUNNER_TEMP/e2e-summary.md"
           touch "$log"
-          sudo /opt/e2e-bin/e2e.test -test.list '.*' | grep '^Test' >"$RUNNER_TEMP/e2e.tests"
+          sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+            /opt/e2e-bin/e2e.test -test.list '.*' | grep '^Test' >"$RUNNER_TEMP/e2e.tests"
+          # An empty list (a refused or broken binary) must fail, not pass.
+          test -s "$RUNNER_TEMP/e2e.tests" || { echo "no e2e tests listed" >&2; exit 1; }
           fail=0
           {
             echo "### e2e-host tests"

@@ -18,16 +18,16 @@ func TestCheckEnv(t *testing.T) {
 		goos string
 		env  map[string]string
 	}{
-		"nothing set":            {"linux", map[string]string{}},
-		"not Linux":              {"windows", ok},
-		"darwin":                 {"darwin", ok},
-		"no GITHUB_ACTIONS":      {"linux", map[string]string{"RUNNER_ENVIRONMENT": "github-hosted"}},
-		"GITHUB_ACTIONS=1":       {"linux", map[string]string{"GITHUB_ACTIONS": "1", "RUNNER_ENVIRONMENT": "github-hosted"}},
-		"GITHUB_ACTIONS=TRUE":    {"linux", map[string]string{"GITHUB_ACTIONS": "TRUE", "RUNNER_ENVIRONMENT": "github-hosted"}},
-		"self-hosted":            {"linux", map[string]string{"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "self-hosted"}},
-		"no RUNNER_ENVIRONMENT":  {"linux", map[string]string{"GITHUB_ACTIONS": "true"}},
-		"padded":                 {"linux", map[string]string{"GITHUB_ACTIONS": "true ", "RUNNER_ENVIRONMENT": " github-hosted"}},
-		"github-hosted-ish":      {"linux", map[string]string{"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted-not"}},
+		"nothing set":           {"linux", map[string]string{}},
+		"not Linux":             {"windows", ok},
+		"darwin":                {"darwin", ok},
+		"no GITHUB_ACTIONS":     {"linux", map[string]string{"RUNNER_ENVIRONMENT": "github-hosted"}},
+		"GITHUB_ACTIONS=1":      {"linux", map[string]string{"GITHUB_ACTIONS": "1", "RUNNER_ENVIRONMENT": "github-hosted"}},
+		"GITHUB_ACTIONS=TRUE":   {"linux", map[string]string{"GITHUB_ACTIONS": "TRUE", "RUNNER_ENVIRONMENT": "github-hosted"}},
+		"self-hosted":           {"linux", map[string]string{"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "self-hosted"}},
+		"no RUNNER_ENVIRONMENT": {"linux", map[string]string{"GITHUB_ACTIONS": "true"}},
+		"padded":                {"linux", map[string]string{"GITHUB_ACTIONS": "true ", "RUNNER_ENVIRONMENT": " github-hosted"}},
+		"github-hosted-ish":     {"linux", map[string]string{"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted-not"}},
 	}
 	for name, c := range cases {
 		err := CheckEnv(c.goos, env(c.env))

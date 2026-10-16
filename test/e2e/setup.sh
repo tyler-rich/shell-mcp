@@ -1,10 +1,19 @@
 #!/usr/bin/env bash
-# End-to-end setup for the gate and the privileged helper on a DISPOSABLE
-# systemd machine: the GitHub-hosted runner VM (CI job "e2e-host", run
-# under sudo there) or the local systemd test container
-# (test/e2e/local.sh). Run as root. Never run it on a real host: it
-# creates accounts, installs binaries, policies, systemd units and a polkit
-# rule, and writes under /etc, /usr/local and /var/lib.
+# Runner-only, checked before anything else runs: this script changes the
+# machine, so it refuses unless it is on Linux, under GitHub Actions
+# (GITHUB_ACTIONS=true) and on a GitHub-hosted runner
+# (RUNNER_ENVIRONMENT=github-hosted). test/e2e/guard_test.sh proves it exits
+# at once anywhere else.
+if [ "$(uname -s)" != Linux ] || [ "${GITHUB_ACTIONS:-}" != true ] || [ "${RUNNER_ENVIRONMENT:-}" != github-hosted ]; then
+	echo "setup.sh: refusing to run: it changes the machine and runs only on a GitHub-hosted Actions runner (Linux, GITHUB_ACTIONS=true, RUNNER_ENVIRONMENT=github-hosted)" >&2
+	exit 64
+fi
+
+# End-to-end setup for the gate and the privileged helper on the DISPOSABLE
+# GitHub-hosted runner VM (CI job "e2e-host", run under sudo there). Run as
+# root. Never run it on a real host: it creates accounts, installs
+# binaries, policies, systemd units, a polkit rule and a second sshd, and
+# writes under /etc, /usr/local and /var/lib.
 #
 # Everything here is invented test data. Test identities use the documented
 # test id range 4200001-4200009, above distribution, systemd dynamic-user
@@ -319,8 +328,8 @@ if [ -x /usr/sbin/sshd ]; then
 		ss -ltn | grep -q '127.0.0.1:2222 ' && break
 		sleep 0.2
 	done
-	# Not fatal here: the server SSH tests then skip, or fail under
-	# E2E_REQUIRE_ALL (the CI job), and the other tests still run.
+	# Not fatal here: the server SSH tests then fail under E2E_REQUIRE_ALL
+	# (the CI job), and the other tests still run and report.
 	if ss -ltn | grep -q '127.0.0.1:2222 '; then
 		echo "e2e setup: test sshd on 127.0.0.1:2222 ($(/usr/sbin/sshd -V 2>&1 | head -n1))"
 	else
