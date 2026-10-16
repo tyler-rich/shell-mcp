@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
 	"github.com/tyler-rich/shell-mcp/internal/sshx/sshtest"
@@ -36,6 +35,9 @@ func forced(t *testing.T, g *gatetest.HarnessGate) sshtest.Exec {
 			t.Errorf("gate wrote to stderr: %q", stderr.String())
 		}
 		var ee *exec.ExitError
+		if ctx.Err() != nil {
+			return 0 // the client closed the session after its answer
+		}
 		if errors.As(err, &ee) {
 			return uint32(ee.ExitCode()) //nolint:gosec // G115: exit codes are 0..255
 		}

@@ -232,7 +232,11 @@ func (s *Server) session(ch ssh.Channel, reqs <-chan *ssh.Request, cfg Config) {
 			continue
 		}
 		_ = r.Reply(true, nil)
+		// The handler's context ends when the client closes the channel (the
+		// requests channel closes with it) or the handler returns.
+		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
+			defer cancel()
 			for r := range reqs {
 				s.record("request:" + r.Type)
 				if r.WantReply {
@@ -247,7 +251,6 @@ func (s *Server) session(ch ssh.Channel, reqs <-chan *ssh.Request, cfg Config) {
 				break
 			}
 		}
-		ctx, cancel := context.WithCancel(context.Background())
 		status := cfg.Exec(ctx, &Session{OriginalCommand: p.Command, Stdin: ch, Stdout: ch, Close: func() { _ = ch.Close() }})
 		cancel()
 		s.active.Add(-1)
