@@ -585,6 +585,9 @@ func TestOperatorToolsApprovalGuard(t *testing.T) {
 	t.Cleanup(func() { _ = cs.Close() })
 	p := opsWork + "/guarded.txt"
 	_ = os.Remove(p)
+	// journal() reads from one second before start (whole seconds), so
+	// let the earlier tests' gate lines fall outside that window.
+	time.Sleep(2100 * time.Millisecond)
 	start := time.Now()
 	for _, name := range operatorToolNames {
 		args := map[string]any{"path": p, "content": "x\n"}
