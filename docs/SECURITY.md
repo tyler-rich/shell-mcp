@@ -117,6 +117,7 @@ Everything a root operator legitimately does can be declared in a host policy. W
 - an SSH private key is not Ed25519, is passphrase-protected without a passphrase source, or cannot be parsed;
 - `SHELL_MCP_DEFAULT_TARGET` names an unknown target;
 - a redaction pattern fails to compile;
+- a `SHELL_MCP_TRUSTED_PROXIES` entry is not an IP address or canonical CIDR prefix, or is a `/0`; or the replaced `SHELL_MCP_TRUST_PROXY` is set;
 - `stdio` transport with `bearer` mode (meaningless — stdio is `none`);
 - an invalid approval setting (`SHELL_MCP_APPROVAL_TIERS` without `destructive`, an unknown fallback, a TTL outside 30..600).
 
@@ -151,8 +152,9 @@ services:
       SHELL_MCP_TARGET_NAME: app-host
       SHELL_MCP_TARGET_HOST: target-a.example.test
       SHELL_MCP_TARGET_USER: svc-shell
-      SHELL_MCP_TARGET_HOST_KEYS: "SHA256:placeholder"
+      SHELL_MCP_TARGET_HOST_KEYS: "ssh-ed25519 SHA256:placeholder"
       SHELL_MCP_ALLOWED_HOSTS: localhost,127.0.0.1,mcp.example.test
+      SHELL_MCP_TRUSTED_PROXIES: ""          # your reverse proxy's address (e.g. 192.0.2.5); empty = X-Forwarded-For never used
     secrets: [mcp_token, ssh_key]
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
@@ -175,4 +177,4 @@ secrets:
 
 When the container runs on the target itself, it reaches the host's sshd through the Docker host gateway (`extra_hosts: ["host.docker.internal:host-gateway"]`) — the `from=` restriction then names the Docker network's subnet. In DockHand/Portainer, keep secrets in the tool's encrypted env store (`SHELL_MCP_TOKEN`, `SHELL_MCP_SSH_KEY`), never in the YAML.
 
-TLS: terminate at a reverse proxy or run over a VPN; the server speaks plain HTTP on an internal network only. Set `SHELL_MCP_TRUST_PROXY=true` only behind that proxy.
+TLS: terminate at a reverse proxy or run over a VPN; the server speaks plain HTTP on an internal network only. Behind that proxy, list its address in `SHELL_MCP_TRUSTED_PROXIES` (and nothing else): only requests from a listed peer have their client taken from `X-Forwarded-For` (its last entry); every other request counts against its own peer address.

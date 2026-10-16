@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Reports whether a systemd-enabled container can boot on this Docker host
-# without --privileged (Session 1c's helper e2e needs one). Prints one line;
-# exit 0 if systemd reached running or degraded, 3 otherwise.
+# without --privileged (information only: the helper e2e runs on CI's
+# GitHub-hosted runner VM). Prints one line; exit 0 if systemd reached
+# running or degraded, 3 otherwise.
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 

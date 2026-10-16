@@ -64,7 +64,7 @@ type Config struct {
 	AllowUnauthenticated bool
 	AllowedHosts         []string
 	AllowedOrigins       []string
-	TrustProxy           bool
+	TrustedProxies       []netip.Prefix
 	RateLimitPerMin      int
 	Targets              []Target
 	DefaultTarget        string
@@ -91,8 +91,42 @@ type Target struct {
 	Host     string
 	Port     int
 	User     string
-	HostKeys []string
+	HostKeys []HostKey
 	Key      *PrivateKey
+}
+
+// HostKey is one pinned host key: its type and its SHA-256 fingerprint.
+type HostKey struct {
+	Type        string
+	Fingerprint string
+}
+
+// String returns the pin as configured: "<key-type> SHA256:<base64>".
+func (h HostKey) String() string { return h.Type + " " + h.Fingerprint }
+
+// HostKeyTypes are the host-key types a pin may name (D-012). DSA and
+// certificates are never accepted; an ssh-rsa key is verified with
+// rsa-sha2-512 or rsa-sha2-256 only, never SHA-1 (internal/sshx).
+var HostKeyTypes = []string{
+	ssh.KeyAlgoED25519, ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521, ssh.KeyAlgoRSA,
+}
+
+// HostKeyPinFormat ends the one-line reason for a malformed pin: the
+// expected form and how to obtain it.
+const HostKeyPinFormat = `must be "<key-type> SHA256:<base64>" with key type ssh-ed25519, ` +
+	`ecdsa-sha2-nistp256, ecdsa-sha2-nistp384, ecdsa-sha2-nistp521 or ssh-rsa ` +
+	`(on the target, the key type is the first word of the host key's .pub file and ` +
+	`"ssh-keygen -lf <host key>.pub" prints its fingerprint; or run ` +
+	`"ssh-keyscan -t ed25519 <host> | ssh-keygen -lf -" and verify the fingerprint out of band)`
+
+// ParseHostKeyPin parses "<key-type> SHA256:<base64>": exactly one space,
+// a type from HostKeyTypes and an OpenSSH SHA-256 fingerprint.
+func ParseHostKeyPin(pin string) (HostKey, bool) {
+	typ, fp, ok := strings.Cut(pin, " ")
+	if !ok || !slices.Contains(HostKeyTypes, typ) || !ValidFingerprint(fp) {
+		return HostKey{}, false
+	}
+	return HostKey{Type: typ, Fingerprint: fp}, true
 }
 
 // Load reads the configuration from lookup (and the files it names) and
@@ -161,7 +195,7 @@ func (l *loader) network(c *Config) (err error) {
 	if len(c.AllowedHosts) > maxListItems || len(c.AllowedOrigins) > maxListItems {
 		return errorf("SHELL_MCP_ALLOWED_HOSTS / SHELL_MCP_ALLOWED_ORIGINS: at most %d entries", maxListItems)
 	}
-	if c.TrustProxy, err = l.boolean("SHELL_MCP_TRUST_PROXY", false); err != nil {
+	if c.TrustedProxies, err = l.trustedProxies(); err != nil {
 		return err
 	}
 	c.RateLimitPerMin, err = l.integer("SHELL_MCP_RATE_LIMIT_PER_MIN", 120, 1, 100000)
@@ -489,9 +523,14 @@ func (l *loader) buildTarget(ft *fileTarget, sharedKey *PrivateKey) (Target, err
 	if len(ft.HostKeys) > 16 {
 		return Target{}, errorf("%s: at most 16 pinned host keys", id)
 	}
-	for _, fp := range ft.HostKeys {
-		if !ValidFingerprint(fp) {
-			return Target{}, errorf("%s: host key %q is not a SHA256:<base64> fingerprint", id, fp)
+	pins := make([]HostKey, 0, len(ft.HostKeys))
+	for _, raw := range ft.HostKeys {
+		pin, ok := ParseHostKeyPin(raw)
+		if !ok {
+			return Target{}, errorf("%s: host key %q %s", id, raw, HostKeyPinFormat)
+		}
+		if !slices.Contains(pins, pin) {
+			pins = append(pins, pin)
 		}
 	}
 
@@ -510,7 +549,7 @@ func (l *loader) buildTarget(ft *fileTarget, sharedKey *PrivateKey) (Target, err
 	}
 	return Target{
 		Name: ft.Name, Host: ft.Host, Port: ft.Port, User: ft.User,
-		HostKeys: slices.Clone(ft.HostKeys), Key: key,
+		HostKeys: pins, Key: key,
 	}, nil
 }
 
@@ -522,14 +561,16 @@ func validHost(h string) bool {
 }
 
 // ValidFingerprint reports whether fp is an OpenSSH SHA-256 fingerprint:
-// "SHA256:" followed by the unpadded standard base64 of 32 bytes.
+// "SHA256:" followed by the unpadded standard base64 of 32 bytes, in its
+// canonical form (the decoder skips \r and \n, so the value must also
+// re-encode to itself).
 func ValidFingerprint(fp string) bool {
 	b64, ok := strings.CutPrefix(fp, "SHA256:")
 	if !ok {
 		return false
 	}
 	raw, err := base64.RawStdEncoding.Strict().DecodeString(b64)
-	return err == nil && len(raw) == 32
+	return err == nil && len(raw) == 32 && base64.RawStdEncoding.EncodeToString(raw) == b64
 }
 
 func (l *loader) sharedKey() (*PrivateKey, error) {
@@ -720,4 +761,52 @@ func lowerList(s string) []string {
 		items[i] = strings.ToLower(items[i])
 	}
 	return items
+}
+
+// trustedProxies parses SHELL_MCP_TRUSTED_PROXIES: a comma list of IP
+// addresses (one host) or CIDR prefixes in canonical form. Empty (the
+// default) means X-Forwarded-For is never used. The old boolean
+// SHELL_MCP_TRUST_PROXY is refused, so a configuration that relied on it
+// fails loudly instead of silently dropping the proxy.
+func (l *loader) trustedProxies() ([]netip.Prefix, error) {
+	if l.isSet("SHELL_MCP_TRUST_PROXY") {
+		return nil, errorf("SHELL_MCP_TRUST_PROXY was replaced by SHELL_MCP_TRUSTED_PROXIES: a comma list of the proxies' IP addresses or CIDR prefixes (empty: X-Forwarded-For is never used)")
+	}
+	entries := splitList(l.get("SHELL_MCP_TRUSTED_PROXIES", ""))
+	if len(entries) > maxListItems {
+		return nil, errorf("SHELL_MCP_TRUSTED_PROXIES: at most %d entries", maxListItems)
+	}
+	out := make([]netip.Prefix, 0, len(entries))
+	for _, e := range entries {
+		p, reason := parseProxy(e)
+		if reason != "" {
+			return nil, errorf("SHELL_MCP_TRUSTED_PROXIES: %q %s", e, reason)
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+func parseProxy(e string) (p netip.Prefix, reason string) {
+	if !strings.Contains(e, "/") {
+		a, err := netip.ParseAddr(e)
+		if err != nil || a.Zone() != "" {
+			return netip.Prefix{}, "is not an IP address or CIDR prefix (for example 192.0.2.10 or 192.0.2.0/24)"
+		}
+		a = a.Unmap()
+		return netip.PrefixFrom(a, a.BitLen()), ""
+	}
+	p, err := netip.ParsePrefix(e)
+	switch {
+	case err != nil:
+		return netip.Prefix{}, "is not an IP address or CIDR prefix (for example 192.0.2.10 or 192.0.2.0/24)"
+	case p.Bits() == 0:
+		return netip.Prefix{}, "would trust every address; list the proxies' own addresses"
+	case p.Masked() != p:
+		return netip.Prefix{}, fmt.Sprintf("has host bits set; the prefix is %s", p.Masked())
+	}
+	if p.Addr().Is4In6() {
+		return netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96), ""
+	}
+	return p, ""
 }

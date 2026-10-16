@@ -6,6 +6,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -23,7 +25,11 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/tyler-rich/shell-mcp/internal/auth"
 	"github.com/tyler-rich/shell-mcp/internal/config"
+	"github.com/tyler-rich/shell-mcp/internal/envelope"
+	"github.com/tyler-rich/shell-mcp/internal/gateclient"
+	"github.com/tyler-rich/shell-mcp/internal/sshx"
 	"github.com/tyler-rich/shell-mcp/internal/tools"
 	"github.com/tyler-rich/shell-mcp/internal/transport"
 )
@@ -35,38 +41,39 @@ var (
 )
 
 const (
-	maxRequestBodyBytes = 1 << 20
-	healthcheckTimeout  = 3 * time.Second
-	shutdownTimeout     = 10 * time.Second
+	healthcheckTimeout = 3 * time.Second
+	shutdownTimeout    = 10 * time.Second
+	// maxStdioLine bounds one JSON-RPC message on stdio, like the HTTP body cap.
+	maxStdioLine = transport.MaxBodyBytes
 )
 
 const usage = `usage: shell-mcp <command> [flags]
 
 commands:
   serve        start the MCP server (HTTP, or stdio with --transport stdio)
-  check        validate the configuration and print it with secrets masked
-  tools        print the tool catalogue
+  check        connect to every target, verify its host key and gate, and print the result
+  tools        print the tool catalogue (with schema hashes)
   healthcheck  exit 0 if the local /healthz answers {"status":"ok"}
   version      print version information
 `
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	code := run(ctx, os.Args[1:], os.LookupEnv, os.Stdout, os.Stderr)
+	code := run(ctx, os.Stdin, os.Args[1:], os.LookupEnv, os.Stdout, os.Stderr)
 	stop()
 	os.Exit(code)
 }
 
-func run(ctx context.Context, args []string, lookup config.LookupFunc, stdout, stderr io.Writer) int {
+func run(ctx context.Context, stdin io.Reader, args []string, lookup config.LookupFunc, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		_, _ = io.WriteString(stderr, usage)
 		return 2
 	}
 	switch args[0] {
 	case "serve":
-		return cmdServe(ctx, args[1:], lookup, stderr)
+		return cmdServe(ctx, args[1:], lookup, stdin, stdout, stderr)
 	case "check":
-		return cmdCheck(args[1:], lookup, stdout, stderr)
+		return cmdCheck(ctx, args[1:], lookup, stdout, stderr)
 	case "tools":
 		return cmdTools(args[1:], stdout, stderr)
 	case "healthcheck":
@@ -77,7 +84,11 @@ func run(ctx context.Context, args []string, lookup config.LookupFunc, stdout, s
 		}
 		return healthcheck(ctx, url)
 	case "version":
-		_, _ = fmt.Fprintf(stdout, "shell-mcp %s (commit %s, %s)\n", version, commit, runtime.Version())
+		diag := ""
+		if tools.DiagBuild {
+			diag = ", diagnostic build: not for release"
+		}
+		_, _ = fmt.Fprintf(stdout, "shell-mcp %s (commit %s, %s%s)\n", version, commit, runtime.Version(), diag)
 		return 0
 	case "-h", "--help", "help":
 		_, _ = io.WriteString(stdout, usage)
@@ -96,7 +107,7 @@ func loadConfig(lookup config.LookupFunc, stderr io.Writer) (*config.Config, boo
 	return cfg, true
 }
 
-func cmdServe(ctx context.Context, args []string, lookup config.LookupFunc, stderr io.Writer) int {
+func cmdServe(ctx context.Context, args []string, lookup config.LookupFunc, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	transportFlag := fs.String("transport", "", "override SHELL_MCP_TRANSPORT (http or stdio)")
@@ -121,32 +132,65 @@ func cmdServe(ctx context.Context, args []string, lookup config.LookupFunc, stde
 	for _, w := range cfg.Warnings {
 		logger.Warn(w)
 	}
-	if cfg.AuthMode != "none" {
-		logger.Error("refusing to start", "reason", transport.ErrBearerNotImplemented.Error())
-		return 1
-	}
-
-	server, err := newMCPServer(cfg)
-	if err != nil {
-		logger.Error("refusing to start", "reason", err.Error())
-		return 1
+	if tools.DiagBuild {
+		logger.Warn("diagnostic build: carries shell_diag_elicit; not for release")
 	}
 
 	if cfg.Transport == "stdio" {
+		server, cleanup, err := newMCPServer(cfg, logger)
+		if err != nil {
+			logger.Error("refusing to start", "reason", err.Error())
+			return 1
+		}
+		defer cleanup()
 		logger.Info("serving MCP over stdio", "profile", cfg.Profile)
-		if runErr := server.Run(ctx, &mcp.StdioTransport{}); runErr != nil && !errors.Is(runErr, context.Canceled) {
+		t := &mcp.IOTransport{Reader: readCloser{stdin}, Writer: nopWriteCloser{stdout}, MaxLineLength: maxStdioLine}
+		if runErr := server.Run(ctx, t); runErr != nil && !errors.Is(runErr, context.Canceled) && !errors.Is(runErr, io.EOF) {
 			logger.Error("stdio transport stopped", "error", runErr.Error())
 			return 1
 		}
 		return 0
 	}
 
-	srv, err := transport.New(cfg, mcpHTTPHandler(server, logger))
+	srv, cleanup, err := newHTTPServer(cfg, logger)
 	if err != nil {
 		logger.Error("refusing to start", "reason", err.Error())
 		return 1
 	}
+	defer cleanup()
 	return serveHTTP(ctx, srv, logger)
+}
+
+// readCloser and nopWriteCloser adapt the process's stdin and stdout; the
+// transport's MaxLineLength bounds each inbound message.
+type readCloser struct{ r io.Reader }
+
+func (r readCloser) Read(p []byte) (int, error) { return r.r.Read(p) }
+func (r readCloser) Close() error {
+	if c, ok := r.r.(io.Closer); ok {
+		return c.Close()
+	}
+	return nil
+}
+
+type nopWriteCloser struct{ w io.Writer }
+
+func (w nopWriteCloser) Write(p []byte) (int, error) { return w.w.Write(p) }
+func (nopWriteCloser) Close() error                  { return nil }
+
+// newHTTPServer builds the HTTP server: the middleware chain in front of the
+// SDK's stateless Streamable HTTP handler.
+func newHTTPServer(cfg *config.Config, logger *slog.Logger) (*http.Server, func(), error) {
+	server, cleanup, err := newMCPServer(cfg, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	srv, err := transport.New(cfg, mcpHTTPHandler(server, logger), &transport.Options{Logger: logger})
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	return srv, cleanup, nil
 }
 
 // mcpHTTPHandler serves MCP as stateless Streamable HTTP with JSON responses
@@ -154,20 +198,57 @@ func cmdServe(ctx context.Context, args []string, lookup config.LookupFunc, stde
 func mcpHTTPHandler(server *mcp.Server, logger *slog.Logger) http.Handler {
 	return mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return server },
-		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: maxRequestBodyBytes, Logger: logger},
+		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: transport.MaxBodyBytes, Logger: logger},
 	)
 }
 
-func newMCPServer(cfg *config.Config) (*mcp.Server, error) {
+// newDeps builds what the tools need: one SSH client per target and the
+// gate client. cleanup closes the SSH clients.
+func newDeps(cfg *config.Config, logger *slog.Logger) (*tools.Deps, func(), error) {
+	pool, err := sshx.NewPool(cfg, sshx.Options{Logger: logger})
+	if err != nil {
+		return nil, nil, err
+	}
+	principal := auth.Principal{Name: auth.PrincipalBearer, Profile: cfg.Profile}
+	if cfg.AuthMode == "none" {
+		principal.Name = auth.PrincipalUnauthenticated
+	}
+	d := &tools.Deps{
+		Targets:       cfg.Targets,
+		DefaultTarget: cfg.DefaultTarget,
+		Opener: func(name string) (gateclient.Opener, bool) {
+			c, ok := pool.Get(name)
+			return c, ok
+		},
+		Gate:           gateclient.New(gateclient.Options{Logger: logger}),
+		Principal:      principal,
+		Logger:         logger,
+		DefaultTimeout: cfg.DefaultTimeout,
+	}
+	return d, pool.Close, nil
+}
+
+// newMCPServer registers, once, the tools of the configured profile minus
+// SHELL_MCP_DISABLE_TOOLS (D-005). Nothing registers a tool later.
+func newMCPServer(cfg *config.Config, logger *slog.Logger) (*mcp.Server, func(), error) {
 	profile, err := tools.ParseProfile(cfg.Profile)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	d, cleanup, err := newDeps(cfg, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	reg, err := tools.Catalogue(d)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "shell-mcp", Version: version}, nil)
-	for _, reg := range tools.NewRegistry().ToolsForProfile(profile, cfg.DisableTools) {
-		reg.Tool.Install(server)
+	for _, r := range reg.ToolsForProfile(profile, cfg.DisableTools) {
+		r.Tool.Install(server)
 	}
-	return server, nil
+	return server, cleanup, nil
 }
 
 func serveHTTP(ctx context.Context, srv *http.Server, logger *slog.Logger) int {
@@ -200,7 +281,30 @@ func newLogger(cfg *config.Config, w io.Writer) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(w, opts))
 }
 
-func cmdCheck(args []string, lookup config.LookupFunc, stdout, stderr io.Writer) int {
+// checkReport is the output of `shell-mcp check`.
+type checkReport struct {
+	OK      bool             `json:"ok"`
+	Config  config.Effective `json:"config"`
+	Targets []targetCheck    `json:"targets"`
+}
+
+type targetCheck struct {
+	Name    string `json:"name"`
+	Host    string `json:"host"`
+	Port    int    `json:"port"`
+	User    string `json:"user"`
+	OK      bool   `json:"ok"`
+	HostKey string `json:"host_key_verified,omitempty"`
+	*tools.ProbeResult
+	// Tools are the profile's tools this target's gate can serve (by its
+	// max_tier and privileged forwarding).
+	Tools []string        `json:"tools,omitempty"`
+	Error *envelope.Error `json:"error,omitempty"`
+}
+
+// cmdCheck connects to every target, verifies its host key, calls the
+// gate's hello and prints what it found. It exits 1 if any target fails.
+func cmdCheck(ctx context.Context, args []string, lookup config.LookupFunc, stdout, stderr io.Writer) int {
 	if len(args) != 0 {
 		_, _ = io.WriteString(stderr, "shell-mcp: check takes no arguments\n")
 		return 2
@@ -209,15 +313,70 @@ func cmdCheck(args []string, lookup config.LookupFunc, stdout, stderr io.Writer)
 	if !ok {
 		return 1
 	}
-	return writeJSON(cfg.Effective(), stdout, stderr)
+	logger := newLogger(cfg, stderr)
+	pool, err := sshx.NewPool(cfg, sshx.Options{Logger: logger})
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp: %v\n", err)
+		return 1
+	}
+	defer pool.Close()
+	d := &tools.Deps{
+		Targets: cfg.Targets, Logger: logger, DefaultTimeout: cfg.DefaultTimeout,
+		Opener: func(name string) (gateclient.Opener, bool) {
+			c, ok := pool.Get(name)
+			return c, ok
+		},
+		Gate: gateclient.New(gateclient.Options{Logger: logger}),
+	}
+	profile, err := tools.ParseProfile(cfg.Profile)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp: %v\n", err)
+		return 1
+	}
+	reg, err := tools.Catalogue(&tools.Deps{})
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp: %v\n", err)
+		return 1
+	}
+	regs := reg.ToolsForProfile(profile, cfg.DisableTools)
+
+	report := checkReport{OK: true, Config: cfg.Effective(), Targets: []targetCheck{}}
+	for _, t := range cfg.Targets {
+		tc := targetCheck{Name: t.Name, Host: t.Host, Port: t.Port, User: t.User}
+		res, e := tools.Probe(ctx, d, t.Name)
+		if c, ok := pool.Get(t.Name); ok && e == nil {
+			tc.HostKey = c.VerifiedHostKey()
+		}
+		if e != nil {
+			tc.Error = e
+			report.OK = false
+		} else {
+			tc.OK, tc.ProbeResult = true, res
+			tc.Tools = tools.EffectiveTools(regs, res.Gate.MaxTier, res.Privileged.Enabled)
+		}
+		report.Targets = append(report.Targets, tc)
+	}
+	if code := writeJSON(report, stdout, stderr); code != 0 {
+		return code
+	}
+	if !report.OK {
+		return 1
+	}
+	return 0
 }
 
-// catalogueEntry is one row of the `tools` catalogue. Session 2 adds the
-// description and schema hashes.
+// catalogueEntry is one row of `shell-mcp tools`. The schema hashes are the
+// SHA-256 of each schema's canonical JSON (object keys sorted), so any
+// change to a tool's contract changes the catalogue.
 type catalogueEntry struct {
-	Name       string `json:"name"`
-	Tier       string `json:"tier"`
-	Privileged bool   `json:"privileged"`
+	Name               string               `json:"name"`
+	Title              string               `json:"title"`
+	Tier               string               `json:"tier"`
+	Privileged         bool                 `json:"privileged"`
+	Annotations        *mcp.ToolAnnotations `json:"annotations"`
+	Description        string               `json:"description"`
+	InputSchemaSHA256  string               `json:"input_schema_sha256"`
+	OutputSchemaSHA256 string               `json:"output_schema_sha256"`
 }
 
 func cmdTools(args []string, stdout, stderr io.Writer) int {
@@ -225,11 +384,44 @@ func cmdTools(args []string, stdout, stderr io.Writer) int {
 		_, _ = io.WriteString(stderr, "shell-mcp: tools takes no arguments\n")
 		return 2
 	}
+	reg, err := tools.Catalogue(&tools.Deps{})
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp: %v\n", err)
+		return 1
+	}
 	entries := []catalogueEntry{}
-	for _, reg := range tools.NewRegistry().ToolsForProfile(tools.ProfileAdmin, nil) {
-		entries = append(entries, catalogueEntry{Name: reg.Tool.Def.Name, Tier: reg.Tier.String(), Privileged: reg.Privileged})
+	for _, r := range reg.ToolsForProfile(tools.ProfileAdmin, nil) {
+		def := r.Tool.Def
+		in, err1 := schemaHash(def.InputSchema)
+		out, err2 := schemaHash(def.OutputSchema)
+		if err := errors.Join(err1, err2); err != nil {
+			_, _ = fmt.Fprintf(stderr, "shell-mcp: %s: %v\n", def.Name, err)
+			return 1
+		}
+		entries = append(entries, catalogueEntry{
+			Name: def.Name, Title: def.Title, Tier: r.Tier.String(), Privileged: r.Privileged,
+			Annotations: def.Annotations, Description: def.Description, InputSchemaSHA256: in, OutputSchemaSHA256: out,
+		})
 	}
 	return writeJSON(entries, stdout, stderr)
+}
+
+// schemaHash is the SHA-256 of v's canonical JSON: marshalled, decoded into
+// generic values and marshalled again, which sorts every object's keys.
+func schemaHash(v any) (string, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	var generic any
+	if uerr := json.Unmarshal(b, &generic); uerr != nil {
+		return "", uerr
+	}
+	if b, err = json.Marshal(generic); err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func writeJSON(v any, stdout, stderr io.Writer) int {
