@@ -199,6 +199,13 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	cmd.Env = []string{}
 	cmd.Dir = "/"
 	cmd.ExtraFiles = []*os.File{childCtl}
+	// The parent-death signal fires when the thread that forked the child
+	// exits (prctl(2)). That thread is whichever one runs this goroutine,
+	// and it needs no pinning here: when the gate or helper dies, every
+	// thread exits, so the signal always comes; and the Go runtime ends a
+	// thread before then only when a goroutine locked to it exits, which
+	// nothing in the gate or helper does around Run. The child keeps it on
+	// its main thread, which the trampoline's execve keeps.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
 
 	var pgid atomic.Int64
