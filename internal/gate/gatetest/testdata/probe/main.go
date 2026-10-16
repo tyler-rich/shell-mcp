@@ -30,6 +30,12 @@ import (
 // userspace checks never see.
 var outside = ""
 
+// The main goroutine stays on the main thread for the probe's lifetime
+// (runtime.LockOSThread: called from an init function, main runs on that
+// thread). Per-thread state such as the parent-death signal is then read
+// where execve(2) left it, not on whichever thread the runtime picked.
+func init() { runtime.LockOSThread() }
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("usage")
