@@ -342,6 +342,7 @@ $2    templates:
       - ["rlimits"]
       - ["procattrs"]
       - ["ignore-term", "60s"]
+      - ["drop-ignore-term", "4200004", "60s"]
 power:
   allowed: [reboot]
   acknowledge: "e2e: priv_power is called only with reboot.target and poweroff.target runtime-masked"

@@ -68,6 +68,26 @@ func main() {
 	case "ignore-term":
 		signal.Ignore(syscall.SIGTERM)
 		sleep(args[0])
+	case "drop-ignore-term":
+		// Ignores SIGTERM, switches to uid and gid args[0] with no
+		// supplementary groups (all threads: Go applies these to every
+		// thread), and sleeps for args[1]. The credential change clears its
+		// parent-death signal (commit_creds).
+		signal.Ignore(syscall.SIGTERM)
+		id, _ := strconv.Atoi(args[0])
+		if err := syscall.Setgroups(nil); err != nil {
+			report(err, "")
+			os.Exit(1)
+		}
+		if err := syscall.Setresgid(id, id, id); err != nil {
+			report(err, "")
+			os.Exit(1)
+		}
+		if err := syscall.Setresuid(id, id, id); err != nil {
+			report(err, "")
+			os.Exit(1)
+		}
+		sleep(args[1])
 	case "fork-sleep":
 		// A grandchild in the same process group; print its pid, then sleep.
 		pid := spawn("sleep", args[0])

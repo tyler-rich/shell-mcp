@@ -172,15 +172,20 @@ func TestServiceDirectives(t *testing.T) {
 	want(t, d, s+"RuntimeMaxSec", "150")
 	want(t, d, s+"TasksMax", "64")
 	want(t, d, s+"MemoryMax", "256M")
+	// A helper instance that dies leaves nothing behind for long: whatever
+	// is left in its cgroup gets SIGTERM, then SIGKILL after 5 s, including a
+	// command that switched user and so lost its parent-death signal.
+	want(t, d, s+"KillMode", "control-group")
+	want(t, d, s+"TimeoutStopSec", "5")
 	want(t, d, "[Unit]CollectMode", "inactive-or-failed")
 	// Nothing else: a directive the generator adds must be added here.
-	if n := len(d); n != 41 {
+	if n := len(d); n != 43 {
 		keys := make([]string, 0, n)
 		for k := range d {
 			keys = append(keys, k)
 		}
 		slices.Sort(keys)
-		t.Errorf("%d directives, want 41: %q", n, keys)
+		t.Errorf("%d directives, want 43: %q", n, keys)
 	}
 }
 
@@ -371,6 +376,8 @@ func TestBroadServiceDirectives(t *testing.T) {
 	want(t, d, s+"RuntimeMaxSec", "150")
 	want(t, d, s+"TasksMax", "256")
 	want(t, d, s+"MemoryMax", "1G")
+	want(t, d, s+"KillMode", "control-group")
+	want(t, d, s+"TimeoutStopSec", "5")
 	want(t, d, "[Unit]CollectMode", "inactive-or-failed")
 	// No User=: the service runs as root anyway, and with User= systemd drops
 	// CAP_SETUID from a unit that has seccomp filters (ProtectClock=,
@@ -381,13 +388,13 @@ func TestBroadServiceDirectives(t *testing.T) {
 			t.Errorf("the broad unit sets %s=%v, which §5.2 does not list", k, v)
 		}
 	}
-	if n := len(d); n != 17 {
+	if n := len(d); n != 19 {
 		keys := make([]string, 0, n)
 		for k := range d {
 			keys = append(keys, k)
 		}
 		slices.Sort(keys)
-		t.Errorf("%d directives, want 17: %q", n, keys)
+		t.Errorf("%d directives, want 19: %q", n, keys)
 	}
 }
 
