@@ -460,7 +460,7 @@ func TestIntegrationSandboxTrampoline(t *testing.T) {
 		k, v, _ := strings.Cut(l, "=")
 		a[k] = v
 	}
-	if a["nnp"] != "1" || a["seccomp"] != "2" || a["pdeathsig"] != "9" || a["pgid_is_pid"] != "true" {
+	if a["nnp"] != "1" || a["seccomp"] != "2" || a["pdeathsig"] != "9" || a["pdeathsig_thread"] != "main" || a["pgid_is_pid"] != "true" {
 		t.Fatalf("attributes %v", a)
 	}
 	// The Go runtime's own cgroup file is the only descriptor a Go command

@@ -563,7 +563,7 @@ func TestHelperExecTrampoline(t *testing.T) {
 				k, v, _ := strings.Cut(l, "=")
 				a[k] = v
 			}
-			if a["pdeathsig"] != "9" || a["pgid_is_pid"] != "true" {
+			if a["pdeathsig"] != "9" || a["pdeathsig_thread"] != "main" || a["pgid_is_pid"] != "true" {
 				t.Fatalf("attributes %v", a)
 			}
 			if c.unit == "" && (a["nnp"] != "1" || a["seccomp"] != "2") {
