@@ -1163,3 +1163,55 @@ Both raise the test's own soft limits to the hard limits first, so an unlimited 
 - **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0, and `github.com/google/jsonschema-go` v0.4.3. jsonschema-go was already in go.mod as an indirect dependency of the SDK; it is now direct, because tools build their schemas with it.
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.14.0, govulncheck v1.9.0.
+
+### 2026-10-16 — Trusted proxies by address; runner-only e2e guard; local e2e retired (PR #15 follow-up)
+**Decision (maintainer requests on PR #15):**
+- **`SHELL_MCP_TRUSTED_PROXIES` replaces the boolean `SHELL_MCP_TRUST_PROXY`.** It supersedes the "`SHELL_MCP_TRUST_PROXY`" paragraph of the server-core entry above.
+  - **The value.** A comma list of the reverse proxies' IP addresses or CIDR prefixes. Empty, the default, means `X-Forwarded-For` is never used.
+  - **When the header counts.** Only when a request's direct peer address is in the list. Then only the last entry of the last header is used: the one that proxy appended. Leftmost entries are written by the client and are never used. An unparsable last entry falls back to the peer.
+  - **Every other request** is rate-limited and locked out by its own peer address, whatever headers it carries.
+  - **Startup.** An invalid entry fails startup with a one-line reason. That covers:
+    - not an address or prefix;
+    - a zone;
+    - host bits set (the reason names the masked prefix);
+    - a `/0`, which would trust everyone.
+    
+    The old `SHELL_MCP_TRUST_PROXY` is refused when set, so a configuration that relied on it fails loudly instead of silently dropping its proxy. IPv4-mapped entries are stored as IPv4.
+  - **Docs updated:** ARCHITECTURE §5; SECURITY §6 (a new fail-closed rule), §7 (the compose example) and the TLS note; `deploy/.env.example`; `deploy/docker-compose.yml`. `check` prints the parsed list as `trusted_proxies`.
+  - **Tests** (`5d398aa`, committed failing first):
+    - `TestSpoofedXForwardedForFromNonProxyPeerIgnored`: rate limit and lockout by the peer, while the attacker rotates forged headers. It failed against the old semantics, which the stub kept: any peer's header trusted once a proxy is set.
+    - `TestTrustedProxyLastEntryUsed`: a CIDR and an IPv6 proxy; forged leftmost entries change nothing; the leftmost entry is never a client; several headers; an unparsable entry.
+    - `TestXForwardedForIgnoredWithoutTrustedProxies`.
+    - Config: `TestTrustedProxiesParsed`, `TestTrustedProxiesInvalid` (8 cases), `TestTrustProxyVariableReplaced`.
+- **Runner-only guard.** `test/e2e/setup.sh` and the e2e test binary refuse to run unless they are on Linux with `GITHUB_ACTIONS=true` and `RUNNER_ENVIRONMENT=github-hosted`. Both change the machine as root: accounts, units, policies, packages, a second sshd.
+  - **setup.sh** checks in its first lines, before `set -euo pipefail` or anything else. The only external command before the decision is `uname`.
+  - **The binary** checks first thing in its `TestMain`: new package `test/e2e/runner`. It refuses before the root check, the client mode and test listing, and exits 64 with a one-line reason.
+  - **Child processes.** The binary's re-executed client children get the runner's own two variables passed through.
+  - **Verified at the source** (docs.github.com, Actions variables reference): `GITHUB_ACTIONS` is "Always set to `true` when GitHub Actions is running the workflow"; `RUNNER_ENVIRONMENT` is `github-hosted` or `self-hosted`.
+  - **CI.** `sudo` resets the environment, so the `e2e-host` steps pass the runner's own values through `sudo env` (setup, tests, test listing). The summary step now also fails on an empty test list, so a refused or broken binary cannot pass as "nothing to check".
+  - **Proof.** `test/e2e/guard_test.sh` runs `setup.sh` and the built `e2e.test` under `env -i`, with a stub, which only logs its name, first on `PATH` for every system command `setup.sh` calls.
+    - Every refusal case (nothing set, a workstation, not Linux, `GITHUB_ACTIONS` alone, self-hosted, `GITHUB_ACTIONS=1`; for the binary also `-test.list`) must exit 64 at once, say why, and call nothing but `uname`.
+    - The control case passes the guard and stops at `setup.sh`'s own `E2E_BIN` check, still changing nothing.
+    - Against the unguarded code, 9 of 10 cases failed (`3da1535`); `TestCheckEnv` failed against a stub.
+    - The test runs in CI's `go` jobs and in `scripts/ci-local.sh` ("e2e runner-only guards").
+  - **CLAUDE.md** gains the rule, next to the sudo exception: never weaken the guard or set those variables to get past it.
+- **Local e2e retired** (maintainer decision when the guard turned out to stop it). `test/e2e/local.sh` and its `test/e2e/Dockerfile.systemd` are removed. The `e2e-host` job on the GitHub-hosted runner is now the only e2e path. Locally only 3 tests had run anyway, because journald fails under Docker Desktop's cgroup driver (S1c entry). README and the e2e comments updated.
+- **The cgroup exception** (CLAUDE.md, recorded in the S0 entries). With `local.sh` gone, only `scripts/probe/systemd.sh` mounts `/sys/fs/cgroup` read-write: the informational "can an unprivileged systemd container boot here" probe of CI's `probes` job and of `ci-local.sh`. The exception is therefore **narrowed to that one script and its image** (`scripts/probe/Dockerfile.systemd`), not removed; every other condition is unchanged.
+
+**The Git Bash incident (this session, earlier in PR #15).** While adding the test sshd to `setup.sh`, the session ran an edit as a shell command with a quoted heredoc, and the inserted text held a nested `<<EOF`. That inner terminator ended the outer heredoc early, so the rest of the text was executed by the workstation's Git Bash instead of being written to the file. Those lines were `setup.sh` steps meant for the root e2e VM:
+- `chmod`, and `install -o root …` of a run directory;
+- `sshd -t`, `systemctl stop`, `systemd-run`;
+- an `ss` wait loop;
+- `journalctl`, then `exit 1`.
+
+Every one failed: no `sshd`, `systemctl`, `systemd-run`, `ss` or `journalctl` on Windows, and `install` rejected the user `root`. The shell exited at `exit 1`. The session checked that nothing was created (no `/run/sshd`, no `/sshd_config`, no `/etc/shell-mcp-e2e-sshd`) and that the repository was unchanged, and reported it to the maintainer. Edits since then are written with file tools, not nested heredocs. The new guard is the structural fix: had the script itself been run on the workstation, it would now refuse before its first command.
+
+**Alternatives rejected:**
+- Keeping the boolean alongside the list.
+- Honouring the header from any peer once a list is set (the spoofing case).
+- Using any but the last entry.
+- A second, weaker guard so `local.sh` could keep running inside its container (marker files or container detection can be forged; maintainer chose retirement).
+- Setting `GITHUB_ACTIONS`/`RUNNER_ENVIRONMENT` inside a local container: it would defeat the guard.
+- Removing the cgroup exception outright: the probe still uses it.
+
+**Versions:** unchanged (Go 1.27.2; no dependency added).
