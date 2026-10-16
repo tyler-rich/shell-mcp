@@ -73,7 +73,7 @@ func TestFailureMessageIsOneBoundedLine(t *testing.T) {
 		t.Fatalf("message not one bounded line: %q (%d bytes)", e.Error.Message, len(e.Error.Message))
 	}
 	if !strings.HasPrefix(e.Error.Message, "dial: line one line two") {
-		t.Fatalf("message = %q", e.Error.Message[:60])
+		t.Fatalf("message = %q", e.Error.Message)
 	}
 }
 
