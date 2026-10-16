@@ -1276,3 +1276,90 @@ The lockout exists to stop token guessing, and a request without a credential gu
 - **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.14.0, govulncheck v1.9.0.
+
+### 2026-10-16 — Read tools and end-to-end coverage (PR #17, branch feat/read-tools)
+**Decision:** Implement the read tier of `docs/TOOLS.md` (plan §5 S3), except the two previews, which come with the destructive tools (S4b):
+- **The tools:** `shell_get_system_info`, `shell_get_disk_usage`, `shell_list_processes`, `shell_get_service_status`, `shell_list_services`, `shell_get_journal`, `shell_list_directory`, `shell_stat_path`, `shell_read_file`, `shell_find_files`, `shell_inspect_certificate`, `shell_get_git_status`, `shell_get_git_log`, `shell_get_git_diff`, `shell_run_read_command`.
+- **What each does:** it validates its input, calls one gate op through the gate client (`shell_run_read_command` calls two: `policy`, then `exec`), and shapes the result into the envelope.
+- **Registration:** every tool is registered at the read tier, with typed input and output schemas, read annotations, a title, a terse description, an audit line and a catalogue-snapshot row.
+- **Where:** `internal/tools/{read,system,services,files,git,exec}.go`. The data types mirror the gate's wire shapes and are decoded strictly: a field the server does not describe is `protocol_mismatch`.
+
+**Why:** S3 scope; F-07, F-11, S-08, D-005, D-008, D-009. A `read-only` deployment is now fully usable.
+
+**Maintainer decision during the session: the text block.** The prompt asked for a compact summary in the text block, with the full data only in `structuredContent`. Claude Code's MCP documentation describes text results only. It could not be confirmed that Claude Code passes `structuredContent` to the model, so with a summary-only text block file contents, logs and diffs could never reach it. The maintainer chose summary plus JSON:
+- The text block is one summary line, then the full envelope JSON (as in S2).
+- The summary line is `ok: <counts and flags>` or `error: <code>`. It never carries a string from the host or the caller.
+- This applies to every tool, `shell_list_targets` and `shell_get_policy` included. `structuredContent` is unchanged.
+
+**Decisions TOOLS.md left open** (now recorded in its "Read tier: what the table leaves open" paragraph):
+- **Common inputs.** `timeout_seconds` is accepted by the seven tools that start a process on the target (service status and list, journal, the three git tools, and the read command). `max_output_bytes` is accepted by the three that return free text (journal, git diff, read command).
+- **Static schema maxima.** The catalogue does not depend on configuration, so the rug-pull snapshot is the same everywhere. The schema gives the highest value a setting can take (`timeout_seconds` ≤ 3600, the highest `SHELL_MCP_MAX_TIMEOUT`; `max_output_bytes` and `max_bytes` ≤ 4 MiB, the highest server and policy values; `lines` ≤ 10000; `max_depth` ≤ 32; find `limit` ≤ 10000, the policy maxima). The server checks its own settings (`validation_error`); the gate checks the policy's (`bad_request`).
+- **Optional integers are pointers.** A given `0` (or any other out-of-range value) is refused, never read as "default". An omitted value is sent to the gate as zero, and the gate applies the default in the table.
+- **Input forms:**
+  - `modified_within` is `N<s|m|h|d|w>` (≤ ten years), sent as `modified_within_s`.
+  - `offset` and `tail_lines` together are refused.
+  - `user` is a name or a numeric uid (`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,30}\$?$`).
+  - Filters are ≤ 256 bytes without NUL; `name_glob` must be a valid glob without `/`.
+  - Each `args` item is ≤ 1024 bytes with no NUL, CR or LF. These are the template engine's limits; a policy literal with a line break cannot be matched.
+  - `since` must not be after `until` (checked on the server and again by the gate).
+- **`shell_run_read_command`:**
+  - It reads the gate's policy first. An undeclared id is `policy_denied`; a command whose tier is not `read` is `tier_denied`, and no `exec` is sent. Both are gate codes, used with the gate's meaning.
+  - It never sends `stdin_b64`.
+  - **The race.** If the policy's SHA-256 in the `exec` response's gate block differs from the one checked, the result carries a warning. The command has run by then. See "Double-check" below.
+- **Audit arguments:** `target`, `path`, `root`, `repo`, `unit`, `command_id`, `cwd`, and `args_count` (never the argument values). Filters, times and content are never logged.
+
+**Output bounds and redaction order:**
+1. The gate caps and redacts first (its built-in rules and the policy's patterns).
+2. `fetch` decodes the response, then redacts every string reachable in the data (a reflective walk) and every warning, with the server's built-in rules plus `SHELL_MCP_REDACT_PATTERNS`.
+3. Each free-text field (journal output and stderr, diff, file content, stdout, stderr) is cut to the tool's limit, which is `max_output_bytes` or else `SHELL_MCP_MAX_OUTPUT_BYTES`. `redact.Truncate` redacts before and after the cut, so a secret straddling the cut is masked whole. The cut never splits a UTF-8 sequence.
+4. Lists are trimmed from the end until the data's JSON fits `SHELL_MCP_MAX_OUTPUT_BYTES` (a binary search over the count).
+5. Every cut sets `truncated`; for commands, `stdout_truncated`/`stderr_truncated` in `data` and in `exec`. ARCHITECTURE §5's note on `SHELL_MCP_MAX_OUTPUT_BYTES` now says so.
+
+**Tests (committed failing first, `05548d4`; output in the PR body):**
+- **Fake gate** (`internal/tools/read_test.go`). A recording fake gate behind the in-process SSH server checks:
+  - registration in every profile;
+  - each schema bound, enum, pattern and required set;
+  - 61 validation rejections, each with no gate request sent;
+  - each tool's exact gate op and arguments;
+  - the timeout budget;
+  - the read command's tier refusal, undeclared id, template pass-through, a non-zero exit, and the policy-change warning;
+  - output caps and truncation flags (text fields at the server cap and at `max_output_bytes`, lists by size);
+  - redaction of a token generated at test time that only the server's pattern knows. It covers file content, journal output, diffs, command output, command lines, names, commit subjects and unit descriptions, including a token the cap cuts through, plus a private-key block. The token never reaches the result, the text block or the log.
+  - error pass-through: path, policy, sandbox (without an id), install, exec, tier, not found, and the absolute-symlink message;
+  - a summary line free of host and caller text;
+  - audit arguments.
+- **Real gate** (`read_linux_test.go`). Every native and git op goes through the real gate harness, decoded strictly. This proves the wire field names. It also checks the refusals: absolute symlink, built-in deny, outside roots, unlisted repository, missing services and journal sections, an operator command (`tier_denied` from the tool), and a template mismatch.
+- **The S2 harness** now expects the summary line. The four server tests that list the read-only catalogue use one constant. The catalogue snapshot was shown failing, then regenerated.
+
+**End-to-end** (`e2e-host`, `test/e2e/read_tools_test.go`):
+- **How the tools are called:** through the real `shell-mcp` binary (stdio, `none` auth, `read-only` profile, a server-only redaction pattern), the runner's test sshd and the installed gate.
+- **The read policy and key.** `setup.sh` adds `/etc/shell-mcp/gate-read.yaml` and a third client key that selects it (principal `e2e-read`, from 127.0.0.1). The policy is `max_tier: operator` with one operator command, so the tool's own tier refusal is two-sided: a direct gate `exec` of that command succeeds as the control.
+- **Static fixtures from `setup.sh`** under `/srv/example-app`: a tree with a directory symlink whose target is absolute, a `.netrc` (built-in deny), and a file under the policy's deny pattern.
+- **Fixtures made at test time:**
+  - a file holding a random `e2etok_` token;
+  - a journal line with the token, from a transient `example-journal.service` (`systemd-run --wait`);
+  - an ECDSA certificate and a private key;
+  - a git repository cloned from `gatetest.GitServer` (local HTTPS), fetched over HTTPS so that it is one commit behind, one local commit ahead, with an uncommitted change carrying the token.
+- **The cases.** Each tool is its own top-level test with a success and a refusal subtest, so the job summary lists every tool. Every call checks that the token is in neither the result nor the server's log.
+
+**Alternatives rejected:**
+- A summary-only text block (maintainer decision above).
+- Schema bounds computed from configuration: the catalogue would differ per deployment.
+- Treating `0` as "default" for optional integers.
+- Redacting only the fields known to be large: a pattern belongs on every host string.
+- A new gate argument carrying the tool's tier ceiling, which would close the run-command race: a protocol change (STOP-and-ask), not needed for this PR.
+- `timeout_seconds` on the native ops, which start no process.
+
+**Deferred / follow-ups:**
+- **S4b:** `shell_preview_delete` and `shell_preview_git_discard`.
+- **Later, for the maintainer:** an `exec` argument that makes the gate refuse a command above a caller-given tier would remove the run-command race (protocol change; maintainer's call).
+- **S5 (CLIENTS.md):** confirm how each client renders the summary-plus-JSON text block.
+
+**Double-check:** `shell_run_read_command` relies on the policy read just before `exec`. A root who edits the policy between the two requests can make an operator command run through the read tool. The gate's `max_tier` still bounds it, and the result warns afterwards.
+
+**Versions:**
+- **Go:** 1.27.2, still the newest stable per go.dev (go1.27.2, go1.26.9 listed).
+- **Refresh:** `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing, and `scripts/deps-current.sh` reports 13 in-scope modules current.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.14.0, govulncheck v1.9.0.

@@ -178,7 +178,7 @@ All variables are read at startup; `*_FILE` reads the value from a file (Docker 
 | `SHELL_MCP_SSH_CONNECT_TIMEOUT` | `10` | Seconds. |
 | `SHELL_MCP_SSH_MAX_SESSIONS` | `4` | Concurrent sessions per target. |
 | `SHELL_MCP_DEFAULT_TIMEOUT` / `_MAX_TIMEOUT` | `30` / `300` | Seconds for gate operations; the gate clamps further. |
-| `SHELL_MCP_MAX_OUTPUT_BYTES` | `262144` | Per stream returned to the client (the gate cap may be higher). |
+| `SHELL_MCP_MAX_OUTPUT_BYTES` | `262144` | Per stream returned to the client (the gate cap may be higher): each free-text field is cut to it, and a list is trimmed until the data fits it, with truncation flagged (docs/TOOLS.md, read tier). |
 | `SHELL_MCP_APPROVAL_TIERS` | `destructive` | `destructive` or `operator,destructive`. Destructive operations and privileged operations of tier operator or above always need approval; adding `operator` also gates ordinary (unprivileged) writes. `destructive` cannot be removed. |
 | `SHELL_MCP_APPROVAL_FALLBACK` | `deny` | For clients that do not declare elicitation: `deny` (refuse with `approval_unavailable`) or `confirm-argument` (explicit opt-out: a `confirm: true` argument is accepted; WARN at startup and on every use). |
 | `SHELL_MCP_APPROVAL_TTL` | `120` | Seconds an approval request stays valid (30..600). |
