@@ -465,7 +465,7 @@ func TestLimiterMemoryIsBounded(t *testing.T) {
 	cfg := bearerConfig(t)
 	e := newEnv(t, cfg)
 	for i := range maxTrackedClients + 500 {
-		_ = e.do(req{remote: fmt.Sprintf("10.%d.%d.%d:1", i>>16&0xff, i>>8&0xff, i&0xff), noAuth: true})
+		_ = e.do(req{remote: fmt.Sprintf("198.%d.%d.%d:1", 18+(i>>16&1), i>>8&0xff, i&0xff), noAuth: true})
 	}
 	if n := trackedClients(e.h); n > 2*maxTrackedClients {
 		t.Fatalf("tracking %d clients, bound is %d per limiter", n, maxTrackedClients)
