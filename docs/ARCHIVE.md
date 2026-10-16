@@ -1216,7 +1216,7 @@ Every one failed: no `sshd`, `systemctl`, `systemd-run`, `ss` or `journalctl` on
 
 **Versions:** unchanged (Go 1.27.2; no dependency added).
 
-### 2026-10-16 — Auth lockout counts only wrong credentials; client elicitation results recorded (PR #n, branch fix/auth-lockout)
+### 2026-10-16 — Auth lockout counts only wrong credentials; client elicitation results recorded (PR #16, branch fix/auth-lockout)
 **Decision:**
 - **The lockout counts only a presented credential that does not authenticate.** That means an `Authorization` header that is not a matching bearer token, a non-Bearer scheme, a malformed value (an empty value, `Bearer` with no token), or more than one `Authorization` header.
   - A request with **no** `Authorization` header still gets the same 401, with `WWW-Authenticate: Bearer realm="shell-mcp"` and `{"error":"unauthorized"}`. It is still subject to the global per-client rate limit, but it no longer counts toward the lockout.
