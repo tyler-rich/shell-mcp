@@ -34,13 +34,21 @@ func TestRFC6238Vectors(t *testing.T) {
 		if got := stepAt(at); got != v.step {
 			t.Errorf("stepAt(%d) = %#x, want %#x", v.unix, got, v.step)
 		}
-		if got := hotp(rfcSeed, uint64(v.step), 8); got != v.code {
+		if got := hotp(rfcSeed, counter(v.step), 8); got != v.code {
 			t.Errorf("8-digit code at %d = %q, want %q", v.unix, got, v.code)
 		}
 		if got, want := Generate(rfcSeed, at), v.code[2:]; got != want {
 			t.Errorf("Generate at %d = %q, want %q", v.unix, got, want)
 		}
 	}
+}
+
+// counter is a step as the HOTP counter; the tests' steps are never negative.
+func counter(s int64) uint64 {
+	if s < 0 {
+		return 0
+	}
+	return uint64(s)
 }
 
 // fakeClock is the injectable clock.
@@ -66,7 +74,7 @@ func newSeed(t *testing.T, at time.Time) []byte {
 		cur := stepAt(at)
 		distinct := true
 		for s := cur - 40; s <= cur+40; s++ {
-			c := hotp(seed, uint64(s), Digits)
+			c := hotp(seed, counter(s), Digits)
 			if seen[c] {
 				distinct = false
 				break
@@ -106,7 +114,7 @@ func newFixture(t *testing.T, names ...string) *fixture {
 
 // codeAt is the approver's correct code for the step offset steps from now.
 func (f *fixture) codeAt(name string, offset int64) string {
-	return hotp(f.seeds[name], uint64(stepAt(f.clock.t)+offset), Digits)
+	return hotp(f.seeds[name], counter(stepAt(f.clock.t)+offset), Digits)
 }
 
 // wrong is a well-formed code that matches no step in the accepted window.
@@ -194,8 +202,9 @@ func TestStepCurrentAtStartRefused(t *testing.T) {
 
 // lockOut sends MaxWrong wrong codes and then the one that locks the
 // approver out, and returns the lockout it started.
-func (f *fixture) lockOut(t *testing.T, name string) *Lockout {
+func (f *fixture) lockOut(t *testing.T) *Lockout {
 	t.Helper()
+	const name = "alice"
 	for i := range MaxWrong {
 		if out := f.expect(t, name, f.wrong(name), BadCode); out.Lockout != nil {
 			t.Fatalf("wrong code %d started a lockout", i+1)
@@ -212,7 +221,7 @@ func (f *fixture) lockOut(t *testing.T, name string) *Lockout {
 func TestFourthWrongCodeLocksOut(t *testing.T) {
 	f := newFixture(t)
 	f.clock.advance(5 * Period)
-	lo := f.lockOut(t, "alice")
+	lo := f.lockOut(t)
 	if want := f.clock.t.Add(FirstLockout); !lo.Until.Equal(want) || lo.Consecutive != 1 {
 		t.Fatalf("lockout = %+v, want until %s, consecutive 1", lo, want)
 	}
@@ -234,7 +243,7 @@ func TestFourthWrongCodeLocksOut(t *testing.T) {
 func TestLockedCodesUnchecked(t *testing.T) {
 	f := newFixture(t)
 	f.clock.advance(5 * Period)
-	lo := f.lockOut(t, "alice")
+	lo := f.lockOut(t)
 	for range 20 {
 		out := f.expect(t, "alice", f.wrong("alice"), Locked)
 		if !out.Lockout.Until.Equal(lo.Until) || out.Lockout.Consecutive != 1 {
@@ -302,7 +311,7 @@ func TestLockoutDoublesUpToCap(t *testing.T) {
 		8 * time.Hour, 16 * time.Hour, 24 * time.Hour, 24 * time.Hour, 24 * time.Hour,
 	}
 	for i, d := range want {
-		lo := f.lockOut(t, "alice")
+		lo := f.lockOut(t)
 		if got := lo.Until.Sub(f.clock.t); got != d || lo.Consecutive != i+1 {
 			t.Fatalf("lockout %d: %s (consecutive %d), want %s (consecutive %d)", i+1, got, lo.Consecutive, d, i+1)
 		}
@@ -314,7 +323,7 @@ func TestLockoutCapHoldsForManyLockouts(t *testing.T) {
 	f := newFixture(t)
 	f.clock.advance(5 * Period)
 	for i := range 70 { // past any shift width
-		lo := f.lockOut(t, "alice")
+		lo := f.lockOut(t)
 		if d := lo.Until.Sub(f.clock.t); d <= 0 || d > MaxLockout {
 			t.Fatalf("lockout %d lasts %s", i+1, d)
 		}
@@ -339,16 +348,16 @@ func TestSuccessResets(t *testing.T) {
 
 	// The consecutive-lockout count.
 	f.clock.advance(2 * WrongWindow)
-	lo := f.lockOut(t, "alice")
+	lo := f.lockOut(t)
 	f.clock.t = lo.Until
-	lo = f.lockOut(t, "alice")
+	lo = f.lockOut(t)
 	if lo.Consecutive != 2 {
 		t.Fatalf("second lockout consecutive = %d", lo.Consecutive)
 	}
 	f.clock.t = lo.Until
 	f.expect(t, "alice", f.codeAt("alice", 0), Accepted)
 	f.clock.advance(Period)
-	lo = f.lockOut(t, "alice")
+	lo = f.lockOut(t)
 	if lo.Consecutive != 1 || lo.Until.Sub(f.clock.t) != FirstLockout {
 		t.Fatalf("lockout after a success = %+v, want consecutive 1 lasting %s", lo, FirstLockout)
 	}
@@ -364,7 +373,7 @@ func TestApproversIndependent(t *testing.T) {
 
 	// Wrong codes and lockouts.
 	f.clock.advance(Period)
-	f.lockOut(t, "alice")
+	f.lockOut(t)
 	f.expect(t, "alice", f.codeAt("alice", 1), Locked)
 	f.expect(t, "bob", f.codeAt("bob", 0), Accepted)
 	for range MaxWrong {
@@ -421,7 +430,7 @@ func TestNewCopiesSeeds(t *testing.T) {
 		seed[i] = 0
 	}
 	clock.advance(5 * Period)
-	if got := v.Verify("alice", hotp(keep, uint64(stepAt(clock.t)), Digits)); got.Result != Accepted {
+	if got := v.Verify("alice", hotp(keep, counter(stepAt(clock.t)), Digits)); got.Result != Accepted {
 		t.Fatalf("Verify after the caller's seed changed = %v", got.Result)
 	}
 }

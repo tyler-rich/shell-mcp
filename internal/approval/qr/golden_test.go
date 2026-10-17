@@ -2,8 +2,10 @@ package qr
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/base32"
 	"encoding/hex"
+	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -102,7 +104,7 @@ func rowsOf(c *Code) []string {
 	return rows
 }
 
-func compare(t *testing.T, g golden, c *Code) {
+func compare(t *testing.T, g *golden, c *Code) {
 	t.Helper()
 	if c.Version() != g.version || c.Mask() != g.chosen {
 		t.Fatalf("version %d mask %d, want version %d mask %d", c.Version(), c.Mask(), g.version, g.chosen)
@@ -142,7 +144,7 @@ func TestGolden(t *testing.T) {
 			if err != nil {
 				t.Fatalf("encode %d bytes: %v", len(g.payload), err)
 			}
-			compare(t, g, c)
+			compare(t, &g, c)
 		})
 	}
 }
@@ -179,7 +181,7 @@ func TestCapacity(t *testing.T) {
 			c, err := Encode([]byte(strings.Repeat("x", l)))
 			switch {
 			case l > MaxBytes:
-				if err != ErrTooLong || c != nil {
+				if !errors.Is(err, ErrTooLong) || c != nil {
 					t.Fatalf("%d bytes: %v, %v; want ErrTooLong", l, c, err)
 				}
 			case err != nil:
@@ -189,7 +191,7 @@ func TestCapacity(t *testing.T) {
 			}
 		}
 	}
-	if _, err := Encode(make([]byte, 10_000)); err != ErrTooLong {
+	if _, err := Encode(make([]byte, 10_000)); !errors.Is(err, ErrTooLong) {
 		t.Fatalf("10000 bytes: %v", err)
 	}
 }
@@ -212,7 +214,7 @@ func TestRoundTripGolden(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: decode: %v", g.id, err)
 		}
-		if string(got) != string(g.payload) {
+		if !bytes.Equal(got, g.payload) {
 			t.Fatalf("%s: decoded %q, want %q", g.id, got, g.payload)
 		}
 	}
@@ -273,7 +275,7 @@ func TestDecoderDetectsCorruption(t *testing.T) {
 		c.modules[i] = !c.modules[i]
 		got, err := decode(c)
 		c.modules[i] = !c.modules[i]
-		if err == nil && string(got) == string(payload) {
+		if err == nil && bytes.Equal(got, payload) {
 			t.Fatalf("flipping module (%d,%d) went unnoticed", i%c.size, i/c.size)
 		}
 	}

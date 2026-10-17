@@ -230,7 +230,7 @@ func TestLoadRefuses(t *testing.T) {
 	requireModes(t)
 	seed := randSeed(t)
 	dir := t.TempDir()
-	if err := os.Chmod(dir, 0o700); err != nil {
+	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // G302: a test fixture mode
 		t.Fatal(err)
 	}
 	big := writeFile(t, "alice "+seed+"\n"+strings.Repeat("x", 64<<10), 0o600)

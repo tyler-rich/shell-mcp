@@ -297,7 +297,7 @@ func decode(c *Code) ([]byte, error) {
 		if r.left() < 8 {
 			return nil, errors.New("count exceeds the data")
 		}
-		out = append(out, byte(r.read(8)))
+		out = append(out, byte(r.read(8))) //nolint:gosec // G115: an 8-bit read
 	}
 	if t := min(4, r.left()); r.read(t) != 0 {
 		return nil, errors.New("terminator")

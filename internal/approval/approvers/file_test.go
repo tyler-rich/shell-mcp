@@ -13,22 +13,22 @@ import (
 
 // Seeds are generated at test time; names are invented.
 
-func readFile(t *testing.T, path string) (string, os.FileInfo) {
+func readFile(t *testing.T, path string) (content string, fi os.FileInfo) {
 	t.Helper()
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // G304: the test's own temporary file
 	if err != nil {
 		t.Fatal(err)
 	}
-	fi, err := os.Stat(path)
-	if err != nil {
+	if fi, err = os.Stat(path); err != nil {
 		t.Fatal(err)
 	}
 	return string(b), fi
 }
 
-// onlyFile fails unless dir holds exactly the one file name: no temporary
-// file is left behind.
-func onlyFile(t *testing.T, dir, name string) {
+// onlyFile fails unless dir holds only the approvers file: no temporary file
+// is left behind.
+func onlyFile(t *testing.T, dir string) {
+	const name = "approvers"
 	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -58,7 +58,7 @@ func TestAddCreatesFile(t *testing.T) {
 	if fi.Mode().Perm() != 0o600 || !fi.Mode().IsRegular() {
 		t.Fatalf("mode %v, want 0600", fi.Mode())
 	}
-	onlyFile(t, dir, "approvers")
+	onlyFile(t, dir)
 	got, err := Load(path, 1)
 	if err != nil || len(got) != 1 || !bytes.Equal(got[0].Seed(), seed) {
 		t.Fatalf("Load after Add = %v, %v", got, err)
@@ -85,7 +85,7 @@ func TestAddAppendsAtomically(t *testing.T) {
 	if os.SameFile(before, after) {
 		t.Fatal("the file was rewritten in place, not replaced")
 	}
-	onlyFile(t, filepath.Dir(path), "approvers")
+	onlyFile(t, filepath.Dir(path))
 }
 
 func TestAddAddsMissingNewline(t *testing.T) {
@@ -157,7 +157,7 @@ func TestAddRefuses(t *testing.T) {
 			if content != c.content || !os.SameFile(before, after) || after.Mode().Perm() != c.mode {
 				t.Fatal("a refused Add changed the file")
 			}
-			onlyFile(t, filepath.Dir(path), "approvers")
+			onlyFile(t, filepath.Dir(path))
 		})
 	}
 }
@@ -184,7 +184,7 @@ func TestRemove(t *testing.T) {
 	if after.Mode().Perm() != 0o600 || os.SameFile(before, after) {
 		t.Fatal("Remove did not replace the file atomically with mode 0600")
 	}
-	onlyFile(t, filepath.Dir(path), "approvers")
+	onlyFile(t, filepath.Dir(path))
 
 	if err := Remove(path, "alice"); err != nil {
 		t.Fatal(err)

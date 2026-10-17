@@ -2,6 +2,7 @@ package qr
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -16,7 +17,7 @@ func FuzzEncode(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
 		c, err := Encode(data)
 		if len(data) > MaxBytes {
-			if err != ErrTooLong || c != nil {
+			if !errors.Is(err, ErrTooLong) || c != nil {
 				t.Fatalf("%d bytes: %v, %v", len(data), c, err)
 			}
 			return

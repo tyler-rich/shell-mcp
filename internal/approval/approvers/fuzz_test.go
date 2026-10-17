@@ -27,8 +27,8 @@ func FuzzParse(f *testing.F) {
 		f.Add([]byte(s), 2)
 	}
 	notBase32 := func(r rune) bool { return (r < 'a' || r > 'z') && (r < '2' || r > '7') }
-	f.Fuzz(func(t *testing.T, data []byte, max int) {
-		got, err := Parse(data, max)
+	f.Fuzz(func(t *testing.T, data []byte, maxApprovers int) {
+		got, err := Parse(data, maxApprovers)
 		if err != nil {
 			msg := err.Error()
 			if strings.ContainsAny(msg, "\r\n") {
@@ -45,8 +45,8 @@ func FuzzParse(f *testing.F) {
 			}
 			return
 		}
-		if max < 1 || max > MaxApprovers || len(got) < 1 || len(got) > max {
-			t.Fatalf("accepted %d approvers with max %d", len(got), max)
+		if maxApprovers < 1 || maxApprovers > MaxApprovers || len(got) < 1 || len(got) > maxApprovers {
+			t.Fatalf("accepted %d approvers with max %d", len(got), maxApprovers)
 		}
 		seen := map[string]bool{}
 		for _, a := range got {

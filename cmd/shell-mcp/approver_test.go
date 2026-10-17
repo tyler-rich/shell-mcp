@@ -164,7 +164,7 @@ func TestApproverAdd(t *testing.T) {
 	}
 
 	// The file.
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(path) //nolint:gosec // G304: the test's own temporary file
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestApproverAddRefusals(t *testing.T) {
 	if code, _, stderr := approver(t, terminalEnv(rand.Reader), "add", "--name", "alice", "--file", path); code != 0 {
 		t.Fatalf("first add: exit %d: %s", code, stderr)
 	}
-	before, _ := os.ReadFile(path)
+	before, _ := os.ReadFile(path) //nolint:gosec // G304: the test's own temporary file
 	for _, c := range []struct {
 		name string
 		args []string
@@ -246,7 +246,7 @@ func TestApproverAddRefusals(t *testing.T) {
 				t.Fatalf("exit %d, stdout %q, stderr %q", code, stdout, stderr)
 			}
 			noSeedIn(t, "stderr", stderr, seed)
-			if after, _ := os.ReadFile(path); !bytes.Equal(before, after) {
+			if after, _ := os.ReadFile(path); !bytes.Equal(before, after) { //nolint:gosec // G304: the test's own temporary file
 				t.Fatal("a refused add changed the file")
 			}
 		})
@@ -254,10 +254,10 @@ func TestApproverAddRefusals(t *testing.T) {
 
 	t.Run("group-readable", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "approvers")
-		if err := os.WriteFile(p, before, 0o600); err != nil {
+		if err := os.WriteFile(p, before, 0o600); err != nil { //nolint:gosec // G703: the test's own temporary file
 			t.Fatal(err)
 		}
-		if err := os.Chmod(p, 0o640); err != nil {
+		if err := os.Chmod(p, 0o640); err != nil { //nolint:gosec // G302: a deliberately insecure test fixture mode
 			t.Fatal(err)
 		}
 		code, stdout, stderr := approver(t, terminalEnv(rand.Reader), "add", "--name", "bob", "--file", p, "--allow-multiple")
@@ -320,7 +320,7 @@ func TestApproverRemoveAndList(t *testing.T) {
 			t.Fatalf("add %s: %s", n, stderr)
 		}
 	}
-	content, _ := os.ReadFile(path)
+	content, _ := os.ReadFile(path) //nolint:gosec // G304: the test's own temporary file
 
 	code, stdout, stderr := approver(t, env, "list", "--file", path)
 	if code != 0 || stdout != "alice\nbob\n" || stderr != "" {
@@ -338,7 +338,7 @@ func TestApproverRemoveAndList(t *testing.T) {
 	if code, stdout, _ = approver(t, env, "list", "--file", path); code != 0 || stdout != "bob\n" {
 		t.Fatalf("list after remove: %q", stdout)
 	}
-	if after, _ := os.ReadFile(path); !bytes.HasSuffix(content, after) {
+	if after, _ := os.ReadFile(path); !bytes.HasSuffix(content, after) { //nolint:gosec // G304: the test's own temporary file
 		t.Fatal("remove changed the remaining line")
 	}
 
