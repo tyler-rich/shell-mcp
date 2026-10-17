@@ -115,7 +115,7 @@ func TestLoadValidBaseline(t *testing.T) {
 	if len(cfg.Targets) != 1 || cfg.Targets[0].Name != "app-host" || cfg.Targets[0].Port != 22 {
 		t.Fatalf("single target not built: %+v", cfg.Targets)
 	}
-	if cfg.ApprovalTTL != 120*time.Second || cfg.SSHMaxSessions != 4 || cfg.MaxOutputBytes != 262144 {
+	if cfg.ApprovalTTL != 300*time.Second || cfg.SSHMaxSessions != 4 || cfg.MaxOutputBytes != 262144 {
 		t.Fatalf("defaults not applied: %+v", cfg)
 	}
 	if cfg.Token.Len() != len(testToken) {
