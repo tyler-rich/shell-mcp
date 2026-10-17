@@ -25,6 +25,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/tyler-rich/shell-mcp/internal/approval"
 	"github.com/tyler-rich/shell-mcp/internal/auth"
 	"github.com/tyler-rich/shell-mcp/internal/config"
 	"github.com/tyler-rich/shell-mcp/internal/envelope"
@@ -156,7 +157,7 @@ func cmdServe(ctx context.Context, args []string, lookup config.LookupFunc, stdi
 		return 0
 	}
 
-	srv, cleanup, err := newHTTPServer(cfg, logger)
+	srv, cleanup, err := newHTTPServer(cfg, logger, nil)
 	if err != nil {
 		logger.Error("refusing to start", "reason", err.Error())
 		return 1
@@ -184,7 +185,7 @@ func (nopWriteCloser) Close() error                  { return nil }
 
 // newHTTPServer builds the HTTP server: the middleware chain in front of the
 // SDK's stateless Streamable HTTP handler.
-func newHTTPServer(cfg *config.Config, logger *slog.Logger) (*http.Server, func(), error) {
+func newHTTPServer(cfg *config.Config, logger *slog.Logger, ar *approvalRuntime) (*http.Server, func(), error) {
 	server, cleanup, err := newMCPServer(cfg, logger)
 	if err != nil {
 		return nil, nil, err
@@ -481,4 +482,16 @@ func healthcheck(ctx context.Context, url string) int {
 		return 1
 	}
 	return 0
+}
+
+// approvalRuntime is the approval state of a serving process: the store
+// (web and confirm-argument) and, for web, the approval listener.
+type approvalRuntime struct {
+	store  *approval.Store
+	server *http.Server
+}
+
+// newApprovalRuntime builds the approval store and listener for cfg.
+func newApprovalRuntime(cfg *config.Config, logger *slog.Logger) (*approvalRuntime, error) {
+	return &approvalRuntime{}, nil
 }

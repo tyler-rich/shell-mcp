@@ -190,7 +190,7 @@ func httpStack(t *testing.T, env map[string]string) *httptest.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, cleanup, err := newHTTPServer(cfg, slog.New(slog.DiscardHandler))
+	srv, cleanup, err := newHTTPServer(cfg, slog.New(slog.DiscardHandler), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

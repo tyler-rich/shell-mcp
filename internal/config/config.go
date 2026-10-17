@@ -2,6 +2,7 @@ package config
 
 import (
 	"crypto/ed25519"
+	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -17,6 +18,8 @@ import (
 
 	"go.yaml.in/yaml/v3"
 	"golang.org/x/crypto/ssh"
+
+	"github.com/tyler-rich/shell-mcp/internal/approval/approvers"
 )
 
 // LookupFunc returns the value of an environment variable and whether it is
@@ -76,9 +79,24 @@ type Config struct {
 	ApprovalTiers        []string
 	ApprovalFallback     string
 	ApprovalTTL          time.Duration
-	RedactPatterns       []*regexp.Regexp
-	LogLevel             string
-	LogFormat            string
+	// ApprovalMethod is none, web or confirm-argument.
+	ApprovalMethod string
+	// The approval listener (web): bind, port, optional native TLS, and the
+	// page's fixed origin (scheme://host[:port], no trailing slash).
+	ApprovalBind      string
+	ApprovalPort      int
+	ApprovalTLSCert   *tls.Certificate
+	ApprovalPublicURL string
+	// Approvers are read from SHELL_MCP_APPROVERS_FILE (web).
+	Approvers            []approvers.Approver
+	ApprovalMaxApprovers int
+	// ApprovalNotifyURL and ApprovalNotifyToken configure the optional
+	// ntfy push.
+	ApprovalNotifyURL   string
+	ApprovalNotifyToken Secret
+	RedactPatterns      []*regexp.Regexp
+	LogLevel            string
+	LogFormat           string
 
 	// Warnings are non-fatal findings the caller must log at WARN on every
 	// start. They never contain secret material.

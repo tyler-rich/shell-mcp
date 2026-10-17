@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 
+	"github.com/tyler-rich/shell-mcp/internal/approval"
 	"github.com/tyler-rich/shell-mcp/internal/auth"
 	"github.com/tyler-rich/shell-mcp/internal/config"
 	"github.com/tyler-rich/shell-mcp/internal/envelope"
@@ -39,6 +40,14 @@ type Deps struct {
 	// a human approval (D-006). Until approval exists (S4b), a tool of such
 	// a tier refuses every call with approval_unavailable (approvalGuard).
 	ApprovalTiers []string
+	// ApprovalMethod is SHELL_MCP_APPROVAL_METHOD (empty: none).
+	ApprovalMethod approval.Method
+	// Approvals is the approval store (web and confirm-argument).
+	Approvals *approval.Store
+	// ApprovalPublicURL is SHELL_MCP_APPROVAL_PUBLIC_URL's origin (web).
+	ApprovalPublicURL string
+	// Notify, when set, is called for each new approval record.
+	Notify func(approval.Record, string)
 }
 
 // approvalGuard refuses a call that needs approval, because this release
