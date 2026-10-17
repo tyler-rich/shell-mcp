@@ -1749,6 +1749,14 @@ The document gives exact replacement wording for D-006 and S-12, the config, env
 
 **Fuzzing (60 s each, golang container, no crashers):** `FuzzParse` (approvers file) 34,887,330 execs; `FuzzParseCode` 87,786,998 execs; `FuzzEncode` 348,807 execs (each runs the encoder, all eight mask scorings and the test decoder).
 
+**Mutation check** (throwaway copies in the golang container; nothing committed). Because most TOTP behaviour tests failed inside their fixture against the stubs, every rule was also broken one at a time in the real code, to see whether a test notices.
+- **TOTP: 15 mutants**, among them skew 2, no replay check, a usable start step, 4 wrong codes allowed, a 59 s window, no doubling, no cap, success not resetting, locked codes checked, reused codes counted, malformed codes not counted, shared state across approvers, and seeds not copied. Two survived the first run:
+  - the window, because the tests used the package's own constants;
+  - counting reused codes, which no test covered.
+
+  Since `1005f97` the tests use the handoff's values written out and cover reuse, and all 15 are killed by behavioural tests.
+- **Approvers file: 16 mutants**, among them the bounds, the mode mask, regular files, duplicates, canonical base32, an error echoing a line, a seed in `String`, `--allow-multiple`, in-place writes, the temporary file's mode, and `Add` skipping the mode check. The one survivor, the default maximum (same cause), is killed since `37184f8`.
+
 **Alternatives rejected:**
 - **A QR module.** That would be a STOP-and-ask, and it is not needed.
 - **`golang.org/x/term`.** A new module. `x/sys`, already required directly, provides `TCGETS` and `GetConsoleMode`.
