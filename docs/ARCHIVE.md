@@ -1599,7 +1599,7 @@ The guarantee did not have the race the prompt feared. The test's reading of it 
 - **A long apt-get run loses nothing.** It is already gone at the moment the helper dies, because its parent-death signal fires before any stop timeout counts. Only the processes that outlive it, such as dpkg and maintainer scripts, are affected. Under the old default they also got `SIGTERM` at once; they now get `SIGKILL` after 5 s instead of 90 s. dpkg's interrupted-run recovery (`dpkg --configure -a`) is the same either way.
 - **The helper's own command timeout is unchanged.** It is `SIGTERM`, then `SIGKILL` after `DefaultKillGrace` (2 s), and runs inside the instance, independent of systemd.
 
-**`systemd-analyze security`:** neither directive is part of its assessment. e2e `TestSecurityExposure` still enforces `E2E_SECURITY_MAX` (1.4) on the core unit; see the CI result for this PR.
+**`systemd-analyze security`:** neither directive is part of its assessment. On the CI run for `2f2b792`, e2e `TestSecurityExposure` (threshold `E2E_SECURITY_MAX` 1.4) read the core unit at 1.4 and the broad unit at 8.1 (recorded, not enforced). Both are the same as on the run before the change.
 
 **Who is affected:** a core-unit command cannot switch user at all. Its bounding set has no `CAP_SETUID` or `CAP_SETGID`, and neither is declarable (PRIVILEGED §4). A broad-unit command can, because it runs with root's full set.
 
@@ -1609,13 +1609,13 @@ The guarantee did not have the race the prompt feared. The test's reading of it 
   - **Control:** one second later the command still runs, so no parent-death signal reached it.
   - **Bound:** it must then be gone within `TimeoutStopSec` + 3 s.
 
-  On `b1fc625`, without the directives, CI failed it as intended. The control held, and then: "the user-switched command (pid 7381) still runs 8s after the helper in shell-mcp-privd-broad@….service died (KillMode=control-group, TimeoutStopUSec=1min 30s)". The Go jobs on both matrix entries failed only `TestServiceDirectives` and `TestBroadServiceDirectives`.
+  On `b1fc625`, without the directives, CI failed it as intended. The control held, and then: "the user-switched command (pid 7381) still runs 8s after the helper in shell-mcp-privd-broad@….service died (KillMode=control-group, TimeoutStopUSec=1min 30s)". The Go jobs on both matrix entries failed only `TestServiceDirectives` and `TestBroadServiceDirectives`. With the fix (`aea8e81`), it passed: the command was gone 5.15 s after the helper died.
 - **The pdeathsig window changes.** `TestCommandDiesWithGateOrHelper` now allows 2 s, not 5 s: with `TimeoutStopSec=5`, systemd's own `SIGKILL` could otherwise end the helper cases inside the window. The test requires the unit's stop timeout to be at least twice the window.
 
 **Docs:** PRIVILEGED §5.1 and §5.2 list both directives. A new paragraph before §5.3 says why both units set them.
 
 **Alternatives rejected:**
-- **`KillMode=mixed`:** after the main process exits it SIGKILLs the rest at once, with no grace at all. The maintainer chose `control-group` with a short timeout, which gives leftovers 5 s after `SIGTERM`.
+- **`KillMode=mixed`:** after the main process exits it SIGKILLs the rest at once, with no grace at all. In the broad unit the leftovers include dpkg and maintainer scripts. They should get `SIGTERM` first and a moment to stop at a safe point, not an immediate `SIGKILL` that can leave packages half-configured. The maintainer kept `control-group`: `SIGTERM` to everything left, then `SIGKILL` after 5 s.
 - **A per-command `Pdeathsig` re-arm:** impossible after the command changes its own credentials, and it would not cover its children.
 
 **Versions:** unchanged (Go 1.27.2; modules as above; golangci-lint v2.15.0, govulncheck v1.9.0). No dependency added.
