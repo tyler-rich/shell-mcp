@@ -46,7 +46,7 @@ type Deps struct {
 	// ApprovalPublicURL is SHELL_MCP_APPROVAL_PUBLIC_URL's origin (web).
 	ApprovalPublicURL string
 	// Notify, when set, is called for each new approval record.
-	Notify func(approval.Record, string)
+	Notify func(*approval.Record, string)
 }
 
 // Catalogue returns the registry of every tool this binary knows, each with

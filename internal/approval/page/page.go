@@ -120,7 +120,8 @@ type handler struct {
 }
 
 // New returns the page's handler.
-func New(c Config) (http.Handler, error) {
+func New(cfg *Config) (http.Handler, error) {
+	c := *cfg
 	if c.Store == nil || c.Verifier == nil {
 		return nil, errors.New("page: a store and a verifier are required")
 	}
@@ -167,7 +168,7 @@ func New(c Config) (http.Handler, error) {
 
 // NewServer returns the approval listener's server on addr, serving TLS 1.2
 // or later with cert when it is not nil.
-func NewServer(c Config, addr string, cert *tls.Certificate) (*http.Server, error) {
+func NewServer(c *Config, addr string, cert *tls.Certificate) (*http.Server, error) {
 	h, err := New(c)
 	if err != nil {
 		return nil, err
@@ -219,22 +220,22 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.c.Logger.Warn("request refused", slog.String("reason", auth.CodeRateLimited), slog.String("client", key.String()), slog.String("listener", "approval"))
 		}
 		auth.RetryAfter(w, wait)
-		h.render(w, http.StatusTooManyRequests, view{Message: "Too many requests. Wait a minute and try again."})
+		h.render(w, http.StatusTooManyRequests, &view{Message: "Too many requests. Wait a minute and try again."})
 		return
 	}
 	if !h.hostMatches(r.Host) {
 		h.refused(r, "host", "", "")
-		h.render(w, http.StatusMisdirectedRequest, view{Message: "This request was not addressed to this page's configured origin; nothing was done."})
+		h.render(w, http.StatusMisdirectedRequest, &view{Message: "This request was not addressed to this page's configured origin; nothing was done."})
 		return
 	}
-	if vals := r.Header.Values("Origin"); len(vals) > 1 || len(vals) == 1 && strings.ToLower(vals[0]) != h.origin {
+	if vals := r.Header.Values("Origin"); len(vals) > 1 || len(vals) == 1 && !strings.EqualFold(vals[0], h.origin) {
 		h.refused(r, "cross_origin", "", "")
-		h.render(w, http.StatusForbidden, view{Message: "Cross-origin request refused; nothing was done."})
+		h.render(w, http.StatusForbidden, &view{Message: "Cross-origin request refused; nothing was done."})
 		return
 	}
 	if err := h.cop.Check(r); err != nil {
 		h.refused(r, "cross_origin", "", "")
-		h.render(w, http.StatusForbidden, view{Message: "Cross-origin request refused; nothing was done."})
+		h.render(w, http.StatusForbidden, &view{Message: "Cross-origin request refused; nothing was done."})
 		return
 	}
 	h.route(w, r)
@@ -275,7 +276,7 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
 	if p == "/" {
 		if !methodIs(w, r, http.MethodGet, http.MethodHead) {
-			h.render(w, http.StatusMethodNotAllowed, view{Message: "Method not allowed."})
+			h.render(w, http.StatusMethodNotAllowed, &view{Message: "Method not allowed."})
 			return
 		}
 		h.bookmark(w, r)
@@ -290,13 +291,13 @@ func (h *handler) route(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case !hasVerb:
 		if !methodIs(w, r, http.MethodGet, http.MethodHead) {
-			h.render(w, http.StatusMethodNotAllowed, view{Message: "Method not allowed."})
+			h.render(w, http.StatusMethodNotAllowed, &view{Message: "Method not allowed."})
 			return
 		}
 		h.recordPage(w, id)
 	case verb == "approve" || verb == "decline":
 		if !methodIs(w, r, http.MethodPost) {
-			h.render(w, http.StatusMethodNotAllowed, view{Message: "Method not allowed: decisions are made with the form on the approval page."})
+			h.render(w, http.StatusMethodNotAllowed, &view{Message: "Method not allowed: decisions are made with the form on the approval page."})
 			return
 		}
 		h.decide(w, r, id, verb == "approve")
@@ -314,18 +315,18 @@ func methodIs(w http.ResponseWriter, r *http.Request, allowed ...string) bool {
 }
 
 func (h *handler) notFound(w http.ResponseWriter) {
-	h.render(w, http.StatusNotFound, view{Message: "Not found."})
+	h.render(w, http.StatusNotFound, &view{Message: "Not found."})
 }
 
 func (h *handler) bookmark(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if !q.Has("id") {
-		h.render(w, http.StatusOK, view{Bookmark: true})
+		h.render(w, http.StatusOK, &view{Bookmark: true})
 		return
 	}
 	id := strings.ToLower(strings.TrimSpace(q.Get("id")))
 	if len(q["id"]) != 1 || !approval.ParseID(id) {
-		h.render(w, http.StatusBadRequest, view{Bookmark: true, Message: "That is not an approval id: 26 letters a–z and digits 2–7."})
+		h.render(w, http.StatusBadRequest, &view{Bookmark: true, Message: "That is not an approval id: 26 letters a–z and digits 2–7."})
 		return
 	}
 	w.Header().Set("Location", "/approvals/"+id)
@@ -335,10 +336,10 @@ func (h *handler) bookmark(w http.ResponseWriter, r *http.Request) {
 func (h *handler) recordPage(w http.ResponseWriter, id string) {
 	rec, ok := h.lookup(id)
 	if !ok {
-		h.render(w, http.StatusNotFound, view{Message: noRecord})
+		h.render(w, http.StatusNotFound, &view{Message: noRecord})
 		return
 	}
-	h.render(w, http.StatusOK, view{Record: h.recView(rec)})
+	h.render(w, http.StatusOK, &view{Record: h.recView(&rec)})
 }
 
 const noRecord = "No approval with this id: it expired, was never issued, or the server restarted."
@@ -358,49 +359,49 @@ const (
 
 func (h *handler) decide(w http.ResponseWriter, r *http.Request, id string, approve bool) {
 	if r.ContentLength > MaxBodyBytes {
-		h.render(w, http.StatusRequestEntityTooLarge, view{Message: "Request too large."})
+		h.render(w, http.StatusRequestEntityTooLarge, &view{Message: "Request too large."})
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
 	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(strings.ToLower(ct), "application/x-www-form-urlencoded") {
-		h.render(w, http.StatusBadRequest, view{Message: "Bad request."})
+		h.render(w, http.StatusBadRequest, &view{Message: "Bad request."})
 		return
 	}
 	if err := r.ParseForm(); err != nil {
 		var mbe *http.MaxBytesError
 		if errors.As(err, &mbe) {
-			h.render(w, http.StatusRequestEntityTooLarge, view{Message: "Request too large."})
+			h.render(w, http.StatusRequestEntityTooLarge, &view{Message: "Request too large."})
 			return
 		}
-		h.render(w, http.StatusBadRequest, view{Message: "Bad request."})
+		h.render(w, http.StatusBadRequest, &view{Message: "Bad request."})
 		return
 	}
 	for _, v := range r.PostForm {
 		if len(v) != 1 {
-			h.render(w, http.StatusBadRequest, view{Message: "Bad request."})
+			h.render(w, http.StatusBadRequest, &view{Message: "Bad request."})
 			return
 		}
 	}
 	rec, ok := h.lookup(id)
 	if !ok {
 		h.refused(r, "unknown", "", "")
-		h.render(w, http.StatusNotFound, view{Message: noRecord})
+		h.render(w, http.StatusNotFound, &view{Message: noRecord})
 		return
 	}
 	if tok := r.PostForm.Get("csrf_token"); tok == "" || subtle.ConstantTimeCompare([]byte(tok), []byte(rec.CSRFToken)) != 1 {
 		h.refused(r, "csrf_token", rec.ID, "")
-		h.render(w, http.StatusForbidden, view{Message: msgCSRF})
+		h.render(w, http.StatusForbidden, &view{Message: msgCSRF})
 		return
 	}
 	switch rec.Status {
 	case approval.StatusPending:
 	case approval.StatusExpired:
 		h.refused(r, "expired", rec.ID, "")
-		h.render(w, http.StatusGone, view{Record: h.recView(rec)})
+		h.render(w, http.StatusGone, &view{Record: h.recView(&rec)})
 		return
 	default:
 		h.refused(r, "not_pending", rec.ID, "")
-		h.render(w, http.StatusConflict, view{Record: h.recView(rec)})
+		h.render(w, http.StatusConflict, &view{Record: h.recView(&rec)})
 		return
 	}
 	name, logName := h.approvers[0], h.approvers[0]
@@ -421,21 +422,21 @@ func (h *handler) decide(w http.ResponseWriter, r *http.Request, id string, appr
 				h.c.OnLockout(logName, out.Lockout.Until, out.Lockout.Consecutive)
 			}
 		}
-		h.render(w, http.StatusForbidden, view{Record: h.recView(rec), Message: msgCode})
+		h.render(w, http.StatusForbidden, &view{Record: h.recView(&rec), Message: msgCode})
 		return
 	}
 	decided, err := h.c.Store.Decide(rec.ID, approve, name, transport.ClientAddr(r, h.c.TrustedProxies).String())
 	switch {
 	case errors.Is(err, approval.ErrExpired):
 		h.refused(r, "expired", rec.ID, logName)
-		h.render(w, http.StatusGone, view{Message: "This approval expired before the decision; nothing was done."})
+		h.render(w, http.StatusGone, &view{Message: "This approval expired before the decision; nothing was done."})
 		return
 	case err != nil:
 		h.refused(r, "not_pending", rec.ID, logName)
-		h.render(w, http.StatusConflict, view{Message: "This approval was already decided."})
+		h.render(w, http.StatusConflict, &view{Message: "This approval was already decided."})
 		return
 	}
-	h.render(w, http.StatusOK, view{Record: h.recView(decided)})
+	h.render(w, http.StatusOK, &view{Record: h.recView(&decided)})
 }
 
 // --- Rendering --------------------------------------------------------------------
@@ -470,7 +471,7 @@ func fields(fs []approval.Field) []fieldView {
 // recView renders a record: every string through approval.Visible, so
 // control and bidi characters show as escapes; html/template escapes the
 // markup.
-func (h *handler) recView(r approval.Record) *recView {
+func (h *handler) recView(r *approval.Record) *recView {
 	v := &recView{
 		ID: r.ID, ToolTitle: approval.Visible(r.ToolTitle), Tool: approval.Visible(r.Tool), Target: approval.Visible(r.Target),
 		TargetHost: approval.Visible(r.TargetHost), Principal: approval.Visible(r.Principal), Description: approval.Visible(r.Description),
@@ -489,7 +490,7 @@ func (h *handler) recView(r approval.Record) *recView {
 	return v
 }
 
-func (h *handler) render(w http.ResponseWriter, status int, v view) {
+func (h *handler) render(w http.ResponseWriter, status int, v *view) {
 	v.Origin = h.origin
 	v.Multi = len(h.approvers) > 1
 	v.Approvers = h.approvers

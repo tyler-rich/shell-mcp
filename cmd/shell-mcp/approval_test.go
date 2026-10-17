@@ -47,7 +47,7 @@ import (
 
 func freePort(t *testing.T) int {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func loadCfg(t *testing.T, env map[string]string) *config.Config {
 	return cfg
 }
 
-func serveReq(h http.Handler, method, target, host, remote string, hdr map[string]string) (int, string) {
+func serveReq(h http.Handler, method, target, host, remote string, hdr map[string]string) (code int, body string) {
 	r := httptest.NewRequestWithContext(context.Background(), method, target, http.NoBody)
 	r.Host, r.RemoteAddr = host, remote
 	for k, v := range hdr {
@@ -200,7 +200,7 @@ func TestApprovalListenerTLS(t *testing.T) {
 	}
 }
 
-func tlsFiles(t *testing.T) (string, string) {
+func tlsFiles(t *testing.T) (certFile, keyFile string) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -291,7 +291,7 @@ func TestSimulatedHumanInProcess(t *testing.T) {
 	t.Cleanup(cleanup)
 	ts := httptest.NewServer(mcpSrv.Handler)
 	t.Cleanup(ts.Close)
-	ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(aport))
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:"+strconv.Itoa(aport))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,9 +303,9 @@ func TestSimulatedHumanInProcess(t *testing.T) {
 	}
 	args := map[string]any{"path": "/srv/app/config.yaml", "content": "key: value2\n"}
 	call := func(a map[string]any) map[string]any {
-		res, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "shell_write_file", Arguments: a})
-		if err != nil {
-			t.Fatal(err)
+		res, cerr := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "shell_write_file", Arguments: a})
+		if cerr != nil {
+			t.Fatal(cerr)
 		}
 		b, _ := json.Marshal(res.StructuredContent)
 		var env map[string]any

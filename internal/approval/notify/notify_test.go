@@ -70,7 +70,7 @@ func TestPublishJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = n.Publish(t.Context(), Message{Title: "Approval requested: Write file on app-host", Message: "Write 12 bytes …\nExpires 2026-10-16T12:05:00Z",
+	err = n.Publish(t.Context(), &Message{Title: "Approval requested: Write file on app-host", Message: "Write 12 bytes …\nExpires 2026-10-16T12:05:00Z",
 		ViewURL: "https://approve.example.test/approvals/aaaaaaaaaaaaaaaaaaaaaaaaaa", Tags: []string{"lock"}, Priority: 4})
 	if err != nil {
 		t.Fatal(err)
@@ -122,11 +122,11 @@ func TestFailureLoggedNeverBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := n.Publish(t.Context(), Message{Title: "x", Message: "y"}); err == nil {
+	if err := n.Publish(t.Context(), &Message{Title: "x", Message: "y"}); err == nil {
 		t.Fatal("a 403 was not an error")
 	}
 	start := time.Now()
-	n.Send(Message{Title: "x", Message: "y"})
+	n.Send(&Message{Title: "x", Message: "y"})
 	if time.Since(start) > 100*time.Millisecond {
 		t.Fatal("Send blocked")
 	}
@@ -158,7 +158,7 @@ func TestNoRedirectFollowed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := n.Publish(t.Context(), Message{Title: "x", Message: "y"}); err == nil {
+	if err := n.Publish(t.Context(), &Message{Title: "x", Message: "y"}); err == nil {
 		t.Fatal("a redirect was a success")
 	}
 	if len(oc.reqs) != 0 {

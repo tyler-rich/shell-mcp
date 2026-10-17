@@ -89,8 +89,8 @@ func binding() Binding {
 	return Binding{Principal: "bearer-token", Tool: "shell_write_file", Target: "app-host", ArgsSHA256: hashA}
 }
 
-func request() Request {
-	return Request{
+func request() *Request {
+	return &Request{
 		Binding: binding(), PreviewSHA256: hashB, PolicySHA256: hashC,
 		ToolTitle: "Write file", TargetHost: "target-a.example.test",
 		Description: "Write 12 bytes to /srv/app/config.yaml on app-host",
@@ -384,7 +384,7 @@ func TestDecide(t *testing.T) {
 	if _, err := s.Decide("aaaaaaaaaaaaaaaaaaaaaaaaaa", true, "alice", ""); !errors.Is(err, ErrUnknown) {
 		t.Fatalf("unknown id: %v", err)
 	}
-	r2, _ := s.Request(func() Request { q := request(); q.ArgsSHA256 = hashC; return q }())
+	r2, _ := s.Request(func() *Request { q := request(); q.ArgsSHA256 = hashC; return q }())
 	c.Add(301 * time.Second)
 	if _, err := s.Decide(r2.ID, true, "alice", ""); !errors.Is(err, ErrExpired) {
 		t.Fatalf("decision after expiry: %v", err)
@@ -505,7 +505,7 @@ func TestUsePendingWaits(t *testing.T) {
 	}
 
 	// Context cancellation ends the wait early.
-	r2, _ := s.Request(func() Request { q := request(); q.ArgsSHA256 = hashC; return q }())
+	r2, _ := s.Request(func() *Request { q := request(); q.ArgsSHA256 = hashC; return q }())
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	b := binding()

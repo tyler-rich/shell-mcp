@@ -135,7 +135,7 @@ type publishBody struct {
 
 // Publish sends m and waits for the answer (at most Timeout). Anything but
 // a 2xx answer is an error.
-func (n *Notifier) Publish(ctx context.Context, m Message) error {
+func (n *Notifier) Publish(ctx context.Context, m *Message) error {
 	body := publishBody{Topic: n.topic, Title: m.Title, Message: m.Message, Tags: m.Tags, Priority: m.Priority}
 	if m.ViewURL != "" {
 		// A view action only opens the page; nothing in a notification can
@@ -170,7 +170,7 @@ func (n *Notifier) Publish(ctx context.Context, m Message) error {
 }
 
 // Send publishes m in the background and logs a failure; it never blocks.
-func (n *Notifier) Send(m Message) {
+func (n *Notifier) Send(m *Message) {
 	go func() {
 		if err := n.Publish(context.Background(), m); err != nil {
 			n.logger.Warn("approval notification failed", slog.String("reason", err.Error()))

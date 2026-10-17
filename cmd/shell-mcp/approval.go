@@ -64,7 +64,7 @@ func newApprovalRuntime(cfg *config.Config, logger *slog.Logger) (*approvalRunti
 	for _, a := range cfg.Approvers {
 		names = append(names, a.Name)
 	}
-	pc := page.Config{
+	pc := &page.Config{
 		PublicURL: cfg.ApprovalPublicURL, Store: ar.store, Verifier: v, Approvers: names,
 		TrustedProxies: cfg.TrustedProxies, RateLimitPerMin: cfg.RateLimitPerMin, Logger: logger,
 		// Relying on a TLS-terminating proxy, the listener serves only it.
@@ -115,11 +115,11 @@ func (ar *approvalRuntime) start(ctx context.Context, logger *slog.Logger) (stop
 // notifyRequest pushes a new approval request: the tool's title, the
 // target, the server's summary, the expiry and a view link to the page,
 // never an action that approves or declines.
-func (ar *approvalRuntime) notifyRequest(r approval.Record, url string) {
+func (ar *approvalRuntime) notifyRequest(r *approval.Record, url string) {
 	if ar.notifier == nil {
 		return
 	}
-	ar.notifier.Send(notify.Message{
+	ar.notifier.Send(&notify.Message{
 		Title:   "Approval requested: " + r.ToolTitle + " on " + r.Target,
 		Message: r.Description + "\nExpires " + r.ExpiresAt.UTC().Format(time.RFC3339) + "\nApproval id " + r.ID,
 		ViewURL: url, Tags: []string{"lock"}, Priority: 4,
@@ -131,7 +131,7 @@ func (ar *approvalRuntime) notifyLockout(approver string, until time.Time, conse
 	if ar.notifier == nil {
 		return
 	}
-	ar.notifier.Send(notify.Message{
+	ar.notifier.Send(&notify.Message{
 		Title:   "Approver locked out: " + approver,
 		Message: "Too many wrong codes. Locked until " + until.UTC().Format(time.RFC3339) + " (lockout " + strconv.Itoa(consecutive) + ").",
 		Tags:    []string{"warning"}, Priority: 4,

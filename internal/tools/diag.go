@@ -57,7 +57,7 @@ func registerDiag(r *Registry, d *Deps) error {
 	handler := func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		start := time.Now()
 		res, env := diagRound(req)
-		d.audit(ctx, def.Name, "", map[string]any{}, "ok", nil, time.Since(start))
+		d.audit(ctx, def.Name, "", map[string]any{}, "ok", nil, time.Since(start), "", "")
 		if res != nil {
 			return res, nil
 		}

@@ -274,7 +274,9 @@ func writeFile(d *Deps) Tool {
 		describe: func(in writeIn, target string) string {
 			return "Write " + describeBytes(len(*in.Content)) + " to " + plain(in.Path, "a file whose path is shown in the arguments") + " on " + target
 		},
-		preview: d.writePreview,
+		preview: func(ctx context.Context, in writeIn, target string) (*preview, *envelope.Error) {
+			return d.writePreview(ctx, &in, target)
+		},
 		precondition: func(in *writeIn, p *preview) {
 			// The write is refused if the content changed after the fresh
 			// preview; a caller's own expected_sha256 is kept (it is bound).
@@ -677,6 +679,8 @@ func runCommand(d *Deps) Tool {
 			}
 			return what + " on " + target
 		},
-		preview: d.runCommandPreview,
+		preview: func(ctx context.Context, in runCommandIn, target string) (*preview, *envelope.Error) {
+			return d.runCommandPreview(ctx, &in, target)
+		},
 	})
 }

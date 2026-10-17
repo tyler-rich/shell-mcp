@@ -405,15 +405,15 @@ func (l *loader) approvalWeb(c *Config) error {
 	if _, err := netip.ParseAddr(c.ApprovalBind); err != nil {
 		return errorf("SHELL_MCP_APPROVAL_BIND must be an IP address (got %q)", c.ApprovalBind)
 	}
+	if err := l.approvalTLS(c); err != nil {
+		return err
+	}
 	var err error
 	if c.ApprovalPort, err = l.integer("SHELL_MCP_APPROVAL_PORT", 8081, 1, 65535); err != nil {
 		return err
 	}
 	if c.ApprovalPort == c.Port {
 		return errorf("SHELL_MCP_APPROVAL_PORT must differ from SHELL_MCP_PORT (both %d)", c.Port)
-	}
-	if err := l.approvalTLS(c); err != nil {
-		return err
 	}
 	raw := l.get("SHELL_MCP_APPROVAL_PUBLIC_URL", "")
 	if raw == "" {

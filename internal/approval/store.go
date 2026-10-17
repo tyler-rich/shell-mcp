@@ -172,14 +172,14 @@ func (s *Store) Method() Method { return s.o.Method }
 // "approval requested" for a new record. More than MaxPendingPerPrincipal
 // pending records of one principal is ErrTooManyPending; MaxRecords
 // unexpired records of any state is ErrStoreFull.
-func (s *Store) Request(r Request) (Record, error) {
+func (s *Store) Request(r *Request) (Record, error) {
 	rec, _, err := s.RequestNew(r)
 	return rec, err
 }
 
 // RequestNew is Request, and reports whether the record is new (false: the
 // pending record of an identical request).
-func (s *Store) RequestNew(r Request) (rec Record, created bool, err error) {
+func (s *Store) RequestNew(r *Request) (rec Record, created bool, err error) {
 	s.mu.Lock()
 	now := s.o.Now()
 	s.sweepLocked(now)
@@ -189,9 +189,9 @@ func (s *Store) RequestNew(r Request) (rec Record, created bool, err error) {
 			continue
 		}
 		if e.r.Binding == r.Binding && e.r.PreviewSHA256 == r.PreviewSHA256 && e.r.PolicySHA256 == r.PolicySHA256 {
-			rec := e.r
+			found := e.r
 			s.mu.Unlock()
-			return rec, false, nil
+			return found, false, nil
 		}
 		if e.r.Principal == r.Principal {
 			pending++
@@ -215,7 +215,7 @@ func (s *Store) RequestNew(r Request) (rec Record, created bool, err error) {
 		s.mu.Unlock()
 		return Record{}, false, err
 	}
-	rec = Record{ID: id, Request: r, CreatedAt: now, ExpiresAt: now.Add(s.o.TTL), Status: StatusPending, CSRFToken: csrf}
+	rec = Record{ID: id, Request: *r, CreatedAt: now, ExpiresAt: now.Add(s.o.TTL), Status: StatusPending, CSRFToken: csrf}
 	s.m[id] = &entry{r: rec, done: make(chan struct{})}
 	s.mu.Unlock()
 	s.o.Logger.Info("approval requested",
@@ -270,7 +270,7 @@ func (s *Store) Decide(id string, approve bool, approver, from string) (Record, 
 	decideLocked(e, approve, approver, from, now)
 	rec := e.r
 	s.mu.Unlock()
-	s.logDecided(rec)
+	s.logDecided(&rec)
 	return rec, nil
 }
 
@@ -283,7 +283,7 @@ func decideLocked(e *entry, approve bool, approver, from string, now time.Time) 
 	e.wake()
 }
 
-func (s *Store) logDecided(r Record) {
+func (s *Store) logDecided(r *Record) {
 	decision := "declined"
 	if r.Status == StatusApproved || r.Status == StatusUsed {
 		decision = "approved"
@@ -348,7 +348,7 @@ func (s *Store) Use(ctx context.Context, id string, b Binding, confirmAs, from s
 			return invalid(e, now, reasonExpired)
 		case confirmAs != "":
 			decideLocked(e, true, confirmAs, from, now)
-			s.logDecided(e.r)
+			s.logDecided(&e.r)
 			s.o.Logger.Warn("approval by the model (confirm-argument): human approval is not enforced",
 				slog.String("approval_id", e.r.ID), slog.String("tool", e.r.Tool))
 		case s.o.Method == MethodConfirm:

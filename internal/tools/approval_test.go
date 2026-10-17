@@ -38,7 +38,7 @@ func fakeReadSHA(content, sha string) string {
 	return fmt.Sprintf(`{"path":"/srv/app/config/app.yaml","size":%d,"sha256":%q,"binary":false,"content":%q,"offset":0,"truncated":false}`, len(content), sha, content)
 }
 
-func (g *recordingGate) set(op string, r gateReply) {
+func (g *recordingGate) set(op string, r gateReply) { //nolint:gocritic // the fake gate stores replies by value
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.replies[op] = r
@@ -381,7 +381,7 @@ func TestApprovalTooManyPending(t *testing.T) {
 func TestApprovalNotify(t *testing.T) {
 	a := newApprovalHarness(t, approval.MethodWeb)
 	var got []string
-	a.deps.Notify = func(r approval.Record, url string) { got = append(got, r.ID+" "+url) }
+	a.deps.Notify = func(r *approval.Record, url string) { got = append(got, r.ID+" "+url) }
 	id := a.pending("shell_write_file", writeArgs)
 	a.pending("shell_write_file", writeArgs) // deduplicated: no second push
 	if len(got) != 1 || got[0] != id+" "+approvalOrigin+"/approvals/"+id {
@@ -447,12 +447,12 @@ func TestApprovalConfirmArgument(t *testing.T) {
 		t.Fatalf("first call: %v", env)
 	}
 	// Without confirm: pending again, at once.
-	if env, _ := a.call("shell_write_file", withID(writeArgs, id)); errCode(env) != "approval_pending" {
-		t.Fatalf("no confirm: %v", env)
+	if again, _ := a.call("shell_write_file", withID(writeArgs, id)); errCode(again) != "approval_pending" {
+		t.Fatalf("no confirm: %v", again)
 	}
 	// confirm without approval_id is refused.
-	if env, _ := a.call("shell_write_file", map[string]any{"path": "/srv/app/config/app.yaml", "content": "key: value2\n", "confirm": true}); errCode(env) != "validation_error" {
-		t.Fatalf("confirm without id: %v", env)
+	if noID, _ := a.call("shell_write_file", map[string]any{"path": "/srv/app/config/app.yaml", "content": "key: value2\n", "confirm": true}); errCode(noID) != "validation_error" {
+		t.Fatalf("confirm without id: %v", noID)
 	}
 	args := withID(writeArgs, id)
 	args["confirm"] = true

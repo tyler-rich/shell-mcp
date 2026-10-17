@@ -83,7 +83,7 @@ func countLines(b []byte) int {
 // content SHA-256 and line count; or another type), the new content's size,
 // SHA-256 and line count, and the line delta. Lines are counted only when
 // the gate returned the whole file as text, unredacted; otherwise null.
-func (d *Deps) writePreview(ctx context.Context, in writeIn, target string) (*preview, *envelope.Error) {
+func (d *Deps) writePreview(ctx context.Context, in *writeIn, target string) (*preview, *envelope.Error) {
 	var acc policyAcc
 	content := []byte(*in.Content)
 	newLines := countLines(content)
@@ -202,7 +202,7 @@ var tierRank = map[string]int{"read": 1, "operator": 2, "destructive": 3}
 // template the arguments match and the arguments as given. An undeclared
 // command, one above the tool's ceiling or arguments matching no template
 // are refused here, as the gate would refuse them.
-func (d *Deps) runCommandPreview(ctx context.Context, in runCommandIn, target string) (*preview, *envelope.Error) {
+func (d *Deps) runCommandPreview(ctx context.Context, in *runCommandIn, target string) (*preview, *envelope.Error) {
 	var acc policyAcc
 	pol, _, h, e := previewFetch[summaryWire](ctx, d, target, protocol.OpPolicy, nil, false)
 	acc.add(h)

@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -142,23 +143,23 @@ func newFixture(t *testing.T, names ...string) *fixture {
 
 func (f *fixture) rebuild() {
 	f.t.Helper()
-	h, err := New(f.cfg)
+	h, err := New(&f.cfg)
 	if err != nil {
 		f.t.Fatal(err)
 	}
 	f.h = h
 }
 
-func (f *fixture) record(args ...approval.Field) approval.Record {
+func (f *fixture) record(args ...approval.Field) *approval.Record {
 	f.t.Helper()
 	if args == nil {
 		args = []approval.Field{{Key: "path", Value: "/srv/app/config.yaml"}, {Key: "content", Value: "key: value\n"}}
 	}
 	f.n++
 	n := f.n
-	r, err := f.store.Request(approval.Request{
+	r, err := f.store.Request(&approval.Request{
 		Binding: approval.Binding{Principal: "bearer-token", Tool: "shell_write_file", Target: "app-host",
-			ArgsSHA256: approval.SHA256Hex([]byte{byte(n)})},
+			ArgsSHA256: approval.SHA256Hex([]byte(strconv.Itoa(n)))},
 		PreviewSHA256: strings.Repeat("b", 64), PolicySHA256: strings.Repeat("c", 64),
 		ToolTitle: "Write file", TargetHost: "target-a.example.test",
 		Description: "Write 11 bytes to /srv/app/config.yaml on app-host",
@@ -168,7 +169,7 @@ func (f *fixture) record(args ...approval.Field) approval.Record {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	return r
+	return &r
 }
 
 // code returns a valid code for the approver at the next step, after
@@ -207,7 +208,7 @@ func (f *fixture) do(method, target string, body url.Values, mod ...func(*http.R
 	return resp{res.StatusCode, res.Header, string(b)}
 }
 
-func (f *fixture) decide(r approval.Record, verb, code string, extra ...string) resp {
+func (f *fixture) decide(r *approval.Record, verb, code string, extra ...string) resp {
 	f.t.Helper()
 	v := url.Values{"code": {code}, "csrf_token": {r.CSRFToken}}
 	for i := 0; i+1 < len(extra); i += 2 {
@@ -777,7 +778,7 @@ func TestNewRefusesBadConfig(t *testing.T) {
 	} {
 		c := f.cfg
 		mod(&c)
-		if _, err := New(c); err == nil {
+		if _, err := New(&c); err == nil {
 			t.Fatalf("%s: accepted", name)
 		}
 	}
@@ -789,14 +790,14 @@ func TestTLSListenerServesTLSOnly(t *testing.T) {
 	f := newFixture(t)
 	f.cfg.PublicURL = "https://127.0.0.1"
 	certPair := testCert(t)
-	srv, err := NewServer(f.cfg, "127.0.0.1:0", &certPair)
+	srv, err := NewServer(&f.cfg, "127.0.0.1:0", &certPair)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if srv.TLSConfig == nil || srv.TLSConfig.MinVersion != tls.VersionTLS12 {
 		t.Fatalf("TLS config %+v", srv.TLSConfig)
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -813,7 +814,8 @@ func TestTLSListenerServesTLSOnly(t *testing.T) {
 		}
 	}
 	// TLS 1.1 is refused.
-	if c, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true, MaxVersion: tls.VersionTLS11}); err == nil { //nolint:gosec // test of the server's minimum version
+	d := &tls.Dialer{Config: &tls.Config{InsecureSkipVerify: true, MaxVersion: tls.VersionTLS11}} //nolint:gosec // test of the server's minimum version, against its own test certificate
+	if c, err := d.DialContext(t.Context(), "tcp", addr); err == nil {
 		_ = c.Close()
 		t.Fatal("a TLS 1.1 handshake succeeded")
 	}

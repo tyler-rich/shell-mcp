@@ -141,14 +141,14 @@ func cmdServe(ctx context.Context, args []string, lookup config.LookupFunc, stdi
 		logger.Warn("diagnostic build: carries shell_diag_elicit; not for release")
 	}
 
-	ar, err := newApprovalRuntime(cfg, logger)
-	if err != nil {
-		logger.Error("refusing to start", "reason", err.Error())
+	ar, aerr := newApprovalRuntime(cfg, logger)
+	if aerr != nil {
+		logger.Error("refusing to start", "reason", aerr.Error())
 		return 1
 	}
-	stopApproval, err := ar.start(ctx, logger)
-	if err != nil {
-		logger.Error("refusing to start", "reason", err.Error())
+	stopApproval, aerr := ar.start(ctx, logger)
+	if aerr != nil {
+		logger.Error("refusing to start", "reason", aerr.Error())
 		return 1
 	}
 	defer stopApproval()

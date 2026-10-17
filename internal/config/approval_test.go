@@ -43,15 +43,15 @@ func needStrictModes(t *testing.T) {
 }
 
 // webEnv is a valid web-method configuration on loopback.
-func webEnv(t *testing.T) (map[string]string, string) {
+func webEnv(t *testing.T) (env map[string]string, seed string) {
 	t.Helper()
 	needStrictModes(t)
-	s := testSeed(t)
-	env := baseEnv(t)
+	seed = testSeed(t)
+	env = baseEnv(t)
 	env["SHELL_MCP_APPROVAL_METHOD"] = "web"
 	env["SHELL_MCP_APPROVAL_PUBLIC_URL"] = "http://127.0.0.1:8081"
-	env["SHELL_MCP_APPROVERS_FILE"] = writeFile(t, "approvers", "alice "+s+"\n", 0o600)
-	return env, s
+	env["SHELL_MCP_APPROVERS_FILE"] = writeFile(t, "approvers", "alice "+seed+"\n", 0o600)
+	return env, seed
 }
 
 func TestApprovalDefaults(t *testing.T) {

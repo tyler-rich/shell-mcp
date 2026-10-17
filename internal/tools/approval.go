@@ -174,7 +174,7 @@ func (d *Deps) approvalURL(id string) string {
 	return d.ApprovalPublicURL + "/approvals/" + id
 }
 
-func (d *Deps) approvalObject(r approval.Record, status approval.Status) *envelope.Approval {
+func (d *Deps) approvalObject(r *approval.Record, status approval.Status) *envelope.Approval {
 	return &envelope.Approval{ID: r.ID, Status: string(status), URL: d.approvalURL(r.ID),
 		ExpiresAt: r.ExpiresAt.UTC().Format(time.RFC3339), Summary: r.Description}
 }
@@ -191,7 +191,7 @@ func (d *Deps) pendingMessage(id string) string {
 		"Then call this tool again with the same arguments and approval_id " + id + "."
 }
 
-func pendingEnvelope[Out any](d *Deps, target string, r approval.Record) envelope.Envelope[Out] {
+func pendingEnvelope[Out any](d *Deps, target string, r *approval.Record) envelope.Envelope[Out] {
 	env := envelope.Failure[Out](target, envelope.Errorf(envelope.CodeApprovalPending, "%s", d.pendingMessage(r.ID)))
 	env.Approval = d.approvalObject(r, approval.StatusPending)
 	return env
@@ -226,9 +226,9 @@ func approveCall[In, Out any](ctx context.Context, d *Deps, s spec[In, Out], req
 	b := approval.Binding{Principal: d.Principal.Name, Tool: s.name, Target: tg.Name, ArgsSHA256: argsHash}
 
 	if ap.ID == "" {
-		p, e := s.preview(ctx, in, tg.Name)
-		if e != nil {
-			return envelope.Failure[Out](tg.Name, e), "", ""
+		p, perr := s.preview(ctx, in, tg.Name)
+		if perr != nil {
+			return envelope.Failure[Out](tg.Name, perr), "", ""
 		}
 		ph, err1 := approval.HashOf(p.value)
 		argFields, err2 := approval.Fields(canon, approval.MaxArgsBytes)
@@ -236,7 +236,7 @@ func approveCall[In, Out any](ctx context.Context, d *Deps, s spec[In, Out], req
 		if err := errors.Join(err1, err2, err3); err != nil {
 			return envelope.Failure[Out](tg.Name, envelope.Errorf("internal", "the preview could not be encoded")), "", ""
 		}
-		rec, created, err := d.Approvals.RequestNew(approval.Request{
+		rec, created, err := d.Approvals.RequestNew(&approval.Request{
 			Binding: b, PreviewSHA256: ph, PolicySHA256: p.policy, ToolTitle: s.title, TargetHost: tg.Host,
 			Description: s.describe(in, tg.Name), Args: argFields, Preview: prevFields,
 		})
@@ -250,9 +250,9 @@ func approveCall[In, Out any](ctx context.Context, d *Deps, s spec[In, Out], req
 			return envelope.Failure[Out](tg.Name, envelope.Errorf("internal", "the approval could not be recorded")), "", ""
 		}
 		if created && d.Notify != nil && d.method() == approval.MethodWeb {
-			d.Notify(rec, d.approvalURL(rec.ID))
+			d.Notify(&rec, d.approvalURL(rec.ID))
 		}
-		return pendingEnvelope[Out](d, tg.Name, rec), outcomePending, rec.ID
+		return pendingEnvelope[Out](d, tg.Name, &rec), outcomePending, rec.ID
 	}
 
 	confirmAs := ""
@@ -262,16 +262,16 @@ func approveCall[In, Out any](ctx context.Context, d *Deps, s spec[In, Out], req
 	res := d.Approvals.Use(ctx, ap.ID, b, confirmAs, "")
 	switch res.Outcome {
 	case approval.OutcomePending:
-		return pendingEnvelope[Out](d, tg.Name, res.Record), outcomePending, ap.ID
+		return pendingEnvelope[Out](d, tg.Name, &res.Record), outcomePending, ap.ID
 	case approval.OutcomeDeclined:
 		env := envelope.Failure[Out](tg.Name, envelope.Errorf(envelope.CodeApprovalDeclined, "the approver declined this operation; nothing was sent to the target"))
-		env.Approval = d.approvalObject(res.Record, approval.StatusDeclined)
+		env.Approval = d.approvalObject(&res.Record, approval.StatusDeclined)
 		return env, outcomeDeclined, ap.ID
 	case approval.OutcomeUsed:
 	default:
 		env := envelope.Failure[Out](tg.Name, envelope.Errorf(envelope.CodeApprovalInvalid, "%s", res.Reason))
 		if res.Known {
-			env.Approval = d.approvalObject(res.Record, res.Record.Status)
+			env.Approval = d.approvalObject(&res.Record, res.Record.Status)
 		}
 		return env, outcomeInvalid, ap.ID
 	}
@@ -281,20 +281,20 @@ func approveCall[In, Out any](ctx context.Context, d *Deps, s spec[In, Out], req
 	p, e := s.preview(ctx, in, tg.Name)
 	if e != nil {
 		env := envelope.Failure[Out](tg.Name, e)
-		env.Approval = d.approvalObject(rec, approval.StatusUsed)
+		env.Approval = d.approvalObject(&rec, approval.StatusUsed)
 		return env, outcomeUsed, ap.ID
 	}
 	if ph, err := approval.HashOf(p.value); err != nil || ph != rec.PreviewSHA256 || p.policy != rec.PolicySHA256 {
 		env := envelope.Failure[Out](tg.Name, envelope.Errorf(envelope.CodeApprovalInvalid,
 			"the target or policy changed since approval; request a new approval by calling the tool without approval_id"))
-		env.Approval = d.approvalObject(rec, approval.StatusUsed)
+		env.Approval = d.approvalObject(&rec, approval.StatusUsed)
 		return env, outcomeInvalid, ap.ID
 	}
 	if s.precondition != nil {
 		s.precondition(&in, p)
 	}
 	env := s.run(ctx, req, in)
-	env.Approval = d.approvalObject(rec, approval.StatusUsed)
+	env.Approval = d.approvalObject(&rec, approval.StatusUsed)
 	return env, outcomeUsed, ap.ID
 }
 
