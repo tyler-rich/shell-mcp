@@ -1522,3 +1522,100 @@ The message says approval arrives in a later release. Read tools are never guard
 - **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.14.0, govulncheck v1.9.0.
+
+### 2026-10-16 — The intermittent pdeathsig:0 was the probe's reading; kill-on-death tests (PR #20, branch fix/trampoline-pdeathsig)
+**The failure (S4a entry):** `TestIntegrationSandboxTrampoline` read `pdeathsig:0` once on ubuntu-24.04 (Landlock ABI 7, psx) and passed on rerun. It was treated as a possible race in the parent-death guarantee until proven otherwise.
+
+**Cause: the probe read the value off the main thread.** The command always had `SIGKILL` on its main thread.
+- **The setting is per thread** (kernel source, torvalds/linux master):
+  - `kernel/sys.c`: `PR_GET_PDEATHSIG` returns `current->pdeath_signal`, the calling thread's.
+  - `kernel/fork.c`, `copy_process`: `p->pdeath_signal = 0` for every new task, threads included. A thread the Go runtime starts has none.
+  - `kernel/exit.c`, `forget_original_parent`: when the parent thread exits, every thread of each child is checked. For any thread that holds a signal, `group_send_sig_info(..., PIDTYPE_TGID)` signals the whole thread group. The main thread's `SIGKILL` therefore kills the whole command, whatever its other threads hold.
+- **The probe could read it from any thread.** Go locks the main goroutine to the main thread only while package `init`s run (`runtime/proc.go`, `lockOSThread()` … `unlockOSThread()` around `doInit`). After that, `main` can resume on any thread after a syscall or a preemption. The probe's `procattrs` makes about a thousand `fstat` calls before its `prctl`.
+- **Ruled out at the source:**
+  - **Credential changes.** `kernel/cred.c` `commit_creds` clears `pdeath_signal` only when euid, egid, fsuid or fsgid change or capabilities grow. Landlock's `landlock_restrict_self` commits creds with none of these changed, on either path, and it runs in the gate before any command anyway.
+  - **An exec off the main thread.** The trampoline runs from `init`, locked to the main thread, and refuses unless `gettid() == getpid()`, so its `execve` keeps the main task.
+  - **The parent side.** os/exec sets `PR_SET_PDEATHSIG` in the child and kills it if the parent already changed.
+
+**Evidence (not reasoning alone).** In the golang container (Docker Desktop, kernel 6.6), `execx.Run` started the probe repeatedly, 48 at a time.
+- **Instrumented probe (not committed).** It read `PR_GET_PDEATHSIG` in `init` (main thread, guaranteed) and again where `procattrs` reads it, with `gettid() == getpid()` at that read. Over 100,000 runs, `init` read 9 in every run. The `procattrs` read was 9 in 99,997 runs, all on the main thread, and 0 in 3 runs, every one of them off the main thread.
+- **Original probe:** 13 and 22 of 100,000 runs read 0 (about 1.3–2.2 per 10,000), the CI symptom.
+- **Deterministic:** `TestPdeathsigIsPerThread` reads it on the main thread (9) and on another thread of the same command (0), every time.
+
+The guarantee did not have the race the prompt feared. The test's reading of it did, and the fix is in the test probe.
+
+**Fix:**
+- **Probe.** `internal/gate/gatetest/testdata/probe` calls `runtime.LockOSThread()` in an `init` function. Per the Go docs, `main` then runs on the main thread, and every per-thread read (`PR_GET_PDEATHSIG`, and also `PR_GET_NO_NEW_PRIVS` and `PR_GET_SECCOMP`) happens where `execve` left the state. `procattrs` now reports `pdeathsig_thread=main|other`, and every test that checks `pdeathsig=9` also requires `main`. Before reading, it keeps up to four processors busy and sleeps five times (an injected scheduling point). Without the lock, an unpinned goroutine then usually resumes on another thread.
+- **The engine is unchanged.** `execx.Run` needs no thread pinning, and a comment at the `Pdeathsig` line says why:
+  - The signal follows the gate thread that forked the trampoline. That thread exits when the gate or helper dies, so the signal always comes.
+  - The Go runtime ends a thread earlier only when a goroutine locked to it exits. Nothing in the gate or the helper locks a goroutine around `Run`: there is no `LockOSThread` outside tests.
+  - Even if it did, the result would be an early kill, never a survivor.
+
+**Tests (committed first, shown failing on `16eca87`):**
+- `TestCommandPdeathsigEveryRun` (execx, 400 runs, 8 at a time): **364, 365 and 368 of 400** failed on the unpinned probe (`pdeathsig=0 read on the other thread`), as did `TestCommandProcessAttributes`. After `fec7b33`: **0 of 200,000** (`-count=250`, twice).
+- `TestIntegrationSandboxPdeathsigEveryRun` (gate, 200 runs, 4 at a time, through the real sandbox and trampoline): CI runs it on both all-thread Landlock paths (ABI 7 psx, ABI 8 TSYNC). Locally, 0 of 200 fail; with the probe's lock removed, **186 of 200** do.
+- `TestPdeathsigIsPerThread` (execx, deterministic): main thread 9, another thread 0.
+- **Killing the starter mid-command.** `TestIntegrationSandboxCommandDiesWithGate` (Go matrix) and e2e `TestCommandDiesWithGateOrHelper` cover the gate and the helper in the core and the broad unit. Each SIGKILLs the gate or the helper while a sandboxed command sleeps, a command that ignores SIGTERM (`SigIgn` is checked first). The command must be gone within 5 s. Nothing else can end it in that window:
+  - The request timeout is longer.
+  - The gate runs in no unit.
+  - When a helper instance dies, systemd sends the unit's `KillSignal` and SIGKILLs leftovers only after `TimeoutStopSec`. The test checks `KillSignal=15`, `SendSIGHUP=no` and `TimeoutStopUSec` ≥ 20 s on the instance it killed.
+
+  With `Pdeathsig` removed from execx (local only, not committed), the integration test fails: "the command (pid 520) outlived the gate that started it". The e2e cases cannot run locally (runner-only). They pass in CI on the current engine.
+- **Test support:** `gatetest.FindChild`, `Proc.Alive`, `Proc.WaitIgnoring` and `Proc.WaitGone` read `/proc/<pid>/stat`. A pid is matched together with its start time, and a zombie counts as gone (the containers' pid 1 does not reap). The e2e policies gain a `["ignore-term", "60s"]` template: `probe-sleep` in `gate-read.yaml`, `probe-attrs` and `probe-broad` in the helper policy.
+
+**Observation, not changed (outside this task):**
+- **A helper command can lose the signal itself.** A root command that changes its own euid, egid, fsuid or fsgid loses its parent-death signal (`commit_creds`). If the helper died during such a command, systemd's unit stop would still end the command, with SIGTERM and then SIGKILL after `TimeoutStopSec`, but not at once.
+- **Gate commands cannot do this:** they have no privilege and run under no_new_privs.
+
+**Alternatives rejected:**
+- **Reading the value in the probe's `init` only:** the reads after the scheduling point and the per-thread test show more.
+- **`LockOSThread` around `cmd.Start`/`Wait` in execx:** it guards against nothing that happens, and it costs an OS thread per running command.
+- **Treating the CI failure as noise:** rejected by the prompt, and unnecessary once the cause was measured.
+
+**Also in this PR:** golangci-lint v2.14.0 → v2.15.0 in `ci.yml` and `ci-local.sh`. `deps-current` reported it behind, and v2.15.0 lints the tree with 0 issues.
+
+**Versions:**
+- **Go:** 1.27.2, still the newest stable per go.dev (go1.27.2, go1.26.9 listed).
+- **Refresh:** `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing. `scripts/deps-current.sh` reports 13 in-scope modules current.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+
+### 2026-10-16 — Helper units bound the stop: KillMode=control-group, TimeoutStopSec=5 (PR #20 follow-up)
+**Decision (maintainer request).** Both generated helper units, core and broad, now write `KillMode=control-group` and `TimeoutStopSec=5`. This settles the observation in the entry above.
+
+**Why it is needed:**
+- **A command can lose the parent-death signal.** `Pdeathsig=SIGKILL` covers only the command `execx` starts, and only while it keeps its credentials. A root helper command that changes its user, group or filesystem ids loses it (`kernel/cred.c` `commit_creds`): apt-get switching to `_apt`, or any command that drops privileges.
+- **The command's children never have one.** `copy_process` zeroes it for every new task, so dpkg, maintainer scripts and their children have none.
+- **Before:** if a helper instance died, those processes stayed in the unit's cgroup with only systemd's defaults: `SIGTERM`, then `SIGKILL` after `DefaultTimeoutStopSec` (90 s on the runner). A process that ignored `SIGTERM` ran for 90 s after its helper was gone.
+- **After:** they get `SIGKILL` 5 s after the `SIGTERM`.
+
+**Verified at the source** (`man/systemd.kill.xml` and `man/systemd.service.xml` at tags v257 and v259; the text is the same in both):
+- `KillMode=control-group` kills "all remaining processes in the control group of this unit" on unit stop. The first signal is `SIGTERM` (`KillSignal=`). `SIGKILL` (`FinalKillSignal=`, unless `SendSIGKILL=no`) follows once "the delay configured via the `TimeoutStopSec=` has passed". `control-group` is also the default; it is written so the generated unit states it and a drop-in default cannot change it.
+- `TimeoutStopSec=` "configures the time to wait for the service itself to stop. If it does not terminate in the specified time, it will be forcibly terminated by SIGKILL". It takes unit-less seconds. With no `ExecStop=`, the service gets `SIGTERM` immediately.
+
+**Why 5 s** (the maintainer's value; no reason found at the source for another):
+- **The helper exits at once on SIGTERM.** It installs no `SIGTERM` handler (no `signal.Notify` in `cmd/shell-mcp-privd` or `internal/privd`), so Go's default exits it immediately. The bound therefore applies only to leftovers, never to the helper.
+- **A long apt-get run loses nothing.** It is already gone at the moment the helper dies, because its parent-death signal fires before any stop timeout counts. Only the processes that outlive it, such as dpkg and maintainer scripts, are affected. Under the old default they also got `SIGTERM` at once; they now get `SIGKILL` after 5 s instead of 90 s. dpkg's interrupted-run recovery (`dpkg --configure -a`) is the same either way.
+- **The helper's own command timeout is unchanged.** It is `SIGTERM`, then `SIGKILL` after `DefaultKillGrace` (2 s), and runs inside the instance, independent of systemd.
+
+**`systemd-analyze security`:** neither directive is part of its assessment. On the CI run for `2f2b792`, e2e `TestSecurityExposure` (threshold `E2E_SECURITY_MAX` 1.4) read the core unit at 1.4 and the broad unit at 8.1 (recorded, not enforced). Both are the same as on the run before the change.
+
+**Who is affected:** a core-unit command cannot switch user at all. Its bounding set has no `CAP_SETUID` or `CAP_SETGID`, and neither is declarable (PRIVILEGED §4). A broad-unit command can, because it runs with root's full set.
+
+**Tests (committed first):**
+- `b1fc625` added `KillMode`/`TimeoutStopSec` to `TestServiceDirectives` and `TestBroadServiceDirectives`. Both failed: `[Service]KillMode = [], want ["control-group"]`, `[Service]TimeoutStopSec = [], want ["5"]`, `41 directives, want 43` and `17 directives, want 19`. The golden files are updated with the fix.
+- e2e `TestHelperStopKillsUserSwitchedCommand` (broad unit) runs the probe's new `drop-ignore-term`: ignore `SIGTERM`, then `setgroups`, `setresgid` and `setresuid` to an invented uid on every thread. The test waits until `/proc/<pid>/status` shows the uid and gid switched and `SIGTERM` ignored, then SIGKILLs the helper instance. It then checks:
+  - **Control:** one second later the command still runs, so no parent-death signal reached it.
+  - **Bound:** it must then be gone within `TimeoutStopSec` + 3 s.
+
+  On `b1fc625`, without the directives, CI failed it as intended. The control held, and then: "the user-switched command (pid 7381) still runs 8s after the helper in shell-mcp-privd-broad@….service died (KillMode=control-group, TimeoutStopUSec=1min 30s)". The Go jobs on both matrix entries failed only `TestServiceDirectives` and `TestBroadServiceDirectives`. With the fix (`aea8e81`), it passed: the command was gone 5.15 s after the helper died.
+- **The pdeathsig window changes.** `TestCommandDiesWithGateOrHelper` now allows 2 s, not 5 s: with `TimeoutStopSec=5`, systemd's own `SIGKILL` could otherwise end the helper cases inside the window. The test requires the unit's stop timeout to be at least twice the window.
+
+**Docs:** PRIVILEGED §5.1 and §5.2 list both directives. A new paragraph before §5.3 says why both units set them.
+
+**Alternatives rejected:**
+- **`KillMode=mixed`:** after the main process exits it SIGKILLs the rest at once, with no grace at all. In the broad unit the leftovers include dpkg and maintainer scripts. They should get `SIGTERM` first and a moment to stop at a safe point, not an immediate `SIGKILL` that can leave packages half-configured. The maintainer kept `control-group`: `SIGTERM` to everything left, then `SIGKILL` after 5 s.
+- **A per-command `Pdeathsig` re-arm:** impossible after the command changes its own credentials, and it would not cover its children.
+
+**Versions:** unchanged (Go 1.27.2; modules as above; golangci-lint v2.15.0, govulncheck v1.9.0). No dependency added.

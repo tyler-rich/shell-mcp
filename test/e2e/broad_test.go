@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
 )
 
 // The broad unit, the apt operations, the core unit's hardening and
@@ -563,7 +565,7 @@ func TestHelperExecTrampoline(t *testing.T) {
 				k, v, _ := strings.Cut(l, "=")
 				a[k] = v
 			}
-			if a["pdeathsig"] != "9" || a["pgid_is_pid"] != "true" {
+			if a["pdeathsig"] != "9" || a["pdeathsig_thread"] != "main" || a["pgid_is_pid"] != "true" {
 				t.Fatalf("attributes %v", a)
 			}
 			if c.unit == "" && (a["nnp"] != "1" || a["seccomp"] != "2") {
@@ -576,4 +578,186 @@ func TestHelperExecTrampoline(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---- A command does not outlive the gate or the helper that started it ----------
+
+// startGate starts the real gate as svc-shell with one request on stdin and
+// returns it while it runs.
+func startGate(t *testing.T, policy, principal, ceiling, op string, args any) *exec.Cmd {
+	t.Helper()
+	a, _ := json.Marshal(args)
+	req := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":%q,"op":%q,"args":%s,"timeout_ms":30000}`+"\n", newID(), ceiling, op, a)
+	cmd := exec.CommandContext(t.Context(), gateBin, "serve", "--policy", policy, "--principal", principal) //nolint:gosec // G204: the installed gate; policy and principal are this file's constants
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, svcShell)}
+	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin"}
+	cmd.Dir = "/"
+	cmd.Stdin = strings.NewReader(req)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	return cmd
+}
+
+// timespan parses a systemd time span as systemctl show prints it
+// ("1min 30s", "500ms", "infinity").
+func timespan(t *testing.T, s string) time.Duration {
+	t.Helper()
+	if s == "infinity" {
+		return time.Duration(1<<63 - 1)
+	}
+	var d time.Duration
+	for _, f := range strings.Fields(s) {
+		i := strings.IndexFunc(f, func(r rune) bool { return r < '0' || r > '9' })
+		if i <= 0 {
+			t.Fatalf("time span %q", s)
+		}
+		n, _ := strconv.Atoi(f[:i])
+		unit, ok := map[string]time.Duration{"h": time.Hour, "min": time.Minute, "s": time.Second, "ms": time.Millisecond, "us": time.Microsecond}[f[i:]]
+		if !ok {
+			t.Fatalf("time span %q", s)
+		}
+		d += time.Duration(n) * unit
+	}
+	return d
+}
+
+// pdeathsigWindow is how soon a command must be gone after its starter is
+// killed: the parent-death signal is delivered while the parent exits.
+const pdeathsigWindow = 2 * time.Second
+
+// helperStopTimeout is the helper units' TimeoutStopSec= (internal/privd/units).
+const helperStopTimeout = 5 * time.Second
+
+// helperOf returns the helper instance that started p and its unit, checked
+// to be the core or the broad unit's.
+func helperOf(t *testing.T, p gatetest.Proc, broad bool) (pid int, unit string) {
+	t.Helper()
+	pid = p.Parent()
+	if exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid)); err != nil || !strings.HasPrefix(filepath.Base(exe), filepath.Base(privdBin)) {
+		t.Fatalf("the command's parent %d is %q (%v), not the helper", pid, exe, err)
+	}
+	cg := strings.TrimSpace(readFile(t, fmt.Sprintf("/proc/%d/cgroup", pid)))
+	unit = filepath.Base(cg[strings.LastIndexByte(cg, ':')+1:])
+	wantPrefix := "shell-mcp-privd@"
+	if broad {
+		wantPrefix = "shell-mcp-privd-broad@"
+	}
+	if !strings.HasPrefix(unit, wantPrefix) || !strings.HasSuffix(unit, ".service") {
+		t.Fatalf("the helper runs in %q (cgroup %q)", unit, cg)
+	}
+	return pid, unit
+}
+
+// TestCommandDiesWithGateOrHelper: killing the gate, or the helper in
+// either unit, while a command runs kills the command at once. The command
+// ignores SIGTERM and would sleep for 60 s; the request's own timeout is
+// 30 s. The gate runs outside any unit, so nothing but the parent-death
+// signal can end its command. When a helper instance dies, systemd stops
+// its unit: it sends the unit's KillSignal (SIGTERM, checked) to what is
+// left, with no SIGHUP (checked), and SIGKILL only after TimeoutStopSec
+// (checked to be at least twice the window). Within the window, only the
+// parent-death signal (SIGKILL) ends the command there too.
+func TestCommandDiesWithGateOrHelper(t *testing.T) {
+	sleepArgs := []string{"ignore-term", "60s"}
+	t.Run("gate", func(t *testing.T) {
+		g := startGate(t, "/etc/shell-mcp/gate-read.yaml", "e2e-read", "read", "exec", map[string]any{"command_id": "probe-sleep", "args": sleepArgs})
+		p := gatetest.FindChild(t, g.Process.Pid, sleepArgs...)
+		t.Cleanup(p.Kill)
+		p.WaitIgnoring(t, syscall.SIGTERM)
+		if err := g.Process.Kill(); err != nil {
+			t.Fatal(err)
+		}
+		_ = g.Wait()
+		if !p.WaitGone(pdeathsigWindow) {
+			t.Fatalf("the command (pid %d) outlived the gate", p.Pid)
+		}
+	})
+	for _, c := range []struct{ command, unit string }{{"probe-attrs", ""}, {"probe-broad", "broad"}} {
+		t.Run("helper-"+c.command, func(t *testing.T) {
+			a := map[string]any{"command_id": c.command, "args": sleepArgs}
+			if c.unit != "" {
+				a["unit"] = c.unit
+			}
+			g := startGate(t, gatePolicy, "e2e", "destructive", "priv_exec", a)
+			p := gatetest.FindChild(t, 0, sleepArgs...)
+			t.Cleanup(p.Kill)
+			p.WaitIgnoring(t, syscall.SIGTERM)
+			helper, unit := helperOf(t, p, c.unit == "broad")
+			if got := show(t, unit, "KillSignal"); got != "15" {
+				t.Fatalf("%s KillSignal=%s, want 15 (SIGTERM)", unit, got)
+			}
+			if got := show(t, unit, "SendSIGHUP"); got != "no" {
+				t.Fatalf("%s SendSIGHUP=%s", unit, got)
+			}
+			if got := timespan(t, show(t, unit, "TimeoutStopUSec")); got < 2*pdeathsigWindow {
+				t.Fatalf("%s TimeoutStopUSec=%v: systemd's own SIGKILL could end the command within the window", unit, got)
+			}
+			if err := syscall.Kill(helper, syscall.SIGKILL); err != nil {
+				t.Fatal(err)
+			}
+			if !p.WaitGone(pdeathsigWindow) {
+				t.Fatalf("the command (pid %d) outlived the helper in %s", p.Pid, unit)
+			}
+			_ = g.Wait()
+		})
+	}
+}
+
+// statusIDs returns the Uid: and Gid: lines of /proc/<pid>/status.
+func statusIDs(t *testing.T, pid int) (uid, gid string) {
+	t.Helper()
+	for _, l := range strings.Split(readFile(t, fmt.Sprintf("/proc/%d/status", pid)), "\n") {
+		if v, ok := strings.CutPrefix(l, "Uid:"); ok {
+			uid = strings.Join(strings.Fields(v), " ")
+		}
+		if v, ok := strings.CutPrefix(l, "Gid:"); ok {
+			gid = strings.Join(strings.Fields(v), " ")
+		}
+	}
+	return uid, gid
+}
+
+// TestHelperStopKillsUserSwitchedCommand: a helper command that switches to
+// another user loses its parent-death signal (the kernel clears it on the
+// credential change), so the helper's death no longer kills it; systemd's
+// stop of the instance unit must. The command (broad unit, root with full
+// capabilities) ignores SIGTERM, switches every id to an invented uid and
+// sleeps for 60 s. Control: it is still running a moment after the helper
+// is killed, so no parent-death signal reached it. Then it must be gone
+// within the units' TimeoutStopSec (KillMode=control-group: SIGTERM, then
+// SIGKILL to everything left in the cgroup), with a few seconds' slack.
+func TestHelperStopKillsUserSwitchedCommand(t *testing.T) {
+	args := []string{"drop-ignore-term", strconv.Itoa(exampleApp), "60s"}
+	g := startGate(t, gatePolicy, "e2e", "destructive", "priv_exec", map[string]any{"command_id": "probe-broad", "args": args, "unit": "broad"})
+	p := gatetest.FindChild(t, 0, args...)
+	t.Cleanup(p.Kill)
+	p.WaitIgnoring(t, syscall.SIGTERM)
+	want := strings.Repeat(strconv.Itoa(exampleApp)+" ", 4)
+	want = strings.TrimSpace(want)
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		uid, gid := statusIDs(t, p.Pid)
+		if uid == want && gid == want {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the command did not switch user: Uid %q Gid %q", uid, gid)
+		}
+	}
+	helper, unit := helperOf(t, p, true)
+	if err := syscall.Kill(helper, syscall.SIGKILL); err != nil {
+		t.Fatal(err)
+	}
+	killed := time.Now()
+	time.Sleep(pdeathsigWindow / 2)
+	if !p.Alive() {
+		t.Fatalf("control: the command died with the helper; its parent-death signal survived the user switch")
+	}
+	if !p.WaitGone(helperStopTimeout + 3*time.Second - time.Since(killed)) {
+		t.Fatalf("the user-switched command (pid %d) still runs %v after the helper in %s died (KillMode=%s, TimeoutStopUSec=%s)",
+			p.Pid, time.Since(killed).Round(time.Second), unit, show(t, unit, "KillMode"), show(t, unit, "TimeoutStopUSec"))
+	}
+	t.Logf("gone %v after the helper died", time.Since(killed).Round(10*time.Millisecond))
+	_ = g.Wait()
 }

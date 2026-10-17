@@ -114,6 +114,7 @@ commands:
       - ["bind"]
       - ["signal", "{int:1-4194304}"]
       - ["fork-sleep", "{enum:60s}"]
+      - ["ignore-term", "{enum:60s}"]
       - ["flood", "{int:1-100000000}"]
 `
 
@@ -460,13 +461,102 @@ func TestIntegrationSandboxTrampoline(t *testing.T) {
 		k, v, _ := strings.Cut(l, "=")
 		a[k] = v
 	}
-	if a["nnp"] != "1" || a["seccomp"] != "2" || a["pdeathsig"] != "9" || a["pgid_is_pid"] != "true" {
+	if a["nnp"] != "1" || a["seccomp"] != "2" || a["pdeathsig"] != "9" || a["pdeathsig_thread"] != "main" || a["pgid_is_pid"] != "true" {
 		t.Fatalf("attributes %v", a)
 	}
 	// The Go runtime's own cgroup file is the only descriptor a Go command
 	// may hold, and only where the sandbox lets it read /sys.
 	if fds := a["fds"]; fds != "" && (strings.Contains(fds, ",") || !strings.HasPrefix(fds, "3:100000:/sys/fs/cgroup/")) {
 		t.Fatalf("the command has descriptors it was not given: %s", fds)
+	}
+}
+
+// TestIntegrationSandboxPdeathsigEveryRun: the gate runs the probe a couple
+// of hundred times, four at a time, sandboxed and through the trampoline,
+// on whichever all-thread Landlock path this kernel takes. Every command
+// must find SIGKILL as its parent-death signal, read on its main thread.
+func TestIntegrationSandboxPdeathsigEveryRun(t *testing.T) {
+	needABI(t, 1)
+	g := newGate(t)
+	bin := harness(t)
+	const runs, workers = 200, 4
+	var (
+		mu     sync.Mutex
+		failed int
+		first  string
+		wg     sync.WaitGroup
+	)
+	next := make(chan struct{})
+	for range workers {
+		wg.Go(func() {
+			for range next {
+				cmd := exec.CommandContext(t.Context(), bin, "serve", "--policy", g.pol, "--principal", "test") //nolint:gosec // G204: the test's own harness
+				cmd.Env = append([]string{"PATH=/usr/bin:/bin"}, g.env...)
+				cmd.Stdin = strings.NewReader(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000003","ceiling":"destructive","op":"exec","args":{"command_id":"probe","args":["procattrs"]},"timeout_ms":10000}` + "\n")
+				out, err := cmd.Output()
+				var r resp
+				var d execOut
+				got := ""
+				switch {
+				case err != nil || json.Unmarshal(out, &r) != nil || !r.OK || json.Unmarshal(r.Data, &d) != nil:
+					got = fmt.Sprintf("gate: %v %q", err, out)
+				default:
+					a := map[string]string{}
+					for _, l := range strings.Split(strings.TrimSpace(d.Stdout), "\n") {
+						k, v, _ := strings.Cut(l, "=")
+						a[k] = v
+					}
+					if a["pdeathsig"] != "9" || a["pdeathsig_thread"] != "main" {
+						got = fmt.Sprintf("pdeathsig=%s read on the %s thread", a["pdeathsig"], a["pdeathsig_thread"])
+					}
+				}
+				if got != "" {
+					mu.Lock()
+					failed++
+					if first == "" {
+						first = got
+					}
+					mu.Unlock()
+				}
+			}
+		})
+	}
+	for range runs {
+		next <- struct{}{}
+	}
+	close(next)
+	wg.Wait()
+	if failed > 0 {
+		t.Fatalf("%d of %d runs did not read pdeathsig=9 on the main thread; first: %s", failed, runs, first)
+	}
+}
+
+// TestIntegrationSandboxCommandDiesWithGate: a gate killed while its command runs
+// takes the command with it. The command (sandboxed, started through the
+// trampoline) ignores SIGTERM and would sleep for 60 s; the gate's own
+// timeout is longer still, and nothing else signals it. Only its
+// parent-death signal (SIGKILL, set by os/exec in the trampoline and kept
+// across both execs) can end it within the test's window.
+func TestIntegrationSandboxCommandDiesWithGate(t *testing.T) {
+	needABI(t, 1)
+	g := newGate(t)
+	req := `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000002","ceiling":"destructive","op":"exec","args":{"command_id":"probe","args":["ignore-term","60s"]},"timeout_ms":120000}` + "\n"
+	cmd := exec.CommandContext(t.Context(), harness(t), "serve", "--policy", g.pol, "--principal", "test") //nolint:gosec // G204: the test's own harness
+	cmd.Env = append([]string{"PATH=/usr/bin:/bin"}, g.env...)
+	cmd.Stdin = strings.NewReader(req)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	p := gatetest.FindChild(t, cmd.Process.Pid, "ignore-term", "60s")
+	t.Cleanup(p.Kill)
+	p.WaitIgnoring(t, syscall.SIGTERM)
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait()
+	if !p.WaitGone(5 * time.Second) {
+		t.Fatalf("the command (pid %d) outlived the gate that started it", p.Pid)
 	}
 }
 

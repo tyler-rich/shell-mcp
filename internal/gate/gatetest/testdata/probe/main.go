@@ -14,9 +14,11 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -27,6 +29,12 @@ import (
 // outside is set with -ldflags "-X main.outside=…": a path the gate's
 // userspace checks never see.
 var outside = ""
+
+// The main goroutine stays on the main thread for the probe's lifetime
+// (runtime.LockOSThread: called from an init function, main runs on that
+// thread). Per-thread state such as the parent-death signal is then read
+// where execve(2) left it, not on whichever thread the runtime picked.
+func init() { runtime.LockOSThread() }
 
 func main() {
 	if len(os.Args) < 2 {
@@ -60,6 +68,26 @@ func main() {
 	case "ignore-term":
 		signal.Ignore(syscall.SIGTERM)
 		sleep(args[0])
+	case "drop-ignore-term":
+		// Ignores SIGTERM, switches to uid and gid args[0] with no
+		// supplementary groups (all threads: Go applies these to every
+		// thread), and sleeps for args[1]. The credential change clears its
+		// parent-death signal (commit_creds).
+		signal.Ignore(syscall.SIGTERM)
+		id, _ := strconv.Atoi(args[0])
+		if err := syscall.Setgroups(nil); err != nil {
+			report(err, "")
+			os.Exit(1)
+		}
+		if err := syscall.Setresgid(id, id, id); err != nil {
+			report(err, "")
+			os.Exit(1)
+		}
+		if err := syscall.Setresuid(id, id, id); err != nil {
+			report(err, "")
+			os.Exit(1)
+		}
+		sleep(args[1])
 	case "fork-sleep":
 		// A grandchild in the same process group; print its pid, then sleep.
 		pid := spawn("sleep", args[0])
@@ -150,14 +178,20 @@ func main() {
 				fds = append(fds, fmt.Sprintf("%d:%o:%s", fd, st.Mode&unix.S_IFMT, target))
 			}
 		}
-		var sig int32
-		_ = unix.Prctl(unix.PR_GET_PDEATHSIG, uintptr(unsafe.Pointer(&sig)), 0, 0, 0)
+		// The parent-death signal is per thread (PR_GET_PDEATHSIG reads the
+		// calling thread's; a thread the Go runtime starts has none), and
+		// execve left it on the main thread. Other goroutines keep the
+		// processors busy first, so a read from anywhere but the main
+		// thread shows up as such.
+		yieldThreads()
+		sig, thread := pdeathsig()
 		pgid, _ := unix.Getpgid(0)
 		// prctl, not /proc: a sandbox may hide /proc/self.
 		nnp, _ := unix.PrctlRetInt(unix.PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0)
 		seccomp, _ := unix.PrctlRetInt(unix.PR_GET_SECCOMP, 0, 0, 0, 0)
 		fmt.Printf("fds=%s\n", strings.Join(fds, ","))
 		fmt.Printf("pdeathsig=%d\n", sig)
+		fmt.Printf("pdeathsig_thread=%s\n", thread)
 		fmt.Printf("pgid_is_pid=%v\n", pgid == os.Getpid())
 		fmt.Printf("nnp=%d\n", nnp)
 		fmt.Printf("seccomp=%d\n", seccomp)
@@ -170,6 +204,23 @@ func main() {
 			}
 		}
 		fmt.Printf("sigblk=%s\n", sigblk)
+	case "pdeathsig-threads":
+		// The parent-death signal as the main thread holds it and as
+		// another thread of this process holds it.
+		runtime.LockOSThread()
+		sig, thread := pdeathsig()
+		other, otherThread := make(chan int32), make(chan string)
+		go func() {
+			// Locked to a thread of its own while the main goroutine
+			// holds the main thread, and ended with it: the runtime
+			// retires a thread whose goroutine exits locked.
+			runtime.LockOSThread()
+			s, th := pdeathsig()
+			other <- s
+			otherThread <- th
+		}()
+		fmt.Printf("main=%d %s\n", sig, thread)
+		fmt.Printf("other=%d %s\n", <-other, <-otherThread)
 	case "rlimits":
 		for _, r := range []struct {
 			name string
@@ -197,6 +248,44 @@ func flood(w io.Writer, n int64) {
 		}
 		n -= k
 	}
+}
+
+// pdeathsig returns the calling thread's parent-death signal and whether
+// that thread is the main thread ("main") or not ("other").
+func pdeathsig() (int32, string) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	var sig int32
+	_ = unix.Prctl(unix.PR_GET_PDEATHSIG, uintptr(unsafe.Pointer(&sig)), 0, 0, 0)
+	if unix.Gettid() == os.Getpid() {
+		return sig, "main"
+	}
+	return sig, "other"
+}
+
+// yieldThreads sleeps a few times while other goroutines keep up to four
+// processors busy: a goroutine that is not locked to its thread then
+// usually resumes on another one.
+func yieldThreads() {
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for range min(runtime.GOMAXPROCS(0), 4) {
+		wg.Go(func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					runtime.Gosched()
+				}
+			}
+		})
+	}
+	for range 5 {
+		time.Sleep(200 * time.Microsecond)
+	}
+	close(stop)
+	wg.Wait()
 }
 
 func sleep(s string) {

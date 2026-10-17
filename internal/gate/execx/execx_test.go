@@ -517,11 +517,71 @@ func extraFDs(fds string) []string {
 func TestCommandProcessAttributes(t *testing.T) {
 	p := probePath(t)
 	a := procAttrs(run(t, &execx.Spec{Path: p, Args: []string{"procattrs"}}).Stdout)
-	if a["pdeathsig"] != "9" || a["pgid_is_pid"] != "true" || a["sigblk"] != "0000000000000000" {
+	if a["pdeathsig"] != "9" || a["pdeathsig_thread"] != "main" || a["pgid_is_pid"] != "true" || a["sigblk"] != "0000000000000000" {
 		t.Fatalf("attributes %v", a)
 	}
 	if extra := extraFDs(a["fds"]); len(extra) > 0 {
 		t.Fatalf("the command has descriptors it was not given: %v", extra)
+	}
+}
+
+// TestPdeathsigIsPerThread: the parent-death signal belongs to a thread.
+// The command's main thread, the one the trampoline's execve(2) kept, holds
+// SIGKILL; another thread of the same process holds none (copy_process sets
+// it to 0 for every new task). A read of PR_GET_PDEATHSIG from any thread
+// but the main one therefore says 0 while the process is still covered: on
+// the parent's death the kernel signals the whole thread group for any
+// thread that holds a signal (forget_original_parent).
+func TestPdeathsigIsPerThread(t *testing.T) {
+	p := probePath(t)
+	out := lines(run(t, &execx.Spec{Path: p, Args: []string{"pdeathsig-threads"}}).Stdout)
+	if want := []string{"main=9 main", "other=0 other"}; !slices.Equal(out, want) {
+		t.Fatalf("pdeathsig-threads: %q, want %q", out, want)
+	}
+}
+
+// TestCommandPdeathsigEveryRun runs the probe a few hundred times, eight at
+// a time. Every run must find SIGKILL as its parent-death signal, read on
+// its main thread, after other goroutines kept its processors busy.
+func TestCommandPdeathsigEveryRun(t *testing.T) {
+	p := probePath(t)
+	const runs, workers = 400, 8
+	var (
+		mu     sync.Mutex
+		failed int
+		first  string
+		wg     sync.WaitGroup
+	)
+	next := make(chan struct{})
+	for range workers {
+		wg.Go(func() {
+			for range next {
+				r, err := execx.Run(context.Background(), &execx.Spec{Path: p, Trampoline: self, Args: []string{"procattrs"},
+					Env: execx.Environment("/nonexistent-home"), Timeout: 10 * time.Second, MaxOutput: 1 << 20})
+				var got string
+				if err != nil {
+					got = err.Error()
+				} else if a := procAttrs(r.Stdout); a["pdeathsig"] != "9" || a["pdeathsig_thread"] != "main" {
+					got = fmt.Sprintf("pdeathsig=%s read on the %s thread", a["pdeathsig"], a["pdeathsig_thread"])
+				}
+				if got != "" {
+					mu.Lock()
+					failed++
+					if first == "" {
+						first = got
+					}
+					mu.Unlock()
+				}
+			}
+		})
+	}
+	for range runs {
+		next <- struct{}{}
+	}
+	close(next)
+	wg.Wait()
+	if failed > 0 {
+		t.Fatalf("%d of %d runs did not read pdeathsig=9 on the main thread; first: %s", failed, runs, first)
 	}
 }
 
