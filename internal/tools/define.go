@@ -11,6 +11,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/tyler-rich/shell-mcp/internal/approval"
 	"github.com/tyler-rich/shell-mcp/internal/envelope"
 )
 
@@ -34,6 +35,19 @@ type spec[In, Out any] struct {
 	// and flags only, never a string that came from the host or the caller.
 	summary func(*Out) string
 	run     func(ctx context.Context, req *mcp.CallToolRequest, in In) envelope.Envelope[Out]
+
+	// Approval (D-006), required for operator and destructive tools.
+	// approvalArgs returns the canonical arguments: the typed input with
+	// defaults applied, without the target (bound on its own, as resolved)
+	// and without approval_id and confirm. describe is the one-line
+	// description the approval page shows, generated from those arguments
+	// and the resolved target. preview computes the preview from the gate's
+	// read operations. precondition, when set, passes what the preview saw
+	// to the operation (expected_sha256).
+	approvalArgs func(In) any
+	describe     func(in In, target string) string
+	preview      func(ctx context.Context, in In, target string) (*preview, *envelope.Error)
+	precondition func(in *In, p *preview)
 }
 
 // validator is implemented by inputs with checks beyond their types.
@@ -61,9 +75,23 @@ func define[In, Out any](d *Deps, s spec[In, Out]) Tool {
 	if err != nil {
 		panic(fmt.Sprintf("tools: %s: output schema: %v", s.name, err))
 	}
+	canGate := gateable(s.tier)
+	if canGate {
+		if s.approvalArgs == nil || s.describe == nil || s.preview == nil {
+			panic(fmt.Sprintf("tools: %s: a gateable tool needs approvalArgs, describe and preview", s.name))
+		}
+		approvalSchema(in, d.method() == approval.MethodConfirm)
+	} else {
+		delete(out.Properties, "approval")
+	}
 	def := &mcp.Tool{
 		Name: s.name, Title: s.title, Description: s.description,
 		Annotations: annotations(s.title, s.tier, s.idempotent), InputSchema: in, OutputSchema: out,
+	}
+	if canGate && d.gated(s.tier) {
+		// Client-side defence in depth (handoff §3 a.2): Claude Code shows
+		// the permission prompt on every call. The server cannot verify it.
+		def.Meta = mcp.Meta{"anthropic/requiresUserInteraction": true}
 	}
 	handler := func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		start := time.Now()
@@ -73,14 +101,25 @@ func define[In, Out any](d *Deps, s spec[In, Out]) Tool {
 		var args In
 		var env envelope.Envelope[Out]
 		auditArgs := map[string]any{}
-		decodeErr := decodeArgs(req.Params.Arguments, &args)
+		raw := req.Params.Arguments
+		var ap approvalInput
+		var apErr *envelope.Error
+		if canGate {
+			raw, ap, apErr = splitApproval(raw, d.method() == approval.MethodConfirm)
+		}
+		decodeErr := decodeArgs(raw, &args)
 		if decodeErr == nil && s.audit != nil {
 			auditArgs = s.audit(args)
 		}
+		gated := canGate && d.gated(s.tier)
+		var apOutcome approvalOutcome
+		apID := ""
 		switch {
-		case d.approvalGuard(s.tier) != nil:
+		case gated && d.method() == approval.MethodNone:
 			// First: whatever the arguments, nothing is sent.
-			env = envelope.Failure[Out]("", d.approvalGuard(s.tier))
+			env = envelope.Failure[Out]("", d.unavailable(s.tier))
+		case apErr != nil:
+			env = envelope.Failure[Out]("", apErr)
 		case decodeErr != nil:
 			env = envelope.Failure[Out]("", decodeErr)
 		default:
@@ -89,11 +128,18 @@ func define[In, Out any](d *Deps, s spec[In, Out]) Tool {
 					env = envelope.Failure[Out]("", e)
 				}
 			}
-			if env.Error == nil {
+			switch {
+			case env.Error != nil:
+			case gated:
+				env, apOutcome, apID = approveCall(ctx, d, s, req, args, ap)
+			case ap.given:
+				env = envelope.Failure[Out]("", envelope.Errorf(envelope.CodeValidationError,
+					"this call needs no approval; call again without approval_id and confirm"))
+			default:
 				env = s.run(ctx, req, args)
 			}
 		}
-		d.audit(ctx, s.name, env.Target, auditArgs, outcome(env.OK, env.Error), env.Exec, time.Since(start))
+		d.audit(ctx, s.name, env.Target, auditArgs, outcome(env.OK, env.Error), env.Exec, time.Since(start), apID, apOutcome)
 		return result(env, summarize(env, s.summary))
 	}
 	return Tool{Def: def, Tier: s.tier, Install: func(srv *mcp.Server) { srv.AddTool(def, handler) }}
@@ -179,7 +225,8 @@ func annotations(title string, tier Tier, idempotent bool) *mcp.ToolAnnotations 
 // audit writes the one JSON line per tool call (S-11): principal, target,
 // tool, sanitized arguments, outcome code, exit code and duration. It never
 // carries tokens, keys, content, output, stdin or environment values.
-func (d *Deps) audit(ctx context.Context, tool, target string, args map[string]any, outcome string, exec *envelope.Exec, dur time.Duration) {
+func (d *Deps) audit(ctx context.Context, tool, target string, args map[string]any, outcome string, exec *envelope.Exec, dur time.Duration,
+	approvalID string, approvalOut approvalOutcome) {
 	logger := d.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
@@ -193,10 +240,15 @@ func (d *Deps) audit(ctx context.Context, tool, target string, args map[string]a
 	if exec != nil && exec.ExitCode != nil {
 		exit = *exec.ExitCode
 	}
-	logger.LogAttrs(ctx, slog.LevelInfo, "tool call",
+	attrs := []slog.Attr{
 		slog.String("principal", d.Principal.Name), slog.String("target", target), slog.String("tool", tool),
 		slog.Any("args", args), slog.String("outcome", outcome), slog.Any("exit_code", exit),
-		slog.Int64("duration_ms", dur.Milliseconds()))
+		slog.Int64("duration_ms", dur.Milliseconds()),
+	}
+	if approvalOut != "" {
+		attrs = append(attrs, slog.String("approval_id", approvalID), slog.String("approval_outcome", string(approvalOut)))
+	}
+	logger.LogAttrs(ctx, slog.LevelInfo, "tool call", attrs...)
 }
 
 // maxAuditValue bounds a logged argument (SECURITY §2, log injection).

@@ -35,7 +35,7 @@ const (
 // ServerCodes lists the server's own codes in ARCHITECTURE §6 order.
 var ServerCodes = []string{
 	CodeValidationError, CodeUnknownTarget, CodeTargetUnreachable, CodeHostKeyMismatch, CodeAuthFailedSSH,
-	CodeGateUnavailable, CodeProtocolMismatch, CodeApprovalDeclined, CodeApprovalInvalid, CodeApprovalUnavailable,
+	CodeGateUnavailable, CodeProtocolMismatch, CodeApprovalPending, CodeApprovalDeclined, CodeApprovalInvalid, CodeApprovalUnavailable,
 	CodeTimeout, CodeProfileDenied,
 }
 

@@ -37,8 +37,7 @@ type Deps struct {
 	// Redactor holds the built-in rules and SHELL_MCP_REDACT_PATTERNS.
 	Redactor *redact.Redactor
 	// ApprovalTiers is SHELL_MCP_APPROVAL_TIERS: the tiers whose tools need
-	// a human approval (D-006). Until approval exists (S4b), a tool of such
-	// a tier refuses every call with approval_unavailable (approvalGuard).
+	// a human approval (D-006); destructive tools always do.
 	ApprovalTiers []string
 	// ApprovalMethod is SHELL_MCP_APPROVAL_METHOD (empty: none).
 	ApprovalMethod approval.Method
@@ -48,18 +47,6 @@ type Deps struct {
 	ApprovalPublicURL string
 	// Notify, when set, is called for each new approval record.
 	Notify func(approval.Record, string)
-}
-
-// approvalGuard refuses a call that needs approval, because this release
-// cannot collect one: destructive tools always need it, and operator tools
-// when SHELL_MCP_APPROVAL_TIERS lists operator. Nothing is sent to a
-// target. Read tools never need it.
-func (d *Deps) approvalGuard(t Tier) *envelope.Error {
-	if t == TierRead || (t != TierDestructive && !slices.Contains(d.ApprovalTiers, t.String())) {
-		return nil
-	}
-	return envelope.Errorf(envelope.CodeApprovalUnavailable,
-		"SHELL_MCP_APPROVAL_TIERS requires a human approval for %s tools, and approval arrives in a later release; nothing was sent to the target", t)
 }
 
 // Catalogue returns the registry of every tool this binary knows, each with
