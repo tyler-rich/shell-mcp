@@ -158,8 +158,8 @@ func b32Next(c byte) byte {
 }
 
 func TestParseMaxApprovers(t *testing.T) {
-	if n, err := ParseMaxApprovers("", false); err != nil || n != DefaultMaxApprovers {
-		t.Fatalf("unset = %d, %v; want %d", n, err, DefaultMaxApprovers)
+	if n, err := ParseMaxApprovers("", false); err != nil || n != 1 { // the handoff's default: exactly one approver
+		t.Fatalf("unset = %d, %v; want 1", n, err)
 	}
 	for i := 1; i <= MaxApprovers; i++ {
 		if n, err := ParseMaxApprovers(fmt.Sprint(i), true); err != nil || n != i {
