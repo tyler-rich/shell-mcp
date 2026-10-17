@@ -1619,3 +1619,91 @@ The guarantee did not have the race the prompt feared. The test's reading of it 
 - **A per-command `Pdeathsig` re-arm:** impossible after the command changes its own credentials, and it would not cover its children.
 
 **Versions:** unchanged (Go 1.27.2; modules as above; golangci-lint v2.15.0, govulncheck v1.9.0). No dependency added.
+
+### 2026-10-16 — How approvals reach a human: scoping and handoff (PR #21, branch docs/approval-scoping)
+**Decision (proposed; takes effect when the maintainer accepts the handoff):** `docs/handoff/S4B-APPROVAL.md` recommends out-of-band approval as v1's method (`SHELL_MCP_APPROVAL_METHOD=web`):
+- **Flow.** The first call computes the preview and returns `approval_pending` with an approval id and the URL of an approval page that shell-mcp serves on its own listener. A person approves there with a current TOTP code from a named approver's phone authenticator. The model re-calls the tool with `approval_id`.
+- **Binding.** The record binds principal, tool, target, canonical-args SHA-256, preview SHA-256, gate-policy SHA-256 and expiry. It is used once, marked used before execution, and a fresh preview must still match. Records live in memory, so a restart invalidates them.
+- **Other parts.**
+  - An optional ntfy push carries only a link.
+  - `confirm-argument` stays as the explicit, WARN-logged opt-out.
+  - Approval-gated tools carry `_meta["anthropic/requiresUserInteraction"]: true`.
+  - Form elicitation, URL elicitation, an MCP Apps panel and WebAuthn are deferred to an optional S4d, each reusing the same record.
+
+The document gives exact replacement wording for D-006 and S-12, the config, envelope, SECURITY, ARCHITECTURE and TOOLS changes, an S4b split (S4b-1 approval core, S4b-2 destructive tools), a test plan, a live test, and 13 open questions. No locked document is changed in this PR.
+
+**Why the Code tab declined** (verified in the installed binaries and the SDK docs):
+- **The host.** The Desktop app (2.42304.0) hosts Claude Code 2.1.299 through the Agent SDK (0.3.299).
+- **The path.** Claude Code runs `Elicitation` hooks, then forwards the request to the host as a control request (`subtype: "elicitation"`).
+- **The answer.** The SDK answers `decline` at once when the host registered no `onElicitation`, and Desktop registers none for local sessions.
+- **No workaround.** No setting, permission mode or documented hook makes the Code tab show the question; a hook can only answer for the user.
+- **Upstream.** anthropics/claude-code #89858, #96043 and #98256 (VS Code) are open.
+- **Other surfaces.** The terminal CLI renders elicitations (docs and third-party reports; live test T-1 in the handoff checks the Code tab's own build in a terminal). Desktop chat declares only the MCP Apps extension.
+
+**Why this recommendation:**
+- **It reaches a person in both clients.** It is the only option that does so today: the model only has to re-call a tool and show a link.
+- **The server verifies the person itself.** The proof is a code from a device the agent's environment does not hold.
+- **Elicitation proves only that the client answered.** A hook or an SDK host can answer, and the server cannot tell; the MCP spec makes no human-presence promise.
+- **Neither the bearer token nor the browser session will do.** Claude Code's shell can read the token. A browser session can be driven by a model with browser control. So neither can be the approval credential.
+
+**Alternatives rejected:**
+- Form elicitation as primary: it reaches no person in either client, and its trust root is client configuration.
+- URL elicitation: no maintainer client delivers it, and mcp-remote refuses URL mode.
+- A bare MCP Apps button: host-trusted, and unverified on the mcp-remote path.
+- SSO or forward-auth identity alone: no per-request step-up in Authelia or Authentik, and the model can ride the session.
+- An ntfy `http` action that approves directly: topic readers receive the whole message.
+- WebAuthn now: it needs a dependency or a hand-written verifier (STOP-and-ask); proposed for later.
+
+**Deferred / follow-ups:**
+- The maintainer accepts or amends the handoff (its §11 questions).
+- Then S4b-1, S4b-2 and S4c as outlined there.
+- Live test T-1 (terminal CLI) is optional evidence for the deferred elicitation method.
+- S5's `docs/CLIENTS.md` carries the new client findings.
+
+**Versions:**
+- **Go:** 1.27.2, the newest stable per go.dev (go1.27.2 and go1.26.9 listed).
+- **Refresh:** `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Dependencies added:** none.
+- **Tools:** unchanged.
+
+### 2026-10-16 — Maintainer decisions on the approval handoff (PR #21 follow-up)
+**Decision:** The maintainer accepted out-of-band approval on a separate page with TOTP. `docs/handoff/S4B-APPROVAL.md` now records the decisions in its §11, and the proposed D-006 and S-12 wording and the S4b outline carry them.
+
+**Answers:**
+- Q1–Q8, Q12 and Q13 as recommended.
+- **Q4:** ntfy is optional, and the page works with no push at all.
+- **Q9:** not now.
+- **Q10:** named approvers, exactly one by default. More need `SHELL_MCP_APPROVAL_MAX_APPROVERS`, default 1, at most 8.
+- **Q11:** deferred.
+- **Live test T-1:** skipped.
+
+**Requirements added:**
+- **TOTP limits.** At most 3 wrong codes per approver in any rolling minute, then a 15-minute lockout that doubles per consecutive lockout, up to 24 h. The last accepted step is recorded per approver, so each step's code is used once. ±1 step of clock skew only.
+- **Phishing.**
+  - The page's origin is fixed by `SHELL_MCP_APPROVAL_PUBLIC_URL` and shown prominently on the page.
+  - Operators open approvals from a bookmark or the server's own push, never from a chat link.
+  - The `approval_pending` text tells the model to show the exact URL unchanged.
+- **Page hardening.**
+  - Approve and decline are POST-only, with a CSRF token.
+  - Strict CSP, no framing, no external resources, `Cache-Control: no-store`.
+  - The description and preview are generated by the server from the canonical arguments.
+- **Exposure.** The approval listener binds to loopback by default. A non-loopback bind needs native TLS, or `SHELL_MCP_TRUSTED_PROXIES` covering a TLS-terminating proxy; otherwise startup fails.
+- **Enrolment.** `shell-mcp approver add` shows the `otpauth` QR code in the terminal once. Seeds live only in a mounted secret file, never in environment variables or logs. Every approval and decline is audit-logged with the approver's name.
+
+**How the requirements were read where they met:**
+- **Bookmark vs deferred inbox.** The bookmark page takes an approval id and lists nothing, which reconciles "open from a bookmark" with the deferred inbox.
+- **Decline needs a code.** That way every decline has a verified approver name.
+- **Proxy-only peers.** When the listener relies on `SHELL_MCP_TRUSTED_PROXIES`, it serves only peers inside it.
+- **Seed file permissions.** A group/other-accessible approvers file fails startup, not just a WARN.
+- **QR encoder.** The standard library has none, so S4b-1 writes a small in-repo encoder with golden fixtures and fuzzing. A third-party module would be a STOP-and-ask.
+
+**Alternatives rejected:**
+- A per-record wrong-code limit instead of per-approver: superseded by the per-approver rule.
+- Decline without a code: no verified name to log.
+- Printing the seed when stdout is not a terminal: it could land in a log or a pipe.
+- An inbox listing behind the bookmark: deferred (Q11).
+
+**Deferred / follow-ups:** S4b-1 applies the D-006, S-12 and docs wording in its first commit; then S4b-2, S4c, and S5's deploy and CLIENTS changes, as the handoff outlines.
+
+**Versions:** unchanged from the entry above. No dependency added.
