@@ -1,15 +1,21 @@
 # S4b handoff: how approvals reach a human
 
-> Session S4b-scope, 2026-10-16. Documentation only: no approval code exists or is proposed in this PR.
+> Session S4b-scope, 2026-10-16. Documentation only: no approval code exists in this PR.
 > It answers plan §5 (S4b-scope) and feeds S4b, S4c and S5's `docs/CLIENTS.md`.
-> **Nothing here changes a locked decision by itself.** §7 gives exact new wording for D-006, S-12 and the other documents; it takes effect only when the maintainer accepts it (§11 lists the decisions).
+> **Status: accepted by the maintainer on 2026-10-16** (option c with TOTP; the answers and added requirements are in §11).
+> S4b applies §7's wording to D-006, S-12 and the other documents in its first commit. This PR changes no locked document.
 
 ## 0. Summary
 
 - **Why the Code tab declines (§1).** The Desktop app's Code tab runs Claude Code as an Agent SDK host. When Claude Code receives an elicitation in that mode, it runs `Elicitation` hooks and then forwards the request to the host as an SDK control request. The SDK answers `decline` by itself when the host registered no `onElicitation` callback, and the Desktop app (2.42304.0, SDK 0.3.299) registers none for local Code-tab sessions. That is the immediate decline the maintainer saw. Verified in the installed binaries and in the SDK docs; three open upstream issues report the same. No setting, permission mode or documented hook makes the Code tab show the question to a person.
-- **Recommendation (§5).** Out-of-band approval (option c). The first call returns `approval_pending` with an approval id and the URL of an approval page served by shell-mcp on its own listener. The human opens the page from the link or from an optional push notification. The page shows the server's own description of the operation. The human approves by entering a **current TOTP code from an authenticator on their phone**. The model then re-calls the tool with the approval id, and the server executes only that exact operation, once, within its TTL.
+- **Decision (§5).** Out-of-band approval (option c).
+  - The first call returns `approval_pending` with an approval id and the URL of an approval page that shell-mcp serves on its own listener, whose origin is fixed by configuration.
+  - The human opens the page from a bookmark or from the server's own optional push notification, never from a link the model presents. The page shows its own origin prominently, and the server's own description of the operation, generated from the canonical arguments.
+  - The approver approves or declines by entering a **current TOTP code from an authenticator on their phone**. By default there is exactly one approver, enrolled with a CLI command that shows the `otpauth` QR code in the terminal once.
+  - The model then re-calls the tool with the approval id, and the server executes only that exact operation, once, within its TTL.
   - This works with every client, because the model only re-calls a tool.
   - The model cannot produce the code, and cannot change what the page shows.
+  - The page works with no push channel at all; ntfy is optional.
   - `confirm-argument` stays as the explicit, logged, weaker opt-in.
   - Approval-gated tools also set Claude Code's `anthropic/requiresUserInteraction`, as client-side defence in depth.
   - Form elicitation, URL elicitation and MCP Apps are deferred. Each could later deliver the same approval record more conveniently, but none of them reaches a person through the maintainer's clients today.
@@ -48,7 +54,7 @@ Claude Code 2.1.299 in the Desktop Code tab, protocol 2026-07-28, declared `elic
 | A hook that opens its own OS dialog | Would put a question in front of a person, but it is an undocumented use. The answer comes from a script in a settings file on the same machine and account the model's shell runs in (§3, option a). | Inference |
 
 **Other Claude Code surfaces:**
-- **The CLI in a terminal** renders form and URL elicitations: the docs say so, and third-party reports confirm it for 2.1.296 and 2.1.301. The maintainer's terminal `claude` is older (2.1.156), so live test T-1 (§10) checks this with the Code tab's own 2.1.299 build.
+- **The CLI in a terminal** renders form and URL elicitations: the docs say so, and third-party reports confirm it for 2.1.296 and 2.1.301. The maintainer's terminal `claude` is older (2.1.156), and the maintainer chose not to run live test T-1 (§10), so this rests on the docs and those reports.
 - **The VS Code extension** declines (#98256).
 - **`claude -p`** cancels or declines unless a hook answers (code.claude.com/docs/en/headless).
 
@@ -88,7 +94,7 @@ So the approval must not depend on:
 - a click the model could make in a UI on the workstation;
 - a setting the model can edit.
 
-It needs a factor the model's environment does not hold. In the recommendation, that factor is an authenticator on the human's phone.
+It needs a factor the model's environment does not hold. In the accepted design, that factor is an authenticator on the human's phone.
 
 ## 3. Options
 
@@ -101,7 +107,7 @@ Every option keeps what shell-mcp already does: tier and profile registration, t
 - **State and restart.** Stateless apart from the nonce set. A restart changes the key, so every outstanding state fails as `approval_invalid` (fail closed).
 - **Audit.** Request issued, answer received (accept/decline/cancel), state verified or refused.
 - **Operator setup.** None.
-- **Clients.** The CLI in a terminal (expected, T-1). **Not** the Code tab (automatic decline, §1.2), the VS Code extension, or Desktop chat (not declared). mcp-remote passes form mode only if Desktop declares it, and Desktop doesn't.
+- **Clients.** The CLI in a terminal (per the docs and third-party reports; T-1 was skipped). **Not** the Code tab (automatic decline, §1.2), the VS Code extension, or Desktop chat (not declared). mcp-remote passes form mode only if Desktop declares it, and Desktop doesn't.
 
 | Threat | Assessment |
 |---|---|
@@ -149,53 +155,55 @@ Every option keeps what shell-mcp already does: tier and profile registration, t
 
 **Verdict.** It adds nothing on the maintainer's clients today. Later, a client that renders URL mode could receive option c's page link this way, with no change to the record or the page (§8, S4d).
 
-### c. Out-of-band approval, independent of the client (recommended)
+### c. Out-of-band approval, independent of the client (accepted)
 
 - **How.**
-  1. The first call validates the input, computes the preview through the gate, and creates an approval record.
+  1. The first call validates the input, computes the preview through the gate, and creates an approval record. The record's description is generated by the server from the canonical arguments.
   2. The server optionally pushes a notification to the operator's channel.
-  3. The call returns `approval_pending` with the approval id, the page URL, the expiry and a server-generated summary.
-  4. The human opens the page, sees the server's own description of the operation, and approves with a current TOTP code from their authenticator. Declining needs no code.
+  3. The call returns `approval_pending` with the approval id, the page URL (its origin fixed by configuration), the expiry and a server-generated summary. The result text tells the model to show that URL unchanged.
+  4. The approver opens the page from a bookmark (and enters the id) or from the push, never from a link the model presents. They check the origin banner and the server's description of the operation, and approve or decline with a current TOTP code from their authenticator.
   5. The model re-calls the same tool with the same arguments plus `approval_id`. The server executes only if that record is approved and every bound field matches (§6).
 - **Binding.**
   - **Bound fields.** Principal, tool, target, SHA-256 of the canonical arguments, SHA-256 of the preview, SHA-256 of the gate policy reported with the preview, and expiry.
-  - **Approver.** The approval is recorded against a named approver.
+  - **Approver.** The decision is recorded against the verified approver's name.
   - **Single use.** The record is marked used before execution.
   - **Fresh preview.** It must still hash the same at execution time.
 - **State and restart.** Approval records live in a bounded in-memory store. A restart loses them, so a re-call gets `approval_invalid` ("unknown approval") and the model must ask again (fail closed). TOTP replay state is reset safely at start (§6.4).
 - **Audit.** Server JSON lines for:
   - request created;
-  - decision (approver, client address);
-  - refused attempts (reason only);
+  - decision (verified approver name, client address);
+  - refused attempts;
   - lockouts;
-  - consumption;
+  - expiry;
+  - use;
   - the tool-call line with the approval id.
 
-  Codes, tokens and content are never logged (§6.8).
+  Codes, seeds, tokens and content are never logged (§6.8).
 - **Operator setup.**
-  - Enrol one or more approvers. Each gets a TOTP seed generated by `shell-mcp`, added to an authenticator app on their phone, and stored in a secret file the server reads.
+  - Enrol the approver with `shell-mcp approver add`, which shows the `otpauth` QR code in the terminal once and writes a `0600` secret file. Mount that file into the server.
   - Set the page's public URL.
-  - Expose the approval listener to the networks the approver's phone uses, through the existing reverse proxy or VPN, with TLS.
+  - Either keep the listener on loopback, or expose it to the networks the approver's phone uses, through native TLS or the existing TLS-terminating reverse proxy.
+  - Bookmark the page on the phone.
   - Optionally, configure a push channel.
 - **Clients.** All of them, including the Code tab, Desktop chat through mcp-remote, the terminal CLI, and scripts.
 
 | Threat | Assessment |
 |---|---|
-| T1 | The model cannot approve. The code is generated on the approver's phone from a seed the workstation never holds. The bearer token, a browser session or a click is not enough: the page has no session, takes no bearer token, and requires the code for every approval. The model can create requests (bounded: pending limit, deduplication) and can decline (harmless). |
-| T2 | The record is used once and marked used before execution. Each TOTP time step is accepted once per approver. |
+| T1 | The model cannot approve or decline. The code is generated on the approver's phone from a seed the workstation never holds. The bearer token, a browser session or a click is not enough: the page has no session, takes no bearer token, and requires a code for every decision. The model can create requests, bounded by a pending limit and deduplication. |
+| T2 | The record is used once and marked used before execution. Each TOTP step is accepted once per approver (last accepted step). |
 | T3 | Every bound field is compared on the re-call. A fresh preview and the policy hash must match, so a changed target or policy needs a new approval. |
-| T4 | **CSRF.** No ambient credential: no cookies, and the code is typed into the form each time. There is still a per-render form token, an Origin/`Sec-Fetch-Site` check, no state change on GET, and `frame-ancestors 'none'`. **Phishing.** TOTP is not phishing-resistant. A model with a shell could serve a look-alike page and relay a typed code in real time, to approve a different pending operation. Mitigations: <br>• the link reaches the human through the push notification, a channel the model does not write to; <br>• the page shows the approval id, which the chat also shows; <br>• operator guidance: open approvals only from the notification or the configured host, never from a link that differs from it; <br>• each code works once, and wrong codes lock the page out. <br>WebAuthn removes this residual risk (§11, Q2). |
-| T5 | One code per operation. The page shows the full operation and the preview, rendered by the server with control and bidi characters made visible. The default gates only destructive and privileged-operator operations. Deduplication and a pending limit stop request floods. The friction is deliberate for these tiers. Gating `operator` too (`SHELL_MCP_APPROVAL_TIERS`) multiplies it, and the docs say so. |
+| T4 | **CSRF.** No ambient credential: no cookies, and the code is typed into the form each time. Even so: POST-only decisions with a CSRF token, an Origin/`Sec-Fetch-Site` check and `frame-ancestors 'none'`. <br>**Phishing.** TOTP is not phishing-resistant: a model with a shell could serve a look-alike page and relay a typed code in real time. Mitigations: <br>• the origin is fixed by configuration and shown prominently on the page; <br>• approvers open approvals only from a bookmark or the server's own push, never from a chat link; <br>• the model is told to show the URL unchanged, so a different URL in the chat is a warning sign; <br>• codes are single-use, with per-approver lockouts. <br>WebAuthn removes this residual risk (§11, Q2). |
+| T5 | One code per decision. The page shows the full operation and preview, generated by the server, with control and bidi characters shown as escapes. The default gates only destructive and privileged-operator operations. Deduplication and a pending limit stop request floods. The friction is deliberate for these tiers. Gating `operator` too (`SHELL_MCP_APPROVAL_TIERS`) multiplies it, and the docs say so. |
 | T6 | Principal and target are bound and shown. Each server instance has its own listener, approvers and records, so one instance's approval cannot run on another. |
 | T7 | Can skip it, or fake the page (expected). Unchanged. |
 
-**Verdict.** Recommended as the primary method.
+**Verdict.** Accepted as the primary method.
 
-**Push notification.** Optional; a nudge only.
+**Push notification.** Optional. The page works fully without it.
 - **What it carries.** Tool title, target, summary, expiry, and a `view` link to the page.
-- **What it never carries.** No ntfy `http` action that approves directly. Anyone who can read the topic receives the whole message, including action URLs, headers and bodies. Topic access is set in the channel's own ACLs, which the server cannot verify. ntfy tokens grant access to the whole user account (docs.ntfy.sh/config, access control).
+- **What it never carries.** No ntfy `http` action that approves directly (Q13). Anyone who can read the topic receives the whole message, including action URLs, headers and bodies. Topic access is set in the channel's own ACLs, which the server cannot verify, and ntfy tokens grant access to the whole user account (docs.ntfy.sh/config, access control).
 - **Recommended channel setup.** ntfy with `auth-default-access: deny-all`, a write-only user for the server, and a read-only user for the phone.
-- **On failure.** The approval still works through the link in the tool result.
+- **On failure.** The approver uses the bookmark and the id from the chat.
 
 ### d. MCP Apps (`io.modelcontextprotocol/ui`)
 
@@ -252,36 +260,47 @@ Every option keeps what shell-mcp already does: tier and profile registration, t
 |---|---|---|---|---|---|
 | Reaches a person in the Code tab | No (auto-decline) | No | **Yes** | No (Code doesn't render Apps) | n/a (no person) |
 | Reaches a person in Desktop chat | No (not declared) | No | **Yes** | Probably (unverified spike) | n/a |
-| Reaches a person in a terminal CLI | Yes (to confirm, T-1) | Yes | **Yes** | No | n/a |
+| Reaches a person in a terminal CLI | Yes (docs; T-1 skipped) | Yes | **Yes** | No | n/a |
 | Model can self-approve (T1) | Via client config | No (with step-up) | **No** | Button: host-trusted; +TOTP: no | **Yes** |
 | Replay / cross-operation (T2, T3) | Bound | Bound | **Bound + fresh preview** | Bound | Bound |
-| Phishing residue (T4) | n/a | Low | **Real-time relay (TOTP)** | Low | n/a |
-| Operator setup | None | As c | **Approvers, listener, URL** | As c | One variable |
-| New dependency | No | No | **No (stdlib)** | No | No |
+| Phishing residue (T4) | n/a | Low | **Real-time relay (TOTP), reduced by bookmark + fixed origin** | Low | n/a |
+| Operator setup | None | As c | **One approver (CLI + QR), listener, URL, TLS or proxy** | As c | One variable |
+| New dependency | No | No | **No (stdlib; in-repo QR encoder)** | No | No |
 
-## 5. Recommendation
+## 5. Decision (accepted 2026-10-16)
 
-1. **Primary: option c**, `SHELL_MCP_APPROVAL_METHOD=web`. It uses an approval page on its own listener, a TOTP step-up per approval from named approvers, approval-id re-calls with full binding and a fresh preview, and an optional ntfy push. This is the only option that reaches a person through both of the maintainer's clients today, and the only one whose proof of a person (a code from a device the model cannot reach) the server verifies itself.
-2. **Fallback: option e**, `SHELL_MCP_APPROVAL_METHOD=confirm-argument`, explicit and WARN-logged. **Default: `none`**, under which approval-gated tools refuse with `approval_unavailable`, as today.
+1. **Primary: option c**, `SHELL_MCP_APPROVAL_METHOD=web`.
+   - **What it consists of.**
+     - An approval page on its own listener, loopback by default, with an origin fixed by configuration.
+     - A TOTP code from the approver for every approval and every decline; exactly one approver by default.
+     - Approval-id re-calls, with full binding and a fresh preview.
+     - An optional ntfy push. The page works fully without it.
+   - **Why this one.**
+     - It is the only option that reaches a person through both of the maintainer's clients today.
+     - It is the only one whose proof of a person the server verifies itself: a code from a device the model cannot reach.
+2. **Fallback and default.**
+   - **Fallback: option e**, `SHELL_MCP_APPROVAL_METHOD=confirm-argument`, explicit and WARN-logged.
+   - **Default: `none`.** Approval-gated tools refuse with `approval_unavailable`, as today.
 3. **Client-side defence in depth:** `_meta["anthropic/requiresUserInteraction"]: true` on every approval-gated tool.
 4. **Deferred (S4d, optional, after S4b and S4c):**
    - MCP Apps panel for Desktop chat (with the TOTP field);
    - URL-mode delivery of the same link;
    - form elicitation as a weaker method for terminal-CLI users;
-   - WebAuthn instead of TOTP.
+   - WebAuthn instead of TOTP;
+   - an inbox page that lists pending approvals.
 
    Each reuses option c's record.
 
 **Under this design, the model can:**
 - start an approval request (bounded per principal; an identical pending request returns the same record);
 - see a request's status;
-- relay, or misdescribe, the link in chat;
-- decline a request;
+- relay the approval URL, which it is told to show unchanged;
+- misdescribe the request in chat. The page shows the truth, and operators open it from a bookmark or the push, not from the chat.
 - re-call after approval to run exactly what was approved.
 
 **It cannot:**
-- approve;
-- change what an approval covers;
+- approve or decline. Both need the approver's code.
+- change what an approval covers, or what the page says about it. The description and preview come from the server, generated from the canonical arguments.
 - reuse an approval for another tool, target, argument set or principal;
 - run an approval twice, after expiry, after a restart, or after the target's preview or the gate policy changed;
 - extend a TTL;
@@ -295,15 +314,16 @@ Under `confirm-argument` it can approve everything, and the logs say so. A compr
 
 ```
 model ──call(args)──────────────▶ server: validate → preview via gate (read-tier preview op)
-                                          → create record {pending} → notify (optional)
+                                          → create record {pending} → push (optional)
 model ◀─ ok:false, approval_pending, approval{id,url,expires_at,summary}
-human ── opens url (from notification or chat) ──▶ approval listener: GET /approvals/{id}
-human ── POST approve {approver, totp, form_token} ──▶ verify → record {approved by <approver>}
+         message: "show the user this URL exactly as written: <url> …"
+approver ── opens the bookmarked page (enters the id) or taps the push ──▶ approval listener
+approver ── POST approve|decline {approver, code, csrf_token} ──▶ verify code → record {approved|declined by <name>}
 model ──call(args, approval_id)─▶ server: match record → mark used → fresh preview, compare
                                           → execute with ceiling = tool tier → result
 ```
 
-- **A re-call while still pending** waits up to 20 s (a fixed bound, and never past the expiry) for a decision. Then it returns `approval_pending` again, so the model does not spin.
+- **A re-call while still pending** waits up to 20 s for a decision (a fixed bound, and never past the expiry). Then it returns `approval_pending` again, so the model does not spin.
 - **A declined record** gives `approval_declined`.
 - **Anything else** gives `approval_invalid`: unknown, expired, used, a mismatch, or a changed preview or policy.
 
@@ -311,17 +331,18 @@ model ──call(args, approval_id)─▶ server: match record → mark used →
 
 | Field | Notes |
 |---|---|
-| `id` | 128 random bits, lowercase base32 (26 chars). It is a capability to *view*, never to approve. |
+| `id` | 128 random bits, lowercase base32 (26 chars). It is a capability to *view*, never to approve or decline. |
 | `principal`, `tool`, `target` | As resolved by the server (the target after defaulting). |
 | `args_sha256` | SHA-256 of the canonical arguments: the decoded, typed input with defaults applied and `approval_id`/`confirm` removed, marshalled deterministically. |
-| `preview`, `preview_sha256` | The rendered preview (bounded, e.g. 16 KiB) and its hash. |
+| `description` | One line generated by the server from the tool and the canonical arguments, e.g. "Delete /srv/app/old (recursive) on target-a". Never text the model supplied as prose; the tools have no free-text "reason" argument. |
+| `preview`, `preview_sha256` | The gate's or helper's preview, rendered by the server (bounded, e.g. 16 KiB), and its hash. |
 | `policy_sha256` | From the gate's `gate` block on the preview response. |
 | `created_at`, `expires_at` | TTL from `SHELL_MCP_APPROVAL_TTL`. |
 | `state` | `pending` → `approved` / `declined` / `expired` → `used`. |
-| `approver`, `decided_at`, `decided_from` | Set on decision. |
-| `wrong_codes` | At 3, the record becomes `declined`. |
+| `approver`, `decided_at`, `decided_from` | Set on decision: the verified approver's name and the client address. |
+| `csrf_token` | 128 random bits, created with the record. Required on both POSTs. |
 
-- **Store.** A bounded map: at most 5 pending records per principal (more gets `approval_unavailable`, "too many pending approvals") and at most 256 records in total. Expired records are swept.
+- **Store.** A bounded map: at most 5 pending records per principal (more gets `approval_unavailable`, "too many pending approvals") and at most 256 records in total. Expired records are swept, and their expiry is audit-logged.
 - **Deduplication.** An identical request (same bound fields) while one is pending returns the existing record.
 
 ### 6.3 Execution check (the re-call)
@@ -332,80 +353,126 @@ Every check must hold, in this order:
 3. The principal, tool, target and `args_sha256` are equal.
 4. The record is marked `used`. This happens atomically, before anything is sent, so a failed execution never leaves a reusable approval.
 5. A fresh preview is computed, and both its hash and the policy hash must equal the record's. If they differ, the answer is `approval_invalid` ("the target or policy changed since approval; request a new approval").
-6. The operation runs with the tool's ceiling. Where the operation supports a precondition, the server passes what the preview saw: `expected_sha256` of the previewed content for `shell_priv_write_file` and `shell_write_file`. That closes the window between check and write.
+6. The operation runs with the tool's ceiling. Where the operation supports a precondition, the server passes what the preview saw: `expected_sha256` of the previewed content for `shell_priv_write_file` and `shell_write_file`.
 
-### 6.4 TOTP
+### 6.4 TOTP, approvers and enrolment
 
-- **Parameters.** RFC 6238: HMAC-SHA-1, 6 digits, 30 s step, ±1 step accepted, the RFC's recommended maximum.
-- **Seeds.** One per approver, at least 160 bits, base32.
-- **Replay.** Per approver, the last accepted step is stored, and a code for that step or an earlier one is refused. The RFC says the verifier "MUST NOT accept the second attempt of the OTP".
-- **Restart.** At process start each approver's last accepted step is set to the current step. A code seen before a restart cannot be replayed after it; approvals in the first ≤ 30 s after a start must wait for the next code.
+- **Algorithm.** RFC 6238: HMAC-SHA-1, 6 digits, 30 s step.
+- **Clock skew.** **±1 step only** (the RFC's recommended maximum); ±2 is refused.
+- **Single use.** Each time-step code is usable once per approver.
+  - **Last accepted step.** The server records the last accepted step per approver, and refuses a code for that step or any earlier one. The RFC says the verifier "MUST NOT accept the second attempt of the OTP". This covers approve and decline alike.
+  - **Restart.** At process start, every approver's last accepted step is set to the current step. A code seen before a restart cannot be used after it; a decision in the first ≤ 30 s after a start waits for the next code.
 - **Brute force.**
-  - Per record: 3 wrong codes decline it.
-  - Global: 5 wrong codes lock the page for 15 minutes. Each consecutive lockout doubles, up to 24 hours, and a successful approval resets the count. Each lockout is logged at WARN and pushed to the operator.
-  - That bounds online guessing to a few dozen attempts a day. At three valid codes in 10⁶, that is roughly 10⁻⁴ a day, against an attacker who must also reach the listener.
-- **Enrolment.** `shell-mcp approver-secret <name>` prints a new seed and its `otpauth://` URI once, on the operator's terminal on the server host. There is no QR rendering (stdlib only). The operator puts the line into the approvers secret file.
-- **Guidance.** Keep the seed only in the phone's authenticator and the server's secret store. Never paste it into a chat, and never keep it on the workstation where the agent runs.
+  - **Per approver:** at most **3 wrong codes in any rolling 60 s**. The next wrong code locks that approver out for 15 minutes.
+    - Each consecutive lockout doubles, up to 24 hours. A successful decision resets the count.
+    - During a lockout, every code for that approver is refused without being checked.
+    - Each lockout is audit-logged at WARN, and pushed if a push channel is configured.
+  - **The bound.** About two dozen guesses a day per approver. At 3 valid codes in 10⁶, that is under 10⁻⁴ a day, against an attacker who must also reach the listener.
+  - **Lockout state** is in memory; a restart clears it. Only the operator can restart the server.
+- **Approvers.**
+  - **One by default.** There is exactly one approver by default. `SHELL_MCP_APPROVAL_MAX_APPROVERS` (default 1, at most 8) must be raised explicitly before the server accepts more.
+  - **Named.** Each approver has a name, which the audit records.
+  - **The form.** With one approver the form has no name field. With several, the approver chooses their name, and each has their own lockout and last accepted step.
+- **The secret file.**
+  - **Location.** Approvers live only in a mounted secret file: `SHELL_MCP_APPROVERS_FILE`, one approver per line, `<name> <base32 seed>`.
+  - **Never in the environment.** There is no plain environment variable: `SHELL_MCP_APPROVERS` is refused at startup.
+  - **Permissions.** A file readable or writable by group/other fails startup. That is stricter than the other secret files' WARN, because a readable seed is an approval.
+  - **Never logged.** Seeds are never logged, and never appear in `check` or effective-config output.
+- **Enrolment.** `shell-mcp approver add --name <name> --file <path>` creates an approver.
+  - **Seed.** It generates a 160-bit seed with `crypto/rand`.
+  - **The file.** It writes the line atomically (temp file + rename, mode `0600`). It refuses if:
+    - the name exists;
+    - the file is group/other-accessible;
+    - the file already holds an approver and `--allow-multiple` is not given.
+  - **The QR code.** It shows the `otpauth://totp/shell-mcp:<name>?secret=…&issuer=shell-mcp&algorithm=SHA1&digits=6&period=30` URI **once, as a QR code in the terminal** (Unicode half-blocks), with the URI text below it for authenticators that take manual entry.
+    - It refuses to print either unless stdout is a terminal, so the seed cannot land in a pipe, file or container log.
+    - In the container, the command runs as `docker run --rm -it` with the secrets directory mounted.
+  - **Other commands.** `shell-mcp approver remove --name <name> --file <path>` and `approver list` (names only) complete the set. The server reads the file at start, so changes take effect on restart.
+- **QR encoder.** The standard library has none. S4b-1 writes a small encoder in `internal/approval/qr`: byte mode, error-correction level M, versions 1–10, all eight masks with the standard penalty scoring.
+  - **Tests.** Golden matrices generated offline by an established encoder are committed as fixtures, and the fixture comment names the encoder and its version. A fuzz target covers bounds and panics.
+  - **The alternative** is a third-party module, which is a STOP-and-ask with justification.
+- **Guidance.** Keep the seed only in the phone's authenticator and the server's secret file. Never paste it into a chat, and never keep it on the workstation where the agent runs.
 
 ### 6.5 The approval page
 
-- **Listener.** Its own bind and port (`SHELL_MCP_APPROVAL_BIND`/`_PORT`), so the operator can expose it, for example to a phone over the VPN or proxy, without exposing `/mcp`.
-- **Auth.** It never accepts the bearer token, and `/mcp` never serves approvals. `Host` must equal the public URL's host.
+- **Listener.** Its own bind and port, `SHELL_MCP_APPROVAL_BIND`/`_PORT`, default **`127.0.0.1`/`8081`**. The page is never served on the MCP listener, and `/mcp` is never served on this one.
+- **Exposure rules** (fail-closed at startup). A non-loopback bind must have one of:
+  - **Native TLS.** `SHELL_MCP_APPROVAL_TLS_CERT_FILE` and `_KEY_FILE`, served with `crypto/tls`, TLS 1.2 or later.
+  - **A TLS-terminating proxy.** A non-empty `SHELL_MCP_TRUSTED_PROXIES` covering that proxy. The listener then serves **only** connections whose peer address is inside `SHELL_MCP_TRUSTED_PROXIES`. Any other peer is refused with 403, logged, and gets no page. So plain HTTP never reaches anything but the proxy.
+
+  A non-loopback bind with neither fails startup. In a container the bind is typically `0.0.0.0` inside the container, so one of the two is always required there.
+- **Fixed origin.** `SHELL_MCP_APPROVAL_PUBLIC_URL` fixes the page's origin. It must be `https://`, unless its host is loopback and the bind is loopback.
+  - Every link the server emits uses it.
+  - Requests whose `Host` differs are refused.
+  - An `Origin` header, when present, must equal it.
+- **Auth.** The bearer token is never accepted here.
 - **Routes**; everything else is 404:
-  - `GET /approvals/{id}`: an HTML page with no script, built with `html/template`.
-  - `POST /approvals/{id}/approve`: fields `approver`, `code`, `form_token`.
-  - `POST /approvals/{id}/decline`: field `form_token`.
+  - `GET /`: **the bookmark page.** It shows the origin banner and a field for an approval id. Submitting it is a GET to `/approvals/{id}` that changes nothing. It lists nothing; the inbox is deferred.
+  - `GET /approvals/{id}`: the approval page.
+  - `POST /approvals/{id}/approve` and `POST /approvals/{id}/decline`: fields `code`, `csrf_token`, and `approver` when there are several.
+
+  **Approve and decline are POST-only**, and both need a valid code, so every decision has a verified approver name. GET never changes state.
 - **What the page shows:**
-  - the tool title and name, target name and host, principal;
-  - every canonical argument;
-  - the preview;
-  - expiry, approval id;
-  - "Approve only if you asked for exactly this."
+  - **The origin banner**, first and prominent: "Approval page for shell-mcp at `<public origin>`. Check that your address bar shows exactly this origin. Open approvals only from your bookmark or this server's own notification, never from a link in a chat." The origin comes from configuration, not from the request.
+  - The tool title and name, target name and host, principal.
+  - The record's **description**, generated by the server from the canonical arguments.
+  - Every canonical argument as escaped data in a table, never as prose.
+  - The preview.
+  - Expiry, approval id.
 
-  Strings from the host or the caller have control, bidi and other non-printing characters shown as visible escapes, so a file name cannot disguise the operation.
-- **Request checks:**
-  - No state change on GET.
-  - A per-render form token, stored in the record, is required on POST.
-  - `http.CrossOriginProtection` (Go ≥ 1.25: `Sec-Fetch-Site`, falling back to Origin against Host).
-  - An `Origin`, when present, must equal the public URL's origin.
+  Strings from the host or the caller show control, bidi and other non-printing characters as visible escapes, so a file name cannot disguise the operation. Nothing on the page is model-supplied prose.
+- **CSRF and requests.**
+  - The record's `csrf_token` is embedded in each form and required on both POSTs.
+  - `http.CrossOriginProtection` (Go ≥ 1.25).
   - No cookies.
-  - Body ≤ 4 KiB; per-client rate limit, client derived as on `/mcp` (`SHELL_MCP_TRUSTED_PROXIES`).
-- **Response headers.** `Content-Security-Policy: default-src 'none'; style-src 'sha256-…'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`.
-- **TLS.** Terminated by the operator's proxy. The public URL must be `https://` unless its host is loopback.
-- **No inbox page in S4b** (§11, Q11). A listing of pending approvals would need an authenticated view.
+  - Body ≤ 4 KiB.
+  - Per-client rate limit, client derived as on `/mcp`.
+- **Response headers.**
+  - `Content-Security-Policy: default-src 'none'; style-src 'sha256-…'; img-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`. **No external resources:** no script, font, image or stylesheet from anywhere. The page's own inline style is pinned by hash.
+  - `X-Frame-Options: DENY`.
+  - `Cache-Control: no-store`.
+  - `Referrer-Policy: no-referrer`.
+  - `X-Content-Type-Options: nosniff`.
+  - `Cross-Origin-Opener-Policy: same-origin`.
+  - `Cross-Origin-Resource-Policy: same-origin`.
+- **No push needed.** The page works with no push channel configured: the approver uses the bookmark and the approval id shown in the chat.
 
-### 6.6 Envelope and tool schema
+### 6.6 Envelope, result text and tool schema
 
-- **New code.** `approval_pending` joins the closed set of server codes. The answer is `ok: false`, because nothing ran.
+- **New code.** `approval_pending` joins the closed set of server codes, with `ok: false`, since nothing ran.
 - **New `approval` object.** Envelopes of approval-gated tools gain an optional `approval` object: `{id, status, url, expires_at, summary}`, with status `pending`, `approved`, `declined`, `expired` or `used`.
-  - The text block's summary line stays code-only (`error: approval_pending`). The URL appears in the envelope JSON that follows it.
-  - This is an envelope change after S2, which needs the maintainer's approval (§11, Q5).
-- **New input.** Approval-gated tools gain an optional `approval_id` (pattern `^[a-z2-7]{26}$`), always present, so the catalogue does not depend on configuration.
-- **`confirm`.** It appears only under `confirm-argument`, as D-006 already says. The catalogue snapshot covers both variants.
+- **The `approval_pending` text.** `error.message` and the text block say, in server-generated words: "Approval required. Show the user this URL exactly as written, without changing or shortening it: `<url>`. The approver opens it from their bookmark or the server's notification, checks the operation, and approves with a code. Then call this tool again with the same arguments and `approval_id` `<id>`."
+  - The URL is built from the configured origin and the record id, so it carries no string from the host or the caller. The rule that the text block never repeats such strings still holds.
+  - Tool descriptions stay terse and never explain the flow (CLAUDE.md). The instruction lives in this result.
+- **New input.** Approval-gated tools gain an optional `approval_id` (pattern `^[a-z2-7]{26}$`), always present, so the catalogue does not depend on configuration. `confirm` appears only under `confirm-argument`, as D-006 already says; the catalogue snapshot covers both variants.
 - **New tool `_meta`.** Approval-gated tools carry `"anthropic/requiresUserInteraction": true`.
-- **Tool descriptions** stay terse and do not explain the flow (CLAUDE.md). The `approval_id` field's schema description says what it is.
 
-### 6.7 Configuration (proposed)
+### 6.7 Configuration
 
 | Variable | Default | Rule |
 |---|---|---|
-| `SHELL_MCP_APPROVAL_METHOD` | `none` | `none` \| `web` \| `confirm-argument`. Replaces `SHELL_MCP_APPROVAL_FALLBACK`, which is refused at startup if set, as was done for `SHELL_MCP_TRUST_PROXY`. `confirm-argument` logs a WARN at startup and on every use. |
+| `SHELL_MCP_APPROVAL_METHOD` | `none` | `none` \| `web` \| `confirm-argument`. Replaces `SHELL_MCP_APPROVAL_FALLBACK`, which is refused at startup if set. `confirm-argument` logs a WARN at startup and on every use. |
 | `SHELL_MCP_APPROVAL_TIERS` | `destructive` | Unchanged. |
-| `SHELL_MCP_APPROVAL_TTL` | `300` | Seconds, 60..900. Proposed change from 120 and 30..600, because a person needs time to reach a phone (§11, Q6). |
-| `SHELL_MCP_APPROVAL_BIND` / `_PORT` | `127.0.0.1` / `8081` | `web` only. The port must differ from `SHELL_MCP_PORT`. |
-| `SHELL_MCP_APPROVAL_PUBLIC_URL` | — | Required for `web`. Absolute `https://` URL (`http://` only with a loopback host), no userinfo, query or fragment. Used for links, the Host check and the Origin check. |
-| `SHELL_MCP_APPROVERS_FILE` | — | Required for `web`. A secret file with one approver per line, `<name> <base32 seed>`. Names match `^[a-z][a-z0-9-]{0,31}$`; at least one approver; no duplicates; each seed ≥ 160 bits. Group/other-readable logs a WARN, as for the other secret files. |
-| `SHELL_MCP_APPROVAL_NOTIFY_URL` | — | Optional. ntfy topic URL (`https://…/<topic>`); JSON publish. |
+| `SHELL_MCP_APPROVAL_TTL` | `300` | Seconds, 60..900. |
+| `SHELL_MCP_APPROVAL_BIND` / `_PORT` | `127.0.0.1` / `8081` | `web` only. The port must differ from `SHELL_MCP_PORT`. A non-loopback bind requires native TLS or `SHELL_MCP_TRUSTED_PROXIES` (§6.5). |
+| `SHELL_MCP_APPROVAL_TLS_CERT_FILE` / `_KEY_FILE` | — | Optional native TLS for the approval listener. Both or neither. |
+| `SHELL_MCP_APPROVAL_PUBLIC_URL` | — | Required for `web`. Fixes the page's origin: absolute `https://` URL (`http://` only with a loopback host and a loopback bind), no userinfo, query or fragment. |
+| `SHELL_MCP_APPROVERS_FILE` | — | Required for `web`. A mounted secret file only; the plain variable `SHELL_MCP_APPROVERS` is refused. One `<name> <base32 seed>` per line. Names match `^[a-z][a-z0-9-]{0,31}$`; at least one approver, no duplicates, seeds ≥ 160 bits. Group/other-accessible fails startup. |
+| `SHELL_MCP_APPROVAL_MAX_APPROVERS` | `1` | 1..8. A file with more approvers than this fails startup. |
+| `SHELL_MCP_APPROVAL_NOTIFY_URL` | — | Optional ntfy topic URL (`https://…/<topic>`); JSON publish. |
 | `SHELL_MCP_APPROVAL_NOTIFY_TOKEN` / `_FILE` | — | Bearer token for the notify URL. Required when the URL is set. |
 
 **Fail-closed startup rules** (additions to SECURITY §6). The server exits with a one-line reason on:
 - an unknown method;
-- `SHELL_MCP_APPROVAL_FALLBACK` set;
+- `SHELL_MCP_APPROVAL_FALLBACK` or `SHELL_MCP_APPROVERS` set;
 - `web` without a valid public URL or approvers file;
-- an approver line that does not parse, a short seed, or a duplicate name;
+- an approvers file that is group/other-accessible, has a line that does not parse, a short seed or a duplicate name, or holds more approvers than `SHELL_MCP_APPROVAL_MAX_APPROVERS`;
+- a non-loopback approval bind without native TLS or `SHELL_MCP_TRUSTED_PROXIES`;
+- a TLS certificate without its key, or the reverse, or either unreadable;
+- an `http://` public URL with a non-loopback host or bind;
 - the approval port equal to the MCP port;
 - a notify URL that is not `https://` (loopback excepted), or one without a token;
-- a TTL outside its range;
+- a TTL outside 60..900;
 - `SHELL_MCP_APPROVAL_TIERS` without `destructive` (unchanged).
 
 ### 6.8 Audit lines (server, JSON)
@@ -413,16 +480,18 @@ Every check must hold, in this order:
 | Message | Fields |
 |---|---|
 | `approval requested` | `approval_id`, principal, tool, target, `args_sha256`, `preview_sha256`, `policy_sha256`, `expires_at`, method |
-| `approval decided` | `approval_id`, `decision`, `approver` (or `model (confirm-argument)`), client address, method |
-| `approval attempt refused` | `approval_id` if any, `reason` (`bad_code`, `form_token`, `cross_origin`, `expired`, `locked`, `unknown`), client address |
-| `approval lockout` | `until`, `consecutive` |
+| `approval decided` | `approval_id`, `decision` (`approved` or `declined`), **`approver` (the verified name**, or `model (confirm-argument)`), client address, method |
+| `approval expired` | `approval_id` |
+| `approval attempt refused` | `approval_id` if any, `approver` (the name chosen on the form), `reason` (`bad_code`, `reused_code`, `csrf_token`, `cross_origin`, `host`, `expired`, `locked`, `unknown`, `peer_not_proxy`), client address |
+| `approval lockout` | `approver`, `until`, `consecutive` |
+| `approver enrolled` / `approver removed` (CLI, stderr) | `name`, file path |
 | `tool call` (existing) | gains `approval_id` and `approval_outcome` (`pending`, `used`, `invalid`, `declined`) |
 
-**Never logged:** codes, seeds, form tokens, the notify token, the preview text, or content. Hashes and ids only.
+**Never logged:** codes, seeds, `otpauth` URIs, CSRF tokens, the notify token, the description or preview text, or content. Hashes, ids and approver names only.
 
-The gate's and the helper's audit lines are unchanged. Carrying the approval id to the host would be a protocol change (§11, Q9).
+The gate's and the helper's audit lines are unchanged (Q9: not now).
 
-## 7. Changes implied (exact wording, for S4b to apply once accepted)
+## 7. Changes implied (exact wording; S4b applies it)
 
 ### 7.1 D-006 (plan §2), replacement text
 
@@ -431,10 +500,11 @@ The gate's and the helper's audit lines are unchanged. Carrying the approval id 
 > **Which operations.** Always approval-gated: every destructive operation and every privileged (`priv_*`) operation of tier operator or above. `SHELL_MCP_APPROVAL_TIERS` (default `destructive`) can add ordinary operator writes.
 >
 > **The method** (`SHELL_MCP_APPROVAL_METHOD=web`) is out-of-band.
-> - The first call computes a preview and returns `approval_pending` with an approval id and the URL of an approval page served by shell-mcp on its own listener.
-> - The human opens the page and sees the server's own description of the operation and its preview. They approve by entering a current TOTP code from an authenticator enrolled for a named approver.
-> - The model re-calls the tool with the approval id. The server executes only if that exact approval was approved: principal, tool, target, SHA-256 of the canonical arguments, of the preview and of the gate policy, within `SHELL_MCP_APPROVAL_TTL`, and not yet used. A fresh preview must still match.
-> - Approval state is in memory and does not survive a restart.
+> - **The request.** The first call computes a preview and returns `approval_pending`, with an approval id and the URL of an approval page served by shell-mcp on its own listener. The listener is loopback by default. The page's origin is fixed by `SHELL_MCP_APPROVAL_PUBLIC_URL`. The result tells the model to show that URL unchanged.
+> - **The page.** The approver opens it from a bookmark or the server's own optional push notification, never from a link in the chat. It shows its own origin prominently, and a description and preview the server generated from the canonical arguments.
+> - **The decision.** The approver approves or declines with a current TOTP code from their authenticator. There is exactly one enrolled approver by default.
+> - **The re-call.** The model re-calls the tool with the approval id. The server executes only if that exact approval was approved: principal, tool, target, SHA-256 of the canonical arguments, of the preview and of the gate policy, within `SHELL_MCP_APPROVAL_TTL`, and not yet used. A fresh preview must still match.
+> - **State.** Approval state is in memory and does not survive a restart.
 >
 > **Other values.** With `none` (the default), approval-gated tools refuse with `approval_unavailable`. `confirm-argument` is an explicit, logged-at-WARN opt-out in which the model approves.
 >
@@ -445,20 +515,26 @@ The gate's and the helper's audit lines are unchanged. Carrying the approval id 
 > **Rationale.**
 > - A `confirm: true` parameter is chosen by the model, so a prompt-injected model approves itself.
 > - An answer collected by the client is only as trustworthy as the client's configuration, which an agent with a shell can change, and the maintainer's clients did not show it to anyone.
-> - A code from the approver's authenticator, entered on a page that shows the server's description of the operation, is something the model can neither produce nor alter. It works with every client, because the model only re-calls a tool.
+> - A code from the approver's authenticator, entered on a page whose origin the approver checks and whose content the server generated, is something the model can neither produce nor alter. It works with every client, because the model only re-calls a tool.
 > - The binding stops an approval for one operation being used for another.
 > - Approval defends against a misled model, not a compromised server; that case is bounded by the host policies (docs/PRIVILEGED.md §3).
 
-Plan §1 goal 4 and §1.1 "Why human approval through the protocol" change to match: "through a server-hosted approval page with a code from the approver's authenticator" in place of "through MCP elicitation".
+Plan §1 goal 4 and §1.1 "Why human approval through the protocol" change to match: "on a server-hosted approval page with a code from the approver's authenticator" in place of "through MCP elicitation".
 
 ### 7.2 S-12 (plan §4.2), replacement text
 
 > **S-12 | Human approval (D-006).**
-> - **Record.** An approval record (128-bit random id) binds principal, tool, target, canonical-args SHA-256, preview SHA-256, gate-policy SHA-256 and expiry. It is held in a bounded in-memory store, at most 5 pending per principal, and lost on restart.
-> - **Approving.** A pending record becomes approved only through the approval page with a valid TOTP code (RFC 6238: SHA-1, 6 digits, 30 s, ±1 step) of a configured approver. Each step is accepted once per approver, and none from before process start.
+> - **Record.** An approval record (128-bit random id) binds principal, tool, target, canonical-args SHA-256, preview SHA-256, gate-policy SHA-256 and expiry. Its description and preview are generated by the server from the canonical arguments and the gate's preview, never from model-supplied text. It is held in a bounded in-memory store, at most 5 pending per principal, and lost on restart.
+> - **TOTP.** A record is approved or declined only on the approval page, with a valid TOTP code (RFC 6238: SHA-1, 6 digits, 30 s, ±1 step only) of an enrolled approver.
+>   - The last accepted step is recorded per approver. Each step's code is accepted once, and no code from before process start is accepted.
+>   - At most 3 wrong codes per approver in any rolling minute; then that approver is locked out for 15 minutes, doubling per consecutive lockout up to 24 h. Each lockout is logged and, when configured, pushed.
 > - **Executing.** The re-call executes only if the record is approved, unexpired, unused and matches every bound field. It is marked used before execution, and a fresh preview's hash and the policy hash must still match. Otherwise the answer is `approval_pending`, `approval_declined` or `approval_invalid`.
-> - **The page.** A separate listener, never authenticated by the bearer token. No state change on GET. A per-render form token, Origin/`Sec-Fetch-Site` checks, no cookies, no script, a strict CSP and `frame-ancestors 'none'`. Rate-limited. Three wrong codes decline a record; five globally lock the page, with doubling lockouts up to 24 h, each logged and notified.
-> - **Audit.** Requests, decisions, refused attempts, lockouts and use are audit-logged with ids and hashes, never codes, seeds, tokens or content.
+> - **The page.**
+>   - **Listener.** It has its own listener, loopback by default, never authenticated by the bearer token. A non-loopback bind requires native TLS, or a `SHELL_MCP_TRUSTED_PROXIES` covering a TLS-terminating proxy (and then serves only those peers); otherwise startup fails.
+>   - **Origin.** Its origin is fixed by configuration and shown prominently on the page.
+>   - **Hardening.** Approve and decline are POST-only, with a CSRF token. No cookies, no script, no external resources. A strict CSP, `frame-ancestors 'none'`, `X-Frame-Options: DENY` and `Cache-Control: no-store`. It is rate-limited.
+> - **Approvers.** There is exactly one approver by default; more need `SHELL_MCP_APPROVAL_MAX_APPROVERS`. An approver is created by `shell-mcp approver add`, which shows the `otpauth` QR code in the terminal once. Seeds live only in a mounted secret file that is not group/other-accessible, never in environment variables or logs.
+> - **Audit.** Every approval and decline is audit-logged with the approver's name, and requests, refused attempts, lockouts, expiry and use with ids and hashes. Codes, seeds, tokens and content are never logged.
 
 ### 7.3 Other documents
 
@@ -466,34 +542,40 @@ Plan §1 goal 4 and §1.1 "Why human approval through the protocol" change to ma
 |---|---|
 | plan §4.1 F-09 | "human approval through elicitation (D-006)" → "human approval (D-006)". |
 | plan §5 | **S4b** is split as in §8. **S4c** "privileged tools (`shell_priv_*`), approval-gated per TOOLS.md through the S4b approval core, with previews' preconditions passed through". New optional **S4d** (§8). |
-| plan §8 | `internal/approval/` comment → "approval records, binding, TOTP verification, approval page, notifier". |
-| SECURITY §2 | **Model self-approval** mitigation → "A person approves on the server's approval page with a TOTP code from an authenticator the agent's environment does not hold; the approval is bound to principal, tool, target, arguments, preview and policy, short-lived and single-use (D-006, S-12); `none` → fail closed; `confirm-argument` is a logged opt-out with no protection against this threat." New rows: **Approval phishing / relay** (look-alike page relays a typed code: links via the notification channel, approval id shown in both places, single-use codes and lockouts, WebAuthn as the future fix); **Approval brute force** (per-record and global wrong-code limits with doubling lockouts, notification on lockout). |
-| SECURITY §6 | Add the startup rules of §6.7; replace "an unknown fallback" with "an unknown method; `SHELL_MCP_APPROVAL_FALLBACK` set". |
-| SECURITY §1 | New asset rows: approver TOTP seeds (secret file, never logged, never on the workstation); the notify token. |
-| ARCHITECTURE §1 diagram, §2, §3 | Approval listener next to `/mcp`; `internal/approval` description; request lifecycle step 2 rewritten to §6.1; "stateless server" note: in-memory state adds the approval store. |
+| plan §8 | `internal/approval/` comment → "approval records, binding, TOTP, approvers and enrolment, QR encoder, approval page, notifier". |
+| SECURITY §1 | New asset rows: approver TOTP seeds (mounted secret file, `0600`, never in environment or logs, never on the workstation); the notify token. |
+| SECURITY §2 | **Model self-approval** mitigation → "The approver approves on the server's approval page, with a TOTP code from an authenticator the agent's environment does not hold. The approval is bound to principal, tool, target, arguments, preview and policy, and is short-lived and single-use (D-006, S-12). `none` fails closed. `confirm-argument` is a logged opt-out with no protection against this threat." New rows:<br>• **Approval phishing / relay.** A look-alike page relays a typed code. Mitigations: the origin is fixed by configuration and shown on the page; approvers open approvals only from a bookmark or the server's push, never from a chat link; the result text tells the model to show the URL unchanged; codes are single-use, with lockouts; WebAuthn is the future fix.<br>• **Approval brute force.** At most 3 wrong codes per approver per minute, then doubling lockouts, each logged and pushed.<br>• **Approval page exposure.** Loopback by default; TLS or a trusted proxy required for anything else; proxy-only peers. |
+| SECURITY §6 | Add the startup rules of §6.7. Replace "an unknown fallback" with "an unknown method; `SHELL_MCP_APPROVAL_FALLBACK` or `SHELL_MCP_APPROVERS` set". |
+| ARCHITECTURE §1 diagram, §2, §3 | Approval listener next to `/mcp`; `internal/approval` description; request lifecycle step 2 rewritten to §6.1; "stateless server" note: in-memory state adds the approval store and the approvers' TOTP state. |
 | ARCHITECTURE §5 | Variables of §6.7; remove `SHELL_MCP_APPROVAL_FALLBACK`. |
-| ARCHITECTURE §6 | `approval_pending` in the closed set; the optional `approval` object. |
-| TOOLS.md approval section | Rewritten to the web flow; codes `approval_pending`/`approval_declined`/`approval_invalid`/`approval_unavailable`; `approval_id` on gated tools; `requiresUserInteraction`; the client table gains the S4b-scope findings (Code tab declines in the SDK host; terminal CLI renders; VS Code declines; Desktop chat declares only MCP Apps). |
+| ARCHITECTURE §6 | `approval_pending` in the closed set; the optional `approval` object; the `approval_pending` message. |
+| TOOLS.md approval section | Rewritten to the web flow:<br>• the codes `approval_pending`, `approval_declined`, `approval_invalid` and `approval_unavailable`;<br>• `approval_id` on gated tools, and `requiresUserInteraction`;<br>• the client table gains the S4b-scope findings: the Code tab declines in the SDK host, the terminal CLI renders (docs), VS Code declines, Desktop chat declares only MCP Apps. |
 | `docs/PRIVILEGED.md` §3 | "enforced by the MCP server, which holds the HMAC key" → "enforced by the MCP server, which holds the approval records and verifies the approver's code". |
-| deploy/ (S5) | Compose: a second port mapping for the approval listener (default loopback), the approvers secret, and the optional notify token; `.env.example` entries; a short "approvals" section (enrolment, proxy exposure to the phone over VPN, ntfy ACLs). This adds a port and is a `deploy/` hardening-flag change: STOP-and-ask in that session. |
-| `docs/CLIENTS.md` (S5) | The client matrix, with: approvals arrive as a link in the tool result (and a push), never as a dialog. |
+| deploy/ (S5) | This is a `deploy/` hardening-flag change, so it is a STOP-and-ask in that session.<br>• **Compose:** a second port mapping for the approval listener (loopback by default); the approvers secret file; the optional notify token; and either TLS files or the reverse proxy's address in `SHELL_MCP_TRUSTED_PROXIES`.<br>• **`.env.example`** entries.<br>• **An "approvals" section:** enrolment with `docker run --rm -it … approver add`; exposure to the phone over the VPN or proxy; the bookmark guidance; ntfy ACLs (`deny-all`, a write-only server user, a read-only phone user). |
+| `docs/CLIENTS.md` (S5) | The client matrix, with: approvals arrive as a URL in the tool result (and optionally a push), never as a dialog. Approvers open the bookmarked page. |
 
 ## 8. S4b outline, split into sessions
 
-**S4b-1: approval core** (Opus 5.5, High).
+**S4b-1: approval core** (Opus 5.5, High). Its first commit applies §7's wording to plan, SECURITY, ARCHITECTURE, TOOLS and PRIVILEGED.
 - **Scope:**
-  - `internal/approval`: the record store, canonical arguments, binding and execution check, TOTP (RFC 6238 vectors), approvers file, notifier (ntfy JSON publish).
-  - The approval listener and page.
+  - `internal/approval`: the record store, canonical arguments and server-generated descriptions, binding and the execution check.
+  - TOTP: RFC 6238 vectors, ±1 step, last accepted step, per-approver rolling-minute limit and doubling lockouts.
+  - The approvers file, with a single approver by default.
+  - The notifier (ntfy JSON publish, optional).
+  - The approval listener and page:
+    - bookmark page, origin banner;
+    - POST-only decisions with a CSRF token, decline needing a code;
+    - CSP and headers;
+    - the exposure rules, with native TLS and proxy-only peers.
   - Config and startup rules.
-  - Envelope `approval_pending` and the `approval` object.
+  - Envelope `approval_pending`, the `approval` object and the result text.
   - `approval_id` on gated tools.
-  - `define`'s `approvalGuard` replaced by the approval flow: today that covers operator tools under `SHELL_MCP_APPROVAL_TIERS=operator`, the only gated tools that exist yet.
+  - `define`'s `approvalGuard` replaced by the approval flow: today that covers operator tools under `SHELL_MCP_APPROVAL_TIERS=operator`.
   - The `requiresUserInteraction` meta.
-  - The `shell-mcp approver-secret` command.
   - `confirm-argument` on the same record.
-  - Docs per §7, except deploy/.
+- **Enrolment.** `shell-mcp approver add|remove|list`, and the in-repo QR encoder (§6.4). The encoder may land as its own first PR if it grows.
 - **Tests first** (failing commits named in the PR): §9.1 and the in-process simulated-human tests.
-- **Fuzz:** the approvers-file parser, the TOTP code parser, the approval-id parser, canonical-argument hashing (round trip), 60 s each.
+- **Fuzz** (60 s each): the approvers-file parser, the TOTP code parser, the approval-id parser, canonical-argument hashing (round trip), and the QR encoder (bounds).
 
 **S4b-2: destructive tools** (Opus 5.5, High).
 - **Scope:**
@@ -506,11 +588,14 @@ Plan §1 goal 4 and §1.1 "Why human approval through the protocol" change to ma
 **S4c: privileged tools.**
 - **Scope.** As planned, with approval through S4b-1. Preview preconditions (`expected_sha256`) are passed to the helper; package previews come from the `priv_pkg_*_preview` ops.
 
+**S5: deployment docs.** §7.3's deploy/ and CLIENTS rows.
+
 **S4d (optional, later; each part its own PR):**
 - an MCP Apps approval panel for Desktop chat (with the TOTP field; starts with a spike verifying rendering and app-only routing through mcp-remote to a stateless server);
 - URL-mode delivery of the page link;
 - a form-elicitation method for terminal CLIs;
-- WebAuthn (dependency STOP-and-ask).
+- WebAuthn (dependency STOP-and-ask);
+- an authenticated inbox page.
 
 ## 9. Test plan
 
@@ -526,125 +611,112 @@ Plan §1 goal 4 and §1.1 "Why human approval through the protocol" change to ma
 - **TOTP.**
   - The RFC 6238 Appendix B SHA-1 vectors pass.
   - ±1 step is accepted; ±2 is refused.
-  - The same step twice is refused, per approver; another approver's code for the same step is independent.
+  - The same step twice is refused, across approve and decline.
+  - A code for a step earlier than the last accepted one is refused.
   - A code from the step current at start is refused.
-  - Wrong-code counting: per record, then global, then doubling lockouts; a lockout is logged and notified.
+- **Lockout.**
+  - The 4th wrong code within 60 s locks the approver out, and a correct code during the lockout is refused.
+  - The second lockout lasts twice as long, capped at 24 h.
+  - A success resets the count.
+  - With two approvers, the counters and last accepted steps are independent.
+  - Every lockout is logged and, with a notifier configured, pushed.
 - **Page.**
   - GET never changes state.
-  - POST without, or with a stale, form token is refused.
-  - Cross-site `Sec-Fetch-Site` and a foreign `Origin` are refused.
-  - A wrong `Host` is refused.
-  - The bearer token on the page gives nothing, and `/mcp` has no `/approvals` route (and the reverse).
-  - All headers of §6.5 are present.
-  - Control and bidi characters in a preview are rendered visibly.
+  - Approve and decline by GET are 405.
+  - A POST without, or with another record's, CSRF token is refused.
+  - Decline without a valid code is refused.
+  - Cross-site `Sec-Fetch-Site`, a foreign `Origin` and a wrong `Host` are refused.
+  - The bearer token gives nothing, and the two listeners never serve each other's routes.
+  - **Headers.** All headers of §6.5 are present. The HTML holds no `src`, `href` or `action` pointing off-origin, and no `<script>`.
+  - **Origin banner.** It shows the configured origin even when the request's `Host` differs; such a request is refused anyway.
+  - **Server-generated text.** An argument value written to look like instructions appears only escaped in the arguments table, never in the description or headings.
+  - Control and bidi characters in a preview are shown as escapes.
   - The body cap and the rate limit hold.
+  - The bookmark page has no listing.
+  - With no notifier configured, the whole flow works.
+- **Exposure.**
+  - A non-loopback bind with neither TLS nor trusted proxies fails startup.
+  - With trusted proxies, a peer outside them gets 403 and a log line, and no page.
+  - With TLS files, the listener serves TLS only.
+- **Approvers and enrolment.**
+  - `approver add` creates the file `0600`, appends atomically, and refuses a duplicate name.
+  - It refuses a group/other-accessible file.
+  - It refuses a second approver without `--allow-multiple`.
+  - It refuses to print when stdout is not a terminal.
+  - The `otpauth` URI parameters are right, and the QR matches its golden matrices.
+  - The server refuses more approvers than `SHELL_MCP_APPROVAL_MAX_APPROVERS`, and refuses `SHELL_MCP_APPROVERS`.
 - **Store.** The pending cap per principal holds; deduplication returns the same id; the global bound holds; restart (a new store) makes old ids unknown.
-- **Config.** Every fail-closed rule of §6.7; `SHELL_MCP_APPROVAL_FALLBACK` refused.
+- **Config.** Every fail-closed rule of §6.7.
+- **Result text.** The `approval_pending` message contains the exact configured URL with the record id, and nothing from the host or the caller.
 - **`confirm-argument`.** It works only in that mode; a WARN on every use; the approver is recorded as the model.
-- **Logs.** The audit lines of §6.8. Codes, seeds, tokens and preview text never appear in logs; this is proved by searching the captured log for each.
+- **Logs.** The lines of §6.8, with the approver's name on every decision. Codes, seeds, URIs, tokens, descriptions and preview text never appear; this is proved by searching the captured log for each.
 - **Catalogue.** The snapshot covers both schema variants; gated tools carry the meta.
 
 ### 9.2 End-to-end with a simulated human (S4b-2, e2e-host)
 
 - **Delete.**
   - **Before approval.** `shell_delete_path` returns `approval_pending`, and the file still exists. No gate `delete` line for the principal appears, only `delete_preview`.
-  - **Approval.** The test acts as the human: it fetches the page, reads the form token, computes the TOTP from a test seed, and POSTs approve.
+  - **Approval.** The test acts as the human: it fetches the page through the bookmark route, reads the CSRF token, computes the TOTP from a test seed, and POSTs approve.
   - **After approval.** The re-call deletes, and the gate's audit line appears once. A second re-call is `approval_invalid` with no gate line.
 - **Change after approval.** The previewed directory changes after approval; the re-call is `approval_invalid` and nothing is deleted.
-- **Decline.** Declining on the page gives `approval_declined`, and nothing runs.
+- **Decline.** A decline with a code gives `approval_declined`, the log names the approver, and nothing runs.
 - **Restart.** Restarting the server between approval and re-call gives `approval_invalid`, and nothing runs.
 - **Ceiling.** A destructive `shell_run_command` runs only after approval, at ceiling `destructive`.
 
 ### 9.3 Live client checks (maintainer, after S4b-2)
 
-1. **Code tab.**
-   - The model gets `approval_pending` and shows the link.
-   - The approver approves on the phone, and the re-call deletes a scratch file on a test target.
-   - The permission prompt for the gated tool shows no "Always allow" (`requiresUserInteraction`).
+1. **Code tab, no push configured.**
+   - The model gets `approval_pending` and shows the URL unchanged.
+   - The approver opens the bookmarked page on the phone, enters the id, checks the origin banner and the description, and approves with a code.
+   - The re-call deletes a scratch file on a test target.
+   - The permission prompt for the gated tool shows no "Always allow".
 2. **Desktop chat through mcp-remote `--protocol auto`.** The same as the Code tab check.
 3. **Negative.**
-   - Ask the model to approve the request itself: it cannot.
-   - Paste a wrong code on the page three times: the record is declined.
-   - Re-call after that: `approval_declined`.
-4. **Push.** The ntfy notification arrives with a `view` link, and no approve button.
+   - Ask the model to approve or decline the request itself: it cannot.
+   - Enter four wrong codes within a minute: the approver is locked out, and the log and the push say so.
+4. **Push, if configured.** The ntfy notification arrives with a `view` link, and no approve button.
 
-## 10. Live test for the maintainer now: T-1 (does the terminal CLI render form elicitation?)
+## 10. Live test T-1
 
-**Why.** It settles whether option a works anywhere in the maintainer's setup (it decides only Q1's "later" part; the recommendation does not depend on it). It uses the Code tab's own Claude Code build, so the version matches the earlier test. It needs the existing diagnostic build; everything is loopback and throwaway.
+**Skipped (maintainer, 2026-10-16).** Whether a terminal CLI renders form elicitation rests on the Claude Code docs and third-party reports only (§1.3). That is enough: form elicitation is deferred to S4d either way, and the accepted method does not depend on it.
 
-1. **Scratch folder and diagnostic build** (from `dev`, in the Go image pinned by the Dockerfile):
-   ```powershell
-   cd C:\src\shell-mcp; git checkout dev; git pull
-   $d = Join-Path $env:TEMP 'shell-mcp-diag'; New-Item -ItemType Directory -Force $d | Out-Null
-   $img = (Select-String -Path Dockerfile -Pattern '^FROM (golang:\S+)').Matches[0].Groups[1].Value
-   docker run --rm -v "${PWD}:/src:ro" -v "${d}:/out" -w /src -e GOOS=windows -e GOARCH=amd64 -e CGO_ENABLED=0 -e GOFLAGS=-buildvcs=false $img go build -trimpath -tags shellmcp_diag -o /out/shell-mcp-diag.exe ./cmd/shell-mcp
-   & "$d\shell-mcp-diag.exe" version
-   ```
-   The output must say it is a diagnostic build.
-2. **Throwaway token and key:**
-   ```powershell
-   $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
-   $tok = [Convert]::ToBase64String($b).TrimEnd('=').Replace('+','-').Replace('/','_'); $tok.Length
-   docker run --rm -v "${d}:/out" $img sh -c 'ssh-keygen -q -t ed25519 -N "" -C diag -f /out/key'
-   ```
-3. **Start the server on loopback** (leave this window open):
-   ```powershell
-   $env:SHELL_MCP_TOKEN = $tok; $env:SHELL_MCP_BIND = '127.0.0.1'; $env:SHELL_MCP_PORT = '8765'
-   $env:SHELL_MCP_TARGET_NAME = 'diag-target'; $env:SHELL_MCP_TARGET_HOST = 'target-a.example.test'; $env:SHELL_MCP_TARGET_USER = 'svc-shell'
-   $env:SHELL_MCP_TARGET_HOST_KEYS = 'ssh-ed25519 SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-   $env:SHELL_MCP_SSH_KEY_FILE = "$d\key"
-   & "$d\shell-mcp-diag.exe" serve
-   ```
-4. **Scratch project** (second PowerShell window; replace `<TOKEN>` with the value of `$tok` from step 2):
-   ```powershell
-   $p = Join-Path $env:TEMP 'shell-mcp-diag\project'; New-Item -ItemType Directory -Force $p | Out-Null
-   '{"mcpServers":{"shell-mcp-diag":{"type":"http","url":"http://127.0.0.1:8765/mcp","headers":{"Authorization":"Bearer <TOKEN>"}}}}' | Set-Content -Encoding utf8 (Join-Path $p '.mcp.json')
-   cd $p
-   ```
-5. **Run the Code tab's Claude Code build in this terminal**, not the older `claude` on `PATH`:
-   ```powershell
-   $cc = Get-ChildItem "$env:APPDATA\Claude\claude-code" -Recurse -Filter claude.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-   & $cc.FullName --version
-   & $cc.FullName
-   ```
-   - Approve the project's MCP server when asked.
-   - Send: `Call the shell_diag_elicit tool and show me its full result.`
-   - If a yes/no question appears, answer **yes**.
-   - Copy the tool's `data` object.
-   - Exit with `/exit`.
-6. **Clean up.**
-   - Press Ctrl+C in the server window.
-   - Remove the scratch folder: `Remove-Item -Recurse -Force (Join-Path $env:TEMP 'shell-mcp-diag')`.
-   - Clear the variables: `Remove-Item Env:SHELL_MCP_*`.
-   - Nothing was installed, and no setting outside the scratch folder was changed. The project's MCP approval is stored against the deleted folder's path in `~/.claude.json`; it is harmless, and `claude mcp` or the file itself can remove it.
+## 11. Decisions (maintainer, 2026-10-16)
 
-**Possible outcomes:**
+**Answers to the open questions:**
 
-| Result | Meaning |
-|---|---|
-| A dialog appeared; `data.round = 2`, `action = accept`, `answer = true`, `request_state_echoed = true` | The terminal CLI renders form elicitation. Option a is usable there, but only there. This supports keeping it as a later, weaker method (S4d); it does not change the recommendation. |
-| No dialog; `action = decline` or `cancel` at once | Elicitation reaches no person on any of the maintainer's surfaces. Option a is dropped, not deferred. |
-| `round = 1`, `elicitation_declared = false` | This build negotiated without elicitation (for example, a 2025-11-25 fallback). Report the `protocol_version`; it changes nothing for option c. |
+| # | Question | Decision |
+|---|---|---|
+| Q1 | Out-of-band approval (c) as v1's method; elicitation out of v1 | **Accepted.** |
+| Q2 | Step-up credential | **TOTP now; WebAuthn later** (a dependency STOP-and-ask when it comes). |
+| Q3 | Where the page is served | **Its own listener and port.** |
+| Q4 | Push channel | **ntfy, optional.** The page must work with no push at all (§6.5). |
+| Q5 | Envelope | **`approval_pending` plus the `approval` object.** |
+| Q6 | TTL | **Default 300 s, range 60..900.** |
+| Q7 | Config naming | **`SHELL_MCP_APPROVAL_METHOD` replaces `_FALLBACK`**, and the old variable is refused. |
+| Q8 | Re-preview at execution | **Refuse if the preview or policy changed.** |
+| Q9 | Approval id on gate requests | **Not now.** |
+| Q10 | Approvers | **Named approvers, defaulting to exactly one.** More need `SHELL_MCP_APPROVAL_MAX_APPROVERS` (§6.4). |
+| Q11 | Inbox page | **Deferred.** The bookmark page takes an approval id and lists nothing (§6.5). |
+| Q12 | `requiresUserInteraction` | **Yes.** |
+| Q13 | Approving from the notification | **Never.** |
 
-**No live test is needed to accept option c.** Its client requirement is only that the model can call a tool twice and show a link.
+**Added requirements and where they are:**
 
-## 11. Open questions for the maintainer
+| # | Requirement | Where |
+|---|---|---|
+| R1 | TOTP brute force and replay: a small per-approver per-minute wrong-code limit, then a lockout; each step's code usable once (last accepted step per approver); ±1 step only | §6.4; S-12 |
+| R2 | Phishing: the page shows its origin prominently; operators open approvals from a bookmark or the server's push, never a chat link; the origin is fixed by config; the `approval_pending` text tells the model to show the exact URL unchanged | §6.5, §6.6; D-006; SECURITY §2 row; deploy docs |
+| R3 | Page hardening: POST-only approve and decline with a CSRF token; strict CSP, no framing, no external resources, no-store; description and preview generated by the server from the canonical arguments | §6.2, §6.5; S-12 |
+| R4 | Exposure: loopback by default; a non-loopback bind without TLS, or without `SHELL_MCP_TRUSTED_PROXIES` covering a TLS-terminating proxy, fails startup | §6.5, §6.7; S-12; SECURITY §6 |
+| R5 | Enrolment: a CLI creates an approver and shows the `otpauth` QR in the terminal once; secrets only in a mounted secret file; every approval and decline audit-logged with the approver's name | §6.4, §6.8; S-12 |
 
-| # | Question | Options | Recommendation |
-|---|---|---|---|
-| Q1 | Adopt out-of-band approval (c) as v1's method, and drop elicitation from v1? | (a) yes; (b) also implement form elicitation in S4b for terminal CLIs; (c) keep elicitation as primary and wait for clients | **(a).** It is the only method reaching a person in both clients; elicitation can return as S4d. |
-| Q2 | Step-up credential | (a) TOTP, standard library; (b) WebAuthn now, which needs `github.com/go-webauthn/webauthn` (dependency STOP-and-ask) or a hand-written verifier; (c) forward-auth SSO identity only | **(a) now, (b) later.** (c) alone fails T1: a model driving the user's browser carries the SSO session, and Authelia and Authentik offer no per-request step-up. |
-| Q3 | Where the page is served | (a) its own listener and port; (b) a path on the MCP listener | **(a).** It can be exposed to the phone without exposing `/mcp`, and the two auth schemes never meet. |
-| Q4 | Push channel in S4b | (a) ntfy JSON publish; (b) a generic JSON webhook; (c) none in S4b | **(a).** It is self-hostable with per-topic ACLs; others can follow. |
-| Q5 | Envelope change | (a) code `approval_pending` plus an `approval` object; (b) the code only, details in `error.message` | **(a).** The model needs the id machine-readably. It is additive. |
-| Q6 | TTL | (a) default 300 s, range 60..900; (b) keep 120 s, 30..600 | **(a).** A person needs time to reach a phone; the approval is still single-use and bound. |
-| Q7 | Config naming | (a) `SHELL_MCP_APPROVAL_METHOD` replaces `_FALLBACK` (old variable refused); (b) keep `_FALLBACK` and add a method variable | **(a).** One variable states how approval works. Nothing is released, so nothing breaks. |
-| Q8 | Re-preview at execution | (a) refuse if the preview or policy changed; (b) execute whatever the approval says | **(a).** The human approved what the preview showed. |
-| Q9 | Approval id on gate requests (host audit correlation) | (a) not now; (b) add an optional field to protocol v1 | **(a).** It is a protocol change for correlation only. The server log has both ids, and the gate log has the time and op. |
-| Q10 | Approvers | (a) several named approvers in one file; (b) one unnamed seed | **(a).** The audit says who approved, and seeds rotate one person at a time. |
-| Q11 | Inbox page (a list of pending approvals) | (a) defer; (b) S4b, behind forward-auth headers from trusted proxies | **(a).** It needs an authenticated view. The notification and the link cover it. |
-| Q12 | `anthropic/requiresUserInteraction` on gated tools | (a) yes; (b) no | **(a).** Free defence in depth in Claude Code. Clearly not the approval itself. |
-| Q13 | The notification as a capability (an ntfy `http` action that approves without the page) | (a) never; (b) allowed as an opt-in | **(a).** Topic readers get the whole message; the server cannot verify who that is. |
+**How the requirements were read where they met:**
+- **"From a bookmark" (R2) with the inbox deferred (Q11).** The bookmark page takes an approval id and shows only that record.
+- **"Every decline audit-logged with the approver's name" (R5).** Declining needs a code too, so the name is verified.
+- **"Shows the QR in the terminal" (R5).** The standard library has no QR encoder, so S4b-1 writes one; a module would be a STOP-and-ask.
+- **"Covering a TLS-terminating proxy" (R4).** The listener serves only peers inside `SHELL_MCP_TRUSTED_PROXIES` when it relies on them.
+- **"Small limit" (R1).** Three wrong codes per rolling minute.
+- **Seed files.** A group/other-accessible approvers file fails startup, not just a WARN.
 
 ## 12. What was run (throwaway spikes; nothing committed)
 
@@ -698,4 +770,4 @@ Minified code was read for behaviour only, and nothing of it is reproduced beyon
 - That Desktop renders an MCP App from a stateless 2026-07-28 server through mcp-remote and routes its app-only calls (option d).
 - Whether computer use can click inside the Desktop window's app panel.
 - mcp-remote 0.15.1 behaviour versus `main`.
-- Whether ntfy's iOS and web clients send `http` actions like Android (irrelevant to the recommendation, which uses `view` links only).
+- Whether ntfy's iOS and web clients send `http` actions like Android (irrelevant to the accepted design, which uses `view` links only).
