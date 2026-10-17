@@ -582,6 +582,7 @@ Plan §1 goal 4 and §1.1 "Why human approval through the protocol" change to ma
   - `shell_preview_delete` and `shell_preview_git_discard` (read tier).
   - `shell_delete_path` and `shell_discard_git_changes`.
   - `shell_run_command`'s admin registration at `destructive`, approval-gated.
+  - **A read-tier gate op `exec_preview`** (maintainer decision during S4b-1b): the command's template matched and its path placeholders resolved on the target, returning the resolved binary path and argv without running anything. `shell_run_command`'s preview, operator and destructive, switches to it. Until then (S4b-1b) the preview is built from the `policy` op only: command id, tier, description, `root_equivalent`, the matched template and the args as given, with no binary path and path placeholders shown as given; the approval is still bound to the gate's policy hash, so a changed binary for that id invalidates it.
   - Execution with fresh-preview comparison.
   - e2e-host with a simulated human (§9.2).
 

@@ -37,7 +37,7 @@ Sockets use `Accept=yes`: systemd starts one short-lived helper instance per con
 3. One request per connection, same wire format as the gate protocol v1 (ARCHITECTURE §4), ops prefixed `priv_`. Request ≤ 2 MiB, response ≤ 4 MiB, strict decoding (unknown fields and duplicate keys are errors).
 4. The helper **never trusts the gate**: it re-validates tier, paths, owners, modes, templates and sizes against its own policy. The gate's policy and the helper's policy are independent; both must allow an operation. The request's `ceiling` (ARCHITECTURE §4.1), forwarded by the gate unchanged, is applied by the helper itself as well (§6).
 
-**What approval does and does not cover.** Human approval (D-006) is enforced by the MCP server, which holds the HMAC key. It stops a prompt-injected model from acting without the user. It cannot stop a **fully compromised server**, which could skip the prompt — that case is bounded by the gate policy, the privileged policy and the helper's sandbox. Write the privileged policy for that worst case.
+**What approval does and does not cover.** Human approval (D-006) is enforced by the MCP server, which holds the approval records and verifies the approver's code. It stops a prompt-injected model from acting without the user. It cannot stop a **fully compromised server**, which could skip the prompt — that case is bounded by the gate policy, the privileged policy and the helper's sandbox. Write the privileged policy for that worst case.
 
 ## 4. Privileged policy schema
 
