@@ -54,6 +54,7 @@ commands:
   serve        start the MCP server (HTTP, or stdio with --transport stdio)
   check        connect to every target, verify its host key and gate, and print the result
   tools        print the tool catalogue (with schema hashes)
+  approver     enrol, remove or list approvers (add, remove, list)
   healthcheck  exit 0 if the local /healthz answers {"status":"ok"}
   version      print version information
 `
@@ -77,6 +78,8 @@ func run(ctx context.Context, stdin io.Reader, args []string, lookup config.Look
 		return cmdCheck(ctx, args[1:], lookup, stdout, stderr)
 	case "tools":
 		return cmdTools(args[1:], stdout, stderr)
+	case "approver":
+		return cmdApprover(args[1:], stdout, stderr, processApproverEnv)
 	case "healthcheck":
 		url, err := healthcheckURL(lookup)
 		if err != nil {
