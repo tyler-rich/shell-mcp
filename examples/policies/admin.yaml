@@ -3,7 +3,7 @@
 # Placeholders only. Install as root at /etc/shell-mcp/admin.yaml
 # (root:root 0644) for its own SSH key; the server using that key runs with
 # SHELL_MCP_PROFILE=admin, and every destructive or privileged operation
-# needs a human approval collected by the MCP client (elicitation).
+# needs a human approval on the server's approval page (D-006).
 # Root actions are not done here: they are forwarded to the privileged
 # helper, which applies its own policy (docs/PRIVILEGED.md).
 

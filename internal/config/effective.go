@@ -26,8 +26,15 @@ type Effective struct {
 	MaxTimeoutS          int               `json:"max_timeout_s"`
 	MaxOutputBytes       int               `json:"max_output_bytes"`
 	ApprovalTiers        []string          `json:"approval_tiers"`
-	ApprovalFallback     string            `json:"approval_fallback"`
+	ApprovalMethod       string            `json:"approval_method"`
 	ApprovalTTLS         int               `json:"approval_ttl_s"`
+	ApprovalBind         string            `json:"approval_bind"`
+	ApprovalPort         int               `json:"approval_port"`
+	ApprovalTLS          bool              `json:"approval_tls"`
+	ApprovalPublicURL    string            `json:"approval_public_url"`
+	Approvers            []string          `json:"approvers"`
+	ApprovalMaxApprovers int               `json:"approval_max_approvers"`
+	ApprovalNotify       bool              `json:"approval_notify"`
 	RedactPatterns       int               `json:"redact_patterns"`
 	LogLevel             string            `json:"log_level"`
 	LogFormat            string            `json:"log_format"`
@@ -68,7 +75,14 @@ func (c *Config) Effective() Effective {
 		MaxTimeoutS:          int(c.MaxTimeout.Seconds()),
 		MaxOutputBytes:       c.MaxOutputBytes,
 		ApprovalTiers:        nonNil(c.ApprovalTiers),
-		ApprovalFallback:     c.ApprovalFallback,
+		ApprovalMethod:       c.ApprovalMethod,
+		ApprovalBind:         c.ApprovalBind,
+		ApprovalPort:         c.ApprovalPort,
+		ApprovalTLS:          c.ApprovalTLSCert != nil,
+		ApprovalPublicURL:    c.ApprovalPublicURL,
+		Approvers:            approverNames(c),
+		ApprovalMaxApprovers: c.ApprovalMaxApprovers,
+		ApprovalNotify:       c.ApprovalNotifyURL != "",
 		ApprovalTTLS:         int(c.ApprovalTTL.Seconds()),
 		RedactPatterns:       len(c.RedactPatterns),
 		LogLevel:             c.LogLevel,
@@ -103,6 +117,16 @@ func prefixStrings(ps []netip.Prefix) []string {
 	out := make([]string, 0, len(ps))
 	for _, p := range ps {
 		out = append(out, p.String())
+	}
+	return out
+}
+
+// approverNames lists the approvers by name only; seeds never leave the
+// configuration.
+func approverNames(c *Config) []string {
+	out := make([]string, 0, len(c.Approvers))
+	for _, a := range c.Approvers {
+		out = append(out, a.Name)
 	}
 	return out
 }

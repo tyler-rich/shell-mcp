@@ -594,7 +594,7 @@ func TestOperatorToolsApprovalGuard(t *testing.T) {
 		if name != "shell_write_file" {
 			args = map[string]any{}
 		}
-		refusal(t, callOn(t, cs, &log, name, args), "approval_unavailable", "later release")
+		refusal(t, callOn(t, cs, &log, name, args), "approval_unavailable", "SHELL_MCP_APPROVAL_METHOD=none")
 	}
 	if _, err := os.Lstat(p); !os.IsNotExist(err) {
 		t.Fatalf("the guarded write happened: %v", err)

@@ -514,10 +514,11 @@ func TestOperatorToolsGateErrorsPassThrough(t *testing.T) {
 
 // --- Approval guard ------------------------------------------------------------
 
-// TestApprovalGuard: with operator in SHELL_MCP_APPROVAL_TIERS every
-// operator tool refuses with approval_unavailable and sends nothing (there
-// is no approval before S4b); read tools are unaffected. With the default
-// (destructive) the operator tools run.
+// TestApprovalGuard: with operator in SHELL_MCP_APPROVAL_TIERS and no
+// approval method (SHELL_MCP_APPROVAL_METHOD=none, the zero Deps), every
+// operator tool refuses with approval_unavailable and sends nothing; read
+// tools are unaffected. With the default (destructive) the operator tools
+// run.
 func TestApprovalGuard(t *testing.T) {
 	g := newRecordingGate(operatorReplies())
 	h := readHarness(t, g)
@@ -527,7 +528,7 @@ func TestApprovalGuard(t *testing.T) {
 			env, res := h.call(name, args)
 			e, _ := env["error"].(map[string]any)
 			msg, _ := e["message"].(string)
-			if !res.IsError || e["code"] != "approval_unavailable" || !strings.Contains(msg, "later release") {
+			if !res.IsError || e["code"] != "approval_unavailable" || !strings.Contains(msg, "SHELL_MCP_APPROVAL_METHOD=none") {
 				t.Fatalf("%s: %v, want approval_unavailable", name, env)
 			}
 		}

@@ -135,3 +135,32 @@ func (l *ipLimiter) tracked() int {
 	defer l.mu.Unlock()
 	return len(l.buckets)
 }
+
+// ClientAddr is the address a request comes from, derived as on /mcp: the
+// peer, or the last X-Forwarded-For entry when the peer is one of trusted.
+// The approval listener uses it too.
+func ClientAddr(r *http.Request, trusted []netip.Prefix) netip.Addr { return clientAddr(r, trusted) }
+
+// ClientKey is the client a request counts against for rate limits: an
+// IPv4 address or an IPv6 /64 of ClientAddr.
+func ClientKey(r *http.Request, trusted []netip.Prefix) netip.Prefix {
+	return keyOf(clientAddr(r, trusted))
+}
+
+// Limiter is the per-client token bucket of the global rate limit, for
+// another listener (the approval page) to apply its own instance.
+type Limiter struct{ l *ipLimiter }
+
+// NewLimiter returns a limiter of perMin requests a minute per client.
+func NewLimiter(perMin int, now func() time.Time) *Limiter {
+	if now == nil {
+		now = time.Now
+	}
+	return &Limiter{l: newIPLimiter(perMin, now)}
+}
+
+// Allow takes one token for c, or reports how long until one is available
+// and whether this refusal starts a run of refusals (the one to log).
+func (l *Limiter) Allow(c netip.Prefix) (ok bool, wait time.Duration, first bool) {
+	return l.l.allow(c)
+}

@@ -25,6 +25,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/tyler-rich/shell-mcp/internal/approval"
 	"github.com/tyler-rich/shell-mcp/internal/auth"
 	"github.com/tyler-rich/shell-mcp/internal/config"
 	"github.com/tyler-rich/shell-mcp/internal/envelope"
@@ -77,7 +78,7 @@ func run(ctx context.Context, stdin io.Reader, args []string, lookup config.Look
 	case "check":
 		return cmdCheck(ctx, args[1:], lookup, stdout, stderr)
 	case "tools":
-		return cmdTools(args[1:], stdout, stderr)
+		return cmdTools(args[1:], lookup, stdout, stderr)
 	case "approver":
 		return cmdApprover(args[1:], stdout, stderr, processApproverEnv)
 	case "healthcheck":
@@ -140,8 +141,20 @@ func cmdServe(ctx context.Context, args []string, lookup config.LookupFunc, stdi
 		logger.Warn("diagnostic build: carries shell_diag_elicit; not for release")
 	}
 
+	ar, aerr := newApprovalRuntime(cfg, logger)
+	if aerr != nil {
+		logger.Error("refusing to start", "reason", aerr.Error())
+		return 1
+	}
+	stopApproval, aerr := ar.start(ctx, logger)
+	if aerr != nil {
+		logger.Error("refusing to start", "reason", aerr.Error())
+		return 1
+	}
+	defer stopApproval()
+
 	if cfg.Transport == "stdio" {
-		server, cleanup, err := newMCPServer(cfg, logger)
+		server, cleanup, err := newMCPServer(cfg, logger, ar)
 		if err != nil {
 			logger.Error("refusing to start", "reason", err.Error())
 			return 1
@@ -156,7 +169,7 @@ func cmdServe(ctx context.Context, args []string, lookup config.LookupFunc, stdi
 		return 0
 	}
 
-	srv, cleanup, err := newHTTPServer(cfg, logger)
+	srv, cleanup, err := newHTTPServer(cfg, logger, ar)
 	if err != nil {
 		logger.Error("refusing to start", "reason", err.Error())
 		return 1
@@ -184,8 +197,8 @@ func (nopWriteCloser) Close() error                  { return nil }
 
 // newHTTPServer builds the HTTP server: the middleware chain in front of the
 // SDK's stateless Streamable HTTP handler.
-func newHTTPServer(cfg *config.Config, logger *slog.Logger) (*http.Server, func(), error) {
-	server, cleanup, err := newMCPServer(cfg, logger)
+func newHTTPServer(cfg *config.Config, logger *slog.Logger, ar *approvalRuntime) (*http.Server, func(), error) {
+	server, cleanup, err := newMCPServer(cfg, logger, ar)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -208,7 +221,7 @@ func mcpHTTPHandler(server *mcp.Server, logger *slog.Logger) http.Handler {
 
 // newDeps builds what the tools need: one SSH client per target and the
 // gate client. cleanup closes the SSH clients.
-func newDeps(cfg *config.Config, logger *slog.Logger) (*tools.Deps, func(), error) {
+func newDeps(cfg *config.Config, logger *slog.Logger, ar *approvalRuntime) (*tools.Deps, func(), error) {
 	pool, err := sshx.NewPool(cfg, sshx.Options{Logger: logger})
 	if err != nil {
 		return nil, nil, err
@@ -233,17 +246,21 @@ func newDeps(cfg *config.Config, logger *slog.Logger) (*tools.Deps, func(), erro
 		Redactor:       redact.New(cfg.RedactPatterns),
 		ApprovalTiers:  cfg.ApprovalTiers,
 	}
+	d.ApprovalMethod = approval.Method(cfg.ApprovalMethod)
+	if ar != nil {
+		d.Approvals, d.ApprovalPublicURL, d.Notify = ar.store, cfg.ApprovalPublicURL, ar.notifyRequest
+	}
 	return d, pool.Close, nil
 }
 
 // newMCPServer registers, once, the tools of the configured profile minus
 // SHELL_MCP_DISABLE_TOOLS (D-005). Nothing registers a tool later.
-func newMCPServer(cfg *config.Config, logger *slog.Logger) (*mcp.Server, func(), error) {
+func newMCPServer(cfg *config.Config, logger *slog.Logger, ar *approvalRuntime) (*mcp.Server, func(), error) {
 	profile, err := tools.ParseProfile(cfg.Profile)
 	if err != nil {
 		return nil, nil, err
 	}
-	d, cleanup, err := newDeps(cfg, logger)
+	d, cleanup, err := newDeps(cfg, logger, ar)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -385,14 +402,22 @@ type catalogueEntry struct {
 	Description        string               `json:"description"`
 	InputSchemaSHA256  string               `json:"input_schema_sha256"`
 	OutputSchemaSHA256 string               `json:"output_schema_sha256"`
+	// RequiresUserInteraction is the tool's
+	// _meta["anthropic/requiresUserInteraction"] (approval-gated tools).
+	RequiresUserInteraction bool `json:"requires_user_interaction"`
 }
 
-func cmdTools(args []string, stdout, stderr io.Writer) int {
+func cmdTools(args []string, lookup config.LookupFunc, stdout, stderr io.Writer) int {
 	if len(args) != 0 {
 		_, _ = io.WriteString(stderr, "shell-mcp: tools takes no arguments\n")
 		return 2
 	}
-	reg, err := tools.Catalogue(&tools.Deps{})
+	d, err := catalogueDeps(lookup)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp: %v\n", err)
+		return 1
+	}
+	reg, err := tools.Catalogue(d)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "shell-mcp: %v\n", err)
 		return 1
@@ -406,9 +431,11 @@ func cmdTools(args []string, stdout, stderr io.Writer) int {
 			_, _ = fmt.Fprintf(stderr, "shell-mcp: %s: %v\n", def.Name, err)
 			return 1
 		}
+		rui, _ := def.Meta["anthropic/requiresUserInteraction"].(bool)
 		entries = append(entries, catalogueEntry{
 			Name: def.Name, Title: def.Title, Tier: r.Tier.String(), Privileged: r.Privileged,
 			Annotations: def.Annotations, Description: def.Description, InputSchemaSHA256: in, OutputSchemaSHA256: out,
+			RequiresUserInteraction: rui,
 		})
 	}
 	return writeJSON(entries, stdout, stderr)

@@ -22,6 +22,7 @@ const (
 	CodeAuthFailedSSH       = "auth_failed_ssh"
 	CodeGateUnavailable     = "gate_unavailable"
 	CodeProtocolMismatch    = "protocol_mismatch"
+	CodeApprovalPending     = "approval_pending"
 	CodeApprovalDeclined    = "approval_declined"
 	CodeApprovalInvalid     = "approval_invalid"
 	CodeApprovalUnavailable = "approval_unavailable"
@@ -34,7 +35,7 @@ const (
 // ServerCodes lists the server's own codes in ARCHITECTURE §6 order.
 var ServerCodes = []string{
 	CodeValidationError, CodeUnknownTarget, CodeTargetUnreachable, CodeHostKeyMismatch, CodeAuthFailedSSH,
-	CodeGateUnavailable, CodeProtocolMismatch, CodeApprovalDeclined, CodeApprovalInvalid, CodeApprovalUnavailable,
+	CodeGateUnavailable, CodeProtocolMismatch, CodeApprovalPending, CodeApprovalDeclined, CodeApprovalInvalid, CodeApprovalUnavailable,
 	CodeTimeout, CodeProfileDenied,
 }
 
@@ -107,6 +108,19 @@ type Envelope[T any] struct {
 	Warnings []string `json:"warnings,omitzero"`
 	Gate     *Gate    `json:"gate,omitempty"`
 	Error    *Error   `json:"error,omitempty"`
+	// Approval is set on envelopes of approval-gated tools (D-006).
+	Approval *Approval `json:"approval,omitempty"`
+}
+
+// Approval is an approval record's state as a tool result shows it. Every
+// string is server-generated: the URL from SHELL_MCP_APPROVAL_PUBLIC_URL and
+// the id, the summary from the tool and the canonical arguments.
+type Approval struct {
+	ID        string `json:"id" jsonschema:"The approval id (26 characters); pass it as approval_id when calling the tool again."`
+	Status    string `json:"status" jsonschema:"pending, approved, declined, expired or used."`
+	URL       string `json:"url,omitempty" jsonschema:"The approval page for this request (out-of-band approval only)."`
+	ExpiresAt string `json:"expires_at" jsonschema:"When the approval request expires, RFC 3339."`
+	Summary   string `json:"summary" jsonschema:"The server's one-line description of the operation."`
 }
 
 // Success returns a successful envelope for target with data d.

@@ -47,6 +47,7 @@ func registerDiag(r *Registry, d *Deps) error {
 	if err != nil {
 		return err
 	}
+	delete(out.Properties, "approval") // a read-tier tool: never approval-gated
 	def := &mcp.Tool{
 		Name:        "shell_diag_elicit",
 		Title:       "Elicitation diagnostic",
@@ -57,7 +58,7 @@ func registerDiag(r *Registry, d *Deps) error {
 	handler := func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		start := time.Now()
 		res, env := diagRound(req)
-		d.audit(ctx, def.Name, "", map[string]any{}, "ok", nil, time.Since(start))
+		d.audit(ctx, def.Name, "", map[string]any{}, "ok", nil, time.Since(start), "", "")
 		if res != nil {
 			return res, nil
 		}
