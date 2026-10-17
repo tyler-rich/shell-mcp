@@ -1850,7 +1850,8 @@ The document gives exact replacement wording for D-006 and S-12, the config, env
 **Deferred / follow-ups:**
 - **S4b-2:** destructive tools and their dedicated previews, `exec_preview`, `shell_run_command`'s admin registration at `destructive`.
 - **S5:** compose port mapping for the approval listener, the approvers secret, the notify token, TLS files or the proxy address, the approvals section and ntfy ACLs (handoff §7.3). This PR changed only `deploy/.env.example`'s approval lines, because the old `SHELL_MCP_APPROVAL_FALLBACK=deny` line now fails startup.
-- **Maintainer:** `CLAUDE.md`'s "Never let the model approve its own actions" rule and the "Approval" definition still describe elicitation and `SHELL_MCP_APPROVAL_FALLBACK`; this session left the project rules unchanged.
+- **CLAUDE.md** (maintainer request on the PR): the "Never let the model approve its own actions" rule and the "Approval" definition now match D-006 and S-12. An approval is a record approved on the page with an enrolled approver's TOTP code, bound and used once; elicitation is not an approval in v1; `SHELL_MCP_APPROVAL_METHOD` defaults to `none` and never to anything else; `confirm-argument` is the only way the model approves, an explicit, WARN-logged opt-out; `SHELL_MCP_APPROVAL_FALLBACK` and `SHELL_MCP_APPROVERS` stay refused.
+- **A separate PR (maintainer):** the overwrite window below.
 - **Not addressed here:** a file created between the fresh preview and the write (preview "absent") is overwritten, because `write_file` has no "must not exist" precondition; the window is one SSH round trip, and the write is still the approved content to the approved path.
 
 **Versions:**
