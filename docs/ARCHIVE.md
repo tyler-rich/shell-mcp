@@ -1707,3 +1707,74 @@ The document gives exact replacement wording for D-006 and S-12, the config, env
 **Deferred / follow-ups:** S4b-1 applies the D-006, S-12 and docs wording in its first commit; then S4b-2, S4c, and S5's deploy and CLIENTS changes, as the handoff outlines.
 
 **Versions:** unchanged from the entry above. No dependency added.
+
+### 2026-10-16 — Approver primitives: TOTP, approvers file, enrolment CLI, QR encoder (PR #22, branch feat/approver-primitives)
+**Decision:** Build the self-contained parts of `docs/handoff/S4B-APPROVAL.md` §6.4 (and the approver rows of §6.7 and §6.8) that S4b-1b builds on. Nothing is user-visible yet: no config variable is read, and no server path calls these packages.
+- **`internal/approval/totp`.** RFC 6238 verifier: HMAC-SHA-1, 6 digits, 30 s step, ±1 step only.
+  - **API.** `New(seeds, now)` and `Verify(approver, code) Outcome`, with `Result` one of `accepted`, `bad_code`, `reused_code` or `locked`, plus the lockout details. Also `ParseCode` and `Generate` (for tests and S4b-2's simulated approver).
+  - **Last accepted step.** Kept per approver, and set to the current step at `New`. A code for that step or an earlier one is `reused_code`, whether it comes in for an approve or a decline: both share one `Verify` and one state.
+  - **Brute force.** At most 3 wrong codes per approver in any rolling 60 s. The 4th starts a 15-minute lockout, which doubles per consecutive lockout up to 24 h, and a success resets both counts. During a lockout every code is refused unchecked and nothing is counted.
+  - **Comparison.** All three steps of the window are computed and compared in constant time. No code or seed appears in any error or result.
+- **`internal/approval/approvers`.** The secret file.
+  - **Format.** One `<name> <base32 seed>` per line. Names match `^[a-z][a-z0-9-]{0,31}$`. Seeds are canonical unpadded base32 of 160–512 bits. No duplicates. 1..max approvers, where max is `ParseMaxApprovers` (`SHELL_MCP_APPROVAL_MAX_APPROVERS`: unset is 1; 1..8 in canonical decimal).
+  - **File checks.** The file must be a regular file with no group or other permission bits, checked by `fstat` on the opened file. Anything else is a hard error.
+  - **Errors.** Every error is one line and names line numbers only, never text from the file.
+  - **Rendering.** `Approver` renders only its name in every `fmt`, JSON, text and slog path.
+  - **CLI operations.** `Add`, `Remove` and `List` back the CLI. `Add` and `Remove` replace the file through a synced `0600` temporary file in the same directory and a rename.
+- **`shell-mcp approver add|remove|list`** (`cmd/shell-mcp/approver.go`).
+  - **`add`.** Draws a 160-bit seed from `crypto/rand`, appends it, and shows the `otpauth://totp/shell-mcp:<name>?secret=…&issuer=shell-mcp&algorithm=SHA1&digits=6&period=30` URI once: a half-block QR code with the URI text below it.
+  - **Terminal only.** It shows them only when stdout is a terminal: `TCGETS` on Linux, `GetConsoleMode` on Windows, refused on other systems. The check runs before a seed is generated or anything is written.
+  - **Refusals.** A duplicate name, a group/other-accessible or unparsable file, or a second approver without `--allow-multiple`.
+  - **Audit.** `approver enrolled` and `approver removed` are written to stderr as JSON lines carrying `name` and `file` only. `list` prints names only.
+- **`internal/approval/qr`.** An in-repo encoder, standard library only: byte mode, level M, versions 1–10, all eight masks with N1–N4 penalty scoring. `Terminal()` renders it with a four-module quiet zone.
+
+**Why:** S4b-1a scope (handoff §6.4, §8; D-006 as accepted in the handoff). Every rule's test was committed first, against compiling stubs, and shown failing: `323cde6` (52 tests failing). Five passed against the stubs, and each is a refusal or coverage check whose positive counterpart failed: `TestNewRefuses`, `TestApproverUsage`, `TestEncodeRefusesBadMask`, `TestGoldenCovers` and the `FuzzParseCode` seeds.
+
+**How the handoff was read where it left room:**
+- **What counts as a wrong code.** A malformed code counts. A code that is correct for an already-used step (`reused_code`) does not: it is no guess, and it is what a legitimate approver gets in the first ≤ 30 s after a start. An unknown approver name is `bad_code`, with no state to count against.
+- **The lockout itself.** The 4th wrong code returns `bad_code` with `Lockout.Started` set, so S4b-1b logs the lockout once. Later attempts return `locked`.
+- **Window edge.** The window is strictly under 60 s: a wrong code exactly 60 s after an earlier one no longer counts it.
+- **Consecutive lockouts** reset only on a success, as written; they do not decay.
+- **Typed codes.** `ParseCode` drops spaces ("123 456", as authenticators show it), refuses anything else that is not six ASCII digits, and looks at no more than 16 bytes.
+- **File format.** The file is strict: no blank lines and no comments. A CRLF ending and a lower-case seed are tolerated. Seeds above 512 bits and files of more than 8 lines are refused. The file is at most 64 KiB.
+- **Symlinks** are followed, as container secret mounts need, and the checks apply to the file opened. On Windows the mode is never strict enough, so loading fails closed.
+- **Removing the last approver** leaves an empty file, which the server will refuse at start.
+- **Terminal colours.** The QR code sets its colours explicitly (bright white light modules on black), so it scans on light and dark terminal themes alike.
+
+**QR fixtures.**
+- **Golden matrices** come from Nayuki's qrcodegen 1.8.0 (Python, wheel hash pinned, run once in `python:3.14-slim`). There are 32 cases: every version 1–10 at and past its capacity boundary, an empty payload, binary bytes, two otpauth URIs including the longest name, and forced masks 0–7 at versions 1 and 7. The encoder's penalty follows qrcodegen's reading of N3: the area outside the symbol counts as light. The same scoring was read at the installed source.
+- **Cross-check.** A second encoder, segno 1.6.6, agrees module for module on all 80 full-capacity symbols (versions 1–10 × 8 masks). It differs wherever there is spare capacity. The cause is that segno's `write_padding_bits` adds eight zero bits when the stream already ends on a codeword boundary, which ISO/IEC 18004 §7.4.10 does not do. So qrcodegen is the standard-conforming reference here.
+- **Test decoder.** The tests carry an independent decoder with its own tables and GF(256) arithmetic. It checks finders, separators, timing, alignment, both format copies, version information, every Reed–Solomon block, the terminator and the padding. It reads every golden payload back, and it notices a flip of any single module (`TestDecoderDetectsCorruption`).
+- **CLI output.** The CLI test reads the half-block output back and compares it with the golden `uri-alice` matrix.
+
+**Fuzzing (60 s each, golang container, no crashers):** `FuzzParse` (approvers file) 34,887,330 execs; `FuzzParseCode` 87,786,998 execs; `FuzzEncode` 348,807 execs (each runs the encoder, all eight mask scorings and the test decoder).
+
+**Alternatives rejected:**
+- **A QR module.** That would be a STOP-and-ask, and it is not needed.
+- **`golang.org/x/term`.** A new module. `x/sys`, already required directly, provides `TCGETS` and `GetConsoleMode`.
+- **Treating any character device as a terminal.** `/dev/null` would pass.
+- **Counting reused codes as wrong.** This would lock out an approver who is merely early after a restart.
+- **Echoing names in file errors.** A lower-case seed can match the name pattern.
+- **Writing the file and then refusing to print.** It would leave a seed nobody saw.
+- **Uncoloured half blocks.** They assume one terminal theme.
+
+**Deferred / follow-ups (S4b-1b):**
+- **Config wiring:**
+  - read `SHELL_MCP_APPROVERS_FILE` and `SHELL_MCP_APPROVAL_MAX_APPROVERS` through `approvers.Load` / `ParseMaxApprovers`;
+  - refuse `SHELL_MCP_APPROVERS`;
+  - keep seeds out of `check` and effective-config output.
+- **Logging:** the server's `approval attempt refused` and `approval lockout` lines from `Outcome`.
+- **Notifier:** pushing a lockout.
+- **Not addressed here:**
+  - The CLI takes no lock, so two concurrent writers can lose one's change, though never corrupt the file.
+  - The renamed file is owned by the user who ran the CLI.
+  - Removing a line from a CRLF file rewrites the remaining lines with LF.
+  - There is no terminal check on macOS or the BSDs (refused).
+
+**Versions:**
+- **Go:** 1.27.2, the newest stable per go.dev (go1.27.2 and go1.26.9 listed).
+- **Refresh:** `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing, and `deps-current` reported all 13 modules in scope current.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0 (now also `x/sys/windows`, the same module).
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+- **Fixture generation only (not dependencies):** qrcodegen 1.8.0, segno 1.6.6, `python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170`.
