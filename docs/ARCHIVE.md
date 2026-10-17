@@ -1786,3 +1786,76 @@ The document gives exact replacement wording for D-006 and S-12, the config, env
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
 - **Fixture generation only (not dependencies):** qrcodegen 1.8.0, segno 1.6.6, `python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170`.
+
+### 2026-10-17 — Approval flow: records, binding, approval page, config, tool wiring (PR #23, branch feat/approval-flow)
+**Decision:** Build handoff §6 (except §6.4, done in S4b-1a) and turn D-006 on (plan §5 S4b-1b):
+- **Documents first** (`a186940`). Handoff §7's wording applied to D-006, S-12, plan §1 goal 4 and §1.1, F-09, §5 (S4b-1/S4b-2 split, S4c, optional S4d) and §8; SECURITY §1, §2 and §6; ARCHITECTURE §1–§3, §5 and §6; the TOOLS.md approval section with the S4b-scope client findings; PRIVILEGED §3. TOOLS.md and the page say the page can be opened on any device; only the code must come from the approver's authenticator.
+- **Records and binding** (`internal/approval`). The record binds principal, tool, resolved target, SHA-256 of the canonical arguments, of the preview and of the gate policy, and expiry. The store holds at most 5 pending records per principal and 256 in all, deduplicates an identical pending request, and sweeps expired records (every 30 s and on each new request), logging `approval expired` for those still pending or approved. The re-call check runs in §6.3's order; the record is marked used under the store's lock before anything is sent; a fresh preview and the policy hash must equal the record's.
+- **The approval page** (`internal/approval/page`). §6.5 as written, on its own listener (`SHELL_MCP_APPROVAL_BIND`/`_PORT`, default `127.0.0.1:8081`), for both transports. The four routes; everything else, `/mcp` and `/healthz` included, is 404, and the MCP listener serves none of the page's routes.
+- **Notifier** (`internal/approval/notify`). ntfy JSON publish of new requests (tool title, target, summary, expiry, id, a `view` link) and of lockouts. No `http` action, no proxy, no redirects; a failure is logged at WARN and never blocks.
+- **Config** (`internal/config`). Every §6.7 variable and rule. `SHELL_MCP_APPROVAL_METHOD` (default `none`) replaces `SHELL_MCP_APPROVAL_FALLBACK`, which is now refused, as is `SHELL_MCP_APPROVERS`. TTL 60..900, default 300 (was 30..600, default 120). The approvers file is read through S4b-1a's `approvers.Load`.
+- **Envelope and tools.** `approval_pending` in the closed set; the optional `approval` object on gateable tools' envelopes (removed from the read tools' output schema, so their hashes are unchanged); the §6.6 text, built from the configured origin and the record id only. Every operator and destructive tool has `approval_id` (`^[a-z2-7]{26}$`) whatever the configuration, and `confirm` only under `confirm-argument`; gated tools carry `_meta["anthropic/requiresUserInteraction"]: true`. S4a's `approvalGuard` is gone: `none` still refuses with `approval_unavailable` before anything is sent.
+- **Previews for the operator tools**, from existing read ops only (TOOLS.md, "Approval previews"): write (stat, read_file), copy/move (two stats), mkdir/chmod (stat), service control (service_status), git pull (git_status), run command (policy). `shell_write_file`'s re-call passes the preview's content hash as `expected_sha256` unless the caller gave one.
+- **Audit.** Every §6.8 line; the `tool call` line gains `approval_id` and `approval_outcome`.
+- **`shell-mcp tools`** reads `SHELL_MCP_APPROVAL_METHOD` and `SHELL_MCP_APPROVAL_TIERS` (with serve's rules) and prints `requires_user_interaction`; the snapshot has a second file for the confirm-argument variant with operator gated.
+
+**Why:** S4b-1b scope (handoff §6, §8; D-006 and S-12 as accepted). Approval now reaches a person through every client: the model relays a URL and re-calls a tool.
+
+**Maintainer decision during the session: `shell_run_command`'s preview.** The `policy` op does not return a command's binary path, and path placeholders resolve only on the target, so "the resolved argv" cannot be built from existing operations (the prompt's STOP condition). The maintainer chose a policy-only preview for this PR: command id, tier, description, `root_equivalent`, the matched template (matched on the server with `internal/template`, paths shown as given, units unchecked) and the args. The approval stays bound to the policy hash, so a changed binary for that id invalidates it. **S4b-2 adds a read-tier gate op `exec_preview`** (template matched and path placeholders resolved on the target, returning the resolved binary path and argv without running anything), and the preview, operator and destructive, switches to it. Recorded in handoff §8's S4b-2 scope and plan §5.
+
+**How the handoff was read where it left room:**
+- **Which tools carry `approval_id`.** "Always present, so the catalogue does not depend on configuration" was read as every *gateable* tool (operator and destructive tiers), since operator tools are gated only by configuration. A call that needs no approval and gives `approval_id` or `confirm` is a `validation_error`. `requiresUserInteraction`, by contrast, marks the tools gated under the running configuration.
+- **A pending record and a mismatched call.** §6.3 checks the binding after the state. For a *pending* record the binding is checked before the 20 s wait, so a mismatched call gets `approval_invalid` at once instead of waiting and then `approval_pending`; a mismatch never consumes or changes the record.
+- **`confirm-argument`.** The first call creates the same record and returns `approval_pending` ("call this tool again with the same arguments, approval_id … and confirm true"), without a URL. The re-call with `confirm: true` approves a matching pending record as `model (confirm-argument)`, logs `approval decided` and a WARN, then runs the same checks. Without `confirm` a pending record answers `approval_pending` at once (nobody else can decide). `confirm` without `approval_id` is a `validation_error`.
+- **Descriptions.** §9.1 requires that an argument written to look like instructions appears only escaped in the arguments table. A path, unit or name therefore enters the description only when it is plain (`^/?[A-Za-z0-9._/@+=,:~-]{1,255}$`); otherwise the description says it is shown in the arguments.
+- **Preview stability.** Previews omit what changes by itself (memory, unit timestamps, restart counts, durations), or no service approval could ever match. Line counts in the write preview are `null` unless the gate returned the whole file as unredacted text.
+- **Preview ceiling.** Preview reads go at the tool's ceiling, keeping ARCHITECTURE §3's "every gate request carries the tool's tier"; they are read-tier ops either way.
+- **Bookmark form.** A no-script form cannot put the id in the path, so `GET /?id=<id>` answers 303 to `/approvals/<id>`; a malformed id is a 400 bookmark page. This stays within the four routes.
+- **Public URL.** It must be an origin: a path other than `/` is refused (so links and routes agree), and it is at most 200 bytes (so the pending message stays within the 512-byte message bound). With native TLS it must be `https://`.
+- **Refusal reasons.** The handoff's list has no reason for a POST to an already-decided record; it is logged `not_pending`. The code is never checked for it, nor for a bad CSRF token, an expired or unknown record, or a cross-origin request, so no code is spent on a request that could not decide.
+- **Status codes.** A code not accepted (wrong, reused, locked): 403 with the record's page and "Code not accepted." — byte-identical for the three. Bad CSRF token 403, unknown 404, expired 410, decided 409, wrong Host 421 (the banner still shows the configured origin), cross-origin 403, body over 4 KiB 413, a repeated form field 400. A peer outside the trusted proxies gets a bare 403 and no page.
+- **Rate limit.** The page has its own instance of the `/mcp` limiter, at `SHELL_MCP_RATE_LIMIT_PER_MIN`, with the client derived the same way (`transport.ClientKey`, now exported).
+- **Proxy-only.** Applies when the bind is not loopback and there is no native TLS. Under native TLS any peer is served.
+- **Approver name on refusals.** With several approvers, a name that is not a valid approver name is logged as empty, never as typed.
+
+**Tests (committed failing first, `1c2be17`; output in the PR body).** About 80 tests failed against compiling stubs, plus panics in the approval core and the cmd package. They cover handoff §9.1 except S4b-1a's TOTP, approvers-file and enrolment items:
+- binding on each field (and defaults made explicit hashing the same), expired, used, unknown and declined records, a second re-call, a failed execution leaving the record used, a changed preview, mode, policy or a removed file at execution with no mutating request, the pending wait (bound, early end on a decision and on cancellation, never past expiry), concurrent re-calls using a record once;
+- the store's per-principal cap, deduplication, global bound and restart;
+- every page rule: headers on every response, no script and no off-origin reference, the banner (also on a refused Host), the bookmark page listing nothing, GET never changing state, POST-only decisions, CSRF tokens, cross-site and foreign-Origin requests, the bearer token giving nothing, the generic message rule (byte-identical answers, differing audit reasons), lockouts logged and pushed, several approvers, escaped arguments and previews, body cap, rate limit, proxy-only peers, TLS 1.2+ only;
+- every config rule; the result text; confirm-argument; schemas, meta and both catalogue variants; each operator tool's preview shape and its refusals; the audit lines, with codes, seeds, CSRF tokens, descriptions, previews and content searched for in the captured logs;
+- an in-process simulated human through the real serve stack, and the e2e-host case.
+- **Test fixes made with the implementation:** the notifier test's "no approve URL" check matched the page path `/approvals/` (now the decision routes); the generic-message test had one wrong code too few to start a lockout (`MaxWrong` is 3, so the fourth starts it); the config baseline expected the old TTL default; the envelope's closed-set test gained `approval_pending`.
+
+**End-to-end** (`e2e-host`, `test/e2e/approval_test.go`, §9.2 on `shell_write_file`). The real `shell-mcp` (stdio, operator profile, `SHELL_MCP_APPROVAL_METHOD=web`, operator gated) with its listener on a free loopback port, an approvers file with a seed generated for the run, the test sshd and the installed gate. The test is the approver: bookmark route with the id, page, CSRF token, a TOTP code for the next unused step, POST.
+- the first call returns `approval_pending`, the file is unchanged, and the gate saw only the preview's reads;
+- after approval the re-call writes once (one gate `write_file` line, ceiling `operator`); a second re-call is `approval_invalid` and writes nothing;
+- a change to the file after approval makes the re-call `approval_invalid`, and the change stands;
+- a decline gives `approval_declined`, and the server log names the approver;
+- a restart between approval and re-call gives `approval_invalid` ("unknown approval").
+
+`TestOperatorToolsApprovalGuard` now expects the `none` message.
+
+**Fuzzing (60 s each, golang container, no crashers):** `FuzzParseID` 49,974,301 execs; `FuzzCanonicalJSON` (round trip) 2,533,627 execs.
+
+**Alternatives rejected:**
+- `approval_id` only on tools gated by the running configuration: the catalogue would depend on it.
+- Waiting on a pending record for a mismatched call: it would answer `approval_pending` to a call the record can never cover.
+- Paths in descriptions verbatim: the instruction-looking-argument rule.
+- Volatile fields in previews: no approval of a running service would ever match.
+- A path prefix in the public URL: links and routes could disagree behind a stripping proxy.
+- A shared limiter instance with `/mcp`: the page's traffic would eat the MCP budget.
+- Checking the code before the CSRF token or the record state: a code would be spent on a request that could not decide.
+- Adding the binary path to the gate's `policy` op now: a gate-protocol data change (STOP); the maintainer chose `exec_preview` in S4b-2.
+
+**Deferred / follow-ups:**
+- **S4b-2:** destructive tools and their dedicated previews, `exec_preview`, `shell_run_command`'s admin registration at `destructive`.
+- **S5:** compose port mapping for the approval listener, the approvers secret, the notify token, TLS files or the proxy address, the approvals section and ntfy ACLs (handoff §7.3). This PR changed only `deploy/.env.example`'s approval lines, because the old `SHELL_MCP_APPROVAL_FALLBACK=deny` line now fails startup.
+- **Maintainer:** `CLAUDE.md`'s "Never let the model approve its own actions" rule and the "Approval" definition still describe elicitation and `SHELL_MCP_APPROVAL_FALLBACK`; this session left the project rules unchanged.
+- **Not addressed here:** a file created between the fresh preview and the write (preview "absent") is overwritten, because `write_file` has no "must not exist" precondition; the window is one SSH round trip, and the write is still the approved content to the approved path.
+
+**Versions:**
+- **Go:** 1.27.2, the newest stable per go.dev (go.dev/dl JSON, read 2026-10-16).
+- **Refresh:** `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing; `scripts/deps-current.sh` reports 13 modules in scope current.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
