@@ -47,6 +47,7 @@ func registerDiag(r *Registry, d *Deps) error {
 	if err != nil {
 		return err
 	}
+	delete(out.Properties, "approval") // a read-tier tool: never approval-gated
 	def := &mcp.Tool{
 		Name:        "shell_diag_elicit",
 		Title:       "Elicitation diagnostic",
