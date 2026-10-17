@@ -85,8 +85,8 @@ func atoi(t testing.TB, s string) int {
 	return n
 }
 
-// matrix renders a code as golden rows.
-func matrix(c *Code) []string {
+// rowsOf renders a code as golden rows.
+func rowsOf(c *Code) []string {
 	rows := make([]string, c.Size())
 	for y := range rows {
 		var b strings.Builder
@@ -107,7 +107,7 @@ func compare(t *testing.T, g golden, c *Code) {
 	if c.Version() != g.version || c.Mask() != g.chosen {
 		t.Fatalf("version %d mask %d, want version %d mask %d", c.Version(), c.Mask(), g.version, g.chosen)
 	}
-	got := matrix(c)
+	got := rowsOf(c)
 	if len(got) != len(g.rows) {
 		t.Fatalf("size %d, want %d", len(got), len(g.rows))
 	}
@@ -241,7 +241,7 @@ func TestTerminal(t *testing.T) {
 			t.Fatalf("%s: %d rows read back, want %d", g.id, len(got), n+1)
 		}
 		for x, d := range got[n] {
-			if d {
+			if !d {
 				t.Fatalf("%s: module %d below the symbol is light", g.id, x)
 			}
 		}
@@ -256,6 +256,25 @@ func TestTerminal(t *testing.T) {
 		}
 		if lines := strings.Count(out, "\n"); lines != (n+1)/2 {
 			t.Fatalf("%s: %d lines, want %d", g.id, lines, (n+1)/2)
+		}
+	}
+}
+
+// TestDecoderDetectsCorruption: the test decoder is not vacuous. Flipping
+// any single module of a symbol makes it refuse the symbol or read other
+// data.
+func TestDecoderDetectsCorruption(t *testing.T) {
+	payload := []byte(otpauthURI("alice"))
+	c, err := Encode(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range c.modules {
+		c.modules[i] = !c.modules[i]
+		got, err := decode(c)
+		c.modules[i] = !c.modules[i]
+		if err == nil && string(got) == string(payload) {
+			t.Fatalf("flipping module (%d,%d) went unnoticed", i%c.size, i/c.size)
 		}
 	}
 }

@@ -117,6 +117,31 @@ func decode(c *Code) ([]byte, error) {
 			}
 		}
 	}
+	// Separators: the light ring just outside each finder.
+	for _, o := range [][2]int{{0, 0}, {n - 7, 0}, {0, n - 7}} {
+		for d := -1; d <= 7; d++ {
+			for _, p := range [][2]int{{o[0] + d, o[1] - 1}, {o[0] + d, o[1] + 7}, {o[0] - 1, o[1] + d}, {o[0] + 7, o[1] + d}} {
+				if p[0] >= 0 && p[1] >= 0 && p[0] < n && p[1] < n && dark(p[0], p[1]) {
+					return nil, errors.New("separator")
+				}
+			}
+		}
+	}
+	a := tAlign[v]
+	for _, cy := range a {
+		for _, cx := range a {
+			if (cx == 6 && cy == 6) || (cx == 6 && cy == a[len(a)-1]) || (cx == a[len(a)-1] && cy == 6) {
+				continue
+			}
+			for dy := -2; dy <= 2; dy++ {
+				for dx := -2; dx <= 2; dx++ {
+					if dark(cx+dx, cy+dy) != (max(abs(dx), abs(dy)) != 1) {
+						return nil, errors.New("alignment pattern")
+					}
+				}
+			}
+		}
+	}
 	for i := 8; i < n-8; i++ {
 		if dark(i, 6) != (i%2 == 0) || dark(6, i) != (i%2 == 0) {
 			return nil, errors.New("timing pattern")
@@ -305,13 +330,6 @@ func (r *bitReader) read(n int) uint32 {
 		r.pos++
 	}
 	return v
-}
-
-func abs(x int) int {
-	if x < 0 {
-		return -x
-	}
-	return x
 }
 
 // readTerminal reads Terminal's output back into modules (true for dark).
