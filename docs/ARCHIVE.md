@@ -1860,3 +1860,14 @@ The document gives exact replacement wording for D-006 and S-12, the config, env
 - **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+
+**2026-10-17 — CodeQL go/log-injection triage (PR #23 follow-up).** Three alerts were open on `refs/pull/23/merge` (CodeQL 2.27.2; none on `refs/pull/23/head`): #3 `page.go:198`, #5 `page.go:419` and #4 `store.go:292`. The SARIF code flows give one source for all three: the approval form's `approver` field (`r.PostForm.Get("approver")`). **Verdict: false positive, all three; no production code changed.**
+- **#3 and #5.** That field is read only with several approvers, and it reaches the log only as `logName`, which is set to it only when it passes `approvers.ValidName` (`^[a-z][a-z0-9-]{0,31}$`, anchored to the whole string by Go's RE2) and is empty otherwise. With one approver the field is never read.
+- **#4.** `Decide` stores the name only after `Verify` accepted a TOTP code for it, and `Verify` knows only enrolled names. Those passed the same pattern at enrolment (`shell-mcp approver add` and `approvers.Add`) and again when the server loaded the file (`approvers.parseLine`). The only other approver ever recorded is the constant `model (confirm-argument)`.
+- **The other values on those lines.** Reasons are fixed literals or the `totp.Result` enum. Approval ids are store-generated, and a path id is used only for a lookup, after `approval.ParseID`. Clients are built from netip types (`transport.ClientKey` / `ClientAddr`), so an unparsable `X-Forwarded-For` falls back to the peer. CSRF tokens and codes are never logged.
+- **Both handlers escape anyway.** Both log formats are `log/slog` (`SHELL_MCP_LOG_FORMAT`: `json`, the default, or `text`).
+- **Regression guards** (they pass on the current code; they are not failing-test evidence):
+  - `TestLoggerFormatsKeepHostileValuesInOneField` (cmd): CR, LF, U+2028/2029, other controls, and fake `key=value` and JSON fragments stay one line and one field in both formats.
+  - `TestApproverFieldCannotInjectLogLines` (page): hostile approver names, a hostile `X-Forwarded-For` from the trusted proxy and a malformed path id produce one well-formed entry each, with an empty approver, in both formats.
+  - A throwaway mutant that logs the raw name fails the page guard.
+- The alerts are dismissed by the maintainer, by hand.
