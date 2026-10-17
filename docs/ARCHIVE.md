@@ -1620,7 +1620,7 @@ The guarantee did not have the race the prompt feared. The test's reading of it 
 
 **Versions:** unchanged (Go 1.27.2; modules as above; golangci-lint v2.15.0, govulncheck v1.9.0). No dependency added.
 
-### 2026-10-16 — How approvals reach a human: scoping and handoff (PR #n, branch docs/approval-scoping)
+### 2026-10-16 — How approvals reach a human: scoping and handoff (PR #21, branch docs/approval-scoping)
 **Decision (proposed; takes effect when the maintainer accepts the handoff):** `docs/handoff/S4B-APPROVAL.md` recommends out-of-band approval as v1's method (`SHELL_MCP_APPROVAL_METHOD=web`):
 - **Flow.** The first call computes the preview and returns `approval_pending` with an approval id and the URL of an approval page that shell-mcp serves on its own listener. A person approves there with a current TOTP code from a named approver's phone authenticator. The model re-calls the tool with `approval_id`.
 - **Binding.** The record binds principal, tool, target, canonical-args SHA-256, preview SHA-256, gate-policy SHA-256 and expiry. It is used once, marked used before execution, and a fresh preview must still match. Records live in memory, so a restart invalidates them.
