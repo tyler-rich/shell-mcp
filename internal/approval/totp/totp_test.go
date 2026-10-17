@@ -14,6 +14,16 @@ import (
 
 var rfcSeed = []byte("12345678901234567890")
 
+// The handoff's values (S4B-APPROVAL.md §6.4), written out rather than taken
+// from the package, so a changed constant fails these tests.
+const (
+	specMaxWrong     = 3
+	specWindow       = time.Minute
+	specFirstLockout = 15 * time.Minute
+	specMaxLockout   = 24 * time.Hour
+	specMinSeedBytes = 20
+)
+
 // TestRFC6238Vectors: the SHA-1 rows of RFC 6238 Appendix B, at their eight
 // digits, and the six-digit codes Generate derives from them.
 func TestRFC6238Vectors(t *testing.T) {
@@ -66,7 +76,7 @@ var base = time.Unix(1_800_000_000-1_800_000_000%30+5, 0).UTC()
 func newSeed(t *testing.T, at time.Time) []byte {
 	t.Helper()
 	for range 100 {
-		seed := make([]byte, MinSeedBytes)
+		seed := make([]byte, specMinSeedBytes)
 		if _, err := rand.Read(seed); err != nil {
 			t.Fatal(err)
 		}
@@ -120,7 +130,7 @@ func (f *fixture) codeAt(name string, offset int64) string {
 // wrong is a well-formed code that matches no step in the accepted window.
 func (f *fixture) wrong(name string) string {
 	valid := map[string]bool{}
-	for o := int64(-Skew); o <= Skew; o++ {
+	for o := int64(-1); o <= 1; o++ {
 		valid[f.codeAt(name, o)] = true
 	}
 	n, _ := strconv.Atoi(f.codeAt(name, 0))
@@ -200,12 +210,12 @@ func TestStepCurrentAtStartRefused(t *testing.T) {
 	f.expect(t, "alice", f.codeAt("alice", 0), Accepted)
 }
 
-// lockOut sends MaxWrong wrong codes and then the one that locks the
+// lockOut sends specMaxWrong wrong codes and then the one that locks the
 // approver out, and returns the lockout it started.
 func (f *fixture) lockOut(t *testing.T) *Lockout {
 	t.Helper()
 	const name = "alice"
-	for i := range MaxWrong {
+	for i := range specMaxWrong {
 		if out := f.expect(t, name, f.wrong(name), BadCode); out.Lockout != nil {
 			t.Fatalf("wrong code %d started a lockout", i+1)
 		}
@@ -213,7 +223,7 @@ func (f *fixture) lockOut(t *testing.T) *Lockout {
 	}
 	out := f.expect(t, name, f.wrong(name), BadCode)
 	if out.Lockout == nil || !out.Lockout.Started {
-		t.Fatalf("wrong code %d did not start a lockout: %+v", MaxWrong+1, out.Lockout)
+		t.Fatalf("wrong code %d did not start a lockout: %+v", specMaxWrong+1, out.Lockout)
 	}
 	return out.Lockout
 }
@@ -222,7 +232,7 @@ func TestFourthWrongCodeLocksOut(t *testing.T) {
 	f := newFixture(t)
 	f.clock.advance(5 * Period)
 	lo := f.lockOut(t)
-	if want := f.clock.t.Add(FirstLockout); !lo.Until.Equal(want) || lo.Consecutive != 1 {
+	if want := f.clock.t.Add(specFirstLockout); !lo.Until.Equal(want) || lo.Consecutive != 1 {
 		t.Fatalf("lockout = %+v, want until %s, consecutive 1", lo, want)
 	}
 
@@ -251,7 +261,7 @@ func TestLockedCodesUnchecked(t *testing.T) {
 		}
 	}
 	f.clock.t = lo.Until
-	for range MaxWrong {
+	for range specMaxWrong {
 		if out := f.expect(t, "alice", f.wrong("alice"), BadCode); out.Lockout != nil {
 			t.Fatalf("codes sent during the lockout were counted: %+v", out.Lockout)
 		}
@@ -262,11 +272,11 @@ func TestWrongCodesRollingWindow(t *testing.T) {
 	f := newFixture(t)
 	f.clock.advance(5 * Period)
 	start := f.clock.t
-	for range MaxWrong {
+	for range specMaxWrong {
 		f.expect(t, "alice", f.wrong("alice"), BadCode)
 	}
 	// The first three fall out of the window just after 60 s.
-	f.clock.t = start.Add(WrongWindow + time.Second)
+	f.clock.t = start.Add(specWindow + time.Second)
 	if out := f.expect(t, "alice", f.wrong("alice"), BadCode); out.Lockout != nil {
 		t.Fatalf("a wrong code after the window started a lockout")
 	}
@@ -285,10 +295,10 @@ func TestFourthWrongCodeJustInsideWindow(t *testing.T) {
 	f := newFixture(t)
 	f.clock.advance(5 * Period)
 	start := f.clock.t
-	for range MaxWrong {
+	for range specMaxWrong {
 		f.expect(t, "alice", f.wrong("alice"), BadCode)
 	}
-	f.clock.t = start.Add(WrongWindow - time.Millisecond)
+	f.clock.t = start.Add(specWindow - time.Millisecond)
 	if out := f.expect(t, "alice", f.wrong("alice"), BadCode); out.Lockout == nil {
 		t.Fatal("the fourth wrong code 59.999 s after the first did not lock out")
 	}
@@ -324,7 +334,7 @@ func TestLockoutCapHoldsForManyLockouts(t *testing.T) {
 	f.clock.advance(5 * Period)
 	for i := range 70 { // past any shift width
 		lo := f.lockOut(t)
-		if d := lo.Until.Sub(f.clock.t); d <= 0 || d > MaxLockout {
+		if d := lo.Until.Sub(f.clock.t); d <= 0 || d > specMaxLockout {
 			t.Fatalf("lockout %d lasts %s", i+1, d)
 		}
 		f.clock.t = lo.Until
@@ -336,18 +346,18 @@ func TestSuccessResets(t *testing.T) {
 	f.clock.advance(5 * Period)
 
 	// The wrong-code count.
-	for range MaxWrong - 1 {
+	for range specMaxWrong - 1 {
 		f.expect(t, "alice", f.wrong("alice"), BadCode)
 	}
 	f.expect(t, "alice", f.codeAt("alice", 0), Accepted)
-	for range MaxWrong {
+	for range specMaxWrong {
 		if out := f.expect(t, "alice", f.wrong("alice"), BadCode); out.Lockout != nil {
 			t.Fatal("wrong codes before a success still counted")
 		}
 	}
 
 	// The consecutive-lockout count.
-	f.clock.advance(2 * WrongWindow)
+	f.clock.advance(2 * specWindow)
 	lo := f.lockOut(t)
 	f.clock.t = lo.Until
 	lo = f.lockOut(t)
@@ -358,8 +368,8 @@ func TestSuccessResets(t *testing.T) {
 	f.expect(t, "alice", f.codeAt("alice", 0), Accepted)
 	f.clock.advance(Period)
 	lo = f.lockOut(t)
-	if lo.Consecutive != 1 || lo.Until.Sub(f.clock.t) != FirstLockout {
-		t.Fatalf("lockout after a success = %+v, want consecutive 1 lasting %s", lo, FirstLockout)
+	if lo.Consecutive != 1 || lo.Until.Sub(f.clock.t) != specFirstLockout {
+		t.Fatalf("lockout after a success = %+v, want consecutive 1 lasting %s", lo, specFirstLockout)
 	}
 }
 
@@ -376,7 +386,7 @@ func TestApproversIndependent(t *testing.T) {
 	f.lockOut(t)
 	f.expect(t, "alice", f.codeAt("alice", 1), Locked)
 	f.expect(t, "bob", f.codeAt("bob", 0), Accepted)
-	for range MaxWrong {
+	for range specMaxWrong {
 		if out := f.expect(t, "bob", f.wrong("bob"), BadCode); out.Lockout != nil {
 			t.Fatal("alice's wrong codes counted for bob")
 		}
@@ -397,14 +407,14 @@ func TestUnknownApproverRefused(t *testing.T) {
 
 func TestNewRefuses(t *testing.T) {
 	now := func() time.Time { return base }
-	short := make([]byte, MinSeedBytes-1)
+	short := make([]byte, specMinSeedBytes-1)
 	for _, c := range []struct {
 		name  string
 		seeds map[string][]byte
 	}{
 		{"no approvers", map[string][]byte{}},
 		{"short seed", map[string][]byte{"alice": short}},
-		{"empty name", map[string][]byte{"": make([]byte, MinSeedBytes)}},
+		{"empty name", map[string][]byte{"": make([]byte, specMinSeedBytes)}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if _, err := New(c.seeds, now); err == nil {
@@ -412,7 +422,7 @@ func TestNewRefuses(t *testing.T) {
 			}
 		})
 	}
-	if _, err := New(map[string][]byte{"alice": make([]byte, MinSeedBytes)}, nil); err == nil {
+	if _, err := New(map[string][]byte{"alice": make([]byte, specMinSeedBytes)}, nil); err == nil {
 		t.Fatal("New accepted a nil clock")
 	}
 }
@@ -465,5 +475,32 @@ func TestResultString(t *testing.T) {
 		if got := r.String(); got != want {
 			t.Errorf("%d.String() = %q, want %q", int(r), got, want)
 		}
+	}
+}
+
+// TestReusedCodesNotCounted: a code for an already-used step is refused but
+// is not a wrong code, so it neither starts nor brings closer a lockout.
+func TestReusedCodesNotCounted(t *testing.T) {
+	f := newFixture(t)
+	f.clock.advance(5 * Period)
+	code := f.codeAt("alice", 0)
+	f.expect(t, "alice", code, Accepted)
+	for range 10 {
+		if out := f.expect(t, "alice", code, ReusedCode); out.Lockout != nil {
+			t.Fatalf("a reused code started a lockout: %+v", out.Lockout)
+		}
+	}
+	for range specMaxWrong {
+		if out := f.expect(t, "alice", f.wrong("alice"), BadCode); out.Lockout != nil {
+			t.Fatal("reused codes counted towards the lockout")
+		}
+	}
+}
+
+// TestParametersAreTheHandoffs: the exported parameters are the handoff's.
+func TestParametersAreTheHandoffs(t *testing.T) {
+	if Digits != 6 || Period != 30*time.Second || Skew != 1 || MaxWrong != specMaxWrong || WrongWindow != specWindow ||
+		FirstLockout != specFirstLockout || MaxLockout != specMaxLockout || MinSeedBytes != specMinSeedBytes {
+		t.Fatal("a TOTP parameter differs from handoff §6.4")
 	}
 }
