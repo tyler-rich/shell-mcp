@@ -1619,3 +1619,50 @@ The guarantee did not have the race the prompt feared. The test's reading of it 
 - **A per-command `Pdeathsig` re-arm:** impossible after the command changes its own credentials, and it would not cover its children.
 
 **Versions:** unchanged (Go 1.27.2; modules as above; golangci-lint v2.15.0, govulncheck v1.9.0). No dependency added.
+
+### 2026-10-16 — How approvals reach a human: scoping and handoff (PR #n, branch docs/approval-scoping)
+**Decision (proposed; takes effect when the maintainer accepts the handoff):** `docs/handoff/S4B-APPROVAL.md` recommends out-of-band approval as v1's method (`SHELL_MCP_APPROVAL_METHOD=web`):
+- **Flow.** The first call computes the preview and returns `approval_pending` with an approval id and the URL of an approval page that shell-mcp serves on its own listener. A person approves there with a current TOTP code from a named approver's phone authenticator. The model re-calls the tool with `approval_id`.
+- **Binding.** The record binds principal, tool, target, canonical-args SHA-256, preview SHA-256, gate-policy SHA-256 and expiry. It is used once, marked used before execution, and a fresh preview must still match. Records live in memory, so a restart invalidates them.
+- **Other parts.**
+  - An optional ntfy push carries only a link.
+  - `confirm-argument` stays as the explicit, WARN-logged opt-out.
+  - Approval-gated tools carry `_meta["anthropic/requiresUserInteraction"]: true`.
+  - Form elicitation, URL elicitation, an MCP Apps panel and WebAuthn are deferred to an optional S4d, each reusing the same record.
+
+The document gives exact replacement wording for D-006 and S-12, the config, envelope, SECURITY, ARCHITECTURE and TOOLS changes, an S4b split (S4b-1 approval core, S4b-2 destructive tools), a test plan, a live test, and 13 open questions. No locked document is changed in this PR.
+
+**Why the Code tab declined** (verified in the installed binaries and the SDK docs):
+- **The host.** The Desktop app (2.42304.0) hosts Claude Code 2.1.299 through the Agent SDK (0.3.299).
+- **The path.** Claude Code runs `Elicitation` hooks, then forwards the request to the host as a control request (`subtype: "elicitation"`).
+- **The answer.** The SDK answers `decline` at once when the host registered no `onElicitation`, and Desktop registers none for local sessions.
+- **No workaround.** No setting, permission mode or documented hook makes the Code tab show the question; a hook can only answer for the user.
+- **Upstream.** anthropics/claude-code #89858, #96043 and #98256 (VS Code) are open.
+- **Other surfaces.** The terminal CLI renders elicitations (docs and third-party reports; live test T-1 in the handoff checks the Code tab's own build in a terminal). Desktop chat declares only the MCP Apps extension.
+
+**Why this recommendation:**
+- **It reaches a person in both clients.** It is the only option that does so today: the model only has to re-call a tool and show a link.
+- **The server verifies the person itself.** The proof is a code from a device the agent's environment does not hold.
+- **Elicitation proves only that the client answered.** A hook or an SDK host can answer, and the server cannot tell; the MCP spec makes no human-presence promise.
+- **Neither the bearer token nor the browser session will do.** Claude Code's shell can read the token. A browser session can be driven by a model with browser control. So neither can be the approval credential.
+
+**Alternatives rejected:**
+- Form elicitation as primary: it reaches no person in either client, and its trust root is client configuration.
+- URL elicitation: no maintainer client delivers it, and mcp-remote refuses URL mode.
+- A bare MCP Apps button: host-trusted, and unverified on the mcp-remote path.
+- SSO or forward-auth identity alone: no per-request step-up in Authelia or Authentik, and the model can ride the session.
+- An ntfy `http` action that approves directly: topic readers receive the whole message.
+- WebAuthn now: it needs a dependency or a hand-written verifier (STOP-and-ask); proposed for later.
+
+**Deferred / follow-ups:**
+- The maintainer accepts or amends the handoff (its §11 questions).
+- Then S4b-1, S4b-2 and S4c as outlined there.
+- Live test T-1 (terminal CLI) is optional evidence for the deferred elicitation method.
+- S5's `docs/CLIENTS.md` carries the new client findings.
+
+**Versions:**
+- **Go:** 1.27.2, the newest stable per go.dev (go1.27.2 and go1.26.9 listed).
+- **Refresh:** `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Dependencies added:** none.
+- **Tools:** unchanged.
