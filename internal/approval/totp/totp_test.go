@@ -168,7 +168,7 @@ func TestStepAcceptedOnce(t *testing.T) {
 	f := newFixture(t)
 	f.clock.advance(5 * Period)
 	code := f.codeAt("alice", 0)
-	f.expect(t, "alice", code, Accepted) // e.g. an approve
+	f.expect(t, "alice", code, Accepted)   // e.g. an approve
 	f.expect(t, "alice", code, ReusedCode) // e.g. a decline, same step
 	f.clock.advance(Period)
 	f.expect(t, "alice", code, ReusedCode) // still inside the skew window
