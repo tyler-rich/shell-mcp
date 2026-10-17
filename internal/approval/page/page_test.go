@@ -590,7 +590,11 @@ func TestGenericCodeMessage(t *testing.T) {
 	wrong := f.decide(r, "approve", "000000")
 	_ = f.decide(r, "approve", "000001")
 	_ = f.decide(r, "approve", "000002")
+	fourth := f.decide(r, "approve", "000003") // starts the lockout
 	locked := f.decide(r, "approve", f.code("alice"))
+	if fourth.status != wrong.status || fourth.body != wrong.body {
+		t.Fatalf("the lockout-starting answer differs: %d %s", fourth.status, fourth.body)
+	}
 	if reused.status != wrong.status || reused.body != wrong.body || locked.status != wrong.status || locked.body != wrong.body {
 		t.Fatalf("answers differ:\nreused %d %s\nwrong %d %s\nlocked %d %s", reused.status, reused.body, wrong.status, wrong.body, locked.status, locked.body)
 	}
@@ -603,15 +607,9 @@ func TestGenericCodeMessage(t *testing.T) {
 		t.Fatalf("generic answer: %d %s", wrong.status, wrong.body)
 	}
 	got := f.logs.reasons(t)
-	// The fourth wrong code (000002 is the third, the locked one counts
-	// none): reused, bad, bad, bad (starts the lockout), locked.
-	want := []string{"reused_code", "bad_code", "bad_code", "bad_code", "locked"}
+	want := []string{"reused_code", "bad_code", "bad_code", "bad_code", "bad_code", "locked"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		// With MaxWrong 3, the lockout starts on the fourth wrong code.
-		t.Logf("reasons %v", got)
-	}
-	if got[0] != "reused_code" || got[1] != "bad_code" || got[len(got)-1] != "locked" {
-		t.Fatalf("reasons %v", got)
+		t.Fatalf("reasons %v, want %v", got, want)
 	}
 	if f.status(r.ID) != approval.StatusPending {
 		t.Fatal("the record changed")

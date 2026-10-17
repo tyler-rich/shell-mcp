@@ -99,7 +99,7 @@ func TestPublishJSON(t *testing.T) {
 		t.Fatalf("action %v", a)
 	}
 	// Never an http action, a method, headers or a body that could approve.
-	for _, bad := range []string{`"http"`, `"method"`, `"headers"`, "approve?", "/approve"} {
+	for _, bad := range []string{`"http"`, `"method"`, `"headers"`, "approve?", `/approve"`, `/decline"`} {
 		if strings.Contains(string(c.body[0]), bad) {
 			t.Fatalf("notification carries %s: %s", bad, c.body[0])
 		}

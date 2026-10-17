@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"time"
 )
 
@@ -126,25 +127,179 @@ type Options struct {
 // Store is the bounded in-memory approval store. It is safe for concurrent
 // use; a restart (a new Store) forgets every record.
 type Store struct {
-	o Options
+	o  Options
+	mu sync.Mutex
+	m  map[string]*entry
+}
+
+type entry struct {
+	r Record
+	// done is closed when the record is decided or swept, waking re-calls
+	// that wait for it.
+	done   chan struct{}
+	closed bool
+}
+
+func (e *entry) wake() {
+	if !e.closed {
+		close(e.done)
+		e.closed = true
+	}
 }
 
 // NewStore returns an empty store.
-func NewStore(o Options) *Store { return &Store{o: o} }
+func NewStore(o Options) *Store {
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	if o.Logger == nil {
+		o.Logger = slog.New(slog.DiscardHandler)
+	}
+	if o.Wait == 0 {
+		o.Wait = PendingWait
+	}
+	if o.Method == "" {
+		o.Method = MethodNone
+	}
+	return &Store{o: o, m: map[string]*entry{}}
+}
+
+// Method is the store's approval method.
+func (s *Store) Method() Method { return s.o.Method }
 
 // Request creates a pending record for r, or returns the pending record of
 // an identical request (same binding, preview and policy hashes). It logs
-// "approval requested" for a new record.
-func (s *Store) Request(r Request) (Record, error) { return Record{}, nil }
+// "approval requested" for a new record. More than MaxPendingPerPrincipal
+// pending records of one principal is ErrTooManyPending; MaxRecords
+// unexpired records of any state is ErrStoreFull.
+func (s *Store) Request(r Request) (Record, error) {
+	rec, _, err := s.RequestNew(r)
+	return rec, err
+}
 
-// Get returns a snapshot of the record with id.
-func (s *Store) Get(id string) (Record, bool) { return Record{}, false }
+// RequestNew is Request, and reports whether the record is new (false: the
+// pending record of an identical request).
+func (s *Store) RequestNew(r Request) (rec Record, created bool, err error) {
+	s.mu.Lock()
+	now := s.o.Now()
+	s.sweepLocked(now)
+	pending := 0
+	for _, e := range s.m {
+		if e.r.Status != StatusPending {
+			continue
+		}
+		if e.r.Binding == r.Binding && e.r.PreviewSHA256 == r.PreviewSHA256 && e.r.PolicySHA256 == r.PolicySHA256 {
+			rec := e.r
+			s.mu.Unlock()
+			return rec, false, nil
+		}
+		if e.r.Principal == r.Principal {
+			pending++
+		}
+	}
+	switch {
+	case pending >= MaxPendingPerPrincipal:
+		s.mu.Unlock()
+		return Record{}, false, ErrTooManyPending
+	case len(s.m) >= MaxRecords:
+		s.mu.Unlock()
+		return Record{}, false, ErrStoreFull
+	}
+	id, err := NewID()
+	if err != nil {
+		s.mu.Unlock()
+		return Record{}, false, err
+	}
+	csrf, err := randomToken()
+	if err != nil {
+		s.mu.Unlock()
+		return Record{}, false, err
+	}
+	rec = Record{ID: id, Request: r, CreatedAt: now, ExpiresAt: now.Add(s.o.TTL), Status: StatusPending, CSRFToken: csrf}
+	s.m[id] = &entry{r: rec, done: make(chan struct{})}
+	s.mu.Unlock()
+	s.o.Logger.Info("approval requested",
+		slog.String("approval_id", id), slog.String("principal", r.Principal), slog.String("tool", r.Tool),
+		slog.String("target", r.Target), slog.String("args_sha256", r.ArgsSHA256), slog.String("preview_sha256", r.PreviewSHA256),
+		slog.String("policy_sha256", r.PolicySHA256), slog.String("expires_at", rec.ExpiresAt.UTC().Format(time.RFC3339)),
+		slog.String("method", string(s.o.Method)))
+	if s.o.OnCreate != nil {
+		s.o.OnCreate(rec)
+	}
+	return rec, true, nil
+}
+
+// Get returns a snapshot of the record with id. A record past its expiry
+// that was pending or approved reads as expired.
+func (s *Store) Get(id string) (Record, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.m[id]
+	if !ok {
+		return Record{}, false
+	}
+	return snapshot(e, s.o.Now()), true
+}
+
+func snapshot(e *entry, now time.Time) Record {
+	r := e.r
+	if !now.Before(r.ExpiresAt) && (r.Status == StatusPending || r.Status == StatusApproved) {
+		r.Status = StatusExpired
+	}
+	return r
+}
 
 // Decide approves or declines a pending, unexpired record as approver (a
 // verified name), from a client address, and logs "approval decided".
 func (s *Store) Decide(id string, approve bool, approver, from string) (Record, error) {
-	return Record{}, nil
+	s.mu.Lock()
+	e, ok := s.m[id]
+	if !ok {
+		s.mu.Unlock()
+		return Record{}, ErrUnknown
+	}
+	now := s.o.Now()
+	switch {
+	case !now.Before(e.r.ExpiresAt):
+		s.mu.Unlock()
+		return Record{}, ErrExpired
+	case e.r.Status != StatusPending:
+		s.mu.Unlock()
+		return Record{}, ErrNotPending
+	}
+	decideLocked(e, approve, approver, from, now)
+	rec := e.r
+	s.mu.Unlock()
+	s.logDecided(rec)
+	return rec, nil
 }
+
+func decideLocked(e *entry, approve bool, approver, from string, now time.Time) {
+	e.r.Status = StatusDeclined
+	if approve {
+		e.r.Status = StatusApproved
+	}
+	e.r.Approver, e.r.DecidedFrom, e.r.DecidedAt = approver, from, now
+	e.wake()
+}
+
+func (s *Store) logDecided(r Record) {
+	decision := "declined"
+	if r.Status == StatusApproved || r.Status == StatusUsed {
+		decision = "approved"
+	}
+	s.o.Logger.Info("approval decided",
+		slog.String("approval_id", r.ID), slog.String("decision", decision), slog.String("approver", r.Approver),
+		slog.String("client", r.DecidedFrom), slog.String("method", string(s.o.Method)))
+}
+
+// Reasons of invalid outcomes (one line each, for the tool result).
+const (
+	reasonUnknown  = "unknown approval id: it expired, was never issued, or the server restarted; call the tool without approval_id to request a new approval"
+	reasonMismatch = "the approval does not match this call: principal, tool, target and arguments must be the same as when it was requested"
+	reasonExpired  = "the approval has expired; call the tool without approval_id to request a new approval"
+	reasonUsed     = "the approval was already used; call the tool without approval_id to request a new approval"
+)
 
 // Outcome is the result of a re-call's check.
 type Outcome int
@@ -178,16 +333,123 @@ type UseResult struct {
 // confirmAs, when not empty (confirm-argument), first approves a matching
 // pending record as that approver, logging a WARN.
 func (s *Store) Use(ctx context.Context, id string, b Binding, confirmAs, from string) UseResult {
-	return UseResult{}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.m[id]
+	if !ok {
+		return UseResult{Outcome: OutcomeInvalid, Reason: reasonUnknown}
+	}
+	if e.r.Status == StatusPending {
+		now := s.o.Now()
+		switch {
+		case e.r.Binding != b:
+			return invalid(e, now, reasonMismatch)
+		case !now.Before(e.r.ExpiresAt):
+			return invalid(e, now, reasonExpired)
+		case confirmAs != "":
+			decideLocked(e, true, confirmAs, from, now)
+			s.logDecided(e.r)
+			s.o.Logger.Warn("approval by the model (confirm-argument): human approval is not enforced",
+				slog.String("approval_id", e.r.ID), slog.String("tool", e.r.Tool))
+		case s.o.Method == MethodConfirm:
+			// Nobody else can decide: no point in waiting.
+			return UseResult{Outcome: OutcomePending, Record: snapshot(e, now), Known: true}
+		default:
+			if r, done := s.wait(ctx, id, e, now); done {
+				return r
+			}
+			e = s.m[id]
+		}
+	}
+	now := s.o.Now()
+	switch e.r.Status {
+	case StatusDeclined:
+		return UseResult{Outcome: OutcomeDeclined, Record: snapshot(e, now), Known: true}
+	case StatusUsed:
+		return invalid(e, now, reasonUsed)
+	case StatusApproved:
+	default:
+		return invalid(e, now, reasonExpired)
+	}
+	if !now.Before(e.r.ExpiresAt) {
+		return invalid(e, now, reasonExpired)
+	}
+	if e.r.Binding != b {
+		return invalid(e, now, reasonMismatch)
+	}
+	e.r.Status = StatusUsed
+	return UseResult{Outcome: OutcomeUsed, Record: e.r, Known: true}
 }
 
-// Sweep marks every record past its expiry: a pending or approved one
-// becomes expired (logged "approval expired"); records past expiry are
-// removed.
-func (s *Store) Sweep() {}
+// wait releases the lock until the pending record is decided or swept, the
+// wait bound (never past its expiry) passes, or ctx ends, and takes it
+// again. done reports a final result: the record is gone or still pending.
+func (s *Store) wait(ctx context.Context, id string, e *entry, now time.Time) (r UseResult, done bool) {
+	d := min(s.o.Wait, e.r.ExpiresAt.Sub(now))
+	ch := e.done
+	s.mu.Unlock()
+	t := time.NewTimer(d)
+	select {
+	case <-ch:
+	case <-t.C:
+	case <-ctx.Done():
+	}
+	t.Stop()
+	s.mu.Lock()
+	e, ok := s.m[id]
+	if !ok {
+		return UseResult{Outcome: OutcomeInvalid, Reason: reasonUnknown}, true
+	}
+	if now := s.o.Now(); e.r.Status == StatusPending && now.Before(e.r.ExpiresAt) {
+		return UseResult{Outcome: OutcomePending, Record: snapshot(e, now), Known: true}, true
+	}
+	return UseResult{}, false
+}
+
+func invalid(e *entry, now time.Time, reason string) UseResult {
+	return UseResult{Outcome: OutcomeInvalid, Record: snapshot(e, now), Known: true, Reason: reason}
+}
+
+// Sweep removes every record past its expiry; a pending or approved one is
+// logged "approval expired" first.
+func (s *Store) Sweep() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sweepLocked(s.o.Now())
+}
+
+func (s *Store) sweepLocked(now time.Time) {
+	for id, e := range s.m {
+		if now.Before(e.r.ExpiresAt) {
+			continue
+		}
+		if e.r.Status == StatusPending || e.r.Status == StatusApproved {
+			s.o.Logger.Info("approval expired", slog.String("approval_id", id))
+		}
+		e.wake()
+		delete(s.m, id)
+	}
+}
 
 // Run sweeps every interval until ctx ends.
-func (s *Store) Run(ctx context.Context, interval time.Duration) {}
+func (s *Store) Run(ctx context.Context, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.Sweep()
+		}
+	}
+}
 
 // expireAt sets a record's expiry (tests).
-func (s *Store) expireAt(id string, t time.Time) {}
+func (s *Store) expireAt(id string, t time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e, ok := s.m[id]; ok {
+		e.r.ExpiresAt = t
+	}
+}
