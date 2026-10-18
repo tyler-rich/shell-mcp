@@ -76,6 +76,13 @@ func sshTarget(t *testing.T, exec sshtest.Exec) (config.Target, *sshx.Client) {
 // transports to an SDK client.
 func newHarness(t *testing.T, targets []config.Target, clients map[string]*sshx.Client, defaultTarget string) *harness {
 	t.Helper()
+	return newHarnessWith(t, targets, clients, defaultTarget, nil)
+}
+
+// newHarnessWith is newHarness with the Deps adjusted by mod before the
+// catalogue is built (schemas depend on the approval settings).
+func newHarnessWith(t *testing.T, targets []config.Target, clients map[string]*sshx.Client, defaultTarget string, mod func(*Deps)) *harness {
+	t.Helper()
 	logs := &syncBuffer{}
 	d := &Deps{
 		Targets: targets, DefaultTarget: defaultTarget,
@@ -87,6 +94,9 @@ func newHarness(t *testing.T, targets []config.Target, clients map[string]*sshx.
 		Principal:      auth.Principal{Name: auth.PrincipalBearer, Profile: "admin"},
 		Logger:         slog.New(slog.NewJSONHandler(logs, nil)),
 		DefaultTimeout: 10 * time.Second,
+	}
+	if mod != nil {
+		mod(d)
 	}
 	reg, err := Catalogue(d)
 	if err != nil {

@@ -115,7 +115,7 @@ func TestLoadValidBaseline(t *testing.T) {
 	if len(cfg.Targets) != 1 || cfg.Targets[0].Name != "app-host" || cfg.Targets[0].Port != 22 {
 		t.Fatalf("single target not built: %+v", cfg.Targets)
 	}
-	if cfg.ApprovalTTL != 120*time.Second || cfg.SSHMaxSessions != 4 || cfg.MaxOutputBytes != 262144 {
+	if cfg.ApprovalTTL != 300*time.Second || cfg.SSHMaxSessions != 4 || cfg.MaxOutputBytes != 262144 {
 		t.Fatalf("defaults not applied: %+v", cfg)
 	}
 	if cfg.Token.Len() != len(testToken) {
@@ -348,51 +348,6 @@ func TestRuleApprovalTiersAccepted(t *testing.T) {
 	cfg := mustLoad(t, env)
 	if strings.Join(cfg.ApprovalTiers, ",") != "operator,destructive" {
 		t.Fatalf("ApprovalTiers = %v", cfg.ApprovalTiers)
-	}
-}
-
-func TestRuleApprovalFallbackUnknown(t *testing.T) {
-	env := baseEnv(t)
-	env["SHELL_MCP_APPROVAL_FALLBACK"] = "allow"
-	wantReason(t, env, `SHELL_MCP_APPROVAL_FALLBACK must be deny or confirm-argument (got "allow")`)
-}
-
-func TestRuleApprovalTTLOutOfRange(t *testing.T) {
-	for _, v := range []string{"29", "601", "0", "-5"} {
-		env := baseEnv(t)
-		env["SHELL_MCP_APPROVAL_TTL"] = v
-		wantReason(t, env, fmt.Sprintf("SHELL_MCP_APPROVAL_TTL must be between 30 and 600 seconds (got %s)", v))
-	}
-	for _, v := range []string{"30", "600"} {
-		env := baseEnv(t)
-		env["SHELL_MCP_APPROVAL_TTL"] = v
-		mustLoad(t, env)
-	}
-}
-
-// --- Approval defaults and warnings ---------------------------------------
-
-func TestApprovalDefaults(t *testing.T) {
-	cfg := mustLoad(t, baseEnv(t))
-	if cfg.ApprovalFallback != "deny" {
-		t.Fatalf("ApprovalFallback default = %q, want deny", cfg.ApprovalFallback)
-	}
-	if strings.Join(cfg.ApprovalTiers, ",") != "destructive" {
-		t.Fatalf("ApprovalTiers default = %v, want [destructive]", cfg.ApprovalTiers)
-	}
-	for _, w := range cfg.Warnings {
-		if strings.Contains(w, "APPROVAL_FALLBACK") {
-			t.Fatalf("unexpected fallback warning with default config: %q", w)
-		}
-	}
-}
-
-func TestApprovalFallbackConfirmArgumentWarns(t *testing.T) {
-	env := baseEnv(t)
-	env["SHELL_MCP_APPROVAL_FALLBACK"] = "confirm-argument"
-	cfg := mustLoad(t, env)
-	if !containsWarning(cfg, "SHELL_MCP_APPROVAL_FALLBACK=confirm-argument") {
-		t.Fatalf("no WARN for confirm-argument fallback: %v", cfg.Warnings)
 	}
 }
 

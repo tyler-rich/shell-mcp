@@ -8,6 +8,8 @@ This document is normative. Where it conflicts with convenience, it wins. Changi
 |---|---|---|
 | MCP bearer token | Secret file / env store / server memory | `internal/auth` only. Constant-time compare; never logged or returned. |
 | SSH private key(s) | Secret file / env store / server memory | `internal/sshx` only. Never logged, never in `check` output (show the public-key fingerprint instead). |
+| Approver TOTP seeds | Mounted secret file (`SHELL_MCP_APPROVERS_FILE`, `0600`) / server memory | `internal/approval` only. Never in environment variables (`SHELL_MCP_APPROVERS` is refused), never logged, never in `check` or effective-config output, never on the workstation where the agent runs: only in the approver's authenticator and the server's secret file. A readable seed is an approval, so a group/other-accessible file fails startup. |
+| Approval notify token | Secret file / env store / server memory | The notifier only (`SHELL_MCP_APPROVAL_NOTIFY_TOKEN`/`_FILE`). Never logged, never in `check` output. |
 | Gate policy, privileged policy, gate and helper binaries, helper units, `authorized_keys` | Target, root-owned | Root only (D-016). Gate and helper refuse to run if any is writable by group/other or not owned by root; the helper also refuses when its units were generated for a different policy. |
 | Host files, service state, journal, process list | Target | Through gate operations only, within the policy. |
 | Tool results (file contents, command output, logs) | In transit to the client | Returned to the model on request, redacted and size-capped; **never logged**. |
@@ -30,7 +32,10 @@ Trust boundaries:
 | **Persistence / privilege escalation** | Writing systemd units, cron, sudoers, SSH keys, PAM, shell rc files, the gate's policy | Protected-path set cannot be a write root or inside one; the gate refuses a policy that overlaps it; setuid/setgid bits refused; `no_new_privs` on every process; no sudo anywhere (D-017); polkit rule limited to exact units × verbs; privileged groups refused at runtime (D-020). |
 | **Prompt injection via tool output** (LLM01) | Log lines, file contents, commit messages, unit descriptions containing instructions | Structured JSON results; descriptions never instruct the model to act on content; size caps; client guidance in `docs/CLIENTS.md` to treat results as data. |
 | **Excessive agency** (LLM08) | Model calls a write/destructive tool | Profiles (D-005); policy `max_tier` (D-016); computed previews; annotations so clients prompt. |
-| **Model self-approval** | A prompt-injected model supplies whatever confirmation argument a tool asks for | Destructive approval is a user answer collected by the client through elicitation, bound by HMAC to principal, tool, target, arguments and preview, short-lived and single-use (D-006, S-12); no elicitation → fail closed. |
+| **Model self-approval** | A prompt-injected model supplies whatever confirmation argument a tool asks for | The approver approves on the server's approval page, with a TOTP code from an authenticator the agent's environment does not hold. The approval is bound to principal, tool, target, arguments, preview and policy, and is short-lived and single-use (D-006, S-12). `none` fails closed. `confirm-argument` is a logged opt-out with no protection against this threat. |
+| **Approval phishing / relay** | A look-alike page relays a typed code | The origin is fixed by configuration and shown on the page; approvers open approvals only from a bookmark or the server's push, never from a chat link; the result text tells the model to show the URL unchanged; codes are single-use, with lockouts; WebAuthn is the future fix. |
+| **Approval brute force** | Guessing approver codes on the approval page | At most 3 wrong codes per approver per minute, then doubling lockouts, each logged and pushed. |
+| **Approval page exposure** | The approval listener reachable from networks it should not be | Loopback by default; TLS or a trusted proxy required for anything else; proxy-only peers. |
 | **Command execution through repository configuration** | `.git/config` filters, textconv/external diff drivers, `core.askPass`, `include.path`, `url.*.insteadOf` redirecting a pull | The gate's git ops accept only an allowlist of inert repository-local keys and refuse everything else before running git; `GIT_DIR`/`GIT_WORK_TREE` pinned, no system or global config; `.git` is in the protected set, so nothing under it is writable through the file operations (POLICY §3, §7). |
 | **Hard link or copy of a denied binary** | A hard-denied binary declared under an innocent name | Binary identity check at policy load: device + inode and SHA-256 against every hard-denied file in the system binary directories (POLICY §5). |
 | **Escape via a declared binary or a gate bug** | A policy command with a file-write or exec feature; a flaw in our path matcher | Landlock ruleset computed from the policy and applied before the request is read; children inherit it; TCP bind denied and connect limited to listed ports (D-019); Multipath TCP sockets, which Landlock does not govern, are made unavailable by a seccomp filter so programs fall back to governed TCP. |
@@ -119,7 +124,14 @@ Everything a root operator legitimately does can be declared in a host policy. W
 - a redaction pattern fails to compile;
 - a `SHELL_MCP_TRUSTED_PROXIES` entry is not an IP address or canonical CIDR prefix, or is a `/0`; or the replaced `SHELL_MCP_TRUST_PROXY` is set;
 - `stdio` transport with `bearer` mode (meaningless — stdio is `none`);
-- an invalid approval setting (`SHELL_MCP_APPROVAL_TIERS` without `destructive`, an unknown fallback, a TTL outside 30..600).
+- an invalid approval setting: `SHELL_MCP_APPROVAL_TIERS` without `destructive`; an unknown method; `SHELL_MCP_APPROVAL_FALLBACK` or `SHELL_MCP_APPROVERS` set; a TTL outside 60..900;
+- `SHELL_MCP_APPROVAL_METHOD=web` without a valid public URL or approvers file;
+- an approvers file that is group/other-accessible, has a line that does not parse, a short seed or a duplicate name, or holds more approvers than `SHELL_MCP_APPROVAL_MAX_APPROVERS`;
+- a non-loopback approval bind without native TLS or `SHELL_MCP_TRUSTED_PROXIES`;
+- an approval TLS certificate without its key, or the reverse, or either unreadable;
+- an `http://` approval public URL with a non-loopback host or bind;
+- the approval port equal to the MCP port;
+- a notify URL that is not `https://` (loopback excepted), or one without a token.
 
 A secret file readable by group/other logs a WARN on every start (container secret mounts vary; not fatal).
 

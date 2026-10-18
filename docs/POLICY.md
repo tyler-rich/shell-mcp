@@ -62,7 +62,7 @@ Defaults: omitted sections allow nothing. An empty policy with `max_tier: read` 
 |---|---|
 | `read` | No state change on the host. |
 | `operator` | Changes state reversibly: service lifecycle, writes inside write roots with read-back, fast-forward pulls. |
-| `destructive` | Deletes data or discards work. Requires the server's `admin` profile, a human approval through elicitation, and `max_tier: destructive` here. |
+| `destructive` | Deletes data or discards work. Requires the server's `admin` profile, a human approval (D-006), and `max_tier: destructive` here. |
 
 An op or command above `max_tier` is refused with `tier_denied` before any other processing.
 

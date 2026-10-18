@@ -2,11 +2,13 @@ package config
 
 import (
 	"crypto/ed25519"
+	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,6 +19,9 @@ import (
 
 	"go.yaml.in/yaml/v3"
 	"golang.org/x/crypto/ssh"
+
+	"github.com/tyler-rich/shell-mcp/internal/approval/approvers"
+	"github.com/tyler-rich/shell-mcp/internal/approval/notify"
 )
 
 // LookupFunc returns the value of an environment variable and whether it is
@@ -42,8 +47,8 @@ func oneLine(s string) string {
 // Bounds and defaults for settings with numeric ranges.
 const (
 	MinTokenLength     = 43
-	minApprovalTTL     = 30
-	maxApprovalTTL     = 600
+	minApprovalTTL     = 60
+	maxApprovalTTL     = 900
 	maxSecretFileBytes = 64 << 10
 	maxTargetsBytes    = 1 << 20
 	maxTargets         = 256
@@ -74,11 +79,25 @@ type Config struct {
 	MaxTimeout           time.Duration
 	MaxOutputBytes       int
 	ApprovalTiers        []string
-	ApprovalFallback     string
 	ApprovalTTL          time.Duration
-	RedactPatterns       []*regexp.Regexp
-	LogLevel             string
-	LogFormat            string
+	// ApprovalMethod is none, web or confirm-argument.
+	ApprovalMethod string
+	// The approval listener (web): bind, port, optional native TLS, and the
+	// page's fixed origin (scheme://host[:port], no trailing slash).
+	ApprovalBind      string
+	ApprovalPort      int
+	ApprovalTLSCert   *tls.Certificate
+	ApprovalPublicURL string
+	// Approvers are read from SHELL_MCP_APPROVERS_FILE (web).
+	Approvers            []approvers.Approver
+	ApprovalMaxApprovers int
+	// ApprovalNotifyURL and ApprovalNotifyToken configure the optional
+	// ntfy push.
+	ApprovalNotifyURL   string
+	ApprovalNotifyToken Secret
+	RedactPatterns      []*regexp.Regexp
+	LogLevel            string
+	LogFormat           string
 
 	// Warnings are non-fatal findings the caller must log at WARN on every
 	// start. They never contain secret material.
@@ -341,22 +360,174 @@ func (l *loader) approval(c *Config) error {
 	slices.SortFunc(tiers, func(a, b string) int { return tierOrder(a) - tierOrder(b) })
 	c.ApprovalTiers = tiers
 
-	c.ApprovalFallback = l.get("SHELL_MCP_APPROVAL_FALLBACK", "deny")
-	switch c.ApprovalFallback {
-	case "deny":
-	case "confirm-argument":
-		l.warnf("SHELL_MCP_APPROVAL_FALLBACK=confirm-argument: clients without elicitation support can approve operations with a model-supplied argument; human approval is not enforced for them")
-	default:
-		return errorf("SHELL_MCP_APPROVAL_FALLBACK must be deny or confirm-argument (got %q)", c.ApprovalFallback)
+	if l.isSet("SHELL_MCP_APPROVAL_FALLBACK") {
+		return errorf("SHELL_MCP_APPROVAL_FALLBACK was replaced by SHELL_MCP_APPROVAL_METHOD (none, web or confirm-argument)")
 	}
-
-	rawTTL := l.get("SHELL_MCP_APPROVAL_TTL", "120")
+	if l.isSet("SHELL_MCP_APPROVERS") {
+		return errorf("SHELL_MCP_APPROVERS is not accepted: approvers live only in a mounted secret file (SHELL_MCP_APPROVERS_FILE)")
+	}
+	var err error
+	if c.ApprovalMethod, err = l.enum("SHELL_MCP_APPROVAL_METHOD", "none", "none", "web", "confirm-argument"); err != nil {
+		return err
+	}
+	rawTTL := l.get("SHELL_MCP_APPROVAL_TTL", "300")
 	ttl, err := strconv.Atoi(rawTTL)
-	if err != nil || ttl < minApprovalTTL || ttl > maxApprovalTTL {
+	if err != nil || ttl < minApprovalTTL || ttl > maxApprovalTTL || rawTTL != strconv.Itoa(ttl) {
 		return errorf("SHELL_MCP_APPROVAL_TTL must be between %d and %d seconds (got %s)", minApprovalTTL, maxApprovalTTL, rawTTL)
 	}
 	c.ApprovalTTL = time.Duration(ttl) * time.Second
+	c.ApprovalBind, c.ApprovalPort, c.ApprovalMaxApprovers = "127.0.0.1", 8081, approvers.DefaultMaxApprovers
+	switch c.ApprovalMethod {
+	case "confirm-argument":
+		l.warnf("SHELL_MCP_APPROVAL_METHOD=confirm-argument: the model approves its own requests; human approval is not enforced")
+	case "web":
+		return l.approvalWeb(c)
+	}
+	if slices.ContainsFunc(approvalWebVars, l.isSet) {
+		l.warnf("SHELL_MCP_APPROVAL_PUBLIC_URL, SHELL_MCP_APPROVERS_FILE and the other approval page settings are ignored unless SHELL_MCP_APPROVAL_METHOD=web")
+	}
 	return nil
+}
+
+// approvalWebVars are the settings that only SHELL_MCP_APPROVAL_METHOD=web
+// reads.
+var approvalWebVars = []string{
+	"SHELL_MCP_APPROVAL_BIND", "SHELL_MCP_APPROVAL_PORT", "SHELL_MCP_APPROVAL_TLS_CERT_FILE", "SHELL_MCP_APPROVAL_TLS_KEY_FILE",
+	"SHELL_MCP_APPROVAL_PUBLIC_URL", "SHELL_MCP_APPROVERS_FILE", "SHELL_MCP_APPROVAL_MAX_APPROVERS",
+	"SHELL_MCP_APPROVAL_NOTIFY_URL", "SHELL_MCP_APPROVAL_NOTIFY_TOKEN", "SHELL_MCP_APPROVAL_NOTIFY_TOKEN_FILE",
+}
+
+// approvalWeb validates the approval listener, the page's origin, the
+// approvers file and the optional notifier (docs/handoff/S4B-APPROVAL.md
+// §6.7, SECURITY §6).
+func (l *loader) approvalWeb(c *Config) error {
+	c.ApprovalBind = l.get("SHELL_MCP_APPROVAL_BIND", "127.0.0.1")
+	if _, err := netip.ParseAddr(c.ApprovalBind); err != nil {
+		return errorf("SHELL_MCP_APPROVAL_BIND must be an IP address (got %q)", c.ApprovalBind)
+	}
+	if err := l.approvalTLS(c); err != nil {
+		return err
+	}
+	var err error
+	if c.ApprovalPort, err = l.integer("SHELL_MCP_APPROVAL_PORT", 8081, 1, 65535); err != nil {
+		return err
+	}
+	if c.ApprovalPort == c.Port {
+		return errorf("SHELL_MCP_APPROVAL_PORT must differ from SHELL_MCP_PORT (both %d)", c.Port)
+	}
+	raw := l.get("SHELL_MCP_APPROVAL_PUBLIC_URL", "")
+	if raw == "" {
+		return errorf("SHELL_MCP_APPROVAL_METHOD=web requires SHELL_MCP_APPROVAL_PUBLIC_URL")
+	}
+	origin, ok := publicOrigin(raw, IsLoopbackBind(c.ApprovalBind))
+	if !ok {
+		return errorf("SHELL_MCP_APPROVAL_PUBLIC_URL must be an absolute https:// URL with no userinfo, path, query or fragment " +
+			"(http:// only with a loopback host and a loopback SHELL_MCP_APPROVAL_BIND)")
+	}
+	if c.ApprovalTLSCert != nil && !strings.HasPrefix(origin, "https://") {
+		return errorf("SHELL_MCP_APPROVAL_PUBLIC_URL must be https:// when the approval listener serves TLS")
+	}
+	c.ApprovalPublicURL = origin
+	if !IsLoopbackBind(c.ApprovalBind) && c.ApprovalTLSCert == nil && len(c.TrustedProxies) == 0 {
+		return errorf("SHELL_MCP_APPROVAL_BIND=%s is not loopback: set SHELL_MCP_APPROVAL_TLS_CERT_FILE and SHELL_MCP_APPROVAL_TLS_KEY_FILE, "+
+			"or SHELL_MCP_TRUSTED_PROXIES naming the TLS-terminating proxy", c.ApprovalBind)
+	}
+	rawMax, maxSet := l.lookup("SHELL_MCP_APPROVAL_MAX_APPROVERS")
+	if c.ApprovalMaxApprovers, err = approvers.ParseMaxApprovers(strings.TrimSpace(rawMax), maxSet); err != nil {
+		return errorf("%v", err)
+	}
+	file := l.get("SHELL_MCP_APPROVERS_FILE", "")
+	if file == "" {
+		return errorf("SHELL_MCP_APPROVAL_METHOD=web requires SHELL_MCP_APPROVERS_FILE")
+	}
+	if c.Approvers, err = approvers.Load(file, c.ApprovalMaxApprovers); err != nil {
+		return errorf("SHELL_MCP_APPROVERS_FILE: %v", err)
+	}
+	return l.approvalNotify(c)
+}
+
+// approvalTLS loads the optional native TLS pair of the approval listener.
+func (l *loader) approvalTLS(c *Config) error {
+	certFile := l.get("SHELL_MCP_APPROVAL_TLS_CERT_FILE", "")
+	keyFile := l.get("SHELL_MCP_APPROVAL_TLS_KEY_FILE", "")
+	if (certFile == "") != (keyFile == "") {
+		return errorf("SHELL_MCP_APPROVAL_TLS_CERT_FILE and SHELL_MCP_APPROVAL_TLS_KEY_FILE must be set together")
+	}
+	if certFile == "" {
+		return nil
+	}
+	const reason = "SHELL_MCP_APPROVAL_TLS_CERT_FILE / SHELL_MCP_APPROVAL_TLS_KEY_FILE: cannot load the certificate and key"
+	certPEM, err := readBounded(certFile, maxSecretFileBytes)
+	if err != nil {
+		return errorf(reason)
+	}
+	keyPEM, err := l.readSecretFile("SHELL_MCP_APPROVAL_TLS_KEY_FILE", keyFile)
+	if err != nil {
+		return errorf(reason)
+	}
+	pair, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return errorf(reason)
+	}
+	c.ApprovalTLSCert = &pair
+	return nil
+}
+
+// approvalNotify validates the optional ntfy push.
+func (l *loader) approvalNotify(c *Config) error {
+	raw := l.get("SHELL_MCP_APPROVAL_NOTIFY_URL", "")
+	if raw == "" {
+		return nil
+	}
+	if _, _, err := notify.ParseTopicURL(raw); err != nil {
+		return errorf("SHELL_MCP_APPROVAL_NOTIFY_URL: %v", err)
+	}
+	tok, ok, err := l.secret("SHELL_MCP_APPROVAL_NOTIFY_TOKEN")
+	if err != nil {
+		return err
+	}
+	if !ok || strings.TrimSpace(tok) == "" {
+		return errorf("SHELL_MCP_APPROVAL_NOTIFY_URL requires SHELL_MCP_APPROVAL_NOTIFY_TOKEN or SHELL_MCP_APPROVAL_NOTIFY_TOKEN_FILE")
+	}
+	c.ApprovalNotifyURL, c.ApprovalNotifyToken = raw, Secret{v: strings.TrimSpace(tok)}
+	return nil
+}
+
+// maxPublicURL bounds SHELL_MCP_APPROVAL_PUBLIC_URL, so the approval_pending
+// message that carries it stays within an error message's bound.
+const maxPublicURL = 200
+
+// publicOrigin checks SHELL_MCP_APPROVAL_PUBLIC_URL and returns its origin
+// in lower case without a trailing slash: an absolute https:// URL (http://
+// only for a loopback host with a loopback bind) with no userinfo, path
+// other than /, query or fragment, and a port, when given, of 1..65535.
+func publicOrigin(raw string, loopbackBind bool) (string, bool) {
+	if len(raw) > maxPublicURL {
+		return "", false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" ||
+		(u.Path != "" && u.Path != "/") || u.Hostname() == "" {
+		return "", false
+	}
+	if p := u.Port(); p != "" {
+		n, perr := strconv.Atoi(p)
+		if perr != nil || n < 1 || n > 65535 || strconv.Itoa(n) != p {
+			return "", false
+		}
+	}
+	host := strings.ToLower(u.Hostname())
+	switch u.Scheme {
+	case "https":
+	case "http":
+		ip, perr := netip.ParseAddr(host)
+		if !loopbackBind || host != "localhost" && (perr != nil || !ip.IsLoopback()) {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+	return u.Scheme + "://" + strings.ToLower(u.Host), true
 }
 
 func tierOrder(t string) int {

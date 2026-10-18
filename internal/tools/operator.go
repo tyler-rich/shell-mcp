@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -122,6 +123,17 @@ func controlService(d *Deps) Tool {
 			}
 			return fetch[ServiceControl](ctx, d, in.Target, protocol.OpServiceControl, controlWire{Unit: in.Unit, Action: in.Action}, budget)
 		},
+		approvalArgs: func(in controlIn) any {
+			return struct {
+				Unit           string `json:"unit"`
+				Action         string `json:"action"`
+				TimeoutSeconds int    `json:"timeout_seconds"`
+			}{in.Unit, in.Action, d.timeoutDefault(in.timeoutArg)}
+		},
+		describe: func(in controlIn, target string) string {
+			return strings.ToUpper(in.Action[:1]) + in.Action[1:] + " " + plain(in.Unit, "a unit shown in the arguments") + " on " + target
+		},
+		preview: d.controlPreview,
 	})
 }
 
@@ -250,6 +262,28 @@ func writeFile(d *Deps) Tool {
 			return verified(r, WriteFile{Path: x.Path, Created: x.Created, Bytes: x.Bytes, Mode: x.Mode, OldSHA256: x.OldSHA256,
 				NewSHA256: x.SHA256, LinesOld: x.LinesOld, LinesNew: x.LinesNew, LinesDelta: x.LinesNew - x.LinesOld, OwnerPreserved: x.OwnerPreserved})
 		},
+		approvalArgs: func(in writeIn) any {
+			return struct {
+				Path           string `json:"path"`
+				Content        string `json:"content"`
+				Mode           string `json:"mode"`
+				Create         bool   `json:"create"`
+				ExpectedSHA256 string `json:"expected_sha256"`
+			}{in.Path, *in.Content, in.Mode, in.Create == nil || *in.Create, in.ExpectedSHA256}
+		},
+		describe: func(in writeIn, target string) string {
+			return "Write " + describeBytes(len(*in.Content)) + " to " + plain(in.Path, "a file whose path is shown in the arguments") + " on " + target
+		},
+		preview: func(ctx context.Context, in writeIn, target string) (*preview, *envelope.Error) {
+			return d.writePreview(ctx, &in, target)
+		},
+		precondition: func(in *writeIn, p *preview) {
+			// The write is refused if the content changed after the fresh
+			// preview; a caller's own expected_sha256 is kept (it is bound).
+			if in.ExpectedSHA256 == "" {
+				in.ExpectedSHA256 = p.contentSHA256
+			}
+		},
 	})
 }
 
@@ -305,6 +339,23 @@ func makeDirectory(d *Deps) Tool {
 		run: func(ctx context.Context, _ *mcp.CallToolRequest, in mkdirIn) envelope.Envelope[MakeDirectory] {
 			return fetch[MakeDirectory](ctx, d, in.Target, protocol.OpMkdir, mkdirWire{Path: in.Path, Mode: in.Mode, Parents: in.Parents}, d.budget())
 		},
+		approvalArgs: func(in mkdirIn) any {
+			return struct {
+				Path    string `json:"path"`
+				Mode    string `json:"mode"`
+				Parents bool   `json:"parents"`
+			}{in.Path, in.Mode, in.Parents}
+		},
+		describe: func(in mkdirIn, target string) string {
+			what := "Create directory " + plain(in.Path, "a directory whose path is shown in the arguments")
+			if in.Parents {
+				what += " and its missing parents"
+			}
+			return what + " on " + target
+		},
+		preview: func(ctx context.Context, in mkdirIn, target string) (*preview, *envelope.Error) {
+			return d.pathPreview(ctx, in.Path, target)
+		},
 	})
 }
 
@@ -328,6 +379,24 @@ func boundSrcDst(s *jsonschema.Schema) {
 	boundCommon(s)
 	strIn(s, "source", pathPattern, 4096)
 	strIn(s, "destination", pathPattern, 4096)
+}
+
+func srcDstCanonical(in srcDstIn) any {
+	return struct {
+		Source      string `json:"source"`
+		Destination string `json:"destination"`
+		Overwrite   bool   `json:"overwrite"`
+	}{in.Source, in.Destination, in.Overwrite}
+}
+
+func srcDstDescribe(verb string) func(srcDstIn, string) string {
+	return func(in srcDstIn, target string) string {
+		what := verb + " " + plain(in.Source, "a path shown in the arguments") + " to " + plain(in.Destination, "a destination shown in the arguments")
+		if in.Overwrite {
+			what += ", replacing an existing destination"
+		}
+		return what + " on " + target
+	}
 }
 
 func srcDstAudit(in srcDstIn) map[string]any {
@@ -374,6 +443,9 @@ func copyPath(d *Deps) Tool {
 			return verified(r, CopyPath{Source: in.Source, Destination: x.Path, Created: x.Created, Bytes: x.Bytes, Mode: x.Mode,
 				SHA256: x.SHA256, OldSHA256: x.OldSHA256})
 		},
+		approvalArgs: srcDstCanonical,
+		describe:     srcDstDescribe("Copy"),
+		preview:      d.srcDstPreview,
 	})
 }
 
@@ -404,6 +476,9 @@ func movePath(d *Deps) Tool {
 			w := srcDstWire{Source: in.Source, Destination: in.Destination, Overwrite: in.Overwrite}
 			return fetch[MovePath](ctx, d, in.Target, protocol.OpMove, w, d.budget())
 		},
+		approvalArgs: srcDstCanonical,
+		describe:     srcDstDescribe("Move"),
+		preview:      d.srcDstPreview,
 	})
 }
 
@@ -453,6 +528,18 @@ func setPermissions(d *Deps) Tool {
 		run: func(ctx context.Context, _ *mcp.CallToolRequest, in chmodIn) envelope.Envelope[SetPermissions] {
 			return fetch[SetPermissions](ctx, d, in.Target, protocol.OpChmod, chmodWire{Path: in.Path, Mode: in.Mode}, d.budget())
 		},
+		approvalArgs: func(in chmodIn) any {
+			return struct {
+				Path string `json:"path"`
+				Mode string `json:"mode"`
+			}{in.Path, in.Mode}
+		},
+		describe: func(in chmodIn, target string) string {
+			return "Set the mode of " + plain(in.Path, "a path shown in the arguments") + " to " + in.Mode + " on " + target
+		},
+		preview: func(ctx context.Context, in chmodIn, target string) (*preview, *envelope.Error) {
+			return d.pathPreview(ctx, in.Path, target)
+		},
 	})
 }
 
@@ -489,6 +576,16 @@ func gitPull(d *Deps) Tool {
 			}
 			return fetch[GitPull](ctx, d, in.Target, protocol.OpGitPull, repoWire{Repo: in.Repo}, budget)
 		},
+		approvalArgs: func(in repoIn) any {
+			return struct {
+				Repo           string `json:"repo"`
+				TimeoutSeconds int    `json:"timeout_seconds"`
+			}{in.Repo, d.timeoutDefault(in.timeoutArg)}
+		},
+		describe: func(in repoIn, target string) string {
+			return "Fast-forward the repository " + plain(in.Repo, "shown in the arguments") + " on " + target
+		},
+		preview: d.gitPullPreview,
 	})
 }
 
@@ -556,6 +653,34 @@ func runCommand(d *Deps) Tool {
 				w.MaxOutputBytes = *in.MaxOutputBytes
 			}
 			return d.runExec(ctx, in.Target, &w, in.timeoutArg, in.outputArg)
+		},
+		approvalArgs: func(in runCommandIn) any {
+			args := in.Args
+			if args == nil {
+				args = []string{}
+			}
+			cwd := in.Cwd
+			if cwd == "" {
+				cwd = "/"
+			}
+			return struct {
+				CommandID      string   `json:"command_id"`
+				Args           []string `json:"args"`
+				Cwd            string   `json:"cwd"`
+				Stdin          string   `json:"stdin"`
+				TimeoutSeconds int      `json:"timeout_seconds"`
+				MaxOutputBytes int      `json:"max_output_bytes"`
+			}{in.CommandID, args, cwd, in.Stdin, d.timeoutDefault(in.timeoutArg), d.outputDefault(in.outputArg)}
+		},
+		describe: func(in runCommandIn, target string) string {
+			what := "Run command " + in.CommandID + " with " + plural(len(in.Args), "argument", "arguments")
+			if in.Stdin != "" {
+				what += " and " + describeBytes(len(in.Stdin)) + " of standard input"
+			}
+			return what + " on " + target
+		},
+		preview: func(ctx context.Context, in runCommandIn, target string) (*preview, *envelope.Error) {
+			return d.runCommandPreview(ctx, &in, target)
 		},
 	})
 }

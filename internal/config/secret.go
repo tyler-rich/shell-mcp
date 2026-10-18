@@ -21,6 +21,11 @@ func NewSecret(v string) Secret { return Secret{v: v} }
 // Len returns the secret's length in bytes.
 func (s Secret) Len() int { return len(s.v) }
 
+// Reveal returns the secret's value. Only code that sends the secret where
+// it belongs calls it (the notifier's Authorization header); nothing logs or
+// returns its result.
+func (s Secret) Reveal() string { return s.v }
+
 // IsZero reports whether the secret is empty.
 func (s Secret) IsZero() bool { return s.v == "" }
 
