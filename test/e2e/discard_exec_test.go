@@ -119,7 +119,9 @@ func TestDestructiveToolsApproval(t *testing.T) {
 		}
 		t.Cleanup(func() { _ = cs.Close() })
 		dirtyDiscard(t)
-		time.Sleep(1100 * time.Millisecond)
+		// journal() reads from one second before since (whole seconds): let
+		// the previous test's gate lines fall outside that window.
+		time.Sleep(2100 * time.Millisecond)
 		since := time.Now()
 		refusal(t, callOn(t, cs, log, "shell_discard_git_changes", map[string]any{"repo": opsDiscard}), "approval_unavailable", "")
 		refusal(t, callOn(t, cs, log, "shell_run_command", map[string]any{"command_id": "probe-destructive", "args": []string{"echo", "destructive"}}),
@@ -184,11 +186,14 @@ func TestDestructiveToolsApproval(t *testing.T) {
 				t.Fatalf("%s still there: %v", p, err)
 			}
 		}
-		if st := repoGit(t, opsDiscard, "status", "--porcelain", "--untracked-files=no"); st != "" {
-			t.Fatalf("status after the discard: %q", st)
-		}
+		// Before the test's own git runs: its status (as root, without the
+		// gate's flags) would run the hook itself.
 		if _, err := os.Lstat(marker); !os.IsNotExist(err) {
 			t.Fatal("a hook ran during the discard")
+		}
+		_ = os.Remove(opsDiscard + "/.git/hooks/post-index-change")
+		if st := repoGit(t, opsDiscard, "--no-optional-locks", "status", "--porcelain", "--untracked-files=no"); st != "" {
+			t.Fatalf("status after the discard: %q", st)
 		}
 		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"git_discard"`, `"ceiling":"destructive"`, `"outcome":"ok"`)
 		if n := opLines(t, start, "git_discard"); n != 1 {

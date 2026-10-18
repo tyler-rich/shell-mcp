@@ -560,7 +560,9 @@ func TestOperatorToolRunCommand(t *testing.T) {
 		opsServer(t)
 		// Control: the gate runs the destructive command at ceiling
 		// destructive (its max_tier is destructive), so the refusal below
-		// comes from the operator tool's ceiling.
+		// comes from the operator tool's ceiling. The tool resolves the
+		// command first (its approval follows the command's tier), so the
+		// refusal comes from exec_preview and no exec is sent.
 		resp := gateExecAt(t, opsKey, protocol.TierDestructive, "probe-destructive", []string{"echo", "destructive"})
 		if !resp.OK {
 			t.Fatalf("control: the gate refused the destructive command: %+v", resp.Error)
@@ -568,8 +570,15 @@ func TestOperatorToolRunCommand(t *testing.T) {
 		start := time.Now()
 		refusal(t, opCall(t, "shell_run_command", map[string]any{"command_id": "probe-destructive", "args": []string{"echo", "destructive"}}),
 			"tier_denied", "ceiling operator")
-		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"exec"`, `"command_id":"probe-destructive"`,
+		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"exec_preview"`, `"command_id":"probe-destructive"`,
 			`"ceiling":"operator"`, `"outcome":"tier_denied"`)
+		time.Sleep(time.Second)
+		for _, j := range journal(t, "shell-mcp-gate", start) {
+			if strings.Contains(j.Message, `"op":"exec"`) && strings.Contains(j.Message, `"command_id":"probe-destructive"`) && strings.Contains(j.Message, `"ceiling":"operator"`) &&
+				strings.Contains(j.Message, `"principal":"`+opsWho+`"`) {
+				t.Fatalf("an exec was sent for the refused command: %s", j.Message)
+			}
+		}
 	})
 }
 
