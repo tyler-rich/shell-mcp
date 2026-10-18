@@ -48,6 +48,15 @@ type spec[In, Out any] struct {
 	describe     func(in In, target string) string
 	preview      func(ctx context.Context, in In, target string) (*preview, *envelope.Error)
 	precondition func(in *In, p *preview)
+	// tierFromPreview: whether a call needs approval follows the tier of
+	// the operation its preview resolved (shell_run_command: the command's
+	// tier), not the tool's; the operation then runs at that tier's
+	// ceiling when approved, and at the highest tier that needs no
+	// approval otherwise (perTierCall).
+	tierFromPreview bool
+	// precheck, when set, validates what needs the server's settings (its
+	// timeout and output limits) before anything is sent.
+	precheck func(in *In) *envelope.Error
 }
 
 // validator is implemented by inputs with checks beyond their types.
@@ -115,7 +124,7 @@ func define[In, Out any](d *Deps, s spec[In, Out]) Tool {
 		var apOutcome approvalOutcome
 		apID := ""
 		switch {
-		case gated && d.method() == approval.MethodNone:
+		case gated && d.method() == approval.MethodNone && !s.tierFromPreview:
 			// First: whatever the arguments, nothing is sent.
 			env = envelope.Failure[Out]("", d.unavailable(s.tier))
 		case apErr != nil:
@@ -128,10 +137,17 @@ func define[In, Out any](d *Deps, s spec[In, Out]) Tool {
 					env = envelope.Failure[Out]("", e)
 				}
 			}
+			if env.Error == nil && s.precheck != nil {
+				if e := s.precheck(&args); e != nil {
+					env = envelope.Failure[Out]("", e)
+				}
+			}
 			switch {
 			case env.Error != nil:
+			case s.tierFromPreview:
+				env, apOutcome, apID = perTierCall(ctx, d, s, req, args, ap)
 			case gated:
-				env, apOutcome, apID = approveCall(ctx, d, s, req, args, ap)
+				env, apOutcome, apID = approveCall(ctx, d, s, req, args, ap, nil)
 			case ap.given:
 				env = envelope.Failure[Out]("", envelope.Errorf(envelope.CodeValidationError,
 					"this call needs no approval; call again without approval_id and confirm"))

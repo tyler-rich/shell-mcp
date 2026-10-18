@@ -131,6 +131,9 @@ type preview struct {
 	policy        string
 	contentSHA256 string
 	absent        bool
+	// tier is the tier of the operation the preview resolved, when the
+	// tool's gating follows it (spec.tierFromPreview); 0 otherwise.
+	tier Tier
 }
 
 // policyAcc collects the policy hashes of a preview's requests.
@@ -217,7 +220,8 @@ func (a targetArg) targetName() string { return a.Target }
 // creates (or finds) the approval record; a re-call with approval_id goes
 // through the store's checks, then a fresh preview that must hash the same,
 // then the operation with the preview's precondition.
-func approveCall[In, Out any](ctx context.Context, d *Deps, s spec[In, Out], req *mcp.CallToolRequest, in In, ap approvalInput) (envelope.Envelope[Out], approvalOutcome, string) {
+// first, when given, is the first call's preview, already computed.
+func approveCall[In, Out any](ctx context.Context, d *Deps, s spec[In, Out], req *mcp.CallToolRequest, in In, ap approvalInput, first *preview) (envelope.Envelope[Out], approvalOutcome, string) {
 	tn := ""
 	if t, ok := any(in).(targeted); ok {
 		tn = t.targetName()
@@ -237,9 +241,12 @@ func approveCall[In, Out any](ctx context.Context, d *Deps, s spec[In, Out], req
 	b := approval.Binding{Principal: d.Principal.Name, Tool: s.name, Target: tg.Name, ArgsSHA256: argsHash}
 
 	if ap.ID == "" {
-		p, perr := s.preview(ctx, in, tg.Name)
-		if perr != nil {
-			return envelope.Failure[Out](tg.Name, perr), "", ""
+		p := first
+		if p == nil {
+			var perr *envelope.Error
+			if p, perr = s.preview(ctx, in, tg.Name); perr != nil {
+				return envelope.Failure[Out](tg.Name, perr), "", ""
+			}
 		}
 		ph, err1 := approval.HashOf(p.value)
 		argFields, err2 := approval.Fields(canon, approval.MaxArgsBytes)
@@ -304,9 +311,70 @@ func approveCall[In, Out any](ctx context.Context, d *Deps, s spec[In, Out], req
 	if s.precondition != nil {
 		s.precondition(&in, p)
 	}
+	if s.tierFromPreview {
+		// The approved operation runs at its own tier's ceiling (the fresh
+		// preview hashed as approved, so its tier is the approved one).
+		ctx = withCeiling(ctx, p.tier)
+	}
 	env := s.run(ctx, req, in)
 	env.Approval = d.approvalObject(&rec, approval.StatusUsed)
 	return env, outcomeUsed, ap.ID
+}
+
+// perTierCall runs a call of a tool whose gating follows the tier of the
+// operation its preview resolves (shell_run_command, D-006). A re-call
+// with approval_id goes through the approval flow. Otherwise the preview
+// is computed first, at the tool's ceiling: an operation whose tier needs
+// approval goes through the approval flow with that preview (and, when
+// approved, runs at that tier's ceiling); one that does not runs at once
+// at the highest tier that needs no approval, with the preview's
+// precondition, so an operation whose tier rose after the preview (a
+// policy edit) is refused by the gate instead of running unapproved.
+func perTierCall[In, Out any](ctx context.Context, d *Deps, s spec[In, Out], req *mcp.CallToolRequest, in In, ap approvalInput) (envelope.Envelope[Out], approvalOutcome, string) {
+	if ap.given {
+		if d.method() == approval.MethodNone {
+			return envelope.Failure[Out]("", d.unavailable(s.tier)), "", ap.ID
+		}
+		return approveCall(ctx, d, s, req, in, ap, nil)
+	}
+	tn := ""
+	if t, ok := any(in).(targeted); ok {
+		tn = t.targetName()
+	}
+	tg, e := d.resolve(tn)
+	if e != nil {
+		return envelope.Failure[Out](tn, e), "", ""
+	}
+	p, e := s.preview(ctx, in, tg.Name)
+	if e != nil {
+		return envelope.Failure[Out](tg.Name, e), "", ""
+	}
+	if !p.tier.valid() || p.tier > s.tier {
+		return envelope.Failure[Out](tg.Name, envelope.Errorf("internal", "the preview named no tier within the tool's")), "", ""
+	}
+	if d.gated(p.tier) {
+		if d.method() == approval.MethodNone || d.Approvals == nil {
+			return envelope.Failure[Out](tg.Name, envelope.Errorf(envelope.CodeApprovalUnavailable,
+				"this %s-tier operation needs a human approval and this server collects none (SHELL_MCP_APPROVAL_METHOD=none); nothing was run", p.tier)), "", ""
+		}
+		return approveCall(ctx, d, s, req, in, ap, p)
+	}
+	if s.precondition != nil {
+		s.precondition(&in, p)
+	}
+	return s.run(withCeiling(ctx, d.ungatedCeiling(s.tier)), req, in), "", ""
+}
+
+// ungatedCeiling is the highest tier, up to max, whose operations need no
+// approval under SHELL_MCP_APPROVAL_TIERS: operator by default, read when
+// operator is listed.
+func (d *Deps) ungatedCeiling(maxTier Tier) Tier {
+	for t := maxTier; t > TierRead; t-- {
+		if !d.gated(t) {
+			return t
+		}
+	}
+	return TierRead
 }
 
 // describeBytes is "N byte(s)".

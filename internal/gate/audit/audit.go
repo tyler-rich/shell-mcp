@@ -127,7 +127,7 @@ var loggedArgs = map[string]bool{
 	"sort_by": true, "user": true, "name_contains": true, "overwrite": true, "parents": true,
 	"mode": true, "create": true, "expect_absent": true, "max_bytes": true, "offset": true, "tail_lines": true,
 	"name_glob": true, "type": true, "max_depth": true, "modified_within_s": true,
-	"include_hidden": true, "failed_only": true, "max_output_bytes": true,
+	"include_hidden": true, "failed_only": true, "max_output_bytes": true, "include_untracked": true,
 }
 
 // SanitizeArgs keeps the loggable scalar arguments of a request, and for a

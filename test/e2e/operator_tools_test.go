@@ -53,6 +53,7 @@ const (
 	opsRepos   = opsRoot + "/repos"
 	opsRepo    = opsRepos + "/app"
 	opsForeign = opsRepos + "/foreign"
+	opsDiscard = opsRepos + "/discard"
 	opsGitAddr = "127.0.0.1:44443"
 	opsRemote  = "https://" + opsGitAddr + "/example-ops.git"
 	opsCAFile  = "/usr/local/share/ca-certificates/shell-mcp-e2e-git.crt"
@@ -176,7 +177,7 @@ func opsFixtures(t *testing.T) error {
 		gatetest.Git(t, opsBare, "config", kv[0], kv[1])
 	}
 	gatetest.Git(t, opsSeed, "remote", "add", "origin", opsBare)
-	for _, r := range []struct{ dir, url string }{{"app", opsRemote}, {"foreign", "https://" + opsGitAddr + "/other.git"}} {
+	for _, r := range []struct{ dir, url string }{{"app", opsRemote}, {"foreign", "https://" + opsGitAddr + "/other.git"}, {"discard", opsRemote}} {
 		_ = os.RemoveAll(filepath.Join(opsRepos, r.dir))
 		gatetest.Git(t, opsRepos, "clone", "-q", opsBare, r.dir)
 		gatetest.Git(t, filepath.Join(opsRepos, r.dir), "remote", "set-url", "origin", r.url)
@@ -559,7 +560,9 @@ func TestOperatorToolRunCommand(t *testing.T) {
 		opsServer(t)
 		// Control: the gate runs the destructive command at ceiling
 		// destructive (its max_tier is destructive), so the refusal below
-		// comes from the operator tool's ceiling.
+		// comes from the operator tool's ceiling. The tool resolves the
+		// command first (its approval follows the command's tier), so the
+		// refusal comes from exec_preview and no exec is sent.
 		resp := gateExecAt(t, opsKey, protocol.TierDestructive, "probe-destructive", []string{"echo", "destructive"})
 		if !resp.OK {
 			t.Fatalf("control: the gate refused the destructive command: %+v", resp.Error)
@@ -567,8 +570,17 @@ func TestOperatorToolRunCommand(t *testing.T) {
 		start := time.Now()
 		refusal(t, opCall(t, "shell_run_command", map[string]any{"command_id": "probe-destructive", "args": []string{"echo", "destructive"}}),
 			"tier_denied", "ceiling operator")
-		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"exec"`, `"command_id":"probe-destructive"`,
+		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"exec_preview"`, `"command_id":"probe-destructive"`,
 			`"ceiling":"operator"`, `"outcome":"tier_denied"`)
+		time.Sleep(time.Second)
+		for _, j := range journal(t, "shell-mcp-gate", start) {
+			// Any exec for the command except the control's own, at ceiling
+			// destructive above, fails: the tool must send none, at any ceiling.
+			if strings.Contains(j.Message, `"op":"exec"`) && strings.Contains(j.Message, `"command_id":"probe-destructive"`) &&
+				strings.Contains(j.Message, `"principal":"`+opsWho+`"`) && !strings.Contains(j.Message, `"ceiling":"destructive"`) {
+				t.Fatalf("an exec was sent for the refused command: %s", j.Message)
+			}
+		}
 	})
 }
 
@@ -590,6 +602,9 @@ func TestOperatorToolsApprovalGuard(t *testing.T) {
 	time.Sleep(2100 * time.Millisecond)
 	start := time.Now()
 	for _, name := range operatorToolNames {
+		if name == "shell_run_command" {
+			continue // gated by the command's tier, below
+		}
 		args := map[string]any{"path": p, "content": "x\n"}
 		if name != "shell_write_file" {
 			args = map[string]any{}
@@ -599,13 +614,24 @@ func TestOperatorToolsApprovalGuard(t *testing.T) {
 	if _, err := os.Lstat(p); !os.IsNotExist(err) {
 		t.Fatalf("the guarded write happened: %v", err)
 	}
+	// shell_run_command: an operator command is refused after its preview,
+	// and nothing runs; a read command needs no approval and runs at ceiling
+	// read (the highest tier the listed tiers leave ungated).
+	refusal(t, callOn(t, cs, &log, "shell_run_command", map[string]any{"command_id": "probe-exit", "args": []string{"exit", "1"}}),
+		"approval_unavailable", "SHELL_MCP_APPROVAL_METHOD=none")
+	okDataAs(t, callOn(t, cs, &log, "shell_run_command", map[string]any{"command_id": "probe-echo", "args": []string{"echo", "guarded-read"}}), opsWho)
 	okDataAs(t, callOn(t, cs, &log, "shell_stat_path", map[string]any{"path": opsWork}), opsWho)
-	// The stat reached the gate; nothing before it did.
+	// The stat, the previews and the read command reached the gate; no
+	// guarded operation did.
 	findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"stat"`)
+	findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"exec"`, `"command_id":"probe-echo"`, `"ceiling":"read"`, `"outcome":"ok"`)
 	for _, j := range journal(t, "shell-mcp-gate", start) {
-		if strings.Contains(j.Message, `"principal":"`+opsWho+`"`) && !strings.Contains(j.Message, `"op":"stat"`) {
-			t.Fatalf("a guarded call reached the gate: %q", j.Message)
+		m := j.Message
+		if !strings.Contains(m, `"principal":"`+opsWho+`"`) || strings.Contains(m, `"op":"stat"`) || strings.Contains(m, `"op":"exec_preview"`) ||
+			strings.Contains(m, `"op":"exec"`) && strings.Contains(m, `"command_id":"probe-echo"`) {
+			continue
 		}
+		t.Fatalf("a guarded call reached the gate: %q", m)
 	}
 }
 

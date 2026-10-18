@@ -141,3 +141,69 @@ func TestParseProfile(t *testing.T) {
 		}
 	}
 }
+
+// TestRegisterForProfiles: a name may be registered once per set of
+// profiles that do not overlap (shell_run_command at operator in the
+// operator profile and at destructive in admin); each profile then sees
+// exactly one registration, and All lists both.
+func TestRegisterForProfiles(t *testing.T) {
+	r := populated(t)
+	op := Tool{Def: &mcp.Tool{Name: "shell_run_command"}, Tier: TierOperator, Install: func(*mcp.Server) {}}
+	ad := Tool{Def: &mcp.Tool{Name: "shell_run_command"}, Tier: TierDestructive, Install: func(*mcp.Server) {}}
+	if err := r.RegisterFor(op, TierOperator, []Profile{ProfileOperator}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RegisterFor(ad, TierDestructive, []Profile{ProfileAdmin}); err != nil {
+		t.Fatal(err)
+	}
+	for p, want := range map[Profile]Tier{ProfileOperator: TierOperator, ProfileAdmin: TierDestructive} {
+		var got []Tier
+		for _, g := range r.ToolsForProfile(p, nil) {
+			if g.Tool.Def.Name == "shell_run_command" {
+				got = append(got, g.Tier)
+			}
+		}
+		if len(got) != 1 || got[0] != want {
+			t.Fatalf("%s: shell_run_command at %v", p, got)
+		}
+	}
+	if slices.Contains(names(r.ToolsForProfile(ProfileReadOnly, nil)), "shell_run_command") {
+		t.Fatal("registered in read-only")
+	}
+	all := r.All()
+	var tiers []Tier
+	for _, g := range all {
+		if g.Tool.Def.Name == "shell_run_command" {
+			tiers = append(tiers, g.Tier)
+		}
+	}
+	if len(all) != 8 || !slices.Equal(tiers, []Tier{TierOperator, TierDestructive}) {
+		t.Fatalf("All: %v tiers %v", names(all), tiers)
+	}
+	// Disabled by name removes it from every profile.
+	if slices.Contains(names(r.ToolsForProfile(ProfileAdmin, []string{"shell_run_command"})), "shell_run_command") {
+		t.Fatal("not disabled")
+	}
+	bad := []struct {
+		name     string
+		tool     Tool
+		tier     Tier
+		profiles []Profile
+	}{
+		{"overlapping profiles", ad, TierDestructive, []Profile{ProfileAdmin}},
+		{"no profiles", Tool{Def: &mcp.Tool{Name: "shell_x_y"}, Install: func(*mcp.Server) {}}, TierRead, nil},
+		{"unknown profile", Tool{Def: &mcp.Tool{Name: "shell_x_y"}, Install: func(*mcp.Server) {}}, TierRead, []Profile{"root"}},
+		{"tier above the profile", Tool{Def: &mcp.Tool{Name: "shell_x_y"}, Install: func(*mcp.Server) {}}, TierDestructive, []Profile{ProfileOperator}},
+		{"name already registered for every profile", tool("shell_read_file"), TierRead, []Profile{ProfileAdmin}},
+		{"privileged", tool("shell_priv_x_y"), TierOperator, []Profile{ProfileAdmin}},
+	}
+	for _, b := range bad {
+		if err := r.RegisterFor(b.tool, b.tier, b.profiles); err == nil {
+			t.Errorf("%s: accepted", b.name)
+		}
+	}
+	// Register refuses a name registered for some profiles only.
+	if err := r.Register(tool("shell_run_command"), TierOperator, false); err == nil {
+		t.Fatal("Register accepted a name RegisterFor holds")
+	}
+}

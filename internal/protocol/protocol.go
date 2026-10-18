@@ -132,6 +132,7 @@ const (
 	OpGitDiscard        = "git_discard"
 	OpGitDiscardPreview = "git_discard_preview"
 	OpExec              = "exec"
+	OpExecPreview       = "exec_preview"
 )
 
 // Privileged operations forwarded to the helper (PRIVILEGED.md §6).

@@ -22,7 +22,7 @@ import (
 
 // Invented layout and identities; nothing here describes a real host.
 type fixture struct {
-	t                                    *testing.T
+	t                                    testing.TB
 	dir, read, write, secrets, bin, home string
 	exe, policyFile, probe               string
 	opts                                 ops.Options
@@ -77,7 +77,7 @@ redact:
     templates: [["write", "{path:write}"]]
 `
 
-func newFixture(t *testing.T, tier string) *fixture {
+func newFixture(t testing.TB, tier string) *fixture {
 	t.Helper()
 	d := gatetest.SecureDir(t)
 	f := &fixture{t: t, dir: d,
@@ -494,7 +494,7 @@ func TestProductionOptionsHaveNoTestHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.TestGitCAFile != "" || o.InjectReadBackFault != nil || o.InjectBeforeCommit != nil || o.InjectNoReplaceFault != nil || o.InjectDeleteStep != nil || o.Audit == nil ||
+	if o.TestGitCAFile != "" || o.InjectReadBackFault != nil || o.InjectBeforeCommit != nil || o.InjectNoReplaceFault != nil || o.InjectDeleteStep != nil || o.InjectDiscardStep != nil || o.Audit == nil ||
 		o.Systemctl != ops.SystemctlPath || o.Journalctl != ops.JournalctlPath || o.Git != ops.GitPath {
 		t.Fatalf("production options %+v", o)
 	}

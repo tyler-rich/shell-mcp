@@ -6,6 +6,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/tyler-rich/shell-mcp/internal/config"
+	"github.com/tyler-rich/shell-mcp/internal/sshx"
 )
 
 // Operator-tier tools against a recording fake gate (docs/TOOLS.md,
@@ -61,6 +64,7 @@ func operatorReplies() map[string]gateReply {
 	r["chmod"] = gateReply{data: fakeChmod}
 	r["git_pull"] = gateReply{data: fakePull}
 	r["service_control"] = gateReply{data: fakeControl}
+	r["exec_preview"] = gateReply{data: fakeExecPreview(shaExec, "operator")}
 	return r
 }
 
@@ -97,9 +101,13 @@ func TestOperatorToolsRegistered(t *testing.T) {
 			if i < 0 {
 				t.Fatalf("%s is not registered in the %s profile (have %v)", want, p, names(regs))
 			}
-			// shell_run_command too: its admin registration at destructive
-			// comes with approval (S4b).
-			if regs[i].Tier != TierOperator || regs[i].Privileged || regs[i].Tool.Tier != TierOperator {
+			// shell_run_command is registered at destructive in admin
+			// (TestRunCommandRegistrations).
+			wantTier := TierOperator
+			if want == "shell_run_command" && p == ProfileAdmin {
+				wantTier = TierDestructive
+			}
+			if regs[i].Tier != wantTier || regs[i].Privileged || regs[i].Tool.Tier != wantTier {
 				t.Fatalf("%s in %s: tier %s (defined %s), privileged %v", want, p, regs[i].Tier, regs[i].Tool.Tier, regs[i].Privileged)
 			}
 		}
@@ -216,7 +224,7 @@ func TestOperatorToolSchemaBounds(t *testing.T) {
 // anything is sent.
 func TestOperatorToolsValidation(t *testing.T) {
 	g := newRecordingGate(operatorReplies())
-	h := readHarness(t, g)
+	h := operatorHarness(t, g)
 	tooBig := strings.Repeat("a", 1<<20+1)
 	many := make([]string, 65)
 	for i := range many {
@@ -312,21 +320,27 @@ func TestOperatorToolsCallTheirOp(t *testing.T) {
 		{"shell_set_permissions", map[string]any{"path": "/srv/app/config/app.yaml", "mode": "0600"}, "chmod", `{"mode":"0600","path":"/srv/app/config/app.yaml"}`},
 		{"shell_git_pull", map[string]any{"repo": "/srv/app/deploy"}, "git_pull", `{"repo":"/srv/app/deploy"}`},
 		{"shell_run_command", map[string]any{"command_id": "app-restart", "args": []string{"restart"}}, "exec",
-			`{"args":["restart"],"command_id":"app-restart","cwd":"","max_output_bytes":0,"stdin_b64":""}`},
+			`{"args":["restart"],"command_id":"app-restart","cwd":"","expected_preview_sha256":"` + shaExec + `","max_output_bytes":0,"stdin_b64":""}`},
 		{"shell_run_command", map[string]any{"command_id": "app-import", "cwd": "/srv/app", "stdin": stdin, "max_output_bytes": 100}, "exec",
-			`{"args":[],"command_id":"app-import","cwd":"/srv/app","max_output_bytes":100,"stdin_b64":"` + base64.StdEncoding.EncodeToString([]byte(stdin)) + `"}`},
+			`{"args":[],"command_id":"app-import","cwd":"/srv/app","expected_preview_sha256":"` + shaExec + `","max_output_bytes":100,"stdin_b64":"` + base64.StdEncoding.EncodeToString([]byte(stdin)) + `"}`},
 	}
 	for _, c := range cases {
 		t.Run(c.tool, func(t *testing.T) {
 			g := newRecordingGate(operatorReplies())
-			h := readHarness(t, g)
+			h := operatorHarness(t, g)
 			env, _ := h.call(c.tool, c.args)
 			if env["ok"] != true {
 				t.Fatalf("envelope %v", env)
 			}
 			reqs := g.requests()
-			if len(reqs) != 1 || reqs[0].Op != c.op || reqs[0].Ceiling != "operator" {
-				t.Fatalf("requests %v (ceilings), want one %s at ceiling operator", g.ops(), c.op)
+			// shell_run_command resolves the command with exec_preview first
+			// (its gating follows the command's tier).
+			want := []string{c.op}
+			if c.tool == "shell_run_command" {
+				want = []string{"exec_preview", "exec"}
+			}
+			if !slices.Equal(g.ops(), want) || reqs[len(reqs)-1].Ceiling != "operator" {
+				t.Fatalf("requests %v, want %v, the last at ceiling operator", g.ops(), want)
 			}
 			if got := jsonOf(t, g.args(t, c.op)); got != c.gateArgs {
 				t.Fatalf("gate args %s\nwant %s", got, c.gateArgs)
@@ -340,7 +354,7 @@ func TestOperatorToolsCallTheirOp(t *testing.T) {
 func TestOperatorToolsTimeoutBudget(t *testing.T) {
 	for _, tool := range []string{"shell_control_service", "shell_git_pull", "shell_run_command"} {
 		g := newRecordingGate(operatorReplies())
-		h := readHarness(t, g)
+		h := operatorHarness(t, g)
 		args := map[string]any{"timeout_seconds": 42}
 		for k, v := range operatorCallArgs[tool] {
 			args[k] = v
@@ -348,7 +362,7 @@ func TestOperatorToolsTimeoutBudget(t *testing.T) {
 		if env, _ := h.call(tool, args); env["ok"] != true {
 			t.Fatalf("%s: %v", tool, env)
 		}
-		if r := g.requests(); len(r) != 1 || r[0].TimeoutMS != 42000 {
+		if r := g.requests(); len(r) == 0 || r[len(r)-1].TimeoutMS != 42000 {
 			t.Fatalf("%s: requests %+v", tool, r)
 		}
 	}
@@ -361,7 +375,7 @@ func TestOperatorToolsTimeoutBudget(t *testing.T) {
 func TestWriteFileResult(t *testing.T) {
 	tok := randomToken(t)
 	g := newRecordingGate(operatorReplies())
-	h := readHarness(t, g)
+	h := operatorHarness(t, g)
 	env, res := h.call("shell_write_file", map[string]any{"path": "/srv/app/config/app.yaml", "content": "token: " + tok + "\n"})
 	d := data(t, env)
 	want := map[string]any{"path": "/srv/app/config/app.yaml", "created": false, "bytes": 12.0, "mode": "0640",
@@ -379,7 +393,7 @@ func TestWriteFileResult(t *testing.T) {
 	// A created file has no old hash; its delta counts every line.
 	r := operatorReplies()
 	r["write_file"] = gateReply{data: fakeCreate}
-	h = readHarness(t, newRecordingGate(r))
+	h = operatorHarness(t, newRecordingGate(r))
 	env, _ = h.call("shell_write_file", map[string]any{"path": "/srv/app/config/new.yaml", "content": "new\n"})
 	if d := data(t, env); d["created"] != true || d["old_sha256"] != "" || d["new_sha256"] != shaNew || d["lines_delta"] != 1.0 || env["verified"] != true {
 		t.Fatalf("created: %v", env)
@@ -399,7 +413,7 @@ func TestUnverifiedWriteIsFailure(t *testing.T) {
 	} {
 		r := operatorReplies()
 		r[c.op] = gateReply{data: c.reply}
-		h := readHarness(t, newRecordingGate(r))
+		h := operatorHarness(t, newRecordingGate(r))
 		env, res := h.call(c.tool, c.args)
 		if errCode(env) != "verify_failed" || !res.IsError || env["data"] != nil || env["verified"] != nil {
 			t.Fatalf("%s: %v, want verify_failed", c.tool, env)
@@ -409,7 +423,7 @@ func TestUnverifiedWriteIsFailure(t *testing.T) {
 
 func TestOperatorToolResults(t *testing.T) {
 	g := newRecordingGate(operatorReplies())
-	h := readHarness(t, g)
+	h := operatorHarness(t, g)
 	cases := []struct {
 		tool string
 		want string
@@ -456,7 +470,7 @@ func TestRunCommand(t *testing.T) {
 	tok := randomToken(t)
 	r := operatorReplies()
 	r["exec"] = gateReply{data: fakeExec("restarted with "+tok+"\n", 2)}
-	h := readHarness(t, newRecordingGate(r))
+	h := operatorHarness(t, newRecordingGate(r))
 	withServerPattern(h)
 	env, _ := h.call("shell_run_command", map[string]any{"command_id": "app-restart", "args": []string{"restart"}})
 	d := data(t, env)
@@ -465,7 +479,7 @@ func TestRunCommand(t *testing.T) {
 		t.Fatalf("envelope %v", env)
 	}
 	r["exec"] = gateReply{data: fakeExec(strings.Repeat("x", 300), 0)}
-	h = readHarness(t, newRecordingGate(r))
+	h = operatorHarness(t, newRecordingGate(r))
 	env, _ = h.call("shell_run_command", map[string]any{"command_id": "app-restart", "max_output_bytes": 100})
 	if d := data(t, env); len(d["stdout"].(string)) != 100 || d["stdout_truncated"] != true || env["exec"].(map[string]any)["stdout_truncated"] != true {
 		t.Fatalf("capped %v", env)
@@ -502,7 +516,7 @@ func TestOperatorToolsGateErrorsPassThrough(t *testing.T) {
 		t.Run(c.tool+"_"+c.reply.code, func(t *testing.T) {
 			r := operatorReplies()
 			r[c.op] = c.reply
-			h := readHarness(t, newRecordingGate(r))
+			h := operatorHarness(t, newRecordingGate(r))
 			env, res := h.call(c.tool, operatorCallArgs[c.tool])
 			e, _ := env["error"].(map[string]any)
 			if !res.IsError || e["code"] != c.reply.code || e["message"] != c.reply.msg || env["data"] != nil {
@@ -521,9 +535,12 @@ func TestOperatorToolsGateErrorsPassThrough(t *testing.T) {
 // run.
 func TestApprovalGuard(t *testing.T) {
 	g := newRecordingGate(operatorReplies())
-	h := readHarness(t, g)
+	h := operatorHarness(t, g)
 	h.deps.ApprovalTiers = []string{"operator", "destructive"}
 	for _, name := range operatorTools {
+		if name == "shell_run_command" {
+			continue // gated by the command's tier, after its preview (TestRunCommandPerTierWithoutApprovalMethod)
+		}
 		for _, args := range []map[string]any{operatorCallArgs[name], {"target": "app-host"}} {
 			env, res := h.call(name, args)
 			e, _ := env["error"].(map[string]any)
@@ -550,7 +567,7 @@ func TestApprovalGuard(t *testing.T) {
 // --- Text block and audit ----------------------------------------------------
 
 func TestOperatorToolsTextSummary(t *testing.T) {
-	h := readHarness(t, newRecordingGate(operatorReplies()))
+	h := operatorHarness(t, newRecordingGate(operatorReplies()))
 	for _, name := range operatorTools {
 		_, res := h.call(name, operatorCallArgs[name])
 		var tc struct {
@@ -575,7 +592,7 @@ func TestOperatorToolsTextSummary(t *testing.T) {
 // file content, stdin or command arguments.
 func TestOperatorToolsAudit(t *testing.T) {
 	tok := randomToken(t)
-	h := readHarness(t, newRecordingGate(operatorReplies()))
+	h := operatorHarness(t, newRecordingGate(operatorReplies()))
 	calls := []struct {
 		tool string
 		args map[string]any
@@ -628,4 +645,15 @@ func TestOperatorToolsAudit(t *testing.T) {
 	if strings.Contains(h.logs.String(), tok[7:]) {
 		t.Fatal("the log carries content, stdin or an argument")
 	}
+}
+
+// operatorHarness is readHarness serving the operator profile, where
+// shell_run_command is registered at operator.
+func operatorHarness(t *testing.T, g *recordingGate) *harness {
+	t.Helper()
+	tg, c := sshTarget(t, g.exec)
+	h := newHarnessWith(t, []config.Target{tg}, map[string]*sshx.Client{"app-host": c}, "", func(d *Deps) { d.Principal.Profile = string(ProfileOperator) })
+	h.deps.MaxOutputBytes = 4096
+	h.deps.MaxTimeout = 60e9 // 60 s
+	return h
 }

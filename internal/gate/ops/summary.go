@@ -41,7 +41,7 @@ func (s *server) hello(raw jsontext.Value) (data any, warns []string, failure er
 	}
 	for _, c := range s.p.Commands {
 		if c.Tier <= s.p.MaxTier {
-			ops = append(ops, protocol.OpExec)
+			ops = append(ops, protocol.OpExec, protocol.OpExecPreview)
 			break
 		}
 	}

@@ -72,7 +72,8 @@ func newApprovalHarness(t *testing.T, method approval.Method) *approvalHarness {
 	return newApprovalHarnessOn(t, g, method, []config.Target{tg}, map[string]*sshx.Client{"app-host": c})
 }
 
-func newApprovalHarnessOn(t *testing.T, g *recordingGate, method approval.Method, targets []config.Target, clients map[string]*sshx.Client) *approvalHarness {
+// newApprovalHarnessOn serves the admin profile, or the profile given.
+func newApprovalHarnessOn(t *testing.T, g *recordingGate, method approval.Method, targets []config.Target, clients map[string]*sshx.Client, profile ...Profile) *approvalHarness {
 	t.Helper()
 	logs := &syncBuffer{}
 	store := approval.NewStore(approval.Options{TTL: 300 * time.Second, Method: method, Wait: 300 * time.Millisecond,
@@ -82,6 +83,9 @@ func newApprovalHarnessOn(t *testing.T, g *recordingGate, method approval.Method
 		d.ApprovalMethod = method
 		d.Approvals = store
 		d.ApprovalPublicURL = approvalOrigin
+		if len(profile) == 1 {
+			d.Principal.Profile = string(profile[0])
+		}
 		d.Logger = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	})
 	h.deps.MaxOutputBytes = 4096
@@ -451,6 +455,9 @@ func TestApprovalAuditLines(t *testing.T) {
 func TestApprovalMethodNone(t *testing.T) {
 	a := newApprovalHarness(t, approval.MethodNone)
 	for _, name := range operatorTools {
+		if name == "shell_run_command" {
+			continue // gated by the command's tier (TestRunCommandPerTierWithoutApprovalMethod)
+		}
 		for _, args := range []map[string]any{operatorCallArgs[name], {"target": "app-host"}, withID(operatorCallArgs[name], "aaaaaaaaaaaaaaaaaaaaaaaaaa")} {
 			env, _ := a.call(name, args)
 			if errCode(env) != "approval_unavailable" || !strings.Contains(jsonOf(t, env["error"]), "SHELL_MCP_APPROVAL_METHOD=none") {
@@ -639,9 +646,10 @@ func TestApprovalPreviews(t *testing.T) {
 		{"shell_git_pull", operatorCallArgs["shell_git_pull"], map[string]gateReply{"git_status": {data: gitStatus}}, "git_status", map[string]string{
 			"repo": "/srv/app/deploy", "branch": "main", "upstream": "origin/main", "ahead": "1", "behind": "2",
 			"entries_total": "3", "entries[0].path": "config.yaml", "truncated": "false"}},
-		{"shell_run_command", operatorCallArgs["shell_run_command"], nil, "policy", map[string]string{
-			"command_id": "app-restart", "tier": "operator", "description": "Restart the application", "root_equivalent": "false",
-			"template[0]": "restart", "args[0]": "restart"}},
+		{"shell_run_command", operatorCallArgs["shell_run_command"], map[string]gateReply{"exec_preview": {data: fakeExecPreview(shaExec, "operator")}, "exec": {data: fakeExec("ok\n", 0)}},
+			"exec_preview", map[string]string{"command_id": "app-restart", "tier": "operator", "description": "Restart the application",
+				"root_equivalent": "false", "template[0]": "restart", "argv[0]": "/usr/local/bin/example-app", "argv[1]": "restart", "cwd": "/",
+				"preview_sha256": shaExec}},
 	} {
 		t.Run(c.tool, func(t *testing.T) {
 			a := newApprovalHarness(t, approval.MethodWeb)
@@ -675,22 +683,15 @@ func TestApprovalPreviews(t *testing.T) {
 }
 
 func TestRunCommandPreviewRefusals(t *testing.T) {
-	for name, c := range map[string]struct {
-		args map[string]any
-		code string
-	}{
-		"undeclared":           {map[string]any{"command_id": "app-unknown"}, "policy_denied"},
-		"read is fine, args":   {map[string]any{"command_id": "app-restart", "args": []string{"restart", "now"}}, "template_mismatch"},
-		"above the tool tier":  {map[string]any{"command_id": "app-wipe"}, "tier_denied"},
-		"enum value not taken": {map[string]any{"command_id": "app-status", "args": []string{"status", "db"}}, "template_mismatch"},
-	} {
-		t.Run(name, func(t *testing.T) {
+	// The gate resolves the command in exec_preview; its refusal is the
+	// result, no approval is requested and nothing runs.
+	for _, code := range []string{"policy_denied", "template_mismatch", "tier_denied", "path_denied"} {
+		t.Run(code, func(t *testing.T) {
 			a := newApprovalHarness(t, approval.MethodWeb)
-			a.g.set("policy", gateReply{data: strings.Replace(fakePolicyCommands, `]}]}`,
-				`]},{"id":"app-wipe","description":"Wipe","tier":"destructive","root_equivalent":false,"templates":[[]]}]}`, 1)})
-			env, _ := a.call("shell_run_command", c.args)
-			if errCode(env) != c.code {
-				t.Fatalf("%v, want %s", env, c.code)
+			a.g.set("exec_preview", gateReply{code: code, msg: "refused"})
+			env, _ := a.call("shell_run_command", map[string]any{"command_id": "app-restart", "args": []string{"restart"}})
+			if errCode(env) != code || env["approval"] != nil {
+				t.Fatalf("%v, want %s", env, code)
 			}
 			if got := a.mutatingOps(); len(got) != 0 {
 				t.Fatalf("mutating ops %v", got)

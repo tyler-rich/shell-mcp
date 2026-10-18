@@ -6,11 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"reflect"
-	"slices"
 
 	"github.com/tyler-rich/shell-mcp/internal/envelope"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
-	"github.com/tyler-rich/shell-mcp/internal/template"
 )
 
 // Approval previews of the operator tools (docs/TOOLS.md, "Approval
@@ -187,57 +185,66 @@ func (d *Deps) gitPullPreview(ctx context.Context, in repoIn, target string) (*p
 	}, "")
 }
 
-// previewResolver matches templates on the server for the preview only:
-// path placeholders are shown as given and unit placeholders are not
-// checked; the gate resolves and checks both when the command runs.
-type previewResolver struct{}
+// execPreviewWire is the gate's exec_preview data and its arguments.
+type execPreviewWire struct {
+	CommandID      string   `json:"command_id"`
+	Tier           string   `json:"tier"`
+	Description    string   `json:"description"`
+	RootEquivalent bool     `json:"root_equivalent"`
+	Template       []string `json:"template"`
+	Argv           []string `json:"argv"`
+	Cwd            string   `json:"cwd"`
+	PolicySHA256   string   `json:"policy_sha256"`
+	PreviewSHA256  string   `json:"preview_sha256"`
+}
 
-func (previewResolver) ResolvePath(v string, _ bool) (string, error) { return v, nil }
-func (previewResolver) MatchUnit(string) bool                        { return true }
+type execPreviewArgsWire struct {
+	CommandID string   `json:"command_id"`
+	Args      []string `json:"args"`
+	Cwd       string   `json:"cwd"`
+}
 
-var tierRank = map[string]int{"read": 1, "operator": 2, "destructive": 3}
-
-// runCommandPreview, from the policy op only until S4b-2's exec_preview:
-// the command id, its tier, description and root_equivalent flag, the
-// template the arguments match and the arguments as given. An undeclared
-// command, one above the tool's ceiling or arguments matching no template
-// are refused here, as the gate would refuse them.
+// runCommandPreview is shell_run_command's approval preview: the gate's
+// exec_preview, which resolves the command exactly as exec will (the
+// command's tier against the tool's ceiling, the template the arguments
+// match, path placeholders and the cwd resolved on the target) and runs
+// nothing: the command id, tier, description, root_equivalent flag, the
+// matched template, the resolved argv and cwd, and preview_sha256, which
+// the re-call sends to exec as expected_preview_sha256. The hash is taken
+// from the gate's answer before the server's redaction.
 func (d *Deps) runCommandPreview(ctx context.Context, in *runCommandIn, target string) (*preview, *envelope.Error) {
-	var acc policyAcc
-	pol, _, h, e := previewFetch[summaryWire](ctx, d, target, protocol.OpPolicy, nil, false)
-	acc.add(h)
-	if e != nil {
-		return nil, e
-	}
-	i := slices.IndexFunc(pol.Commands, func(c Command) bool { return c.ID == in.CommandID })
-	if i < 0 {
-		return nil, envelope.Errorf(protocol.CodePolicyDenied, "command %q is not declared in the target policy", in.CommandID)
-	}
-	cmd := pol.Commands[i]
-	ceiling, _ := ctx.Value(ceilingKey{}).(Tier)
-	if tierRank[cmd.Tier] == 0 || tierRank[cmd.Tier] > int(ceiling) {
-		return nil, envelope.Errorf(protocol.CodeTierDenied, "command tier %s exceeds the request's ceiling %s", cmd.Tier, ceiling)
-	}
 	args := in.Args
 	if args == nil {
 		args = []string{}
 	}
-	var matched []string
-	for _, raw := range cmd.Templates {
-		t, err := template.Parse(raw)
-		if err != nil {
-			continue
-		}
-		if _, err := template.Match([]template.Template{t}, args, previewResolver{}); err == nil {
-			matched = raw
-			break
+	resp, e := d.call(ctx, target, protocol.OpExecPreview, execPreviewArgsWire{CommandID: in.CommandID, Args: args, Cwd: in.Cwd}, d.budget())
+	if e != nil {
+		return nil, e
+	}
+	policy := ""
+	if resp.Gate != nil {
+		policy = resp.Gate.PolicySHA256
+	}
+	env := envelope.FromGate[execPreviewWire](target, resp)
+	if !env.OK {
+		return nil, env.Error
+	}
+	hash := env.Data.PreviewSHA256
+	if !sha256RE.MatchString(hash) {
+		return nil, envelope.Errorf("internal", "the gate's preview has no valid preview_sha256")
+	}
+	x := *env.Data
+	redactStrings(d.redactor(), reflect.ValueOf(&x))
+	for _, l := range []*[]string{&x.Template, &x.Argv} {
+		if *l == nil {
+			*l = []string{}
 		}
 	}
-	if matched == nil {
-		return nil, envelope.Errorf(protocol.CodeTemplateMismatch, "the arguments match none of the command's templates")
+	value := map[string]any{"command_id": x.CommandID, "tier": x.Tier, "description": x.Description, "root_equivalent": x.RootEquivalent,
+		"template": x.Template, "argv": x.Argv, "cwd": x.Cwd, "preview_sha256": hash}
+	tier, ok := map[string]Tier{"read": TierRead, "operator": TierOperator, "destructive": TierDestructive}[env.Data.Tier]
+	if !ok {
+		return nil, envelope.Errorf("internal", "the gate's preview names no known tier")
 	}
-	return acc.result(map[string]any{
-		"command_id": cmd.ID, "tier": cmd.Tier, "description": cmd.Description, "root_equivalent": cmd.RootEquivalent,
-		"template": matched, "args": args,
-	}, "")
+	return &preview{value: value, policy: policy, contentSHA256: hash, tier: tier}, nil
 }

@@ -1987,6 +1987,7 @@ The document gives exact replacement wording for D-006 and S-12, the config, env
 - **Can still happen, two cases only:**
   - (a) A process finds the random temporary name and replaces that entry between steps 3 and 4. It needs write access to that directory, so it could delete the listed entry itself. Against such a process the approval has never been the boundary.
   - (b) On a filesystem that reports no birth time, a listed entry is removed by someone else and a new one created under its name gets the same inode number, with the same type and mount, between step 1 and step 2. That is a window of one system call. ext4 (256-byte inodes), xfs v5, btrfs and recent tmpfs report birth time.
+  - (c) *(Added 2026-10-18 in S4b-2b; not listed when this entry was written.)* A process that already holds a listed file open for writing writes through that descriptor after step 1 and before step 4: the write lands in the inode that step 4 removes. For a delete that is a window of a few system calls. Only a file lease (`F_SETLEASE`) could close it, and a lease needs the file's owner or `CAP_LEASE`.
 - **Changes that stop the deletion** with an accurate count: a listed file modified in place during the deletion (its change time moves), and a listed entry removed by someone else.
 - **Briefly unavailable:** a newcomer that replaced a listed name between steps 1 and 2 is absent from its name for two system calls while it is set aside, checked and put back.
 
@@ -2075,3 +2076,116 @@ The document gives exact replacement wording for D-006 and S-12, the config, env
   - `TestCheckPolicyProbesNoReplace`: the real probe, one root unsupported, and a probe error.
   - All failed against the stubs.
 - **Fuzzing (60 s, golang container, no crashers):** `FuzzHasSetAsideComponent` (agrees with an independent formulation), 44,784,964 execs.
+
+### 2026-10-18 — Git discard bound to its preview, exec_preview, shell_run_command at destructive (PR #26, branch feat/git-discard-exec)
+**Decision:** An approval to discard changes never discards a change made after the approver looked, and an approval to run a command never runs another argv, `cwd`, binary or tier (plan §5 S4b-2b).
+
+**Part 1: git discard.**
+- **Protocol (maintainer-approved change).** `git_discard` requires `expected_preview_sha256` (missing or malformed is `bad_request`; another hash is `exists`, nothing changed) and takes `include_untracked` (default false). `git_discard_preview` takes `include_untracked` too, so the preview the approver sees is the discard's (maintainer decision during the session, below). Their result is new: HEAD, the counts, the first 50 entries (path, status letters or `??`, `restore` or `remove`), the skipped repositories and `preview_sha256`. Protocol v1 is amended in place, before any release. ARCHITECTURE §3, §4.1, §4.3.
+- **The ops existed and were unsafe.** S1b's `git_discard` ran `reset --hard` then `clean -f -d`, ignoring any preview: a change made after the preview was discarded (the window test's first run against it: "the edit was discarded"; the concurrent racer's created file was removed on run 5). Its preview also listed a path removed from the index (`git rm --cached`) both as reset and as removed.
+- **Why not git's own commands.** `reset --hard` and `checkout -f` overwrite whatever is at a path when they run, and the index has no conditional update. So the gate restores each path itself, with git writing the content:
+  1. **Lock.** `.git/index.lock` is created exclusively (`openat` with `O_CREAT|O_EXCL|O_NOFOLLOW` on the `.git` descriptor opened through `os.Root` and verified as `<repo real path>/.git`; `os.Root.OpenFile` re-follows a final symlink after `ELOOP`, so a raw `openat` is used). It holds `shell-mcp-gate git_discard` and a newline. Its identity (object, size and change time, taken after that write) is recorded, and `Release` removes it only while it is still that file, on every exit path. Git refuses to change the index while it exists (a concurrent `git add` fails: tested).
+  2. **Recompute** the preview under the lock; refuse unless the hash is the expected one.
+  3. **Set aside** every listed file and symlink (`fsx.SetAside`). Under its name: the object, size, change time and permission bits the preview saw. Then a rename to `.shell-mcp-delete-<32 hex>` with `RENAME_NOREPLACE`. Then the same object, size and permission bits, and the same content SHA-256. Otherwise it is put back and the discard stops.
+  4. **Untracked** paths go through `fsx.DeleteExact` with each path's own delete preview hash, so the stranded-entry handling and the prefix refusal are the delete's.
+  5. **Temporary index.** The gate creates `.git/.shell-mcp-index-<32 hex>` exclusively. Git fills it (`GIT_INDEX_FILE`, `read-tree <HEAD oid>`) and writes the restored files from it with `checkout-index -q --stdin -z` **without `-f`**: git's `create_file` is `O_CREAT|O_EXCL`, and without `-f` it never unlinks an existing file or removes a directory in the way. It then refreshes the temporary index and lists with `status` what still differs from it.
+  6. **Verify and remove.** A restored path that matches HEAD has its set-aside entry removed, if that entry's size and change time are still what they were after its content check. A path that does not match is not restored: its entry is put back, or left under its temporary name when the name was taken.
+  7. **Commit.** Only when every path verified is the temporary index renamed onto `.git/index`. Otherwise the index is unchanged and the discard stops with `exists` and counts.
+- **The `.git` exception** (maintainer's conditions): exactly `index.lock`, the temporary index and the rename onto `index`, for `git_discard` only. Every other `.git` path, and every file operation, still refuses `.git` (POLICY §3).
+- **Refusals.** In-progress merge, rebase, `am`, cherry-pick, revert, bisect and sequencer; unmerged entries; any gitlink change; no commits; an untracked symlink (with `include_untracked`); an entry in the way of a restore, with the hint "pass include_untracked" when that removes exactly it; `.git/index.lock` existing, with a message that says whether a gate left it and how to recover. The gate never removes a lock it did not create in the request.
+- **Hooks.** Every command carries the existing `core.hooksPath=/dev/null`. Two-sided test: a `post-index-change` hook planted in the repository runs when git writes a scratch index without the gate's flags, and never during a preview or a discard (the e2e case plants one too).
+- **Ignored files** are never touched (no `-x`); nested repositories are skipped and listed; HEAD, refs and the stash are unchanged (tested, with a stash entry).
+
+**Premises checked, and where the prompt was corrected:**
+- **"Pass `-c core.hooksPath=/dev/null` if the flags don't cover it."** They already did, for every git op (S1b). The new test proves it for the commands the discard runs.
+- **"Fix `shell_run_read_command`'s two-request check."** There is none since PR #18: it sends one `exec` at ceiling `read`, and the gate checks the tier in that request. Left as it is.
+- **A directory where a tracked file was, with `include_untracked`.** `git clean -d` does not list it as untracked (verified on git 2.47.3; `reset --hard` would remove it), so it is refused with and without the flag, naming it. A file where a tracked directory was is listed, so `include_untracked` resolves that case.
+- **A path removed from the index (`git rm --cached`)** is both a tracked change and listed by `git clean`; it is handled once, as tracked (set aside, then restored).
+
+**Maintainer decisions during the session (STOP-and-ask, 2026-10-18):**
+- **Index:** hold git's `index.lock` natively, with the conditions above (exclusive creation, the three names only, release on every path, stale-lock reporting and recovery docs, never removing a lock the gate did not create, the lock and hook tests).
+- **Open descriptors:** accept and document a write through a descriptor opened before the operation; also added retroactively to the delete's window (2026-10-18 entry, case (c)).
+- **`include_untracked` on `git_discard_preview`** as well, default false, covered by the hash.
+- **Edge cases:** refuse and name the path; untracked symlinks are always refused; the final-symlink rule is unchanged.
+
+**Found while writing the window analysis: the open-descriptor window was not one system call.** In a discard, the time between a set-aside file's content check and its removal spans git's checkout. `SetAside` now records the entry once its content is checked, and `Remove` requires the same size and change time, so such a write keeps the entry (named) and stops the discard. The window is back to the moment between that last check and the unlink. `TestSetAside` and `TestGitDiscardOpenDescriptorWrite` failed against the object-only check (`9cd1c18`).
+
+**The remaining window (exact).** Between the recompute and the index commit:
+- **Never discarded:**
+  - a file created under a new name anywhere;
+  - a staging change, a commit or any other git index writer (the lock);
+  - a listed file edited, chmod-ed or replaced before it is set aside (the first check), or between that check and the rename (the object and content checks after it): it is put back;
+  - a newcomer under a listed name after that name was set aside (checkout-index's `O_EXCL` refuses; verification fails; the entry stays set aside, named);
+  - an edit or replacement of a restored file before verification (not restored, entry kept, index unchanged) or after it (never touched again);
+  - a write through an earlier-opened descriptor into a set-aside file, up to the last check before its removal.
+- **Can still happen** (the delete's three cases):
+  - (a) a process that finds a set-aside entry's random name and replaces it between its last check and its removal (it needs write access to the directory);
+  - (b) on a filesystem without birth times, an inode number reused between the first check and the rename;
+  - (c) a write through an earlier-opened descriptor in the moment between that last check and the unlink.
+- Change-time comparisons are as fine as the kernel's timestamps: a same-size in-place overwrite within one tick of the last check is not seen by it (the content check sees any such write up to that check).
+
+**Part 2: exec_preview and shell_run_command.**
+- **Protocol (maintainer-approved).** A read-tier op `exec_preview` (`command_id`, `args`, `cwd`) and an optional `expected_preview_sha256` on `exec`.
+- **Same code path.** Both call `resolveExec`: the command's tier against min(`max_tier`, `ceiling`) first, `template.MatchIndex` (new: `Match` plus the index of the template that matched), path placeholders resolved by the gate's resolver, `cwd` through `ResolveDir`. `exec_preview` returns the command id, tier, description, `root_equivalent`, the matched template, the resolved argv and `cwd`, the policy SHA-256 and `preview_sha256` over all of them. `exec` with the field recomputes it and refuses with `exists`, running nothing, on a mismatch.
+- **Server.** The registry gains `RegisterFor` (a name per non-overlapping set of profiles) and `All`. `shell_run_command` is registered at operator for the operator profile (unchanged: `destructiveHint: false`, approval-gated only under `SHELL_MCP_APPROVAL_TIERS=operator`) and at destructive for admin (`destructiveHint: true`, `requiresUserInteraction` in every variant). Its preview, in both, is `exec_preview` (replacing S4b-1b's policy-only preview). Whether a call needs approval follows the command's tier (below, "Maintainer correction"), and every `exec` carries the preview's hash. `shell-mcp tools` lists every registration with its `profiles`; the snapshot gains three rows and the field, and no existing row's schema hash changed.
+- **A destructive command in the operator profile** is refused by the gate at ceiling `operator` (`tier_denied`), by `exec_preview` and `exec` alike.
+
+**Tests (committed failing first, `f2a62f6`; output in the PR body).** The stubs kept S1b's discard (its preview given the new shape, binding nothing), answered `internal` for `exec_preview` and the server tools, and left `RegisterFor` unimplemented.
+- **gitx:** `TestParseDiscardStatus`, `TestParseDiscardStatusRefuses`, `FuzzParseDiscardStatus`.
+- **fsx:** `TestGitIndexLock`, `TestGitIndexLockRefusesAndLeavesForeignLocks`, `TestObserveWorktree`, `TestSetAside`, `FuzzWorktreeEntryEncoding`.
+- **gate:**
+  - `TestGitDiscardPreviewReports`, `TestGitDiscardRestoresExactlyThePreview` (both flags; ignored files, HEAD, refs and the stash unchanged), `TestGitDiscardBindsThePreview` (six kinds of change after the preview), `TestGitDiscardRefusals`, `TestGitDiscardHooksNeverRun` (two-sided);
+  - `TestGitDiscardHoldsTheIndexLock` (a concurrent `git add` fails and its file is untouched; the lock is released after a refusal too), `TestGitDiscardStaleGateLock`;
+  - `TestGitDiscardWindow`: 180 runs, 10 points × 3 kinds (a tracked file edited in place, an untracked file created, a file replaced) × 6 repetitions. The points: before the call, after the compare, the four set-aside steps, before the untracked removal, before and after the checkout, before the commit. Every change survived. Outcomes: `exists` up to "after checkout", except "create" once the untracked paths were removed (`ok`); `ok` at "before unlink" and "before commit".
+  - `TestGitDiscardConcurrentRacer`: 200 runs, no hooks; a racer starting after a random delay of up to 1.5 times the median discard (about 41 ms) replaces a tracked file and creates untracked files until the discard returns. One run: 101 `exists`, 35 `ok` with the racer active, 64 with the racer starting after the discard; 1,040 racer files; every replacement and file survived.
+  - `TestGitDiscardNamesAStrandedEntry`, `TestGitDiscardOpenDescriptorWrite`;
+  - `TestExecPreviewResolvesAsExec` (every template and placeholder type), `TestExecExpectedPreview` (malformed and other hashes, a policy edit, a retargeted directory symlink in a path placeholder), `TestExecPreviewTier`, `FuzzExecPreviewMatchesExec`.
+- **server:** the discard tools (registration, schemas, the preview tool, `approval_unavailable`, the web flow for both flags, changes after approval, gate refusals, the hash not redacted, descriptions); `TestRunCommandRegistrations`, `TestRunCommandAdminApproval`, `TestRunCommandOperatorPreviewIsExecPreview`, `TestRunCommandUngatedSendsNoPrecondition`; `TestRegisterForProfiles`; the catalogue's two `shell_run_command` rows.
+- **Test fixes made with the implementation:**
+  - the hook test planted its hooks before its own `git add` setup (the marker came from the test);
+  - the "directory in the way" case (above);
+  - the exec preview's `cwd` case used a symlink, which `exec` refuses; it now retargets a path placeholder's directory;
+  - the racer first always hit before the recompute (100 of 100 `exists`); it now starts within the discard;
+  - a set-aside test re-used an observation after a rename had moved the change time;
+  - operator-tool tests run in the operator profile; the approval-preview and preview-refusal tests use `exec_preview`; S1b's `TestGitDiscard` is replaced.
+- **e2e-host** (`test/e2e/discard_exec_test.go`; `setup.sh` lists `/srv/example-ops/repos/discard`):
+  - `TestGitDiscardPreviewTool`: success, refusals.
+  - `TestDestructiveToolsApproval`: no approval method; the discard approved and run once, a second re-call `approval_invalid`, a change after approval `approval_invalid` and surviving; a destructive command approved and run once at ceiling `destructive`, a second re-call `approval_invalid`, a policy edit after approval `approval_invalid` with no `exec` line.
+
+**Fuzzing (60 s each, golang container, no crashers):** `FuzzParseDiscardStatus` 75,179,803 execs; `FuzzWorktreeEntryEncoding` 34,979,649; `FuzzExecPreviewMatchesExec` 180,500 (each runs the probe); `FuzzParseAndMatch` (template, touched for `MatchIndex`) 53,230,537.
+
+**Alternatives rejected:**
+- `git reset --mixed` for the index: a staging change between the recompute and the reset would be undone (its blob kept, unreachable).
+- `git apply --cached -R` as a conditional index update: its context matching lets some concurrent changes through and not others, and it does not check the whole index.
+- Holding every set-aside file open, or taking file leases: descriptor limits; leases need the file's owner.
+- Writing the restored content natively: checkout's end-of-line, `ident` and symlink rules belong to git, and `checkout-index` without `-f` applies them and is create-only.
+- Gating every admin `shell_run_command` call (the first version of this PR, from a literal reading of "always with approval"): it made admin stricter than the operator profile for the same command, against D-006.
+- Checking the command's tier on the server and sending the unapproved `exec` at the tool's ceiling: a policy edit raising the tier between the preview and the exec would then run unapproved. The lowered ceiling makes the gate's single tier check refuse it.
+
+**Deferred / follow-ups:**
+- **S4c:** `priv_delete` and `priv_exec` still lack preview binding (the delete entry's follow-up stands; `priv_exec` would want the helper's own `exec_preview`).
+- **Not addressed:** index entries flagged assume-unchanged or skip-worktree lose the flag, and their files are not touched (documented in POLICY §7).
+
+**Versions:**
+- **Go:** 1.27.2, the newest stable per go.dev (`go.dev/dl/?mode=json`, read 2026-10-18).
+- **Refresh:** `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0; git 2.47.3 in the test image.
+
+**Maintainer correction on the PR (2026-10-18): `shell_run_command`'s approval follows the command's tier.** The first version gated every admin call, from a literal reading of "always with approval". The intended rule is D-006's, and the admin profile must never be stricter than the operator profile for the same command:
+- **Which calls.** A destructive command always needs approval; an operator command only when `SHELL_MCP_APPROVAL_TIERS` lists operator; a read command never.
+- **Order.** Every call first sends `exec_preview` at the tool's ceiling, which resolves the command's tier.
+- **Gated.** The usual approval flow follows, with that preview. The approved re-call sends `exec` at ceiling = the command's tier, with `expected_preview_sha256`.
+- **Not gated.** `exec` is sent at once at ceiling = the highest tier that needs no approval (operator by default, read when operator is listed), with `expected_preview_sha256`. A policy edit that raises the tier in between is refused by the gate's tier check, which comes before anything else, so an unapproved command never runs above that ceiling.
+- **Method `none`** refuses only the commands that need approval, after their preview.
+- **Unchanged:** the registrations, their static annotations and the catalogue.
+- **Implementation.** `spec.tierFromPreview` sends such calls to `perTierCall`. The preview carries the resolved tier. `approveCall` takes the already computed first preview and runs at its tier. `spec.precheck` validates the timeout and output limits before the preview is sent.
+- **Tests (committed failing first, `d868220`):** `TestRunCommandPerTier` (both profiles, both tier settings, each command tier: gated or not, the exec's ceiling, the hash), `TestRunCommandPerTierWithoutApprovalMethod`, `TestRunCommandRaisedTierIsRefused`. All failed against the tool-tier gating (every admin call pending; the operator profile running at once without a preview).
+- **Gate-side check:** `TestExecRaisedTierStopsAtTheCeiling` (a command raised to destructive between `exec_preview` and an exec at ceiling operator is refused, nothing runs). It passes on the existing gate, whose tier check already comes first.
+- **Existing tests changed:** one `exec` becomes `exec_preview` then `exec` with the hash; the none and guard tests leave `shell_run_command` to the per-tier tests; `TestRunCommandUngatedSendsNoPrecondition` is gone (an ungated exec now carries the hash).
+- **e2e-host:** `TestDestructiveToolsApproval` gains the per-tier cases (without an approval method: a read and an operator command run at ceiling operator, the destructive one is refused after its `exec_preview`; with operator listed: a read command runs at ceiling read, an operator command is approved and runs at ceiling operator). `TestOperatorToolsApprovalGuard` checks the same under method none in the operator profile.
+- **First CI run with per-tier gating (e2e-host): three test fixes.** Unit, race, lint and image jobs passed. In e2e-host:
+  - The no-method subtest read the journal from one second before its start and counted the previous test's `git_discard_preview` lines; it now waits 2.1 s, as the guard test does.
+  - The discard subtest ran its own `git status` as root (which rewrites the index and runs `post-index-change`) before checking the hook marker; the marker is now checked first, and the status runs with `--no-optional-locks`.
+  - `TestOperatorToolRunCommand/refusal_destructive_command` expected the refusal at `exec`; with the command resolved first it comes from `exec_preview` (ceiling operator, `tier_denied`), and no `exec` at ceiling operator is sent.
