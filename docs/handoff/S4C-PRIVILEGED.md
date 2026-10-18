@@ -126,6 +126,7 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 - **Who can reach it.** Anything that can send `priv_copy` through the gate, which today means a compromised server or service account. That is exactly the threat the privileged policy defends against (PRIVILEGED §3).
 - **Who is exposed.** Other local users, not only the caller: a `0644` file inside a restricted directory becomes readable once copied out.
 - **Decision:** fix in S4c-0 by clamping, not refusing (§5).
+- **Status: fixed in S4c-0 (PR #28).** fsx masks every new inode's mode by `fsx.Config.ModesMax`, which the helper sets to `modes.max`; the result reports the mode set.
 
 **F-2. `priv_chown` and `priv_chmod` change an inode that can also have a name outside the write roots.**
 - **Severity:** medium (maintainer's rating: it can escalate, not only leak).
@@ -137,6 +138,7 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 - **Why no other layer stops it.** `ReadWritePaths=` limits paths, not inodes, and Landlock has no chmod or chown right.
 - **Not affected:** `priv_write_file`, `priv_mkdir`, `priv_copy`, `priv_move` and `priv_restore_backup`. Each one commits a new inode by rename, or creates a new entry.
 - **Decision:** fix in S4c-0. Refuse a non-directory whose link count is above 1, with the count read by fstat on the same descriptor that fchown or fchmod acts on (§5).
+- **Status: fixed in S4c-0 (PR #28).** `fsx.Chmod` and `fsx.Chown` refuse it with `path_denied` naming the path and the count. `fsx.Chmod` is shared, so the gate's `chmod` (`shell_set_permissions`) refuses it too: the same class of bug as the service account, within its own ownership (ARCHIVE §14, S4c-0).
 
 **F-3. Not a bug, but surfaced by the same audit.** `priv_restore_backup` restores the recorded owner and mode without checking either against `owners` or `modes.max`.
 - PRIVILEGED §6 says it does exactly that ("with its recorded owner and mode"), so the code matches the document.
@@ -146,6 +148,7 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 - **Code.** `writeAtomic` gives the new inode the existing file's mode when no mode is given (`write.go`, `newMode = os.FileMode(um)`). `TestDefaultModesWithinMask` asserts exactly that: an existing `0640` file stays `0640` under `modes.max: "0700"`.
 - **Decided (Q16; F-4 accepted by the maintainer):** a write's new inode is clamped to `modes.max` like every other new inode (S4c-0). That changes the tested result above to `0600`, deliberately.
 - **Visible effect, documented in PRIVILEGED.md by S4c-0:** a file whose mode is wider than `modes.max` is narrowed to the mask when the helper writes it, copies over it or restores it.
+- **Status: fixed in S4c-0 (PR #28),** with F-1; PRIVILEGED §4 states the visible effect. F-3's mode clamp is applied too (files and every tree entry); the rest of F-3 is S4c-5's.
 
 ### 2.2 Cross-cutting gaps
 
@@ -542,6 +545,7 @@ All of them:
 
 ### S4c-0: `fix(privd)`: every new inode within modes.max, hard links on chown and chmod, the mode/owner audit
 
+- **Status: done (PR #28).** One exception, left for the maintainer: a restore's result has no `mode` field, and adding one is a protocol change, so the restored mode is not reported (S4c-5's `priv_restore_preview` carries `restore.mode`, P-2c). ARCHIVE §14, S4c-0, has the audit table and the findings.
 - **Includes.**
   - **One rule for every new inode the helper creates:** its mode lies within `modes.max`. The result reports the mode actually set.
   - **F-1: copy, by clamping, not refusing.** `priv_copy` has no mode input, so refusing would make such files uncopyable.
