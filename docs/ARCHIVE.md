@@ -2221,3 +2221,25 @@ The document gives exact replacement wording for D-006 and S-12, the config, env
 **Deferred / follow-ups:** The maintainer's answers to the handoff's 16 open questions. Then S4c-0 to S4c-8 (S4c-9 if Q6 is yes).
 
 **Versions:** Go 1.27.2, the newest stable per go.dev (read 2026-10-18), unchanged in `go.mod`. No dependency change: this PR touches documents only.
+
+**2026-10-18 — Maintainer decisions on the S4c handoff (PR #27 follow-up).** The handoff's §6 now records an answer for each of the 16 questions, and §2–§5 and §7 were updated so every S4c session builds from them.
+- **Accepted as recommended:**
+  - Q1: bind the privileged policy hash;
+  - Q2: recursive chown and chmod, with S4c-0's link-count refusal on every entry of the walk;
+  - Q4: package binding P2;
+  - Q6: a minimal policy summary, now a planned S4c-9;
+  - Q7: read preview tools for delete and packages;
+  - Q9: no apt sources in the update-index preview;
+  - Q11: no `stdin` on `shell_priv_run_command`;
+  - Q12: prune after commit;
+  - Q13: metadata read-back;
+  - Q16: a write keeps a concurrent mode or owner change to the existing file, provided the new inode's mode is clamped to `modes.max`.
+- **Changed by the maintainer:**
+  - **Q3, restore.** Keep the recorded owner and group, clamp the mode to `modes.max`, and verify the backup's recorded content hash before restoring (`verify_failed` on a mismatch; today it is `backup_failed`).
+  - **Q5, exec routing.** The helper's preview, a core-unit op for commands of either unit, resolves the command and reports its unit. The approval shows the unit and binds it through the preview hash, and the server sends `priv_exec` to that unit directly. `helper_wrong_unit` is an error, never a retry in another unit. A broad command's exec recomputes the hash in the broad unit, so a resolution that differs between the two units is a refusal, never another argv.
+  - **Q8.** No metadata backups, but the helper's audit line records the old mode, owner and group of every entry changed, bounded for recursive ops (100 entries or 32 KiB, with a total and a truncation flag).
+  - **Q10.** A total size cap on the backup store, a new privileged policy key `backups.max_store_bytes`: default 1 GiB, range 64 MiB to 1 TiB. An operation whose backup would exceed the cap is refused with `backup_failed`, and changes nothing. Retention is kept.
+  - **Q14.** `expected_preview_sha256` is required on every op with its own preview, and on `priv_exec` whenever approval is involved; it is optional only for read commands.
+  - **Q15.** Copy and move with `overwrite` bind the destination's content hash and type, through a new `expected_destination_sha256` (approved as P-9). A preview that saw no destination re-calls with `overwrite: false`.
+- **Found while applying Q16 (F-4).** A write over an existing file keeps that file's mode even outside `modes.max`, and `TestDefaultModesWithinMask` asserts it. S4c-0 now clamps every new inode the helper creates (copy, copy over a file, write over a file, restore) to `modes.max`, and changes that test's expectation deliberately.
+- **D-006 and S-12.** Approved as an extension of the approval binding to the privileged policy's hash and, for a privileged command, its unit, and nothing else. The exact text is in handoff §7.1, with the matching CLAUDE.md definition, for S4c-1's first commit to apply verbatim. D-021 is unchanged. No locked document changes in this PR.
