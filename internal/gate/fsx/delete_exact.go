@@ -609,3 +609,11 @@ func isDevice(id *ident) bool { return id.typ == unix.S_IFCHR || id.typ == unix.
 func errDevice() error {
 	return errf(protocol.CodePathDenied, "the path is or holds a device node, which a delete never removes")
 }
+
+// ErrNoReplaceUnsupported is ProbeNoReplace's answer for a filesystem
+// without RENAME_NOREPLACE.
+var ErrNoReplaceUnsupported = errors.New("the filesystem does not support RENAME_NOREPLACE")
+
+// ProbeNoReplace reports whether dir's filesystem supports RENAME_NOREPLACE.
+// STUB.
+func ProbeNoReplace(string) error { return nil }

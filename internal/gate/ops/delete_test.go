@@ -106,3 +106,61 @@ func TestGateDeleteWindow(t *testing.T) {
 	}
 	t.Logf("gate delete window: %d runs, every newcomer survived", gateWindowRuns)
 }
+
+// TestGateDeleteNamesASetAsideEntry: when an entry set aside cannot be put
+// back, the refusal and the gate's audit line name its temporary path.
+func TestGateDeleteNamesASetAsideEntry(t *testing.T) {
+	f := newFixture(t, "destructive")
+	next := f.auditTo(t)
+	dir := filepath.Join(f.write, "tree")
+	gateTree(t, dir)
+	var pv deletePreview
+	f.ok("delete_preview", m{"path": dir, "recursive": true}, &pv)
+	_ = next()
+	victim := dir + "/sub/b.txt"
+	put := func(content string) {
+		tmp := filepath.Join(f.write, "racer")
+		if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
+			t.Error(err)
+		}
+		if err := os.Rename(tmp, victim); err != nil {
+			t.Error(err)
+		}
+	}
+	f.opts.InjectDeleteStep = func(s fsx.DeleteStep, p string) {
+		if p != victim {
+			return
+		}
+		switch s {
+		case fsx.DeleteStepBeforeRename:
+			put("newcomer A")
+		case fsx.DeleteStepAfterRename:
+			put("newcomer B")
+		default:
+		}
+	}
+	r := f.call("delete", m{"path": dir, "recursive": true, "expected_preview_sha256": pv.PreviewSHA256})
+	f.opts.InjectDeleteStep = nil
+	if r.OK || r.Error == nil || r.Error.Code != "exists" {
+		t.Fatalf("delete: %+v", r.Error)
+	}
+	ents, err := os.ReadDir(dir + "/sub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aside := ""
+	for _, en := range ents {
+		if strings.HasPrefix(en.Name(), ".shell-mcp-delete-") {
+			aside = filepath.Join(dir, "sub", en.Name())
+		}
+	}
+	if aside == "" || contentOf(t, aside) != "newcomer A" || contentOf(t, victim) != "newcomer B" {
+		t.Fatalf("set aside %q in %v", aside, ents)
+	}
+	if !strings.Contains(r.Error.Message, aside) {
+		t.Fatalf("message does not name %s: %q", aside, r.Error.Message)
+	}
+	if line := next(); !strings.Contains(line, `"set_aside":"`+aside+`"`) || !strings.Contains(line, `"outcome":"exists"`) {
+		t.Fatalf("audit line does not name the set-aside entry: %s", line)
+	}
+}

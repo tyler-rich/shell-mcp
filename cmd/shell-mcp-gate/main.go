@@ -18,6 +18,7 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/install"
 	"github.com/tyler-rich/shell-mcp/internal/gate/ops"
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
@@ -178,6 +179,9 @@ func polkitWith(args []string, stdout, stderr io.Writer, trust policy.Trust) int
 // checkPolicyWith is checkPolicy with the trust set and the service home as
 // parameters; only tests pass anything but policy.RootTrust() and
 // ops.ServiceHome().
+// probeNoReplace is fsx.ProbeNoReplace; tests replace it.
+var probeNoReplace = fsx.ProbeNoReplace
+
 func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust, home string) int {
 	fs := flag.NewFlagSet("check-policy", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)

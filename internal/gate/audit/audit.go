@@ -50,6 +50,9 @@ type Record struct {
 	Args       map[string]any
 	Outcome    string // "ok" or the gate error code
 	DurationMS int64
+	// SetAside is the path of an entry a delete set aside and could not
+	// put back (empty otherwise).
+	SetAside string
 }
 
 // Sink receives audit records.

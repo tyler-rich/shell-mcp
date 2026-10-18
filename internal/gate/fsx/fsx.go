@@ -81,6 +81,9 @@ func New(cfg *Config) *FS { return &FS{cfg: *cfg} }
 type Error struct {
 	Code string
 	Msg  string
+	// SetAside, when set, is the path of an entry a delete set aside and
+	// could not put back under its name (it was not deleted).
+	SetAside string
 }
 
 func (e *Error) Error() string { return e.Code + ": " + e.Msg }
