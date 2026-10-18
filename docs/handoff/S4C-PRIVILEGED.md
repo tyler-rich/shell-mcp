@@ -144,7 +144,8 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 
 **F-4. Writes over an existing file keep its mode, even outside `modes.max`.** Found while answering Q16, and of the same kind as F-1.
 - **Code.** `writeAtomic` gives the new inode the existing file's mode when no mode is given (`write.go`, `newMode = os.FileMode(um)`). `TestDefaultModesWithinMask` asserts exactly that: an existing `0640` file stays `0640` under `modes.max: "0700"`.
-- **Decided (Q16):** a write's new inode is clamped to `modes.max` like every other new inode (S4c-0). That changes the tested result above to `0600`, deliberately.
+- **Decided (Q16; F-4 accepted by the maintainer):** a write's new inode is clamped to `modes.max` like every other new inode (S4c-0). That changes the tested result above to `0600`, deliberately.
+- **Visible effect, documented in PRIVILEGED.md by S4c-0:** a file whose mode is wider than `modes.max` is narrowed to the mask when the helper writes it, copies over it or restores it.
 
 ### 2.2 Cross-cutting gaps
 
@@ -557,7 +558,7 @@ All of them:
     - Restore is covered by the rule above; its other changes (preview binding, `verify_failed` on a damaged backup) are S4c-5's.
   - **Metadata read-back (X-10, Q13)** for the non-recursive ops: fstat after the change on the same descriptor; a mismatch is `verify_failed`.
   - **Old values in the audit (Q8)** for the non-recursive chown and chmod: the helper's line records the entry's old mode, owner and group (`changed`).
-  - **Docs.** PRIVILEGED §4 and §6 (the new-inode mode rule, the link-count rule, read-back, restore's owner and mode) and ARCHIVE.
+  - **Docs.** PRIVILEGED §4 and §6 (the new-inode mode rule, the link-count rule, read-back, restore's owner and mode) and ARCHIVE. PRIVILEGED.md must state the clamp's visible effect in so many words: a file wider than `modes.max` is narrowed to the mask when the helper writes it (and likewise when it copies over it or restores it).
 - **Excludes.** Any tool; any protocol change; recursive chown and chmod (S4c-3).
 - **Tests (failing first).**
   - Under `modes.max: "0700"`: a copy of a `0644` source gives `0600`, a copy over a `0644` destination gives `0600`, a write over an existing `0640` file gives `0600`, and a restore of a `0644` backup gives `0600`; each result reports the mode set.
@@ -788,7 +789,7 @@ Become:
 
 (The elided parts are unchanged.)
 
-**CLAUDE.md, Definitions, "Approval".** "bound to principal, tool, target and the SHA-256 of the canonical arguments, the preview and the gate policy" becomes "bound to principal, tool, target and the SHA-256 of the canonical arguments, the preview and the gate policy (for a privileged operation, also the privileged policy, and for a privileged command, its unit)". The CLAUDE.md hard rule's list "(principal, tool, target, canonical arguments, preview, policy)" already covers both policies and is unchanged.
+**CLAUDE.md, Definitions, "Approval"** (confirmed by the maintainer, 2026-10-18, with the same extension as D-006 and nothing more; applied verbatim in S4c-1's first commit with D-006 and S-12). "bound to principal, tool, target and the SHA-256 of the canonical arguments, the preview and the gate policy" becomes "bound to principal, tool, target and the SHA-256 of the canonical arguments, the preview and the gate policy (for a privileged operation, also the privileged policy, and for a privileged command, its unit)". The CLAUDE.md hard rule's list "(principal, tool, target, canonical arguments, preview, policy)" already covers both policies and is unchanged.
 
 **D-021 (plan §2):** unchanged. "Overwritten and deleted files are backed up first" stays true with the store cap, which refuses an operation rather than skipping its backup; the binding lives in D-006.
 
@@ -800,7 +801,7 @@ Become:
 - **TOOLS.md, `shell_priv_restore_backup`,** "preview: diff against current". No content is ever shown. The preview is the backup's and the current file's size, mode, owner and SHA-256 (and line counts where the server reads both).
 - **PRIVILEGED §6, "Every write-class op returns a preview first".** No op returns a preview. Previews are separate read ops, or composed by the server. Reword to "every write-class op has a preview, shown in the approval request: …".
 - **PRIVILEGED §6, `priv_copy` and `priv_move` row.** "Modes within the mask" was not true for copy (F-1, fixed in S4c-0). The row should say that every new inode's mode is masked by `modes.max` (a new copy takes the source's mode, a copy over a file the destination's), and that with `overwrite` the destination is bound by `expected_destination_sha256` (P-9).
-- **PRIVILEGED §6, `priv_write_file` row.** "Owner and mode preserved unless given" becomes "owner preserved, and mode preserved within `modes.max`, unless given" (F-4).
+- **PRIVILEGED §6, `priv_write_file` row.** "Owner and mode preserved unless given" becomes "owner preserved, and mode preserved within `modes.max`, unless given: a file wider than `modes.max` is narrowed to the mask when the helper writes it" (F-4, S4c-0).
 - **PRIVILEGED §6, `priv_restore_backup` and Backups.** The restored mode is masked by `modes.max`; a backup whose data does not match its recorded SHA-256 is `verify_failed`, and nothing is restored (Q3). The store's total size cap (§4.1).
 - **PRIVILEGED §4.** The `backups.max_store_bytes` key, its range and default (§4.1).
 - **PRIVILEGED §6, `priv_exec`.** "How the server learns a command's unit is S4c's" → D6: the core-unit preview reports the unit, the server sends `priv_exec` there, and `helper_wrong_unit` is an error.

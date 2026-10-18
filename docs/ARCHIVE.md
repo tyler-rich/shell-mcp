@@ -2243,3 +2243,8 @@ The document gives exact replacement wording for D-006 and S-12, the config, env
   - **Q15.** Copy and move with `overwrite` bind the destination's content hash and type, through a new `expected_destination_sha256` (approved as P-9). A preview that saw no destination re-calls with `overwrite: false`.
 - **Found while applying Q16 (F-4).** A write over an existing file keeps that file's mode even outside `modes.max`, and `TestDefaultModesWithinMask` asserts it. S4c-0 now clamps every new inode the helper creates (copy, copy over a file, write over a file, restore) to `modes.max`, and changes that test's expectation deliberately.
 - **D-006 and S-12.** Approved as an extension of the approval binding to the privileged policy's hash and, for a privileged command, its unit, and nothing else. The exact text is in handoff §7.1, with the matching CLAUDE.md definition, for S4c-1's first commit to apply verbatim. D-021 is unchanged. No locked document changes in this PR.
+
+**2026-10-18 — Two confirmations (PR #27 follow-up).**
+- **CLAUDE.md "Approval" definition.** The maintainer confirmed it, with the same extension as D-006 and nothing more. S4c-1's first commit applies it verbatim, together with D-006 and S-12 (handoff §7.1).
+- **F-4.** The maintainer accepted it. S4c-0 must state the clamp's visible effect in PRIVILEGED.md: a file wider than `modes.max` is narrowed to the mask when the helper writes it, copies over it or restores it.
+- **CI.** The run on `e841498` passed (all ten checks).
