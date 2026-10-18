@@ -47,6 +47,7 @@ type writeArgs struct {
 	Mode           string `json:"mode"`
 	Create         *bool  `json:"create"`
 	ExpectedSHA256 string `json:"expected_sha256"`
+	ExpectAbsent   bool   `json:"expect_absent"`
 }
 
 type mkdirArgs struct {

@@ -48,6 +48,10 @@ type Options struct {
 	ApplySandbox func(*policy.Policy) (sandbox.Report, error)
 	// InjectReadBackFault is passed to fsx; tests only.
 	InjectReadBackFault func([]byte) []byte
+	// InjectBeforeCommit and InjectNoReplaceFault are passed to fsx; tests
+	// only.
+	InjectBeforeCommit   func()
+	InjectNoReplaceFault func() error
 
 	// Systemctl, Journalctl and Git are the absolute paths of the binaries
 	// the built-in service, journal and git operations run. Production uses
@@ -251,7 +255,9 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 			MaxFindDepth:     p.Limits.MaxFindDepth,
 			MaxDeleteEntries: p.Limits.MaxDeleteEntries,
 		},
-		InjectReadBackFault: o.InjectReadBackFault,
+		InjectReadBackFault:  o.InjectReadBackFault,
+		InjectBeforeCommit:   o.InjectBeforeCommit,
+		InjectNoReplaceFault: o.InjectNoReplaceFault,
 	})
 	s.red = redact.New(p.Redact)
 

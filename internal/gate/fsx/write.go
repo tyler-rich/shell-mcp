@@ -217,6 +217,9 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 			return res, e
 		}
 	}
+	if f.cfg.InjectBeforeCommit != nil {
+		f.cfg.InjectBeforeCommit()
+	}
 	if err = l.parent.Rename(tmp, l.base); err != nil {
 		return res, mapErr(err)
 	}
@@ -540,6 +543,9 @@ func (f *FS) Move(src, dst string, overwrite bool) (MoveResult, error) {
 		if e := unchangedSince(ld.parent, ld.base, backedUp); e != nil {
 			return res, e
 		}
+	}
+	if f.cfg.InjectBeforeCommit != nil {
+		f.cfg.InjectBeforeCommit()
 	}
 	if ls.parentReal == ld.parentReal {
 		err = ls.parent.Rename(ls.base, ld.base)

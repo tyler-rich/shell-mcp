@@ -49,6 +49,16 @@ type Config struct {
 	// after a write before they are compared. Tests only; production code
 	// never sets it.
 	InjectReadBackFault func([]byte) []byte
+	// InjectBeforeCommit, when non-nil, is called after every check and
+	// immediately before a write, copy or move commits (the rename or link
+	// that makes the destination appear). Tests only; production code never
+	// sets it.
+	InjectBeforeCommit func()
+	// InjectNoReplaceFault, when non-nil, is called instead of the system
+	// call of a create-only commit (link for write and copy, renameat2 with
+	// RENAME_NOREPLACE for move), and its error is that call's result. Tests
+	// only; production code never sets it.
+	InjectNoReplaceFault func() error
 	// Backup, when non-nil, is called before every overwrite, move-over and
 	// delete; its error aborts the operation. The gate never sets it.
 	Backup BackupFunc
@@ -131,6 +141,9 @@ type WriteOptions struct {
 	Mode           *os.FileMode
 	Create         bool
 	ExpectedSHA256 string
+	// ExpectAbsent refuses the write with exists if the file exists, up to
+	// and including the commit. Mutually exclusive with ExpectedSHA256.
+	ExpectAbsent bool
 	// Owner, when set, is the new file's owner (the helper only).
 	Owner *Owner
 	// DefaultMode, when non-zero, replaces 0640 as a new file's mode when

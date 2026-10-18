@@ -90,6 +90,10 @@ type Options struct {
 	PkgLockRetry time.Duration
 	// InjectReadBackFault is passed to fsx; tests only.
 	InjectReadBackFault func([]byte) []byte
+	// InjectBeforeCommit and InjectNoReplaceFault are passed to fsx; tests
+	// only.
+	InjectBeforeCommit   func()
+	InjectNoReplaceFault func() error
 	// Now is the clock (backup ids and times).
 	Now func() time.Time
 }
@@ -418,7 +422,9 @@ func (s *server) run(nc net.Conn) *protocol.Response {
 			MaxFindDepth:     8,
 			MaxDeleteEntries: p.Limits.MaxDeleteEntries,
 		},
-		InjectReadBackFault: o.InjectReadBackFault,
+		InjectReadBackFault:  o.InjectReadBackFault,
+		InjectBeforeCommit:   o.InjectBeforeCommit,
+		InjectNoReplaceFault: o.InjectNoReplaceFault,
 	}
 	if p.BackupsKeep > 0 {
 		cfg.Backup = s.backup
