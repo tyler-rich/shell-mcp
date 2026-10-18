@@ -2189,3 +2189,35 @@ The document gives exact replacement wording for D-006 and S-12, the config, env
   - The no-method subtest read the journal from one second before its start and counted the previous test's `git_discard_preview` lines; it now waits 2.1 s, as the guard test does.
   - The discard subtest ran its own `git status` as root (which rewrites the index and runs `post-index-change`) before checking the hook marker; the marker is now checked first, and the status runs with `--no-optional-locks`.
   - `TestOperatorToolRunCommand/refusal_destructive_command` expected the refusal at `exec`; with the command resolved first it comes from `exec_preview` (ceiling operator, `tier_denied`), and no `exec` at ceiling operator is sent.
+
+### 2026-10-18 — Privileged tools scoped: gaps, design and session split (PR #27, branch docs/s4c-scope)
+**Decision:** Documentation only. `docs/handoff/S4C-PRIVILEGED.md` scopes S4c (plan §5) against the bar the gate reached in S4a–S4b-2b. No locked document, code or test changes; the wording changes it proposes (§7) are for the implementation sessions, after approval.
+- **Inventory.** The helper implements every PRIVILEGED §6 op except recursive chown and chmod. The gate forwards and routes them all. The server has the privileged registration and the approval core, but no `shell_priv_*` tool.
+- **Main gaps (must-fix before exposure):**
+  - the privileged policy's hash never reaches the server: the gate replaces the helper's response block with its own;
+  - the approval core gates by tier only, while D-006 always gates privileged operator and destructive operations;
+  - `priv_delete` still uses S1's `fsx.Delete`;
+  - `priv_exec` has no preview op, and the server cannot learn a command's unit;
+  - package simulations carry no hash, and nothing binds the approved transaction to the run;
+  - `priv_restore_backup` binds nothing, and tree restores are not create-only;
+  - a privileged request with a timeout above the gate's limit reports `timeout` while the helper's command or transaction carries on.
+- **Proposed design.**
+  - A `helper` block on forwarded responses, and an approval bound to both policy hashes (a D-006 wording change for the maintainer).
+  - Dedicated read-tier previews with `expected_preview_sha256` for chown/chmod (recursive, identity-bound walk), restore, delete (the gate's `DeleteExact` with the backup written from the plan), exec (a helper `priv_exec_preview`), packages and power.
+  - Composed previews with the existing preconditions for write, mkdir, copy and move.
+  - Package runs: re-simulated and compared, pinned, `--no-remove`, upgrade as `install --only-upgrade` over the approved list, and a dpkg-status diff (`verify_failed` on a mismatch).
+  - Exec routing: core first, then broad after `helper_wrong_unit`.
+  - Pruning after commit.
+- **Sessions:** S4c-0 (a standalone fix) through S4c-8, plus an optional S4c-9 (a privileged policy summary). Each is one PR, Opus 5.5 at High.
+
+**Findings in merged code (reported and decided during the session):**
+- **`priv_copy` ignores `modes.max`.** The new file keeps the source's mode minus `7002` (`internal/gate/fsx/write.go`, `Copy`). It is reachable today by anything that can send `priv_copy` through the gate, and exposes files to other local users. Maintainer decision: a standalone `fix(privd)` PR first (S4c-0) that clamps the mode to `modes.max` rather than refusing, reports the mode set, and audits every mode- or owner-setting op against `modes.max` and the allow-lists.
+- **`priv_chown` and `priv_chmod` act on the inode behind a hard link,** which may have a name outside the write roots (`fsx.Chown`, `fsx.Chmod`; `ReadWritePaths=` limits paths, not inodes, and Landlock has no chmod or chown right). Maintainer rating: medium, since it can escalate. Decision: fixed in S4c-0, by refusing a non-directory with a link count above 1, read by fstat on the same descriptor that is changed. Any other op that changes an existing inode in place gets the same rule. Recursive walks (S4c-3) refuse such entries.
+
+**Why:** The helper predates atomic create-only commits, preview binding, set-aside deletes and per-tier approval. A root tool must not ship weaker than the unprivileged one. Scoping first keeps each implementation PR to one concern, with its protocol changes approved up front.
+
+**Alternatives rejected (in the handoff, with reasons):** reusing the gate's `exec_preview` for root commands; letting the core instance answer broad commands' previews; one generic `priv_preview` op; a dedicated preview op for every write; downloading `.deb`s and installing them with `dpkg -i`; trusting the package simulation without verifying the run.
+
+**Deferred / follow-ups:** The maintainer's answers to the handoff's 16 open questions. Then S4c-0 to S4c-8 (S4c-9 if Q6 is yes).
+
+**Versions:** Go 1.27.2, the newest stable per go.dev (read 2026-10-18), unchanged in `go.mod`. No dependency change: this PR touches documents only.
