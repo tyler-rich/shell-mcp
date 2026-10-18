@@ -347,6 +347,12 @@ func perTierCall[In, Out any](ctx context.Context, d *Deps, s spec[In, Out], req
 	}
 	p, e := s.preview(ctx, in, tg.Name)
 	if e != nil {
+		// TEMPORARY MUTANT (reverted in the next commit): after a refused
+		// preview, also send the operation at ceiling read, and still answer
+		// with the preview's refusal. The e2e "no exec sent" check must fail.
+		if e.Code == "tier_denied" {
+			_ = s.run(withCeiling(ctx, TierRead), req, in)
+		}
 		return envelope.Failure[Out](tg.Name, e), "", ""
 	}
 	if !p.tier.valid() || p.tier > s.tier {
