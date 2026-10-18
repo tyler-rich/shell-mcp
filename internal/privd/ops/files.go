@@ -110,6 +110,14 @@ func (s *server) mode(str string) (*os.FileMode, error) {
 	return &m, nil
 }
 
+// newInodeMode is the mode for an inode the helper creates from a recorded
+// mode (a restore): without setuid, setgid, sticky or world-write, and
+// masked by modes.max. fsx masks every new inode by modes.max too
+// (Config.ModesMax), so this only makes the recorded mode acceptable.
+func (s *server) newInodeMode(m uint32) os.FileMode {
+	return os.FileMode(m&0o775) & s.p.ModesMax
+}
+
 // owner resolves owner and group names against the allow-lists.
 func (s *server) owner(user, group string) (*fsx.Owner, error) {
 	if user == "" && group == "" {
@@ -250,6 +258,9 @@ func (s *server) chown(raw jsontext.Value) (data any, warns []string, failure er
 		return nil, nil, errf(protocol.CodeBadRequest, "owner or group is required")
 	}
 	r, err := s.fs.Chown(a.Path, *owner)
+	if r.Changed {
+		s.recordChange(a.Path, r.Before)
+	}
 	return r, nil, err
 }
 
@@ -266,6 +277,9 @@ func (s *server) chmod(raw jsontext.Value) (data any, warns []string, failure er
 		return nil, nil, err
 	}
 	r, err := s.fs.Chmod(a.Path, *mode)
+	if r.Changed {
+		s.recordChange(a.Path, r.Before)
+	}
 	return r, nil, err
 }
 

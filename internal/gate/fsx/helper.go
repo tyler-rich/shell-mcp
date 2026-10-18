@@ -141,7 +141,8 @@ func (f *FS) openEntry(l *loc, e *treeEntry) (*os.File, error) {
 
 // Chown sets the owner and/or group of p under a write root, through a
 // descriptor opened without following a final symlink. Only regular files
-// and directories; a file with setuid, setgid or sticky bits is refused.
+// and directories; a file with setuid, setgid or sticky bits, or with more
+// than one link (singleLink), is refused.
 func (f *FS) Chown(p string, o Owner) (ChownResult, error) {
 	if o.UID == nil && o.GID == nil {
 		return ChownResult{}, errf(protocol.CodeBadRequest, "an owner or a group is required")
@@ -166,11 +167,14 @@ func (f *FS) Chown(p string, o Owner) (ChownResult, error) {
 	if unixMode(fi)&0o7000 != 0 {
 		return ChownResult{}, errf(protocol.CodePolicyDenied, "files with setuid, setgid or sticky bits are never changed")
 	}
+	if e := singleLink(p, fi); e != nil {
+		return ChownResult{}, e
+	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
 		return ChownResult{}, errf(protocol.CodeInternal, "no owner information")
 	}
-	res := ChownResult{Path: p, OldUID: st.Uid, OldGID: st.Gid, UID: st.Uid, GID: st.Gid}
+	res := ChownResult{Path: p, OldUID: st.Uid, OldGID: st.Gid, UID: st.Uid, GID: st.Gid, Before: metaOf(fi)}
 	uid, gid := -1, -1
 	if o.UID != nil {
 		uid, res.UID = int(*o.UID), *o.UID
@@ -180,6 +184,12 @@ func (f *FS) Chown(p string, o Owner) (ChownResult, error) {
 	}
 	if err := file.Chown(uid, gid); err != nil {
 		return ChownResult{}, mapErr(err)
+	}
+	res.Changed = true
+	want := res.Before
+	want.UID, want.GID = res.UID, res.GID
+	if e := f.verifyMeta(file, want); e != nil {
+		return res, e
 	}
 	return res, nil
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 	"github.com/tyler-rich/shell-mcp/internal/privd/selfcheck"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
@@ -23,7 +24,8 @@ import (
 // request id — the gate's audit line for the same id carries the gate
 // principal — the request's tier ceiling, the peer's uid and pid, the op, sanitized arguments (paths,
 // owners, modes, command id, argument count, backup id; never content,
-// command arguments or output), the backups written, the outcome and the
+// command arguments or output), the backups written, for chmod and chown
+// the entry changed with its old mode, owner and group, the outcome and the
 // duration.
 
 const maxAuditText = 512
@@ -94,6 +96,21 @@ func sanitizeArgs(raw []byte) map[string]any {
 	return out
 }
 
+// auditChange is an entry chmod or chown changed, with its mode, owner and
+// group before the change (metadata is not backed up; the audit line is the
+// record).
+type auditChange struct {
+	Path    string `json:"path"`
+	OldMode string `json:"old_mode"`
+	OldUID  uint32 `json:"old_uid"`
+	OldGID  uint32 `json:"old_gid"`
+}
+
+// recordChange notes an entry chmod or chown changed.
+func (s *server) recordChange(p string, before fsx.Meta) {
+	s.changed = append(s.changed, auditChange{Path: auditText(p), OldMode: fmt.Sprintf("%04o", before.Mode), OldUID: before.UID, OldGID: before.GID})
+}
+
 type auditLine struct {
 	ID         string         `json:"id"`
 	Ceiling    string         `json:"ceiling"`
@@ -102,6 +119,7 @@ type auditLine struct {
 	Op         string         `json:"op"`
 	Args       map[string]any `json:"args"`
 	BackupIDs  []string       `json:"backup_ids"`
+	Changed    []auditChange  `json:"changed,omitempty"`
 	Outcome    string         `json:"outcome"`
 	Check      string         `json:"check,omitempty"`
 	Detail     string         `json:"detail,omitempty"`
@@ -150,7 +168,7 @@ func (s *server) auditRefusal(err error, code string) {
 // a refused operation.
 func (s *server) auditRequest(resp *protocol.Response) {
 	uid, pid := s.cred.UID, s.cred.PID
-	l := &auditLine{PeerUID: &uid, PeerPID: &pid, Outcome: "ok", BackupIDs: s.ids()}
+	l := &auditLine{PeerUID: &uid, PeerPID: &pid, Outcome: "ok", BackupIDs: s.ids(), Changed: s.changed}
 	if s.req != nil {
 		l.ID, l.Ceiling, l.Op, l.Args = s.req.ID, s.req.Ceiling, auditText(s.req.Op), sanitizeArgs(s.req.Args)
 	}
