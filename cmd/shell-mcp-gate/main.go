@@ -241,6 +241,19 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust
 		for _, w := range p.Warnings {
 			pr("WARN %s", w)
 		}
+		// delete, and move without overwrite, need RENAME_NOREPLACE and are
+		// refused on a filesystem without it (POLICY §3): probe each write
+		// root (a file created, renamed and removed inside it).
+		for _, root := range p.Paths.Write {
+			switch err := probeNoReplace(root); {
+			case err == nil:
+				pr("ok   paths.write %s: RENAME_NOREPLACE supported", root)
+			case errors.Is(err, fsx.ErrNoReplaceUnsupported):
+				pr("WARN paths.write %s: the filesystem does not support RENAME_NOREPLACE; delete, and move without overwrite, are refused under this root", root)
+			default:
+				pr("WARN paths.write %s: could not probe RENAME_NOREPLACE (%v); delete, and move without overwrite, need it", root, err)
+			}
+		}
 	}
 
 	abi := sandbox.KernelABI()

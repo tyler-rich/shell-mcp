@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"slices"
+	"strings"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -40,16 +41,36 @@ import (
 // by a path from the root. Each entry is removed in four steps on its
 // parent directory's descriptor:
 //
-//  1. statx(name): the entry still has the identity (and, for anything but
-//     a directory, the size and change time) the walk saw;
+//  1. statx(name): the same object as the walk saw (device, inode, type,
+//     mount id, birth time where reported) and, for a non-directory this
+//     pass has not yet renamed or unlinked under another name, the same
+//     size and change time;
 //  2. renameat2(name → tmp, RENAME_NOREPLACE): whatever is under the name
-//     now is set aside under a fresh random name in the same directory;
-//  3. statx(tmp): it is the same object (device, inode, type, mount, birth
+//     now is set aside under .shell-mcp-delete-<32 hex> in the same
+//     directory;
+//  3. statx(tmp): the same object (device, inode, type, mount id, birth
 //     time); otherwise it is put back under its name (RENAME_NOREPLACE)
 //     and the deletion stops;
-//  4. unlinkat(tmp) (AT_REMOVEDIR for a directory, which fails on a
-//     directory that gained entries; it is then put back and the deletion
-//     stops).
+//  4. unlinkat(tmp) (AT_REMOVEDIR for a directory, which the kernel refuses
+//     on a directory that is not empty; it is then put back and the
+//     deletion stops).
+//
+// Change times are compared only where nothing this pass did can have
+// moved them: in the hash (the walk changes nothing) and in step 1 for a
+// non-directory not yet touched. A rename may move the renamed inode's
+// change time (POSIX leaves it open, and Linux filesystems commonly set
+// it), so step 3 never compares it, whatever the filesystem does; removing a directory's entries moves its change and modification
+// times, so no step compares a directory's times or size (its emptiness is
+// the kernel's AT_REMOVEDIR check); and unlinking one name of a hard-linked
+// inode moves that inode's change time (its link count), so its other
+// names are compared by object and size only (touched).
+//
+// An entry that fails step 3, or whose directory gained entries, is put
+// back; when its name was taken again meanwhile it stays under its
+// temporary name, which the refusal (Error.SetAside) and the gate's audit
+// line name. No preview or delete ever touches a path with that prefix
+// (errSetAside): an operator recovers it (POLICY §3). The prefix also
+// finds what a gate that died between steps 2 and 4 left.
 //
 // Linux has no conditional unlink: unlinkat removes whatever is under a
 // name at that moment. Step 2 turns "whatever is under the name" into a
@@ -252,6 +273,9 @@ func (f *FS) walkTop(pl *plan) error {
 	if l.parent == nil || f.isConfiguredRoot(l.p) {
 		return errf(protocol.CodePathDenied, "a root cannot be deleted")
 	}
+	if hasSetAsideComponent(l.p) || hasSetAsideComponent(l.targetReal()) {
+		return errSetAside()
+	}
 	var err error
 	if pl.parent, err = l.parent.Open("."); err != nil {
 		return mapErr(err)
@@ -354,6 +378,9 @@ func (f *FS) walkDir(pl *plan, dir *os.Root, dfd int, top *ident, node *planEntr
 	slices.Sort(names)
 	for _, name := range names {
 		e := &planEntry{name: name, lp: join(node.lp, name), rp: join(node.rp, name)}
+		if strings.HasPrefix(name, deleteTempPrefix) {
+			return errSetAside()
+		}
 		if err := f.checkPath(e.lp, true); err != nil {
 			return err
 		}
@@ -468,6 +495,10 @@ type deleter struct {
 	// setAside names an entry that could not be put back under its name
 	// (taken again meanwhile); it was not deleted.
 	setAside string
+	// touched are the inodes (device, inode) of non-directories this pass
+	// has already renamed or unlinked under another of their names: their
+	// change time moved because of this pass (a hard link).
+	touched map[[2]uint64]bool
 }
 
 // changed is the refusal for an entry that is not what the preview saw.
@@ -508,7 +539,7 @@ func (d *deleter) remove(dfd int, e *planEntry) error {
 		return &changed{"an entry of the preview is gone"}
 	case err != nil:
 		return err
-	case !pre.unchanged(&e.id):
+	case !pre.unchanged(&e.id) && !(d.touched[key2(&e.id)] && pre.sameObject(&e.id) && pre.size == e.id.size):
 		return &changed{"an entry of the preview was replaced or changed"}
 	}
 	tmp := deleteTempPrefix + randHex(16)
@@ -528,6 +559,12 @@ func (d *deleter) remove(dfd int, e *planEntry) error {
 		return &changed{"an entry of the preview is gone"}
 	case err != nil:
 		return mapErr(err)
+	}
+	if !e.id.isDir() {
+		if d.touched == nil {
+			d.touched = map[[2]uint64]bool{}
+		}
+		d.touched[key2(&e.id)] = true
 	}
 	f.step(DeleteStepAfterRename, e.lp)
 	post, err := statxAt(dfd, tmp, 0)
@@ -597,7 +634,9 @@ func (d *deleter) stopped(err error) error {
 	if d.setAside != "" {
 		msg += fmt.Sprintf("; an entry that appeared during deletion could not be put back because its name was taken again, and was left, not deleted, as %s", d.setAside)
 	}
-	return errf(code, "%s", msg)
+	out := errf(code, "%s", msg)
+	out.SetAside = d.setAside
+	return out
 }
 
 // isDevice: a character or block device node. The gate's Landlock
@@ -610,10 +649,73 @@ func errDevice() error {
 	return errf(protocol.CodePathDenied, "the path is or holds a device node, which a delete never removes")
 }
 
+// key2 identifies an inode.
+func key2(id *ident) [2]uint64 { return [2]uint64{id.dev, id.ino} }
+
+// hasSetAsideComponent: a component of p carries the set-aside prefix.
+func hasSetAsideComponent(p string) bool {
+	return slices.ContainsFunc(strings.Split(p, "/"), func(c string) bool { return strings.HasPrefix(c, deleteTempPrefix) })
+}
+
+// errSetAside refuses a path that is or holds an entry an earlier delete
+// set aside and did not remove (it could not put it back, or the gate died
+// part-way): such an entry is never deleted; an operator recovers it
+// (POLICY §3).
+func errSetAside() error {
+	return errf(protocol.CodePathDenied, "the path is or holds an entry set aside by an earlier delete (a name starting with "+
+		deleteTempPrefix+"), which is never deleted; recover it first (see the policy documentation)")
+}
+
 // ErrNoReplaceUnsupported is ProbeNoReplace's answer for a filesystem
 // without RENAME_NOREPLACE.
 var ErrNoReplaceUnsupported = errors.New("the filesystem does not support RENAME_NOREPLACE")
 
-// ProbeNoReplace reports whether dir's filesystem supports RENAME_NOREPLACE.
-// STUB.
-func ProbeNoReplace(string) error { return nil }
+// probePrefix starts the names ProbeNoReplace creates and removes.
+const probePrefix = ".shell-mcp-probe-"
+
+// ProbeNoReplace reports whether dir's filesystem supports RENAME_NOREPLACE
+// (check-policy, for each write root): it creates a file under a fresh
+// name in dir, renames it to another fresh name with RENAME_NOREPLACE, and
+// removes it. A filesystem that refuses the flag (EINVAL, ENOSYS) is
+// ErrNoReplaceUnsupported; any other failure is returned as is. Nothing is
+// left behind unless the process dies between the steps (a name starting
+// with .shell-mcp-probe-).
+func ProbeNoReplace(dir string) error {
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+	a, b := probePrefix+randHex(16), probePrefix+randHex(16)
+	fh, err := r.OpenFile(a, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if err = fh.Close(); err != nil {
+		_ = r.Remove(a)
+		return err
+	}
+	d, err := r.Open(".")
+	if err != nil {
+		_ = r.Remove(a)
+		return err
+	}
+	defer func() { _ = d.Close() }()
+	var rerr error
+	if err = withFD(d, func(fd int) error {
+		rerr = unix.Renameat2(fd, a, fd, b, unix.RENAME_NOREPLACE)
+		return nil
+	}); err != nil {
+		_ = r.Remove(a)
+		return err
+	}
+	switch {
+	case rerr == nil:
+		return r.Remove(b)
+	case errors.Is(rerr, syscall.EINVAL), errors.Is(rerr, syscall.ENOSYS):
+		_ = r.Remove(a)
+		return ErrNoReplaceUnsupported
+	}
+	_ = r.Remove(a)
+	return &fs.PathError{Op: "renameat2", Path: dir, Err: rerr}
+}

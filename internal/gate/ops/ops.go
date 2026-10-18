@@ -137,6 +137,9 @@ type server struct {
 	red    *redact.Redactor
 	report sandbox.Report
 	req    *protocol.Request
+	// setAside is the path of an entry a delete set aside and could not
+	// put back, for the audit line.
+	setAside string
 }
 
 // Serve runs the gate for one request: install checks, policy load,
@@ -170,6 +173,7 @@ func (s *server) audit(resp *protocol.Response, d time.Duration) {
 	if resp.Error != nil {
 		r.Outcome = resp.Error.Code
 	}
+	r.SetAside = s.setAside
 	s.o.Audit.Log(r)
 }
 

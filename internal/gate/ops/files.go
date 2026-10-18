@@ -5,6 +5,7 @@ package ops
 import (
 	"encoding/base64"
 	"encoding/json/jsontext"
+	"errors"
 	"os"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
@@ -224,6 +225,10 @@ func (s *server) delete(raw jsontext.Value) (data any, warns []string, failure e
 		return nil, nil, err
 	}
 	r, err := s.fs.DeleteExact(a.Path, a.Recursive, a.ExpectedPreviewSHA256)
+	var fe *fsx.Error
+	if errors.As(err, &fe) {
+		s.setAside = fe.SetAside
+	}
 	return r, nil, err
 }
 
