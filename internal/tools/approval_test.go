@@ -455,6 +455,9 @@ func TestApprovalAuditLines(t *testing.T) {
 func TestApprovalMethodNone(t *testing.T) {
 	a := newApprovalHarness(t, approval.MethodNone)
 	for _, name := range operatorTools {
+		if name == "shell_run_command" {
+			continue // gated by the command's tier (TestRunCommandPerTierWithoutApprovalMethod)
+		}
 		for _, args := range []map[string]any{operatorCallArgs[name], {"target": "app-host"}, withID(operatorCallArgs[name], "aaaaaaaaaaaaaaaaaaaaaaaaaa")} {
 			env, _ := a.call(name, args)
 			if errCode(env) != "approval_unavailable" || !strings.Contains(jsonOf(t, env["error"]), "SHELL_MCP_APPROVAL_METHOD=none") {

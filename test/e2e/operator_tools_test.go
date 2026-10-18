@@ -591,6 +591,9 @@ func TestOperatorToolsApprovalGuard(t *testing.T) {
 	time.Sleep(2100 * time.Millisecond)
 	start := time.Now()
 	for _, name := range operatorToolNames {
+		if name == "shell_run_command" {
+			continue // gated by the command's tier, below
+		}
 		args := map[string]any{"path": p, "content": "x\n"}
 		if name != "shell_write_file" {
 			args = map[string]any{}
@@ -600,13 +603,24 @@ func TestOperatorToolsApprovalGuard(t *testing.T) {
 	if _, err := os.Lstat(p); !os.IsNotExist(err) {
 		t.Fatalf("the guarded write happened: %v", err)
 	}
+	// shell_run_command: an operator command is refused after its preview,
+	// and nothing runs; a read command needs no approval and runs at ceiling
+	// read (the highest tier the listed tiers leave ungated).
+	refusal(t, callOn(t, cs, &log, "shell_run_command", map[string]any{"command_id": "probe-exit", "args": []string{"exit", "1"}}),
+		"approval_unavailable", "SHELL_MCP_APPROVAL_METHOD=none")
+	okDataAs(t, callOn(t, cs, &log, "shell_run_command", map[string]any{"command_id": "probe-echo", "args": []string{"echo", "guarded-read"}}), opsWho)
 	okDataAs(t, callOn(t, cs, &log, "shell_stat_path", map[string]any{"path": opsWork}), opsWho)
-	// The stat reached the gate; nothing before it did.
+	// The stat, the previews and the read command reached the gate; no
+	// guarded operation did.
 	findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"stat"`)
+	findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"exec"`, `"command_id":"probe-echo"`, `"ceiling":"read"`, `"outcome":"ok"`)
 	for _, j := range journal(t, "shell-mcp-gate", start) {
-		if strings.Contains(j.Message, `"principal":"`+opsWho+`"`) && !strings.Contains(j.Message, `"op":"stat"`) {
-			t.Fatalf("a guarded call reached the gate: %q", j.Message)
+		m := j.Message
+		if !strings.Contains(m, `"principal":"`+opsWho+`"`) || strings.Contains(m, `"op":"stat"`) || strings.Contains(m, `"op":"exec_preview"`) ||
+			strings.Contains(m, `"op":"exec"`) && strings.Contains(m, `"command_id":"probe-echo"`) {
+			continue
 		}
+		t.Fatalf("a guarded call reached the gate: %q", m)
 	}
 }
 

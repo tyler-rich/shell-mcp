@@ -187,22 +187,6 @@ func TestRunCommandOperatorPreviewIsExecPreview(t *testing.T) {
 	}
 }
 
-// TestRunCommandUngatedSendsNoPrecondition: in the operator profile with
-// the default approval tiers, the call is not gated and exec carries no
-// expected hash (the bytes sent are unchanged).
-func TestRunCommandUngatedSendsNoPrecondition(t *testing.T) {
-	g := newRecordingGate(runCommandReplies("operator"))
-	tg, c := sshTarget(t, g.exec)
-	h := newHarnessWith(t, []config.Target{tg}, map[string]*sshx.Client{"app-host": c}, "", func(d *Deps) { d.Principal.Profile = string(ProfileOperator) })
-	env, _ := h.call("shell_run_command", map[string]any{"command_id": "app-restart", "args": []string{"restart"}})
-	if env["ok"] != true || !slices.Equal(g.ops(), []string{"exec"}) {
-		t.Fatalf("env %v ops %v", env, g.ops())
-	}
-	if ea := g.args(t, "exec"); len(ea) != 5 || ea["expected_preview_sha256"] != nil {
-		t.Fatalf("exec args %v", ea)
-	}
-}
-
 func schemaOf(t *testing.T, r Registration) *jsonschema.Schema {
 	t.Helper()
 	s, ok := r.Tool.Def.InputSchema.(*jsonschema.Schema)

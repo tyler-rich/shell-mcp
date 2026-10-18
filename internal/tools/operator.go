@@ -706,6 +706,14 @@ func runCommand(d *Deps, tier Tier) Tool {
 		preview: func(ctx context.Context, in runCommandIn, target string) (*preview, *envelope.Error) {
 			return d.runCommandPreview(ctx, &in, target)
 		},
-		precondition: func(in *runCommandIn, p *preview) { in.expectedPreview = p.contentSHA256 },
+		precondition:    func(in *runCommandIn, p *preview) { in.expectedPreview = p.contentSHA256 },
+		tierFromPreview: true,
+		precheck: func(in *runCommandIn) *envelope.Error {
+			if _, e := d.timeoutFor(in.timeoutArg); e != nil {
+				return e
+			}
+			_, e := d.outputLimit(in.outputArg)
+			return e
+		},
 	})
 }

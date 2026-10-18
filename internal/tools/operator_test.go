@@ -320,9 +320,9 @@ func TestOperatorToolsCallTheirOp(t *testing.T) {
 		{"shell_set_permissions", map[string]any{"path": "/srv/app/config/app.yaml", "mode": "0600"}, "chmod", `{"mode":"0600","path":"/srv/app/config/app.yaml"}`},
 		{"shell_git_pull", map[string]any{"repo": "/srv/app/deploy"}, "git_pull", `{"repo":"/srv/app/deploy"}`},
 		{"shell_run_command", map[string]any{"command_id": "app-restart", "args": []string{"restart"}}, "exec",
-			`{"args":["restart"],"command_id":"app-restart","cwd":"","max_output_bytes":0,"stdin_b64":""}`},
+			`{"args":["restart"],"command_id":"app-restart","cwd":"","expected_preview_sha256":"` + shaExec + `","max_output_bytes":0,"stdin_b64":""}`},
 		{"shell_run_command", map[string]any{"command_id": "app-import", "cwd": "/srv/app", "stdin": stdin, "max_output_bytes": 100}, "exec",
-			`{"args":[],"command_id":"app-import","cwd":"/srv/app","max_output_bytes":100,"stdin_b64":"` + base64.StdEncoding.EncodeToString([]byte(stdin)) + `"}`},
+			`{"args":[],"command_id":"app-import","cwd":"/srv/app","expected_preview_sha256":"` + shaExec + `","max_output_bytes":100,"stdin_b64":"` + base64.StdEncoding.EncodeToString([]byte(stdin)) + `"}`},
 	}
 	for _, c := range cases {
 		t.Run(c.tool, func(t *testing.T) {
@@ -333,8 +333,14 @@ func TestOperatorToolsCallTheirOp(t *testing.T) {
 				t.Fatalf("envelope %v", env)
 			}
 			reqs := g.requests()
-			if len(reqs) != 1 || reqs[0].Op != c.op || reqs[0].Ceiling != "operator" {
-				t.Fatalf("requests %v (ceilings), want one %s at ceiling operator", g.ops(), c.op)
+			// shell_run_command resolves the command with exec_preview first
+			// (its gating follows the command's tier).
+			want := []string{c.op}
+			if c.tool == "shell_run_command" {
+				want = []string{"exec_preview", "exec"}
+			}
+			if !slices.Equal(g.ops(), want) || reqs[len(reqs)-1].Ceiling != "operator" {
+				t.Fatalf("requests %v, want %v, the last at ceiling operator", g.ops(), want)
 			}
 			if got := jsonOf(t, g.args(t, c.op)); got != c.gateArgs {
 				t.Fatalf("gate args %s\nwant %s", got, c.gateArgs)
@@ -356,7 +362,7 @@ func TestOperatorToolsTimeoutBudget(t *testing.T) {
 		if env, _ := h.call(tool, args); env["ok"] != true {
 			t.Fatalf("%s: %v", tool, env)
 		}
-		if r := g.requests(); len(r) != 1 || r[0].TimeoutMS != 42000 {
+		if r := g.requests(); len(r) == 0 || r[len(r)-1].TimeoutMS != 42000 {
 			t.Fatalf("%s: requests %+v", tool, r)
 		}
 	}

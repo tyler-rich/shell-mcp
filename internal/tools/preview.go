@@ -242,5 +242,9 @@ func (d *Deps) runCommandPreview(ctx context.Context, in *runCommandIn, target s
 	}
 	value := map[string]any{"command_id": x.CommandID, "tier": x.Tier, "description": x.Description, "root_equivalent": x.RootEquivalent,
 		"template": x.Template, "argv": x.Argv, "cwd": x.Cwd, "preview_sha256": hash}
-	return &preview{value: value, policy: policy, contentSHA256: hash}, nil
+	tier, ok := map[string]Tier{"read": TierRead, "operator": TierOperator, "destructive": TierDestructive}[env.Data.Tier]
+	if !ok {
+		return nil, envelope.Errorf("internal", "the gate's preview names no known tier")
+	}
+	return &preview{value: value, policy: policy, contentSHA256: hash, tier: tier}, nil
 }

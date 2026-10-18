@@ -111,7 +111,7 @@ func TestGitDiscardPreviewTool(t *testing.T) {
 
 func TestDestructiveToolsApproval(t *testing.T) {
 	opsServer(t)
-	t.Run("no approval method: refused, nothing sent", func(t *testing.T) {
+	t.Run("no approval method: destructive refused after its preview, read and operator commands run", func(t *testing.T) {
 		log := &syncedBuffer{}
 		cs, err := startServer(t, log, "SHELL_MCP_PROFILE=admin")
 		if err != nil {
@@ -125,11 +125,24 @@ func TestDestructiveToolsApproval(t *testing.T) {
 		refusal(t, callOn(t, cs, log, "shell_run_command", map[string]any{"command_id": "probe-destructive", "args": []string{"echo", "destructive"}}),
 			"approval_unavailable", "")
 		fileIs(t, opsDiscard+"/app.conf", "version: edited\n")
+		// Per tier (D-006): read and operator commands need no approval under
+		// the default tiers, in admin as in the operator profile; they run at
+		// ceiling operator, after their preview.
+		okDataAs(t, callOn(t, cs, log, "shell_run_command", map[string]any{"command_id": "probe-echo", "args": []string{"echo", "admin-read"}}), opsWho)
+		env := callOn(t, cs, log, "shell_run_command", map[string]any{"command_id": "probe-exit", "args": []string{"exit", "2"}})
+		if okDataAs(t, env, opsWho) == nil || env["exec"].(map[string]any)["exit_code"] != 2.0 || env["approval"] != nil {
+			t.Fatalf("operator command %v", env)
+		}
 		time.Sleep(time.Second)
-		for _, j := range journal(t, "shell-mcp-gate", since) {
-			if strings.Contains(j.Message, `"principal":"`+opsWho+`"`) {
-				t.Fatalf("a request reached the gate: %s", j.Message)
-			}
+		findJournal(t, "shell-mcp-gate", since, `"principal":"`+opsWho+`"`, `"op":"exec_preview"`, `"command_id":"probe-destructive"`, `"ceiling":"destructive"`)
+		for _, id := range []string{"probe-echo", "probe-exit"} {
+			findJournal(t, "shell-mcp-gate", since, `"principal":"`+opsWho+`"`, `"op":"exec"`, `"command_id":"`+id+`"`, `"ceiling":"operator"`, `"outcome":"ok"`)
+		}
+		if n := opLines(t, since, "exec", `"command_id":"probe-destructive"`); n != 0 {
+			t.Fatalf("%d exec lines for the destructive command", n)
+		}
+		if n := opLines(t, since, "git_discard_preview") + opLines(t, since, "git_discard"); n != 0 {
+			t.Fatalf("%d discard lines without an approval method", n)
 		}
 	})
 
@@ -207,6 +220,31 @@ func TestDestructiveToolsApproval(t *testing.T) {
 		time.Sleep(time.Second)
 		if n := opLines(t, since, "git_discard"); n != 0 {
 			t.Fatalf("%d git_discard lines after the change", n)
+		}
+	})
+
+	t.Run("run command per tier with operator listed: read runs, operator is approved and runs at operator", func(t *testing.T) {
+		// startApprovalServer sets SHELL_MCP_APPROVAL_TIERS=operator,destructive.
+		time.Sleep(1100 * time.Millisecond)
+		start := time.Now()
+		env := srv.callTool(t, "shell_run_command", map[string]any{"command_id": "probe-echo", "args": []string{"echo", "listed-read"}})
+		if okDataAs(t, env, opsWho) == nil || env["approval"] != nil {
+			t.Fatalf("read command %v", env)
+		}
+		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"exec"`, `"command_id":"probe-echo"`, `"ceiling":"read"`, `"outcome":"ok"`)
+		op := map[string]any{"command_id": "probe-exit", "args": []string{"exit", "1"}}
+		id := pendingID(t, srv.callTool(t, "shell_run_command", op))
+		if n := opLines(t, start, "exec", `"command_id":"probe-exit"`); n != 0 {
+			t.Fatalf("%d exec lines before approval", n)
+		}
+		srv.decide(t, h, id, "approve")
+		env = srv.callTool(t, "shell_run_command", withApproval(op, id))
+		if okDataAs(t, env, opsWho) == nil || env["exec"].(map[string]any)["exit_code"] != 1.0 {
+			t.Fatalf("approved operator command %v", env)
+		}
+		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"exec"`, `"command_id":"probe-exit"`, `"ceiling":"operator"`, `"outcome":"ok"`)
+		if n := opLines(t, start, "exec", `"command_id":"probe-exit"`); n != 1 {
+			t.Fatalf("%d exec lines after the approved re-call, want 1", n)
 		}
 	})
 
