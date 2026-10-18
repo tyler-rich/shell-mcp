@@ -28,10 +28,10 @@ func FuzzValidPreviewSHA256(f *testing.F) {
 // decodePreviewEntry is appendPreviewEntry's inverse, for the fuzz target.
 func decodePreviewEntry(b []byte) (path string, id ident, rest []byte, ok bool) {
 	n, k := binary.Uvarint(b)
-	if k <= 0 || uint64(len(b)-k) < n {
+	if k <= 0 || uint64(len(b)-k) < n { //nolint:gosec // G115: len(b)-k is not negative here
 		return "", ident{}, nil, false
 	}
-	path, b = string(b[k:k+int(n)]), b[k+int(n):]
+	path, b = string(b[k:k+int(n)]), b[k+int(n):] //nolint:gosec // G115: n is at most len(b)
 	if len(b) < 4+8*4+4+1 {
 		return "", ident{}, nil, false
 	}

@@ -309,13 +309,13 @@ func TestPreviewHashCoversEveryEntry(t *testing.T) {
 		{"renamed", func(t *testing.T, dir string) { must(t, os.Rename(dir+"/b/c.txt", dir+"/b/c2.txt")) }},
 		{"moved to another directory", func(t *testing.T, dir string) { must(t, os.Rename(dir+"/b/c.txt", dir+"/f/c.txt")) }},
 		{"resized", func(t *testing.T, dir string) {
-			f, err := os.OpenFile(dir+"/a.txt", os.O_WRONLY|os.O_APPEND, 0)
+			f, err := os.OpenFile(dir+"/a.txt", os.O_WRONLY|os.O_APPEND, 0) //nolint:gosec // G304: test fixture
 			must(t, err)
 			_, err = f.WriteString("a")
 			must(t, errors.Join(err, f.Close()))
 		}},
 		{"modified in place, same size", func(t *testing.T, dir string) {
-			f, err := os.OpenFile(dir+"/a.txt", os.O_WRONLY, 0)
+			f, err := os.OpenFile(dir+"/a.txt", os.O_WRONLY, 0) //nolint:gosec // G304: test fixture
 			must(t, err)
 			_, err = f.WriteString("bbb")
 			must(t, errors.Join(err, f.Close()))
@@ -423,7 +423,7 @@ const deleteWindowRuns = 200
 // it when p is free), staging the file in staging first.
 func replaceFile(t *testing.T, staging, p, content string) {
 	t.Helper()
-	tmp := filepath.Join(staging, fmt.Sprintf("racer-%d", rand.Int64()))
+	tmp := filepath.Join(staging, "racer-"+randHex(8))
 	must(t, os.WriteFile(tmp, []byte(content), 0o600))
 	must(t, os.Rename(tmp, p))
 }
@@ -521,12 +521,12 @@ func TestDeleteWindowDuringDeletion(t *testing.T) {
 			if s != step || p != victim || planted != "" {
 				return
 			}
-			fi, err := os.Lstat(victim)
+			fi, lerr := os.Lstat(victim)
 			switch {
-			case err == nil && fi.IsDir():
+			case lerr == nil && fi.IsDir():
 				planted = victim + "/newcomer"
 				replaceFile(t, staging, planted, racer)
-			case err == nil:
+			case lerr == nil:
 				planted = victim
 				replaceFile(t, staging, planted, racer)
 			default: // set aside: the name is free
@@ -630,7 +630,7 @@ func TestDeleteConcurrentRacer(t *testing.T) {
 		done := make(chan struct{})
 		var wg sync.WaitGroup
 		wg.Go(func() {
-			spin(time.Duration(rand.Int64N(int64(dur))))
+			spin(time.Duration(jitter(int64(dur))))
 			for k := 0; ; k++ {
 				select {
 				case <-done:
@@ -639,9 +639,9 @@ func TestDeleteConcurrentRacer(t *testing.T) {
 				}
 				var p string
 				if k%2 == 0 {
-					p = fmt.Sprintf("%s/s%d/new-%d", dir, 1+rand.IntN(3), k)
+					p = fmt.Sprintf("%s/s%d/new-%d", dir, 1+pick(3), k)
 				} else {
-					p = files[rand.IntN(len(files))]
+					p = files[pick(len(files))]
 				}
 				content := fmt.Sprintf("racer %d.%d", i, k)
 				tmp := filepath.Join(staging, fmt.Sprintf("racer-%d-%d", i, k))
@@ -653,7 +653,7 @@ func TestDeleteConcurrentRacer(t *testing.T) {
 				} else {
 					_ = os.Remove(tmp)
 				}
-				spin(time.Duration(rand.Int64N(int64(dur/8) + 1)))
+				spin(time.Duration(jitter(int64(dur/8) + 1)))
 			}
 		})
 		_, err = e.fs.DeleteExact(dir, true, pv.PreviewSHA256)
@@ -688,3 +688,8 @@ func spin(d time.Duration) {
 		runtime.Gosched()
 	}
 }
+
+// jitter and pick are test timing and choices, not secrets.
+func jitter(n int64) int64 { return rand.Int64N(n) } //nolint:gosec // G404: test jitter
+
+func pick(n int) int { return rand.IntN(n) } //nolint:gosec // G404: test choice

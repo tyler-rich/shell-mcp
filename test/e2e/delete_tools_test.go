@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/tyler-rich/shell-mcp/internal/approval/approvers"
 )
 
@@ -29,14 +31,14 @@ func delTree(t *testing.T, dir string) []string {
 	files := map[string]string{"a.txt": "aa", "sub/b.txt": "bb", "sub/c.txt": "cc"}
 	for name, content := range files {
 		p := filepath.Join(dir, name)
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(p), 0o750); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(p, []byte(content), 0o644); err != nil { //nolint:gosec // G306: test fixture
 			t.Fatal(err)
 		}
 	}
-	if out, err := exec.CommandContext(t.Context(), "chown", "-R", "svc-shell:svc-shell", dir).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(t.Context(), "chown", "-R", "svc-shell:svc-shell", dir).CombinedOutput(); err != nil { //nolint:gosec // G204: a fixed command on the test's own path
 		t.Fatalf("chown: %v: %s", err, out)
 	}
 	return []string{dir + "/a.txt", dir + "/sub/b.txt", dir + "/sub/c.txt"}
@@ -84,6 +86,16 @@ func TestDeleteToolsPreview(t *testing.T) {
 		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"delete_preview"`, `"ceiling":"read"`, `"outcome":"ok"`)
 	})
 	t.Run("refusals", func(t *testing.T) {
+		// A device node (the test runs as root on the runner VM): the gate's sandbox
+		// grants no right to create one, so a delete refuses it in the walk.
+		devDir := opsWork + "/del-dev"
+		_ = os.RemoveAll(devDir)
+		if err := os.Mkdir(devDir, 0o755); err != nil { //nolint:gosec // G301: root-owned; the service account must traverse it
+			t.Fatal(err)
+		}
+		if err := unix.Mknod(devDir+"/null", unix.S_IFCHR|0o600, int(unix.Mkdev(1, 3))); err != nil { //nolint:gosec // G115: a small device number
+			t.Fatal(err)
+		}
 		for _, c := range []struct {
 			path      string
 			recursive bool
@@ -96,11 +108,14 @@ func TestDeleteToolsPreview(t *testing.T) {
 			{opsWork + "/mounted/point", true, "path_denied", "mount"},
 			{opsWork + "/mounted", true, "path_denied", "mount"},
 			{dir, false, "bad_request", "not empty"},
+			{devDir + "/null", false, "path_denied", "device node"},
+			{devDir, true, "path_denied", "device node"},
 		} {
 			refusal(t, opCall(t, "shell_preview_delete", map[string]any{"path": c.path, "recursive": c.recursive}), c.code, c.msg)
 		}
 		stillThere(t, files...)
 		stillThere(t, opsWork+"/mounted/point/inside.txt", opsRepo+"/.git/config")
+		stillThere(t, devDir+"/null")
 	})
 }
 

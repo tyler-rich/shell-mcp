@@ -271,6 +271,9 @@ func (f *FS) walkTop(pl *plan) error {
 		if crossesMount(&pid, &tid) {
 			return errf(protocol.CodePathDenied, "the path is a mount point (or the root of another filesystem), which is never deleted")
 		}
+		if isDevice(&tid) {
+			return errDevice()
+		}
 		pl.top = &planEntry{name: l.base, lp: l.p, rp: l.targetReal(), id: tid}
 		if err := f.addEntry(pl, pl.top); err != nil {
 			return err
@@ -366,6 +369,9 @@ func (f *FS) walkDir(pl *plan, dir *os.Root, dfd int, top *ident, node *planEntr
 		if crossesMount(top, &e.id) {
 			return errf(protocol.CodePathDenied, "the tree holds a mount point (or the root of another filesystem), which is never deleted or entered")
 		}
+		if isDevice(&e.id) {
+			return errDevice()
+		}
 		node.kids = append(node.kids, e)
 		if err := f.addEntry(pl, e); err != nil {
 			return err
@@ -433,10 +439,10 @@ func (f *FS) DeleteExact(p string, recursive bool, expected string) (DeletePlan,
 	d := &deleter{f: f, pl: pl}
 	err = withFD(pl.parent, func(pfd int) error {
 		if pl.top.id.isDir() {
-			if err := f.inSubdir(pl.l, pl.l.parent, pl.top, func(sub *os.Root, sfd int) error {
+			if ierr := f.inSubdir(pl.l, pl.l.parent, pl.top, func(sub *os.Root, sfd int) error {
 				return d.empty(sub, sfd, pl.top)
-			}); err != nil {
-				return err
+			}); ierr != nil {
+				return ierr
 			}
 		}
 		return d.remove(pfd, pl.top)
@@ -592,4 +598,14 @@ func (d *deleter) stopped(err error) error {
 		msg += fmt.Sprintf("; an entry that appeared during deletion could not be put back because its name was taken again, and was left, not deleted, as %s", d.setAside)
 	}
 	return errf(code, "%s", msg)
+}
+
+// isDevice: a character or block device node. The gate's Landlock
+// sandbox grants no right to create one in a write root (POLICY §4a), and
+// setting an entry aside is a rename, which needs it; refusing device
+// nodes in the walk keeps the delete all or nothing.
+func isDevice(id *ident) bool { return id.typ == unix.S_IFCHR || id.typ == unix.S_IFBLK }
+
+func errDevice() error {
+	return errf(protocol.CodePathDenied, "the path is or holds a device node, which a delete never removes")
 }
