@@ -495,6 +495,8 @@ type deleter struct {
 	// setAside names an entry that could not be put back under its name
 	// (taken again meanwhile); it was not deleted.
 	setAside string
+	// setAsideFrom is the name it appeared under.
+	setAsideFrom string
 	// touched are the inodes (device, inode) of non-directories this pass
 	// has already renamed or unlinked under another of their names: their
 	// change time moved because of this pass (a hard link).
@@ -592,7 +594,7 @@ func (d *deleter) remove(dfd int, e *planEntry) error {
 // replacing anything that took the name meanwhile.
 func (d *deleter) restore(dfd int, tmp string, e *planEntry) {
 	if err := unix.Renameat2(dfd, tmp, dfd, e.name, unix.RENAME_NOREPLACE); err != nil {
-		d.setAside = join(dirOf(e.lp), tmp)
+		d.setAside, d.setAsideFrom = join(dirOf(e.lp), tmp), e.lp
 	}
 }
 
@@ -632,7 +634,7 @@ func (d *deleter) stopped(err error) error {
 			"nothing outside the preview was deleted", reason, d.deleted, total, total-d.deleted)
 	}
 	if d.setAside != "" {
-		msg += fmt.Sprintf("; an entry that appeared during deletion could not be put back because its name was taken again, and was left, not deleted, as %s", d.setAside)
+		msg += fmt.Sprintf("; the entry set aside from %s could not be put back because that name was taken again; it was left, not deleted, as %s", d.setAsideFrom, d.setAside)
 	}
 	out := errf(code, "%s", msg)
 	out.SetAside = d.setAside

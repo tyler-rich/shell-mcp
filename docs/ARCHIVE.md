@@ -2031,7 +2031,7 @@ The document gives exact replacement wording for D-006 and S-12, the config, env
 - Comparing size and change time at the second check: the set-aside rename itself moves the change time.
 
 **Deferred / follow-ups:**
-- **S4c:** the helper's `priv_delete` should adopt the same binding (preview hash, set-aside deletion) next to its backups. It still uses S1's `fsx.Delete`, as does nothing else; `fsx.DeletePreview` stays only as that function's counterpart.
+- **S4c (required):** the helper's `priv_delete` needs the same preview binding (a preview hash bound to the approval and re-checked before anything is removed) and the same set-aside deletion, next to its backups. Until then it uses S1's `fsx.Delete`, which re-reads each directory while removing and so can remove an entry that appeared after its preview; nothing else uses that function, and `fsx.DeletePreview` stays only as its counterpart.
 - **S4b-2b:** the git discard tools, `exec_preview`, `shell_run_command`'s admin registration.
 
 **Versions:**
@@ -2040,3 +2040,38 @@ The document gives exact replacement wording for D-006 and S-12, the config, env
 - **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+
+**2026-10-18 — Stranded set-aside entries, compared fields, hard links, RENAME_NOREPLACE probe (PR #25 follow-up).**
+- **First CI run on the PR: green.** All ten checks passed. In e2e-host, `TestDeleteToolsPreview` (success, refusals) and `TestDeleteToolsApproval` (all four subtests) passed.
+- **Maintainer decisions.**
+  - The set-aside window is accepted: a newcomer that replaced a listed name is briefly absent from it while it is set aside, checked and put back.
+  - A filesystem without `RENAME_NOREPLACE` is refused for every delete (fail closed).
+  - check-policy warns per write root.
+- **Stranded set-aside entries.** An entry set aside that fails its check (or a directory that gained entries) is put back. If that name was taken again, it stays under `.shell-mcp-delete-<32 hex>` in its directory; a gate that dies between setting an entry aside and removing or restoring it leaves the same.
+  - **Naming it.** When the gate notices, the refusal names the temporary path and the path the entry came from (`fsx.Error.SetAside`). The gate's audit line carries `set_aside` with the temporary path; it is omitted otherwise.
+  - **Never deleted.** `delete_preview` and `delete` refuse any path that is, or holds, a name with that prefix (`path_denied`, by requested and real path).
+  - **Recovery.** POLICY §3: `find` the prefix, inspect, move back or away, or remove.
+  - **Not tracked across restarts.** No list of stranded entries is kept between requests: the gate has no state, and the prefix is the record.
+- **Which fields are compared (question B).**
+  1. **At the recompute:** the hash (path, type, size, device, inode, change time, birth time). Nothing has changed yet.
+  2. **Under the name, before setting aside:** device, inode, type, mount id and birth time; for a non-directory also size and change time.
+  3. **After setting aside:** device, inode, type, mount id and birth time; never the change time, which a rename may move.
+  4. **Before removing a directory:** nothing more. Its times and size move as its entries go, and `AT_REMOVEDIR` is the kernel's own emptiness check.
+
+  So no change time is compared after a rename anywhere, nor on a directory during deletion. Whether a given filesystem moves the renamed inode's change time does not matter, and was not verified per filesystem: the source fetches came back truncated, so the code comment says "may move".
+- **Bug found while answering B: hard links.** Unlinking one name of a hard-linked inode moves its change time (the link count), so step 2 refused the inode's later names. A tree with hard links stopped after its first name ("1 of 9 entries were deleted"). Fix: an inode this pass already renamed or unlinked under another name is compared by object and size only.
+- **Change-time granularity.** Change times are as fine as the kernel's timestamps, which can be a clock tick. `TestDeleteHardLinks` passed against the unfixed code until it waited 20 ms between the links and the delete, because link and delete fell in the same tick. Coarse ticks only make a change invisible (never a false refusal), and the unchanged identity fields still bind the object.
+- **RENAME_NOREPLACE probe.** `fsx.ProbeNoReplace(dir)` creates `.shell-mcp-probe-<32 hex>` in the write root with `O_EXCL`, renames it to another fresh name with `RENAME_NOREPLACE`, and removes it. `EINVAL`/`ENOSYS` is `ErrNoReplaceUnsupported`; anything else is reported as "could not probe". check-policy prints `ok   paths.write <root>: RENAME_NOREPLACE supported` or a WARN naming the root and that delete, and move without overwrite, are refused there. Copy without overwrite commits with `link(2)` and is not affected. No Landlock right, dependency or protocol change: check-policy runs outside the sandbox, as the host admin.
+- **Filesystem examples, checked at the source.**
+  - NFS: `fs/nfs/dir.c` `nfs_rename` starts with `if (flags) return -EINVAL`, so every version refuses the flag.
+  - FUSE: `fs/fuse/dir.c` `fuse_rename2` returns `EINVAL` when the protocol minor is below 23 or the server answers rename2 with `ENOSYS`.
+  - SMB/CIFS supports `RENAME_NOREPLACE`: rename(2) lists cifs from Linux 3.17, and `cifs_rename2` accepts the flag ("No-replace is the natural behavior for CIFS"). The maintainer asked for SMB/CIFS as an example of a filesystem without it; the docs instead say it is supported, relying on the server's refusal to replace an existing name. Flagged in the report.
+- **Tests (committed failing first, `ca35043`; output in the PR body).**
+  - `TestDeletePutBackFails` and `TestDeletePutBackFailsForADirectory`: put-back forced to fail by hooks, for a replaced file and a directory that gained an entry.
+  - `TestDeleteRefusesSetAsideNames`.
+  - `TestDeleteHardLinks`.
+  - `TestProbeNoReplace`.
+  - `TestGateDeleteNamesASetAsideEntry`: the gate's message and its audit line name the temporary path.
+  - `TestCheckPolicyProbesNoReplace`: the real probe, one root unsupported, and a probe error.
+  - All failed against the stubs.
+- **Fuzzing (60 s, golang container, no crashers):** `FuzzHasSetAsideComponent` (agrees with an independent formulation), 44,784,964 execs.

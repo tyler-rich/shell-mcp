@@ -5,6 +5,7 @@ package fsx
 import (
 	"encoding/binary"
 	"regexp"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -77,6 +78,19 @@ func FuzzPreviewEntryEncoding(f *testing.F) {
 		p, got, rest, ok = decodePreviewEntry(rest)
 		if !ok || p != path2 || got != id || len(rest) != 0 {
 			t.Fatalf("second entry: %q %+v ok %v rest %d", p, got, ok, len(rest))
+		}
+	})
+}
+
+// FuzzHasSetAsideComponent: a path is refused as holding a set-aside name
+// exactly when one of its components starts with the prefix.
+func FuzzHasSetAsideComponent(f *testing.F) {
+	for _, s := range []string{"/srv/app/.shell-mcp-delete-0123", "/srv/app/x.shell-mcp-delete-", ".shell-mcp-delete-", "/srv/.shell-mcp-delet", "//.shell-mcp-delete-/x", ""} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, p string) {
+		if got, want := hasSetAsideComponent(p), strings.Contains("/"+p, "/"+deleteTempPrefix); got != want {
+			t.Fatalf("hasSetAsideComponent(%q) = %v, want %v", p, got, want)
 		}
 	})
 }
