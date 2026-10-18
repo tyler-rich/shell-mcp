@@ -121,7 +121,7 @@ var loggedArgs = map[string]bool{
 	"verb": true, "command_id": true, "cwd": true, "recursive": true, "staged": true, "lines": true,
 	"since": true, "until": true, "priority": true, "limit": true, "include_pseudo": true,
 	"sort_by": true, "user": true, "name_contains": true, "overwrite": true, "parents": true,
-	"mode": true, "create": true, "max_bytes": true, "offset": true, "tail_lines": true,
+	"mode": true, "create": true, "expect_absent": true, "max_bytes": true, "offset": true, "tail_lines": true,
 	"name_glob": true, "type": true, "max_depth": true, "modified_within_s": true,
 	"include_hidden": true, "failed_only": true, "max_output_bytes": true,
 }

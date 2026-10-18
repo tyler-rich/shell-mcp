@@ -96,7 +96,7 @@ func (d *Deps) writePreview(ctx context.Context, in *writeIn, target string) (*p
 	if st == nil {
 		value["current"] = map[string]any{"state": "absent"}
 		value["lines_delta"] = newLines
-		return acc.result(value, "")
+		return acc.absentResult(value)
 	}
 	if st.Type != "file" {
 		value["current"] = entryPreview(st)
@@ -111,7 +111,7 @@ func (d *Deps) writePreview(ctx context.Context, in *writeIn, target string) (*p
 	if f == nil { // removed between the two reads
 		value["current"] = map[string]any{"state": "absent"}
 		value["lines_delta"] = newLines
-		return acc.result(value, "")
+		return acc.absentResult(value)
 	}
 	cur := map[string]any{"state": "file", "size": st.Size, "mode": st.Mode, "sha256": f.SHA256, "lines": nil}
 	value["lines_delta"] = nil

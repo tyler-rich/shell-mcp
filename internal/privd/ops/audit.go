@@ -42,7 +42,7 @@ func auditText(s string) string {
 // auditedArgs are the argument names whose scalar values may be logged.
 var auditedArgs = map[string]bool{
 	"path": true, "source": true, "destination": true, "owner": true, "group": true, "mode": true,
-	"recursive": true, "overwrite": true, "parents": true, "create": true, "command_id": true,
+	"recursive": true, "overwrite": true, "parents": true, "create": true, "expect_absent": true, "command_id": true,
 	"cwd": true, "id": true, "limit": true, "max_bytes": true, "offset": true, "tail_lines": true,
 	"include_hidden": true, "max_output_bytes": true, "action": true, "unit": true,
 }
