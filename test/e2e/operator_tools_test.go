@@ -574,8 +574,10 @@ func TestOperatorToolRunCommand(t *testing.T) {
 			`"ceiling":"operator"`, `"outcome":"tier_denied"`)
 		time.Sleep(time.Second)
 		for _, j := range journal(t, "shell-mcp-gate", start) {
-			if strings.Contains(j.Message, `"op":"exec"`) && strings.Contains(j.Message, `"command_id":"probe-destructive"`) && strings.Contains(j.Message, `"ceiling":"operator"`) &&
-				strings.Contains(j.Message, `"principal":"`+opsWho+`"`) {
+			// Any exec for the command except the control's own, at ceiling
+			// destructive above, fails: the tool must send none, at any ceiling.
+			if strings.Contains(j.Message, `"op":"exec"`) && strings.Contains(j.Message, `"command_id":"probe-destructive"`) &&
+				strings.Contains(j.Message, `"principal":"`+opsWho+`"`) && !strings.Contains(j.Message, `"ceiling":"destructive"`) {
 				t.Fatalf("an exec was sent for the refused command: %s", j.Message)
 			}
 		}
