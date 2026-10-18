@@ -179,6 +179,9 @@ func TestSetAside(t *testing.T) {
 	if contentAt(t, p) != "approved" {
 		t.Fatal("not put back")
 	}
+	// The renames may have moved its change time: observe it again.
+	w, err = e.fs.ObserveWorktree(p, &budget)
+	must(t, err)
 	a, err = e.fs.SetAside(&w)
 	must(t, err)
 	must(t, a.Remove())
@@ -230,8 +233,28 @@ func TestSetAside(t *testing.T) {
 	if contentAt(t, p) != "newcomer" || contentAt(t, a.Temp()) != "CHANGED!" {
 		t.Fatal("put back replaced the newcomer")
 	}
-	// Remove refuses an object replaced under the temporary name.
+	// Remove refuses an entry written after it was checked, through a
+	// descriptor opened before it was set aside: it stays, named.
 	must(t, os.Remove(p))
+	put(t, p, "open")
+	w, err = e.fs.ObserveWorktree(p, &budget)
+	must(t, err)
+	held, err := os.OpenFile(p, os.O_WRONLY|os.O_APPEND, 0) //nolint:gosec // G304: the test's own file
+	must(t, err)
+	a, err = e.fs.SetAside(&w)
+	must(t, err)
+	_, err = held.WriteString(" and written later")
+	must(t, err)
+	must(t, held.Close())
+	err = a.Remove()
+	if !errors.As(err, &fe) || fe.Code != protocol.CodeExists || fe.SetAside != a.Temp() {
+		t.Fatalf("Remove after a write: %v", err)
+	}
+	if contentAt(t, a.Temp()) != "open and written later" {
+		t.Fatal("the late write was removed")
+	}
+	// Remove refuses an object replaced under the temporary name.
+	_ = os.Remove(p)
 	put(t, p, "again")
 	w, err = e.fs.ObserveWorktree(p, &budget)
 	must(t, err)

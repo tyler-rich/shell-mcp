@@ -283,6 +283,11 @@ type AsideEntry struct {
 	f   *FS
 	w   WorktreeEntry
 	tmp string // the temporary name in the entry's directory
+	// checked is the entry under its temporary name once its content was
+	// checked: Remove requires the same size and change time, so a write
+	// through a descriptor opened before the discard, made while the
+	// discard went on, keeps the entry from being removed.
+	checked ident
 }
 
 // changedSince is the refusal for an entry that is not what the preview
@@ -342,7 +347,9 @@ func (f *FS) SetAside(w *WorktreeEntry) (*AsideEntry, error) {
 		if err == nil && post.sameObject(&w.id) && post.size == w.id.size && post.perm == w.id.perm {
 			var sum string
 			if sum, err = contentHash(pfd, a.tmp, &w.id, &budget, false); err == nil && sum == w.SHA256 {
-				return nil
+				if a.checked, err = statxAt(pfd, a.tmp, 0); err == nil && a.checked.sameObject(&w.id) {
+					return nil
+				}
 			}
 		}
 		return a.putBackAt(pfd, l.base, changedSince(w.Path))
@@ -383,13 +390,15 @@ func (a *AsideEntry) inDir(fn func(l *loc, pfd int) error) error {
 }
 
 // Remove removes the entry set aside, if it is still the object that was
-// set aside.
+// set aside, unchanged (size and change time) since its content was
+// checked.
 func (a *AsideEntry) Remove() error {
 	return a.inDir(func(_ *loc, pfd int) error {
 		a.f.step(DeleteStepBeforeUnlink, a.w.Path)
 		post, err := statxAt(pfd, a.tmp, 0)
-		if err != nil || !post.sameObject(&a.w.id) {
-			e := errf(protocol.CodeExists, "the entry set aside from %s was replaced under its temporary name; it was left as %s", quote(a.w.Path), a.Temp())
+		if err != nil || !post.unchanged(&a.checked) {
+			e := errf(protocol.CodeExists, "the entry set aside from %s was replaced or written under its temporary name after it was checked; "+
+				"it was left, not discarded, as %s", quote(a.w.Path), a.Temp())
 			e.SetAside = a.Temp()
 			return e
 		}

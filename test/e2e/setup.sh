@@ -202,7 +202,8 @@ chmod 0644 /etc/shell-mcp/gate-read.yaml
 # stop, which the polkit rule (from gate-rule.yaml) does not, so the tests
 # can show polkit refusing what the gate allows. The git remote is the
 # tests' local HTTPS server on the fixed port 44443 (the only TCP port the
-# sandbox opens); the second repository's origin is something else. max_tier
+# sandbox opens); the second repository's origin is something else, and the third is
+# for the git discard tests (discard_exec_test.go). max_tier
 # is destructive and it declares a destructive command, so the tests can
 # show the gate running it at ceiling destructive and refusing it at the
 # operator tool's ceiling.
@@ -225,6 +226,8 @@ git:
     - path: /srv/example-ops/repos/app
       remote: https://127.0.0.1:44443/example-ops.git
     - path: /srv/example-ops/repos/foreign
+      remote: https://127.0.0.1:44443/example-ops.git
+    - path: /srv/example-ops/repos/discard
       remote: https://127.0.0.1:44443/example-ops.git
 commands:
   - id: probe-echo

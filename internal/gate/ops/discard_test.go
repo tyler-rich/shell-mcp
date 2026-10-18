@@ -858,6 +858,46 @@ func TestGitDiscardNamesAStrandedEntry(t *testing.T) {
 	}
 }
 
+// TestGitDiscardOpenDescriptorWrite: a process that held a listed file open
+// before the discard and writes through that descriptor while the discard
+// runs (after the file was set aside and checked) does not lose the write:
+// the entry set aside is not removed, the refusal names it, and the index
+// is unchanged.
+func TestGitDiscardOpenDescriptorWrite(t *testing.T) {
+	g := discardRepo(t)
+	victim := filepath.Join(g.repo, "app.conf")
+	for _, at := range []fsx.DiscardStep{fsx.DiscardStepBeforeUntracked, fsx.DiscardStepBeforeCheckout, fsx.DiscardStepAfterCheckout} {
+		resetRepo(t, g)
+		dirty(t, g)
+		indexBefore := gatetest.Git(t, g.repo, "ls-files", "-s")
+		pv := g.preview(t, false)
+		held, err := os.OpenFile(victim, os.O_WRONLY|os.O_APPEND, 0) //nolint:gosec // G304: the test's own tree
+		if err != nil {
+			t.Fatal(err)
+		}
+		g.opts.InjectDiscardStep = func(s fsx.DiscardStep, _ string) {
+			if s == at {
+				if _, err := held.WriteString("late write\n"); err != nil {
+					t.Error(err)
+				}
+			}
+		}
+		r := g.discard(&pv)
+		g.opts.InjectDiscardStep = nil
+		_ = held.Close()
+		if r.OK || r.Error.Code != "exists" {
+			t.Fatalf("step %d: %+v", at, r.Error)
+		}
+		aside := setAsideUnder(t, g.repo)
+		if len(aside) != 1 || contentOf(t, aside[0]) != "port=9999\nlate write\n" || !strings.Contains(r.Error.Message, aside[0]) {
+			t.Fatalf("step %d: set aside %v, message %q", at, aside, r.Error.Message)
+		}
+		if got := gatetest.Git(t, g.repo, "ls-files", "-s"); got != indexBefore {
+			t.Fatalf("step %d: the index changed", at)
+		}
+	}
+}
+
 func resetRepo(t *testing.T, g *gitFixture) {
 	t.Helper()
 	gatetest.Git(t, g.repo, "reset", "-q", "--hard")

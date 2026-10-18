@@ -53,6 +53,7 @@ const (
 	opsRepos   = opsRoot + "/repos"
 	opsRepo    = opsRepos + "/app"
 	opsForeign = opsRepos + "/foreign"
+	opsDiscard = opsRepos + "/discard"
 	opsGitAddr = "127.0.0.1:44443"
 	opsRemote  = "https://" + opsGitAddr + "/example-ops.git"
 	opsCAFile  = "/usr/local/share/ca-certificates/shell-mcp-e2e-git.crt"
@@ -176,7 +177,7 @@ func opsFixtures(t *testing.T) error {
 		gatetest.Git(t, opsBare, "config", kv[0], kv[1])
 	}
 	gatetest.Git(t, opsSeed, "remote", "add", "origin", opsBare)
-	for _, r := range []struct{ dir, url string }{{"app", opsRemote}, {"foreign", "https://" + opsGitAddr + "/other.git"}} {
+	for _, r := range []struct{ dir, url string }{{"app", opsRemote}, {"foreign", "https://" + opsGitAddr + "/other.git"}, {"discard", opsRemote}} {
 		_ = os.RemoveAll(filepath.Join(opsRepos, r.dir))
 		gatetest.Git(t, opsRepos, "clone", "-q", opsBare, r.dir)
 		gatetest.Git(t, filepath.Join(opsRepos, r.dir), "remote", "set-url", "origin", r.url)
