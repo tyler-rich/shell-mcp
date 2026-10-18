@@ -30,6 +30,9 @@ type ChownResult struct {
 	OldGID uint32 `json:"old_gid"`
 	UID    uint32 `json:"uid"`
 	GID    uint32 `json:"gid"`
+	// Before and Changed are as in ChmodResult (the helper's audit).
+	Before  Meta `json:"-"`
+	Changed bool `json:"-"`
 }
 
 // Backup kinds.

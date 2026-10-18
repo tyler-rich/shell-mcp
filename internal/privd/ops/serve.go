@@ -94,6 +94,8 @@ type Options struct {
 	// only.
 	InjectBeforeCommit   func()
 	InjectNoReplaceFault func() error
+	// InjectMetadataReadBackFault is passed to fsx; tests only.
+	InjectMetadataReadBackFault func(fsx.Meta) fsx.Meta
 	// Now is the clock (backup ids and times).
 	Now func() time.Time
 }

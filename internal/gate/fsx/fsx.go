@@ -67,6 +67,25 @@ type Config struct {
 	// Backup, when non-nil, is called before every overwrite, move-over and
 	// delete; its error aborts the operation. The gate never sets it.
 	Backup BackupFunc
+	// ModesMax, when non-nil, masks the mode of every new inode: a file
+	// written (over an existing one too), copied or restored, and a
+	// directory created. The helper sets it to its modes.max (PRIVILEGED
+	// §4); the gate leaves it nil.
+	ModesMax *os.FileMode
+	// VerifyMetadata makes Chmod and Chown re-read the mode, owner and group
+	// through the descriptor they changed; a mismatch is verify_failed. The
+	// helper sets it; the gate does not.
+	VerifyMetadata bool
+	// InjectMetadataReadBackFault, when non-nil, transforms what Chmod and
+	// Chown read back before it is compared. Tests only; production code
+	// never sets it.
+	InjectMetadataReadBackFault func(Meta) Meta
+}
+
+// Meta is an inode's mode (permission and special bits), owner and group.
+type Meta struct {
+	Mode     uint32
+	UID, GID uint32
 }
 
 // FS performs confined operations.
@@ -193,6 +212,11 @@ type ChmodResult struct {
 	Path    string `json:"path"`
 	OldMode string `json:"old_mode"`
 	Mode    string `json:"mode"`
+	// Before is the inode's mode, owner and group before the change, and
+	// Changed whether the change was made (also when its read-back then
+	// failed); for the helper's audit, never on the wire.
+	Before  Meta `json:"-"`
+	Changed bool `json:"-"`
 }
 
 // DeleteResult is delete's and delete_preview's result.
