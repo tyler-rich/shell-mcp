@@ -1952,3 +1952,91 @@ The document gives exact replacement wording for D-006 and S-12, the config, env
 - **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
 - **Dependencies added:** none (x/sys/unix was already direct).
 - **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+
+### 2026-10-18 — Delete bound to its preview: shell_preview_delete, shell_delete_path (PR #25, branch feat/delete-tools)
+**Decision:** The first tool that destroys data deletes exactly what the approver saw, or stops (plan §5 S4b-2a).
+- **Protocol (maintainer-approved change).** `delete` requires `expected_preview_sha256`: the `preview_sha256` that `delete_preview` returned for the same path and `recursive` flag. Protocol v1 is amended in place, before any release. Missing or malformed is `bad_request`; a different hash is `exists`, and nothing is deleted. `delete_preview` does not take the field. ARCHITECTURE §3, §4.1 and §4.3.
+- **fsx (gate only).** New `PreviewDelete` and `DeleteExact` (`internal/gate/fsx/delete_exact.go`). The gate's `delete_preview` and `delete` ops call them.
+  - **The walk.** Each directory is opened as an `os.Root` from its parent's handle and re-checked by requested and real path (roots, deny list, protected set) and by `statx` identity. Names are read once and sorted bytewise. No symlink is followed and no other mount is entered.
+  - **The hash.** SHA-256 over a domain string, the `recursive` flag, and every entry in walk order: its path (length first), type, size, device, inode, change time, and birth time where the filesystem reports one.
+  - **The deletion pass.** Bottom-up over the walked tree. Each directory is re-opened by name from its parent's handle and must have the identity the walk saw. No directory is read again and no entry is addressed by a path from the root.
+  - **Each entry, on its parent's descriptor:**
+    1. `statx(name)`: the walk's identity, and for anything but a directory the same size and change time.
+    2. `renameat2(name → .shell-mcp-delete-<32 hex>, RENAME_NOREPLACE)`.
+    3. `statx(tmp)`: the same object (device, inode, type, mount id, birth time).
+    4. `unlinkat(tmp)`, with `AT_REMOVEDIR` for a directory.
+  - **Stopping.** A mismatch, or a directory that gained entries (`ENOTEMPTY`), puts the entry back under its name with `RENAME_NOREPLACE`, and the deletion stops with `exists`. The message says "nothing was deleted (0 of M entries)" or "N of M entries were deleted and K were not". If the name was taken again meanwhile, the entry is left under its temporary name and the message names it; it is not deleted.
+  - **Refusals.** In addition to the existing ones: a root of the policy (read or write) and a tree holding one; a mount point and a tree holding one, compared by `statx` mount id; a directory on another device (a btrfs subvolume, for example; other files are not compared by device, because overlayfs reports the underlying device for them); a character or block device node and a tree holding one (the gate's Landlock rules grant no right to create a device node, and setting an entry aside is a rename that needs it; refusing in the walk keeps the delete all or nothing); and a temporary name the deny list would cover. A filesystem without `RENAME_NOREPLACE` (`EINVAL`, `ENOSYS`) is `bad_request` before anything is deleted, with no fallback.
+- **Server.**
+  - `shell_preview_delete` (read): `path`, `type`, `entries`, `bytes`, `first` (at most 50), `truncated` and `preview_sha256`.
+  - `shell_delete_path` (destructive): admin profile only, always approval-gated, `requiresUserInteraction` in every catalogue variant. The approval preview is `delete_preview`'s result. The re-call sends the fresh preview's hash, taken from the gate's answer before redaction (a redaction pattern matching hex would otherwise rewrite it). Its `run` refuses without an approved hash, and a gate answer without `deleted: true` is `internal`.
+  - Catalogue snapshot: two rows added, none changed.
+- **Not changed.** The privileged helper (`priv_delete` keeps S1's `fsx.Delete` and its backups, until S4c), the closed error-code set, the envelope, and Landlock: write roots already grant `MAKE_*`, `REMOVE_*` and `REFER`, and the set-aside rename stays inside one directory.
+
+**Premises checked, and where the prompt was corrected:**
+- **The ops already existed.** `delete` and `delete_preview` came with S1. They used `fsx.deleteOp`, which the helper's `priv_delete` shares, and `DeleteResult`, which is embedded in the helper's response. So the gate got new functions and a new result type (`DeletePlan`), and the helper's code path is byte-identical. The old delete re-read every directory during removal, so it deleted entries that appeared after its preview walk; the racer test below shows it.
+- **"unlinkat on entries in the list only" is not enough.** Linux has no conditional unlink: `unlinkat(dirfd, name)` removes whatever is under the name at that moment. A listed name that is atomically replaced (rename over it) between any check and the unlink would take the newcomer with it. Setting the entry aside first fixes the object that is checked and then removed.
+- **"dev+inode" is not enough.** ext4 reuses a freed inode number for the next file created in the same group. A file deleted and recreated under the same name, with the same size, could hash the same. The change time (with nanoseconds) and, where reported, the birth time separate them.
+- **A symlink as the target.** POLICY §3 refuses a final-component symlink for every op except `stat`, and that rule stays: deleting a symlink path is `path_denied`. The prompt's "a symlink is removed as a link, never its target" holds inside a tree, where links are unlinked and never followed, so this was read as compatible with the policy rather than as a conflict.
+
+**The remaining window (exact).** Between the gate's recompute and the last unlink:
+- **Never deleted:**
+  - an entry created under a new name anywhere in the tree (it is never named, and its directory then refuses `AT_REMOVEDIR` and is put back);
+  - an entry replaced under a listed name at any moment (before step 1 it fails the check; between 1 and 2 it is the object set aside, fails step 3 and is put back; after step 2 it holds a free name that is never touched);
+  - an entry created inside a directory after it was set aside under its temporary name (`AT_REMOVEDIR` fails and the directory is put back).
+- **Can still happen, two cases only:**
+  - (a) A process finds the random temporary name and replaces that entry between steps 3 and 4. It needs write access to that directory, so it could delete the listed entry itself. Against such a process the approval has never been the boundary.
+  - (b) On a filesystem that reports no birth time, a listed entry is removed by someone else and a new one created under its name gets the same inode number, with the same type and mount, between step 1 and step 2. That is a window of one system call. ext4 (256-byte inodes), xfs v5, btrfs and recent tmpfs report birth time.
+- **Changes that stop the deletion** with an accurate count: a listed file modified in place during the deletion (its change time moves), and a listed entry removed by someone else.
+- **Briefly unavailable:** a newcomer that replaced a listed name between steps 1 and 2 is absent from its name for two system calls while it is set aside, checked and put back.
+
+**Other decisions:**
+- **Mismatch code.** `exists`, the precedent of `write_file`'s `expected_sha256` mismatch. The message says the tree changed and how much was deleted.
+- **"What was and wasn't deleted"** is reported as counts in the one-line message. Listing paths would need data on a failure response, which is a protocol and envelope change (STOP). Previewing the path again shows exactly what remains.
+- **Directories are re-opened by name and identity**, not held open for the whole delete. Up to 10,000 entries could mean thousands of descriptors and `EMFILE` on hosts with a low hard limit. Re-opening by single component from the parent's handle, with the walk's identity required, is equivalent.
+- **Order of refusals.** A non-empty directory without `recursive` is refused before its entries are examined.
+
+**Tests (committed failing first, `68fd503`; output in the PR body).**
+- **The stubs.** `PreviewDelete` and `DeleteExact` called S1's preview and delete, `ValidPreviewSHA256` accepted anything, and the server tools answered `internal`. Against them, every new test failed: hash format, preview shape and hash, refusals (a tree holding a configured root, a malformed or stale hash), the hash over every kind of change (9 cases), the mount point, the unsupported filesystem, all three window tests, the racer (a deleted newcomer on run 3; the strengthened racer on run 4), the gate's binding and window tests, the server tool tests, the ceiling table and the catalogue.
+- **fsx.**
+  - `TestValidPreviewSHA256`, `TestPreviewDeleteReportsTheTree`, `TestDeleteExactRemovesThePreview`.
+  - `TestDeleteExactRefusals`: roots, a tree holding a nested write root, outside the write roots, protected and `.git`, the deny list, a final symlink to a directory outside the root, non-recursive non-empty, above `max_delete_entries`, missing and unclean paths, malformed and stale hashes. Each is checked for both ops, with nothing changed.
+  - `TestDeleteSymlinksAreRemovedNotFollowed`: links to a directory and a file outside every root, and to a file and a directory inside it.
+  - `TestPreviewHashCoversEveryEntry`: added, added empty directory, removed, renamed, moved, resized, modified in place, replaced by another inode with the same content, and a directory recreated.
+  - `TestDeleteRefusesAMountPoint`: a bind-mounted file under `/etc` in the container; skipped where none is visible, and covered by e2e-host.
+  - `TestDeleteNoReplaceUnsupported`.
+- **Window tests (fsx).**
+  - `TestDeleteWindowBeforeTheRecompute`: 200 runs. A newcomer, or a file replaced, between the preview and the delete: `exists`, nothing deleted.
+  - `TestDeleteWindowAfterTheRecompute`: 200 runs, at the hook after the hash matched.
+  - `TestDeleteWindowDuringDeletion`: 200 runs over every entry and four steps (per step 53/49/49/49). Replacements, newcomers in a directory and under a freed name, and a newcomer inside a directory already set aside under its temporary name.
+  - `TestDeleteConcurrentRacer`: 400 runs, no hook. The racer starts after a random delay of up to the median deletion time (about 0.5 ms) and keeps creating and replacing files until the delete returns. Three local runs: 26/26/23 refused at the recompute, 240/225/208 stopped during deletion, 134/149/169 completed before the racer changed anything. 502/491/445 racer files, every one survived. One run under `-race` (deletions slow to about 1.8 ms): 115 refused at the recompute, 219 stopped during deletion, 66 completed first, 1,035 racer files, every one survived. Against the S1 delete the racer finds a deleted newcomer on run 4.
+- **Gate (`internal/gate/ops`).** `TestDeleteBindsThePreview` (required, malformed and stale hashes; `delete_preview` refuses the field). `TestGateDeleteWindow`: 100 runs through request handling at four steps; every newcomer survived. `TestProductionOptionsHaveNoTestHooks` covers `InjectDeleteStep`.
+- **Server (`internal/tools`).** Registration per profile, annotations and meta, schemas (no `expected_preview_sha256` or `confirm` input), the preview tool's request and shape, `approval_unavailable` with nothing sent, the web flow (first call only `delete_preview`; the re-call `delete_preview` then `delete` with the fresh hash, every request at ceiling `destructive`; a second re-call `approval_invalid`), a changed tree after approval (`approval_invalid`, no delete), gate refusals passing through, the hash not redacted, descriptions, audit lines without the hash.
+- **Test fixes made with the implementation.** The ceiling table's fake gate needed a `delete_preview` reply.
+- **Found in review after the failing commit: device nodes.** Write roots grant `MAKE_SYM`, `MAKE_FIFO` and `MAKE_SOCK` but no device rights, so under Landlock the set-aside rename of a character or block device would fail part-way through a deletion. The walk now refuses device nodes. Its test is the e2e-host case in `TestDeleteToolsPreview` (`mknod` needs root, so it runs only on the runner); it was written with the refusal and was not shown failing first.
+- **Existing tests changed for the new tools.** The read-tool list, schema bounds and the check command's tool list gained `shell_preview_delete`. `TestApprovalSchemaAndMeta` expects the meta on destructive tools under every configuration. The catalogue test now checks `requires_user_interaction` per tier (destructive in both variants, operator only in the gated one) instead of "none in the default". The generic ceiling table skips `shell_delete_path`, which can run only after approval; the approval-flow test checks its ceiling.
+- **e2e-host** (`test/e2e/delete_tools_test.go`; `setup.sh` mounts a tmpfs at `/srv/example-ops/work/mounted/point`).
+  - `TestDeleteToolsPreview`: success, the same hash twice, and refusals (the write root, outside the write roots, `.git` and a repository, the mount point and the directory holding it, non-recursive non-empty), with nothing changed.
+  - `TestDeleteToolsApproval`: an admin server without an approval method is `approval_unavailable`, with no gate line. Then the web flow: pending leaves the tree and the gate sees only `delete_preview` at ceiling `destructive`; after approval the re-call deletes and the gate logs one `delete` line; a second re-call is `approval_invalid` with no new line; the gate never logs the hash; a newcomer after approval makes the re-call `approval_invalid` and everything stays; a refused preview requests no approval.
+  - `startApprovalServer` takes extra environment variables.
+
+**Fuzzing (60 s each, golang container, no crashers):** `FuzzValidPreviewSHA256` (agrees with `^[0-9a-f]{64}$`) 40,839,167 execs; `FuzzPreviewEntryEncoding` (an entry's hash input decodes back to exactly that entry, two in a row, so different entry lists never hash the same input) 37,638,604 execs.
+
+**Alternatives rejected:**
+- Plain `unlinkat` after a check: the window above, which no hook can close.
+- A quarantine directory beside the target: cross-directory renames need write access to each moved directory (for its `..`), leave a visible directory, and gain nothing over a random name in the entry's own directory.
+- Holding every directory open: descriptor limits.
+- `st_dev` alone for mounts: misses bind mounts of the same filesystem, and overlayfs reports other devices for plain files.
+- Listing deleted and remaining paths in the error: a protocol and envelope change.
+- Comparing size and change time at the second check: the set-aside rename itself moves the change time.
+
+**Deferred / follow-ups:**
+- **S4c:** the helper's `priv_delete` should adopt the same binding (preview hash, set-aside deletion) next to its backups. It still uses S1's `fsx.Delete`, as does nothing else; `fsx.DeletePreview` stays only as that function's counterpart.
+- **S4b-2b:** the git discard tools, `exec_preview`, `shell_run_command`'s admin registration.
+
+**Versions:**
+- **Go:** 1.27.2, the newest stable per go.dev (`go.dev/dl/?mode=json`, read 2026-10-18).
+- **Refresh:** `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
