@@ -45,6 +45,7 @@ var alwaysGated = []string{"shell_delete_path"}
 func TestEveryToolSendsItsTierAsCeiling(t *testing.T) {
 	replies := operatorReplies()
 	replies["hello"] = gateReply{data: fakeHello}
+	replies["delete_preview"] = gateReply{data: fakeDeletePlan(shaTree, false)}
 	g := newRecordingGate(replies)
 	h := readHarness(t, g)
 	reg, err := Catalogue(h.deps)

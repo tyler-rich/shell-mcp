@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -583,10 +584,11 @@ func fiIsDir(t *testing.T, p string) bool {
 	return err == nil && fi.IsDir()
 }
 
-// TestDeleteConcurrentRacer: no hook. A goroutine creates a new file in a
-// random directory of the tree, or replaces a random file of the tree by
-// another inode, after a random delay of up to twice the deletion's
-// measured duration. Whatever it created survives in every run.
+// TestDeleteConcurrentRacer: no hook. A goroutine starts after a random
+// delay of up to the deletion's measured duration and then, until the
+// delete returns, keeps creating new files in random directories of the
+// tree and replacing random files of the tree by other inodes. Every file
+// it managed to create survives, in every run.
 func TestDeleteConcurrentRacer(t *testing.T) {
 	const runs = 400
 	e := newDelEnv(t, 100)
@@ -603,64 +605,86 @@ func TestDeleteConcurrentRacer(t *testing.T) {
 		}
 		return files
 	}
-	// Measure one deletion.
-	cal := filepath.Join(e.write, "calibrate")
-	mk(cal)
-	pv, err := e.fs.PreviewDelete(cal, true)
-	must(t, err)
-	start := time.Now()
-	_, err = e.fs.DeleteExact(cal, true, pv.PreviewSHA256)
-	must(t, err)
-	dur := max(time.Since(start), 50*time.Microsecond)
+	// The deletion's duration: the median of a few.
+	var durs []time.Duration
+	for i := range 9 {
+		cal := filepath.Join(e.write, fmt.Sprintf("calibrate%d", i))
+		mk(cal)
+		pv, err := e.fs.PreviewDelete(cal, true)
+		must(t, err)
+		start := time.Now()
+		_, err = e.fs.DeleteExact(cal, true, pv.PreviewSHA256)
+		must(t, err)
+		durs = append(durs, time.Since(start))
+	}
+	slices.Sort(durs)
+	dur := max(durs[len(durs)/2], 20*time.Microsecond)
 
-	var stopped, completed, racerNone int
+	var atRecompute, during, completed, planted int
 	for i := range runs {
 		dir := filepath.Join(e.write, fmt.Sprintf("r%d", i))
 		files := mk(dir)
 		pv, err := e.fs.PreviewDelete(dir, true)
 		must(t, err)
-		racer := fmt.Sprintf("racer %d", i)
-		var planted string
+		made := map[string]string{} // path → content, for every file the racer created
+		done := make(chan struct{})
 		var wg sync.WaitGroup
-		begin := make(chan struct{})
 		wg.Go(func() {
-			<-begin
-			time.Sleep(time.Duration(rand.Int64N(int64(2 * dur))))
-			var p string
-			if i%2 == 0 {
-				p = fmt.Sprintf("%s/s%d/new-%d", dir, 1+i%3, i)
-			} else {
-				p = files[i%len(files)]
-			}
-			tmp := filepath.Join(staging, fmt.Sprintf("racer-%d", i))
-			if os.WriteFile(tmp, []byte(racer), 0o600) != nil {
-				return
-			}
-			if os.Rename(tmp, p) == nil {
-				planted = p
-			} else {
-				_ = os.Remove(tmp)
+			spin(time.Duration(rand.Int64N(int64(dur))))
+			for k := 0; ; k++ {
+				select {
+				case <-done:
+					return
+				default:
+				}
+				var p string
+				if k%2 == 0 {
+					p = fmt.Sprintf("%s/s%d/new-%d", dir, 1+rand.IntN(3), k)
+				} else {
+					p = files[rand.IntN(len(files))]
+				}
+				content := fmt.Sprintf("racer %d.%d", i, k)
+				tmp := filepath.Join(staging, fmt.Sprintf("racer-%d-%d", i, k))
+				if os.WriteFile(tmp, []byte(content), 0o600) != nil {
+					return
+				}
+				if os.Rename(tmp, p) == nil {
+					made[p] = content // a later replacement of p overwrites it here too
+				} else {
+					_ = os.Remove(tmp)
+				}
+				spin(time.Duration(rand.Int64N(int64(dur/8) + 1)))
 			}
 		})
-		close(begin)
 		_, err = e.fs.DeleteExact(dir, true, pv.PreviewSHA256)
+		close(done)
 		wg.Wait()
 		switch {
 		case err == nil:
 			completed++
+		case strings.Contains(err.Error(), "changed since the preview"):
+			wantCode(t, err, protocol.CodeExists)
+			atRecompute++
 		default:
 			wantCode(t, err, protocol.CodeExists)
-			stopped++
+			during++
 		}
-		if planted == "" {
-			racerNone++ // its directory was already gone
-			continue
-		}
-		if got, rerr := os.ReadFile(planted); rerr != nil || string(got) != racer { //nolint:gosec // G304: test fixture
-			t.Fatalf("run %d: the racer's file %s was deleted or changed (%v): the deletion removed something it never saw", i, planted, rerr)
+		for p, content := range made {
+			planted++
+			if got, rerr := os.ReadFile(p); rerr != nil || string(got) != content { //nolint:gosec // G304: test fixture
+				t.Fatalf("run %d: the racer's file %s was deleted or changed (%v): the deletion removed something it never saw", i, p, rerr)
+			}
 		}
 		noTempNames(t, e.write)
 	}
-	t.Logf("concurrent racer: %d runs (deletion took ~%v): %d stopped with exists, %d completed, %d racers found their directory gone; every racer file survived",
-		runs, dur, stopped, completed, racerNone)
+	t.Logf("concurrent racer: %d runs (a deletion takes ~%v): %d refused at the recompute, %d stopped during deletion, %d completed before the racer "+
+		"changed anything; %d racer files, every one survived", runs, dur, atRecompute, during, completed, planted)
+}
+
+// spin waits d without sleeping (time.Sleep oversleeps at this scale).
+func spin(d time.Duration) {
+	until := time.Now().Add(d)
+	for time.Now().Before(until) {
+		runtime.Gosched()
+	}
 }

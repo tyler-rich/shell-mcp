@@ -3,8 +3,11 @@
 package fsx
 
 import (
+	"encoding/binary"
 	"regexp"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 var previewSHA256RE = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -18,6 +21,62 @@ func FuzzValidPreviewSHA256(f *testing.F) {
 	f.Fuzz(func(t *testing.T, s string) {
 		if got, want := ValidPreviewSHA256(s), previewSHA256RE.MatchString(s); got != want {
 			t.Fatalf("ValidPreviewSHA256(%q) = %v, want %v", s, got, want)
+		}
+	})
+}
+
+// decodePreviewEntry is appendPreviewEntry's inverse, for the fuzz target.
+func decodePreviewEntry(b []byte) (path string, id ident, rest []byte, ok bool) {
+	n, k := binary.Uvarint(b)
+	if k <= 0 || uint64(len(b)-k) < n {
+		return "", ident{}, nil, false
+	}
+	path, b = string(b[k:k+int(n)]), b[k+int(n):]
+	if len(b) < 4+8*4+4+1 {
+		return "", ident{}, nil, false
+	}
+	id.typ, b = binary.BigEndian.Uint32(b), b[4:]
+	id.size, b = int64(binary.BigEndian.Uint64(b)), b[8:] //nolint:gosec // G115: bits back
+	id.dev, b = binary.BigEndian.Uint64(b), b[8:]
+	id.ino, b = binary.BigEndian.Uint64(b), b[8:]
+	id.ctime.Sec, b = int64(binary.BigEndian.Uint64(b)), b[8:] //nolint:gosec // G115: bits back
+	id.ctime.Nsec, b = binary.BigEndian.Uint32(b), b[4:]
+	switch b[0] {
+	case 0:
+		return path, id, b[1:], true
+	case 1:
+		b = b[1:]
+		if len(b) < 12 {
+			return "", ident{}, nil, false
+		}
+		id.hasBtime = true
+		id.btime.Sec, b = int64(binary.BigEndian.Uint64(b)), b[8:] //nolint:gosec // G115: bits back
+		id.btime.Nsec, b = binary.BigEndian.Uint32(b), b[4:]
+		return path, id, b, true
+	}
+	return "", ident{}, nil, false
+}
+
+// FuzzPreviewEntryEncoding: an entry's hash input decodes back to exactly
+// that entry, so two different entries (or lists of entries) never feed
+// the preview hash the same bytes.
+func FuzzPreviewEntryEncoding(f *testing.F) {
+	f.Add("/srv/app/old", uint32(0o100000), int64(12), uint64(2049), uint64(77), int64(1760000000), uint32(5), true, int64(1750000000), uint32(9), "/srv/app/old/a")
+	f.Add("", uint32(0), int64(-1), uint64(0), uint64(0), int64(0), uint32(0), false, int64(0), uint32(0), "")
+	f.Fuzz(func(t *testing.T, path string, typ uint32, size int64, dev, ino uint64, cs int64, cn uint32, hasB bool, bs int64, bn uint32, path2 string) {
+		id := ident{typ: typ, size: size, dev: dev, ino: ino, ctime: unix.StatxTimestamp{Sec: cs, Nsec: cn}, hasBtime: hasB}
+		if hasB {
+			id.btime = unix.StatxTimestamp{Sec: bs, Nsec: bn}
+		}
+		b := appendPreviewEntry(nil, path, &id)
+		b = appendPreviewEntry(b, path2, &id)
+		p, got, rest, ok := decodePreviewEntry(b)
+		if !ok || p != path || got != id {
+			t.Fatalf("first entry: %q %+v ok %v; want %q %+v", p, got, ok, path, id)
+		}
+		p, got, rest, ok = decodePreviewEntry(rest)
+		if !ok || p != path2 || got != id || len(rest) != 0 {
+			t.Fatalf("second entry: %q %+v ok %v rest %d", p, got, ok, len(rest))
 		}
 	})
 }
