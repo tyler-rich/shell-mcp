@@ -50,6 +50,9 @@ type Record struct {
 	Args       map[string]any
 	Outcome    string // "ok" or the gate error code
 	DurationMS int64
+	// SetAside is the path of an entry a delete set aside and could not
+	// put back (empty otherwise).
+	SetAside string
 }
 
 // Sink receives audit records.
@@ -75,6 +78,7 @@ type line struct {
 	Args       map[string]any `json:"args"`
 	Outcome    string         `json:"outcome"`
 	DurationMS int64          `json:"duration_ms"`
+	SetAside   string         `json:"set_aside,omitzero"`
 }
 
 // Line renders r as one JSON object on one line; every string is bounded.
@@ -88,7 +92,7 @@ func Line(r *Record) string {
 	}
 	b, err := json.Marshal(line{
 		ID: truncate(r.ID), Ceiling: truncate(r.Ceiling), Principal: truncate(r.Principal), Client: truncate(r.Client), Op: truncate(r.Op),
-		Args: args, Outcome: truncate(r.Outcome), DurationMS: r.DurationMS,
+		Args: args, Outcome: truncate(r.Outcome), DurationMS: r.DurationMS, SetAside: truncate(r.SetAside),
 	}, json.Deterministic(true), jsontext.AllowInvalidUTF8(true))
 	if err != nil {
 		return `{"error":"audit record could not be encoded"}`

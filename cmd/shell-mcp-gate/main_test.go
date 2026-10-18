@@ -5,11 +5,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
+	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
 )
 
@@ -136,5 +138,45 @@ func TestTrampolineIsNotACommand(t *testing.T) {
 	}
 	if code, out, _ := runCmd([]string{"serve", execx.TrampolineArg}, ""); code != 0 || !strings.Contains(out, `"code":"install_insecure"`) {
 		t.Fatalf("as a serve argument: exit %d, stdout %q", code, out)
+	}
+}
+
+// TestCheckPolicyProbesNoReplace: check-policy probes each write root's
+// filesystem for RENAME_NOREPLACE and warns, naming the root, where it is
+// missing (deletes, and copies and moves without overwrite, are refused
+// there) or could not be probed.
+func TestCheckPolicyProbesNoReplace(t *testing.T) {
+	d := gatetest.SecureDir(t)
+	w1, w2 := filepath.Join(d, "srv", "one"), filepath.Join(d, "srv", "two")
+	gatetest.Mkdir(t, w1, 0o755)
+	gatetest.Mkdir(t, w2, 0o755)
+	gatetest.Mkdir(t, filepath.Join(d, "home"), 0o755)
+	p := filepath.Join(d, "etc", "policy.yaml")
+	gatetest.WriteFile(t, p, "version: 1\nmax_tier: destructive\nsandbox:\n  landlock: best-effort\npaths:\n  write: ["+w1+", "+w2+"]\n", 0o644)
+	run := func() string {
+		var out, errb bytes.Buffer
+		checkPolicyWith([]string{"--policy", p}, &out, &errb, gatetest.Trust(), filepath.Join(d, "home"))
+		return out.String()
+	}
+	// The real probe, on the test's own filesystem.
+	if out := run(); !strings.Contains(out, "ok   paths.write "+w1+": RENAME_NOREPLACE supported") ||
+		!strings.Contains(out, "ok   paths.write "+w2+": RENAME_NOREPLACE supported") {
+		t.Fatalf("check-policy:\n%s", out)
+	}
+	defer func(f func(string) error) { probeNoReplace = f }(probeNoReplace)
+	probeNoReplace = func(root string) error {
+		if root == w2 {
+			return fsx.ErrNoReplaceUnsupported
+		}
+		return nil
+	}
+	out := run()
+	if !strings.Contains(out, "WARN paths.write "+w2+": the filesystem does not support RENAME_NOREPLACE") ||
+		strings.Contains(out, "WARN paths.write "+w1) || !strings.Contains(out, "delete") {
+		t.Fatalf("check-policy:\n%s", out)
+	}
+	probeNoReplace = func(string) error { return errors.New("permission denied") }
+	if out := run(); !strings.Contains(out, "WARN paths.write "+w1+": could not probe RENAME_NOREPLACE") {
+		t.Fatalf("check-policy:\n%s", out)
 	}
 }

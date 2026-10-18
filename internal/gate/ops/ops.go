@@ -52,6 +52,8 @@ type Options struct {
 	// only.
 	InjectBeforeCommit   func()
 	InjectNoReplaceFault func() error
+	// InjectDeleteStep is passed to fsx; tests only.
+	InjectDeleteStep func(step fsx.DeleteStep, path string)
 
 	// Systemctl, Journalctl and Git are the absolute paths of the binaries
 	// the built-in service, journal and git operations run. Production uses
@@ -135,6 +137,9 @@ type server struct {
 	red    *redact.Redactor
 	report sandbox.Report
 	req    *protocol.Request
+	// setAside is the path of an entry a delete set aside and could not
+	// put back, for the audit line.
+	setAside string
 }
 
 // Serve runs the gate for one request: install checks, policy load,
@@ -168,6 +173,7 @@ func (s *server) audit(resp *protocol.Response, d time.Duration) {
 	if resp.Error != nil {
 		r.Outcome = resp.Error.Code
 	}
+	r.SetAside = s.setAside
 	s.o.Audit.Log(r)
 }
 
@@ -258,6 +264,7 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 		InjectReadBackFault:  o.InjectReadBackFault,
 		InjectBeforeCommit:   o.InjectBeforeCommit,
 		InjectNoReplaceFault: o.InjectNoReplaceFault,
+		InjectDeleteStep:     o.InjectDeleteStep,
 	})
 	s.red = redact.New(p.Redact)
 

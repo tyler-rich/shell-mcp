@@ -18,6 +18,7 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/install"
 	"github.com/tyler-rich/shell-mcp/internal/gate/ops"
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
@@ -178,6 +179,9 @@ func polkitWith(args []string, stdout, stderr io.Writer, trust policy.Trust) int
 // checkPolicyWith is checkPolicy with the trust set and the service home as
 // parameters; only tests pass anything but policy.RootTrust() and
 // ops.ServiceHome().
+// probeNoReplace is fsx.ProbeNoReplace; tests replace it.
+var probeNoReplace = fsx.ProbeNoReplace
+
 func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust, home string) int {
 	fs := flag.NewFlagSet("check-policy", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -236,6 +240,19 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust
 		pr("ok   policy: sha256 %s, max_tier %s, %d commands", p.SHA256, p.MaxTier, len(p.Commands))
 		for _, w := range p.Warnings {
 			pr("WARN %s", w)
+		}
+		// delete, and move without overwrite, need RENAME_NOREPLACE and are
+		// refused on a filesystem without it (POLICY §3): probe each write
+		// root (a file created, renamed and removed inside it).
+		for _, root := range p.Paths.Write {
+			switch err := probeNoReplace(root); {
+			case err == nil:
+				pr("ok   paths.write %s: RENAME_NOREPLACE supported", root)
+			case errors.Is(err, fsx.ErrNoReplaceUnsupported):
+				pr("WARN paths.write %s: the filesystem does not support RENAME_NOREPLACE; delete, and move without overwrite, are refused under this root", root)
+			default:
+				pr("WARN paths.write %s: could not probe RENAME_NOREPLACE (%v); delete, and move without overwrite, need it", root, err)
+			}
 		}
 	}
 

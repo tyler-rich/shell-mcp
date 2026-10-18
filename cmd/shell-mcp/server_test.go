@@ -343,7 +343,7 @@ func TestStdioRefusesBearer(t *testing.T) {
 // readOnlyTools is the read-only profile's catalogue, sorted.
 const readOnlyTools = "shell_find_files,shell_get_disk_usage,shell_get_git_diff,shell_get_git_log,shell_get_git_status," +
 	"shell_get_journal,shell_get_policy,shell_get_service_status,shell_get_system_info,shell_inspect_certificate," +
-	"shell_list_directory,shell_list_processes,shell_list_services,shell_list_targets,shell_read_file," +
+	"shell_list_directory,shell_list_processes,shell_list_services,shell_list_targets,shell_preview_delete,shell_read_file," +
 	"shell_run_read_command,shell_stat_path"
 
 func withoutDiag(names []string) []string {

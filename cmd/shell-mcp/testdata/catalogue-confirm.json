@@ -34,6 +34,23 @@
     "requires_user_interaction": true
   },
   {
+    "name": "shell_delete_path",
+    "title": "Delete path",
+    "tier": "destructive",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Delete path"
+    },
+    "description": "Deletes a file, an empty directory, or with recursive a directory tree under the target policy's write roots, exactly as its approved preview listed it.",
+    "input_schema_sha256": "21cff3492dae09eb7791787386359c9dca6aaf2a6d362fd79b0dc30d9ef938d8",
+    "output_schema_sha256": "e832044acdc90e3a3b24926eb9ebf42d5b72a1ae45055c9fcc6cd27ba9c991fc",
+    "requires_user_interaction": true
+  },
+  {
     "name": "shell_find_files",
     "title": "Find files",
     "tier": "read",
@@ -321,6 +338,23 @@
     "input_schema_sha256": "eeec5ca77630f8b3785debefba524104289ea46a69827c63a4f3ee3c1f4c8f3f",
     "output_schema_sha256": "502c63a10c7dd536e87a682fe4d399a736ecbde81b85ff3f260029126f6ef5f9",
     "requires_user_interaction": true
+  },
+  {
+    "name": "shell_preview_delete",
+    "title": "Preview delete",
+    "tier": "read",
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Preview delete"
+    },
+    "description": "Reports what deleting a path would remove, without removing anything: type, entry count, total bytes, the first 50 entries and a hash of the complete list.",
+    "input_schema_sha256": "634b0df84a1144f2f55b4089c223ccd9a041f16f5a113d88f0a9d1f82483e5f2",
+    "output_schema_sha256": "b2978bf54e99c3fc4c28999c9c1fc490c4dd962539169caf084ddc7fddbbb2bb",
+    "requires_user_interaction": false
   },
   {
     "name": "shell_read_file",

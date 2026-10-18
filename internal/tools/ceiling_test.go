@@ -35,11 +35,17 @@ var ceilingCallArgs = map[string]map[string]any{
 // serverOnly are tools that never call a gate.
 var serverOnly = []string{"shell_list_targets", "shell_diag_elicit"}
 
+// alwaysGated are tools that run only after an approval (destructive), so
+// a plain call sends nothing; their ceiling is checked through the approval
+// flow (TestDeletePathApprovalFlow: every request at ceiling destructive).
+var alwaysGated = []string{"shell_delete_path"}
+
 // TestEveryToolSendsItsTierAsCeiling: a table over the registry. Each
 // tool's every gate request names exactly the tier it is registered with.
 func TestEveryToolSendsItsTierAsCeiling(t *testing.T) {
 	replies := operatorReplies()
 	replies["hello"] = gateReply{data: fakeHello}
+	replies["delete_preview"] = gateReply{data: fakeDeletePlan(shaTree, false)}
 	g := newRecordingGate(replies)
 	h := readHarness(t, g)
 	reg, err := Catalogue(h.deps)
@@ -54,7 +60,7 @@ func TestEveryToolSendsItsTierAsCeiling(t *testing.T) {
 		name := r.Tool.Def.Name
 		t.Run(name, func(t *testing.T) {
 			before := len(g.requests())
-			if slices.Contains(serverOnly, name) {
+			if slices.Contains(serverOnly, name) || slices.Contains(alwaysGated, name) {
 				return
 			}
 			args, ok := ceilingCallArgs[name]

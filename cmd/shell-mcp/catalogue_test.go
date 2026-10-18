@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"os"
 	"path/filepath"
@@ -31,10 +32,33 @@ func TestCatalogueSnapshot(t *testing.T) {
 	for file, env := range catalogueVariants {
 		t.Run(file, func(t *testing.T) { outs[file] = checkCatalogue(t, file, env) })
 	}
-	// The variants differ exactly where they should.
-	if bytes.Contains(outs["catalogue.json"], []byte(`"requires_user_interaction": true`)) ||
-		!bytes.Contains(outs["catalogue-confirm.json"], []byte(`"requires_user_interaction": true`)) {
-		t.Fatal("requiresUserInteraction is not where the variants say")
+	// The variants differ exactly where they should: destructive tools are
+	// always gated; operator tools only when SHELL_MCP_APPROVAL_TIERS lists
+	// operator.
+	for file, want := range map[string]map[string]bool{
+		"catalogue.json":         {"destructive": true},
+		"catalogue-confirm.json": {"destructive": true, "operator": true},
+	} {
+		var rows []struct {
+			Name     string `json:"name"`
+			Tier     string `json:"tier"`
+			Requires bool   `json:"requires_user_interaction"`
+		}
+		if err := json.Unmarshal(outs[file], &rows); err != nil {
+			t.Fatal(err)
+		}
+		gated := 0
+		for _, r := range rows {
+			if r.Requires != want[r.Tier] {
+				t.Fatalf("%s: %s (tier %s) requires_user_interaction %v", file, r.Name, r.Tier, r.Requires)
+			}
+			if r.Requires {
+				gated++
+			}
+		}
+		if gated == 0 {
+			t.Fatalf("%s: no tool requires user interaction", file)
+		}
 	}
 }
 
