@@ -117,7 +117,7 @@ func withFD(f *os.File, fn func(fd int) error) error {
 		return err
 	}
 	var ferr error
-	if err := sc.Control(func(fd uintptr) { ferr = fn(int(fd)) }); err != nil { //nolint:gosec // G115: a descriptor fits an int
+	if err := sc.Control(func(fd uintptr) { ferr = fn(int(fd)) }); err != nil {
 		return err
 	}
 	return ferr

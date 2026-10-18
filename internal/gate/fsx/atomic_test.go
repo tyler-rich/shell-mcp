@@ -54,7 +54,7 @@ func createOnlyOps(e *env) []createOnly {
 		},
 		{
 			name:    "copy without overwrite",
-			prepare: func(t *testing.T, i int) { put(t, copySrc, "copied\n") },
+			prepare: func(t *testing.T, _ int) { put(t, copySrc, "copied\n") },
 			run: func(dst string, _ int) error {
 				_, err := e.fs.Copy(copySrc, dst, false)
 				return err
@@ -142,10 +142,10 @@ func TestExpectAbsentRules(t *testing.T) {
 // before each commit (InjectBeforeCommit), after every check fsx makes. The
 // commit itself must refuse it.
 func TestCreateOnlyCommitWindow(t *testing.T) {
-	for _, op := range createOnlyOps(newEnv(t)) {
-		t.Run(op.name, func(t *testing.T) {
+	for _, named := range createOnlyOps(newEnv(t)) {
+		t.Run(named.name, func(t *testing.T) {
 			e := newEnv(t)
-			op := findOp(t, createOnlyOps(e), op.name)
+			op := findOp(t, createOnlyOps(e), named.name)
 			dir := strings.Contains(op.name, "directory")
 			for i := range windowRuns {
 				if op.prepare != nil {
@@ -192,13 +192,13 @@ func findOp(t *testing.T, ops []createOnly, name string) createOnly {
 // destination against the operation, with no hook: whoever creates the
 // destination first keeps it. Both succeeding means one replaced the other.
 func TestCreateOnlyConcurrentRace(t *testing.T) {
-	for _, op := range createOnlyOps(newEnv(t)) {
-		if strings.Contains(op.name, "directory") {
+	for _, named := range createOnlyOps(newEnv(t)) {
+		if strings.Contains(named.name, "directory") {
 			continue // a racing mkdir cannot detect being replaced; the window test covers it
 		}
-		t.Run(op.name, func(t *testing.T) {
+		t.Run(named.name, func(t *testing.T) {
 			e := newEnv(t)
-			op := findOp(t, createOnlyOps(e), op.name)
+			op := findOp(t, createOnlyOps(e), named.name)
 			// The racer starts after a random delay of up to twice one
 			// operation's duration, so it lands before, inside and after the
 			// operation's window.
