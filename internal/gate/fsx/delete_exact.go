@@ -541,7 +541,7 @@ func (d *deleter) remove(dfd int, e *planEntry) error {
 		return &changed{"an entry of the preview is gone"}
 	case err != nil:
 		return err
-	case !pre.unchanged(&e.id) && !(d.touched[key2(&e.id)] && pre.sameObject(&e.id) && pre.size == e.id.size):
+	case !d.stillListed(&pre, e):
 		return &changed{"an entry of the preview was replaced or changed"}
 	}
 	tmp := deleteTempPrefix + randHex(16)
@@ -720,4 +720,15 @@ func ProbeNoReplace(dir string) error {
 	}
 	_ = r.Remove(a)
 	return &fs.PathError{Op: "renameat2", Path: dir, Err: rerr}
+}
+
+// stillListed is step 1's check: pre (what is under e's name now) is the
+// entry the walk listed. A non-directory this pass already renamed or
+// unlinked under another of its names (a hard link) is compared by object
+// and size only, since that moved its change time.
+func (d *deleter) stillListed(pre *ident, e *planEntry) bool {
+	if d.touched[key2(&e.id)] {
+		return pre.sameObject(&e.id) && pre.size == e.id.size
+	}
+	return pre.unchanged(&e.id)
 }
