@@ -52,6 +52,8 @@ type Options struct {
 	// only.
 	InjectBeforeCommit   func()
 	InjectNoReplaceFault func() error
+	// InjectDeleteStep is passed to fsx; tests only.
+	InjectDeleteStep func(step fsx.DeleteStep, path string)
 
 	// Systemctl, Journalctl and Git are the absolute paths of the binaries
 	// the built-in service, journal and git operations run. Production uses
@@ -258,6 +260,7 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 		InjectReadBackFault:  o.InjectReadBackFault,
 		InjectBeforeCommit:   o.InjectBeforeCommit,
 		InjectNoReplaceFault: o.InjectNoReplaceFault,
+		InjectDeleteStep:     o.InjectDeleteStep,
 	})
 	s.red = redact.New(p.Redact)
 

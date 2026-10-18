@@ -59,6 +59,11 @@ type Config struct {
 	// RENAME_NOREPLACE for move), and its error is that call's result. Tests
 	// only; production code never sets it.
 	InjectNoReplaceFault func() error
+	// InjectDeleteStep, when non-nil, is called at each point of
+	// DeleteExact's deletion pass with the logical path of the entry
+	// concerned (the target's for DeleteStepAfterCompare). Tests only;
+	// production code never sets it.
+	InjectDeleteStep func(step DeleteStep, path string)
 	// Backup, when non-nil, is called before every overwrite, move-over and
 	// delete; its error aborts the operation. The gate never sets it.
 	Backup BackupFunc

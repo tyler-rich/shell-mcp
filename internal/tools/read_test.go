@@ -30,7 +30,7 @@ var readTools = []string{
 	"shell_get_system_info", "shell_get_disk_usage", "shell_list_processes", "shell_get_service_status",
 	"shell_list_services", "shell_get_journal", "shell_list_directory", "shell_stat_path", "shell_read_file",
 	"shell_find_files", "shell_inspect_certificate", "shell_get_git_status", "shell_get_git_log",
-	"shell_get_git_diff", "shell_run_read_command",
+	"shell_get_git_diff", "shell_run_read_command", "shell_preview_delete",
 }
 
 // gateReply is the fake gate's answer to one op: data on success, or an
@@ -280,9 +280,9 @@ func TestReadToolsRegistered(t *testing.T) {
 			t.Fatalf("%s: tier %s privileged %v", r.Tool.Def.Name, r.Tier, r.Privileged)
 		}
 	}
-	// Not in this session: the previews come with the destructive tools.
+	// Not yet: the git discard preview comes with its destructive tool (S4b-2b).
 	for _, r := range reg.ToolsForProfile(ProfileAdmin, nil) {
-		if n := r.Tool.Def.Name; n == "shell_preview_delete" || n == "shell_preview_git_discard" {
+		if n := r.Tool.Def.Name; n == "shell_preview_git_discard" {
 			t.Fatalf("%s is registered", n)
 		}
 	}
@@ -337,6 +337,7 @@ func TestReadToolSchemaBounds(t *testing.T) {
 		"shell_find_files": {required: []string{"root"}, ints: map[string]bound{"max_depth": {1, 32}, "limit": {1, 10000}},
 			enums: map[string][]any{"type": {"file", "dir", "symlink"}}, strs: map[string]int{"root": 4096, "name_glob": 256, "modified_within": 16}},
 		"shell_inspect_certificate": {required: []string{"path"}, strs: map[string]int{"path": 4096}},
+		"shell_preview_delete":      {required: []string{"path"}, strs: map[string]int{"path": 4096}, absent: []string{"expected_preview_sha256", "approval_id"}},
 		"shell_get_git_status":      {required: []string{"repo"}, strs: map[string]int{"repo": 4096}, ints: map[string]bound{"timeout_seconds": {1, 3600}}},
 		"shell_get_git_log":         {required: []string{"repo"}, ints: map[string]bound{"limit": {1, 200}, "timeout_seconds": {1, 3600}}},
 		"shell_get_git_diff":        {required: []string{"repo"}, ints: map[string]bound{"max_output_bytes": {1, 4 << 20}, "timeout_seconds": {1, 3600}}},

@@ -364,14 +364,15 @@ func TestFileOps(t *testing.T) {
 	f.ok("chmod", m{"path": filepath.Join(f.write, "moved.txt"), "mode": "0600"}, nil)
 	f.fail("chmod", m{"path": filepath.Join(f.write, "moved.txt")}, "bad_request")
 	var pv struct {
-		Entries int  `json:"entries"`
-		Deleted bool `json:"deleted"`
+		Entries       int    `json:"entries"`
+		Deleted       bool   `json:"deleted"`
+		PreviewSHA256 string `json:"preview_sha256"`
 	}
 	f.ok("delete_preview", m{"path": filepath.Join(f.write, "d1"), "recursive": true}, &pv)
-	if pv.Entries != 2 || pv.Deleted {
+	if pv.Entries != 2 || pv.Deleted || len(pv.PreviewSHA256) != 64 {
 		t.Fatalf("preview %+v", pv)
 	}
-	f.ok("delete", m{"path": filepath.Join(f.write, "d1"), "recursive": true}, &pv)
+	f.ok("delete", m{"path": filepath.Join(f.write, "d1"), "recursive": true, "expected_preview_sha256": pv.PreviewSHA256}, &pv)
 	if !pv.Deleted {
 		t.Fatalf("delete %+v", pv)
 	}
@@ -493,7 +494,7 @@ func TestProductionOptionsHaveNoTestHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.TestGitCAFile != "" || o.InjectReadBackFault != nil || o.InjectBeforeCommit != nil || o.InjectNoReplaceFault != nil || o.Audit == nil ||
+	if o.TestGitCAFile != "" || o.InjectReadBackFault != nil || o.InjectBeforeCommit != nil || o.InjectNoReplaceFault != nil || o.InjectDeleteStep != nil || o.Audit == nil ||
 		o.Systemctl != ops.SystemctlPath || o.Journalctl != ops.JournalctlPath || o.Git != ops.GitPath {
 		t.Fatalf("production options %+v", o)
 	}

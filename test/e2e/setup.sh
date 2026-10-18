@@ -264,11 +264,18 @@ ln -s "$fx/tree/sub" "$fx/tree/abs-link"
 # in the read root outside them shows a write being refused. The tests make
 # the files and the repositories.
 ox=/srv/example-ops
+umount "$ox/work/mounted/point" 2>/dev/null || true # a rerun: the tmpfs below
 rm -rf "$ox"
 install -o root -g root -m 0755 -d "$ox"
 install -o svc-shell -g svc-shell -m 0755 -d "$ox/work" "$ox/repos"
 printf 'read only\n' >"$ox/readonly.txt"
 chmod 0644 "$ox/readonly.txt"
+# A tmpfs mounted inside a write root (delete_tools_test.go): the delete
+# operations never delete a mount point nor descend into one, so both the
+# mount point and the directory holding it are refused.
+install -o svc-shell -g svc-shell -m 0755 -d "$ox/work/mounted" "$ox/work/mounted/point"
+mount -t tmpfs -o size=1m,mode=0755,uid=4200001,gid=4200001 e2e-delete-mount "$ox/work/mounted/point"
+printf 'on the mount\n' >"$ox/work/mounted/point/inside.txt"
 
 # priv_policy <extra line for probe-signal> <extra line for probe-broad> <allow_upgrade>
 priv_policy() {

@@ -571,8 +571,10 @@ func TestGitDirWriteDenied(t *testing.T) {
 	g.fail("copy", m{"source": filepath.Join(g.repo, "NOTES.md"), "destination": filepath.Join(g.repo, ".git", "info", "attributes")}, "path_denied")
 	g.fail("move", m{"source": filepath.Join(g.repo, "NOTES.md"), "destination": filepath.Join(g.repo, ".git", "x")}, "path_denied")
 	g.fail("chmod", m{"path": cfg, "mode": "0644"}, "path_denied")
-	g.fail("delete", m{"path": cfg}, "path_denied")
-	g.fail("delete", m{"path": g.repo, "recursive": true}, "path_denied")
+	g.fail("delete", m{"path": cfg, "expected_preview_sha256": strings.Repeat("0", 64)}, "path_denied")
+	g.fail("delete", m{"path": g.repo, "recursive": true, "expected_preview_sha256": strings.Repeat("0", 64)}, "path_denied")
+	g.fail("delete_preview", m{"path": g.repo, "recursive": true}, "path_denied")
+	g.fail("delete_preview", m{"path": filepath.Join(g.repo, ".git"), "recursive": true}, "path_denied")
 	g.fail("exec", m{"command_id": "probe-op", "args": []string{"write", cfg}}, "path_denied")
 	g.ok("read_file", m{"path": cfg}, nil)
 }

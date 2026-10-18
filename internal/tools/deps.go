@@ -74,6 +74,7 @@ func Catalogue(d *Deps) (*Registry, error) {
 		{getGitLog(d), TierRead},
 		{getGitDiff(d), TierRead},
 		{runReadCommand(d), TierRead},
+		{previewDelete(d), TierRead},
 		{controlService(d), TierOperator},
 		{writeFile(d), TierOperator},
 		{makeDirectory(d), TierOperator},
@@ -84,6 +85,7 @@ func Catalogue(d *Deps) (*Registry, error) {
 		// Registered at operator in the operator and admin profiles; its
 		// admin registration at destructive comes with approval (S4b).
 		{runCommand(d), TierOperator},
+		{deletePath(d), TierDestructive},
 	} {
 		if err := r.Register(reg.tool, reg.tier, false); err != nil {
 			return nil, err

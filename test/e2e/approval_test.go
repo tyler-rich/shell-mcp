@@ -65,19 +65,21 @@ type approvalServer struct {
 
 func (s *approvalServer) origin() string { return "http://127.0.0.1:" + strconv.Itoa(s.port) }
 
-func startApprovalServer(t *testing.T, h *human, file string, port int) *approvalServer {
+func startApprovalServer(t *testing.T, h *human, file string, port int, extra ...string) *approvalServer {
 	t.Helper()
 	log := &syncedBuffer{}
 	var cs *mcp.ClientSession
 	var err error
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		cs, err = startServer(t, log,
+		env := append([]string{
 			"SHELL_MCP_APPROVAL_METHOD=web",
 			"SHELL_MCP_APPROVAL_TIERS=operator,destructive",
-			"SHELL_MCP_APPROVAL_PORT="+strconv.Itoa(port),
-			"SHELL_MCP_APPROVAL_PUBLIC_URL=http://127.0.0.1:"+strconv.Itoa(port),
-			"SHELL_MCP_APPROVERS_FILE="+file)
+			"SHELL_MCP_APPROVAL_PORT=" + strconv.Itoa(port),
+			"SHELL_MCP_APPROVAL_PUBLIC_URL=http://127.0.0.1:" + strconv.Itoa(port),
+			"SHELL_MCP_APPROVERS_FILE=" + file,
+		}, extra...)
+		cs, err = startServer(t, log, env...)
 		if err == nil {
 			break
 		}
@@ -107,7 +109,12 @@ func startApprovalServer(t *testing.T, h *human, file string, port int) *approva
 
 func (s *approvalServer) call(t *testing.T, args map[string]any) map[string]any {
 	t.Helper()
-	return callOn(t, s.cs, s.log, "shell_write_file", args)
+	return s.callTool(t, "shell_write_file", args)
+}
+
+func (s *approvalServer) callTool(t *testing.T, name string, args map[string]any) map[string]any {
+	t.Helper()
+	return callOn(t, s.cs, s.log, name, args)
 }
 
 var csrfRE = regexp.MustCompile(`name="csrf_token" value="([^"]+)"`)

@@ -67,9 +67,17 @@ type chmodArgs struct {
 	Mode string `json:"mode"`
 }
 
-type deleteArgs struct {
+type deletePreviewArgs struct {
 	Path      string `json:"path"`
 	Recursive bool   `json:"recursive"`
+}
+
+// deleteArgs: expected_preview_sha256 is required, the preview_sha256 of
+// the delete_preview the caller saw (ARCHITECTURE §4.1).
+type deleteArgs struct {
+	Path                  string `json:"path"`
+	Recursive             bool   `json:"recursive"`
+	ExpectedPreviewSHA256 string `json:"expected_preview_sha256"`
 }
 
 func decode(raw jsontext.Value, v any) error {
@@ -215,15 +223,15 @@ func (s *server) delete(raw jsontext.Value) (data any, warns []string, failure e
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
 	}
-	r, err := s.fs.Delete(a.Path, a.Recursive)
+	r, err := s.fs.DeleteExact(a.Path, a.Recursive, a.ExpectedPreviewSHA256)
 	return r, nil, err
 }
 
 func (s *server) deletePreview(raw jsontext.Value) (data any, warns []string, failure error) {
-	var a deleteArgs
+	var a deletePreviewArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
 	}
-	r, err := s.fs.DeletePreview(a.Path, a.Recursive)
+	r, err := s.fs.PreviewDelete(a.Path, a.Recursive)
 	return r, nil, err
 }
