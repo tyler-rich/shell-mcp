@@ -40,7 +40,7 @@ func dirtyDiscard(t *testing.T) {
 	repoGit(t, opsDiscard, "add", "staged.txt")
 	opsFile(t, opsDiscard+"/untracked.txt", "untracked\n", 0o644)
 	opsFile(t, opsDiscard+"/keep.log", "ignored\n", 0o644)
-	if out, err := exec.CommandContext(t.Context(), "chown", "-R", "svc-shell:svc-shell", opsDiscard).CombinedOutput(); err != nil { //nolint:gosec // G204: a fixed command on the test's own path
+	if out, err := exec.CommandContext(t.Context(), "chown", "-R", "svc-shell:svc-shell", opsDiscard).CombinedOutput(); err != nil {
 		t.Fatalf("chown: %v: %s", err, out)
 	}
 }

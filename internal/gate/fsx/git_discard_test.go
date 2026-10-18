@@ -22,10 +22,10 @@ import (
 // is invented; ".git" is a plain directory here (git itself is exercised
 // by the gate's tests).
 
-func newRepoEnv(t *testing.T) (*env, string) {
+func newRepoEnv(t *testing.T) (e *env, repo string) {
 	t.Helper()
-	e := newDelEnv(t, 100)
-	repo := filepath.Join(e.write, "repo")
+	e = newDelEnv(t, 100)
+	repo = filepath.Join(e.write, "repo")
 	must(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o750))
 	put(t, filepath.Join(repo, ".git", "index"), "old index")
 	return e, repo
@@ -155,8 +155,8 @@ func TestObserveWorktree(t *testing.T) {
 	// a set-aside name, a FIFO.
 	for _, p := range []string{filepath.Join(repo, ".git", "config"), filepath.Join(e.write, "locked", "x"), filepath.Join(e.read, "x"),
 		filepath.Join(repo, ".shell-mcp-delete-0123")} {
-		_, err := e.fs.ObserveWorktree(p, &budget)
-		wantCode(t, err, protocol.CodePathDenied)
+		_, oerr := e.fs.ObserveWorktree(p, &budget)
+		wantCode(t, oerr, protocol.CodePathDenied)
 	}
 	must(t, unix.Mkfifo(filepath.Join(repo, "fifo"), 0o600))
 	_, err = e.fs.ObserveWorktree(filepath.Join(repo, "fifo"), &budget)
@@ -275,7 +275,7 @@ func decodeWorktreeEntry(b []byte) (w WorktreeEntry, rest []byte, ok bool) {
 			return "", false
 		}
 		s := string(b[k : k+int(n)]) //nolint:gosec // G115: n is at most len(b)
-		b = b[k+int(n):]
+		b = b[k+int(n):]             //nolint:gosec // G115: n is at most len(b)
 		return s, true
 	}
 	var p string

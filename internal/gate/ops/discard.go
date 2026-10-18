@@ -178,14 +178,15 @@ func (r *gitRepo) plan(include bool) (*discardPlan, error) {
 	slices.Sort(pl.skipped)
 	budget := int64(fsx.MaxDiscardHashBytes)
 	tracked := map[string]bool{}
-	for _, e := range ents {
+	for i := range ents {
+		e := &ents[i]
 		switch {
 		case e.Kind == "unmerged":
 			return nil, errf(protocol.CodePolicyDenied, "the repository has an unmerged entry (%s); resolve or abort on the host first", shown(e.Path))
 		case e.Sub != "N..." || e.ModeHead == "160000" || e.ModeIndex == "160000" || e.ModeWorktree == "160000":
 			return nil, errf(protocol.CodePolicyDenied, "%s is a submodule with changes; repositories with submodule changes are refused", shown(e.Path))
 		}
-		t := discardTracked{e: e, abs: r.path + "/" + e.Path, restore: e.ModeHead != "000000"}
+		t := discardTracked{e: *e, abs: r.path + "/" + e.Path, restore: e.ModeHead != "000000"}
 		if t.wt, err = s.fs.ObserveWorktree(t.abs, &budget); err != nil {
 			return nil, pathRefusal(e.Path, err)
 		}
@@ -293,8 +294,8 @@ func (pl *discardPlan) sum() string {
 		b = t.wt.AppendHash(b)
 	}
 	b = binary.AppendUvarint(b, uint64(len(pl.untracked)))
-	for _, u := range pl.untracked {
-		b = appendStr(appendStr(b, u.rel), u.plan.PreviewSHA256)
+	for i := range pl.untracked {
+		b = appendStr(appendStr(b, pl.untracked[i].rel), pl.untracked[i].plan.PreviewSHA256)
 	}
 	b = binary.AppendUvarint(b, uint64(len(pl.skipped)))
 	for _, p := range pl.skipped {
@@ -308,7 +309,8 @@ func (pl *discardPlan) sum() string {
 func (pl *discardPlan) data() gitDiscardData {
 	d := gitDiscardData{Repo: pl.repo, Head: pl.head, IncludeUntracked: pl.include, Skipped: pl.skipped, PreviewSHA256: pl.hash, First: []discardEntry{}}
 	all := []discardEntry{}
-	for _, t := range pl.tracked {
+	for i := range pl.tracked {
+		t := &pl.tracked[i]
 		action := "remove"
 		if t.restore {
 			action = "restore"
@@ -318,7 +320,8 @@ func (pl *discardPlan) data() gitDiscardData {
 		}
 		all = append(all, discardEntry{Path: t.e.Path, Status: t.e.XY, Action: action})
 	}
-	for _, u := range pl.untracked {
+	for i := range pl.untracked {
+		u := &pl.untracked[i]
 		d.Untracked++
 		d.UntrackedEntries += u.plan.Entries
 		all = append(all, discardEntry{Path: u.rel, Status: "??", Action: "remove"})
@@ -410,8 +413,7 @@ type discardRun struct {
 	// stopped (its own message says how much).
 	partial bool
 	// stranded are entries set aside that could not be put back.
-	stranded  []string
-	strandMsg []string
+	stranded []string
 }
 
 func (d *discardRun) apply() (data any, warns []string, failure error) {
@@ -431,7 +433,8 @@ func (d *discardRun) apply() (data any, warns []string, failure error) {
 	}
 	// 2. Remove the untracked paths, each exactly as its preview listed it.
 	s.discardStep(fsx.DiscardStepBeforeUntracked, pl.repo)
-	for _, u := range pl.untracked {
+	for i := range pl.untracked {
+		u := &pl.untracked[i]
 		if _, err := s.fs.DeleteExact(u.abs, true, u.plan.PreviewSHA256); err != nil {
 			d.noteStranded(err)
 			d.partial = strings.Contains(err.Error(), "were deleted and")
@@ -441,17 +444,17 @@ func (d *discardRun) apply() (data any, warns []string, failure error) {
 	}
 	// 3. HEAD's index in a temporary index; git writes the restored files
 	// from it, creating each and replacing nothing.
-	tmp, err := d.lock.NewTempIndex()
-	if err != nil {
-		return d.stop(err)
+	tmp, terr := d.lock.NewTempIndex()
+	if terr != nil {
+		return d.stop(terr)
 	}
 	env := []string{"GIT_INDEX_FILE=" + tmp}
-	if _, err := d.r.outputWith(env, nil, "read-tree", pl.head); err != nil {
+	if _, err := d.r.outputWith(env, "read-tree", pl.head); err != nil {
 		return d.stop(err)
 	}
 	var paths []byte
-	for _, t := range pl.tracked {
-		if t.restore {
+	for i := range pl.tracked {
+		if t := &pl.tracked[i]; t.restore {
 			paths = append(append(paths, t.e.Path...), 0)
 		}
 	}
@@ -465,10 +468,10 @@ func (d *discardRun) apply() (data any, warns []string, failure error) {
 	}
 	s.discardStep(fsx.DiscardStepAfterCheckout, pl.repo)
 	// 4. Verify with git: every restored path matches HEAD's index entry.
-	if _, err := d.r.outputWith(env, nil, "update-index", "-q", "--refresh"); err != nil {
+	if _, err := d.r.outputWith(env, "update-index", "-q", "--refresh"); err != nil {
 		return d.stop(err)
 	}
-	out, err := d.r.outputWith(env, nil, "status", "--porcelain=v2", "-z", "--no-renames", "--untracked-files=no", "--ignore-submodules=none")
+	out, err := d.r.outputWith(env, "status", "--porcelain=v2", "-z", "--no-renames", "--untracked-files=no", "--ignore-submodules=none")
 	if err != nil {
 		return d.stop(err)
 	}
@@ -477,8 +480,8 @@ func (d *discardRun) apply() (data any, warns []string, failure error) {
 		return d.stop(errf(protocol.CodeExecFailed, "git status output could not be parsed"))
 	}
 	notRestored := map[string]bool{}
-	for _, e := range dirty {
-		notRestored[e.Path] = true
+	for i := range dirty {
+		notRestored[dirty[i].Path] = true
 	}
 	var firstFail string
 	for i := range pl.tracked {
@@ -495,8 +498,8 @@ func (d *discardRun) apply() (data any, warns []string, failure error) {
 			continue
 		}
 		if a != nil {
-			if err := a.Remove(); err != nil {
-				d.noteStranded(err)
+			if rerr := a.Remove(); rerr != nil {
+				d.noteStranded(rerr)
 				delete(d.aside, i)
 				if firstFail == "" {
 					firstFail = t.e.Path
@@ -512,14 +515,14 @@ func (d *discardRun) apply() (data any, warns []string, failure error) {
 	}
 	// 5. The new index.
 	s.discardStep(fsx.DiscardStepBeforeCommit, pl.repo)
-	if err := d.lock.CommitTempIndex(); err != nil {
-		return d.stop(err)
+	if cerr := d.lock.CommitTempIndex(); cerr != nil {
+		return d.stop(cerr)
 	}
 	d.lock.Release()
 	res := pl.data()
 	res.Applied = true
 	var warnings []string
-	if h, err := d.r.head(); err == nil && h != pl.head {
+	if h, herr := d.r.head(); herr == nil && h != pl.head {
 		warnings = append(warnings, "HEAD moved while the discard ran; the index and files were restored to the HEAD the preview named")
 	}
 	st, _, err := d.r.status("normal", false)

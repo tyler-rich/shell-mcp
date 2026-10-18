@@ -167,11 +167,11 @@ func (r *gitRepo) runWith(env []string, stdin []byte, maxOut int, sub ...string)
 
 // output runs a subcommand that must succeed and whose whole stdout is
 // needed.
-func (r *gitRepo) output(sub ...string) ([]byte, error) { return r.outputWith(nil, nil, sub...) }
+func (r *gitRepo) output(sub ...string) ([]byte, error) { return r.outputWith(nil, sub...) }
 
-// outputWith is output with runWith's environment and stdin.
-func (r *gitRepo) outputWith(env []string, stdin []byte, sub ...string) ([]byte, error) {
-	res, err := r.runWith(env, stdin, r.s.p.Limits.MaxOutputBytes, sub...)
+// outputWith is output with runWith's added environment.
+func (r *gitRepo) outputWith(env []string, sub ...string) ([]byte, error) {
+	res, err := r.runWith(env, nil, r.s.p.Limits.MaxOutputBytes, sub...)
 	if err != nil {
 		return nil, err
 	}

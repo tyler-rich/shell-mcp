@@ -72,7 +72,7 @@ func dirty(t *testing.T, g *gitFixture) {
 	gatetest.WriteFile(t, filepath.Join(r, "d", "a.txt"), "staged\n", 0o644)
 	gatetest.Git(t, r, "add", "d/a.txt")                                                 // modified, staged
 	gatetest.WriteFile(t, filepath.Join(r, "d", "a.txt"), "staged then edited\n", 0o644) // and edited again
-	if err := os.Chmod(filepath.Join(r, "run.sh"), 0o755); err != nil {                  // mode change
+	if err := os.Chmod(filepath.Join(r, "run.sh"), 0o755); err != nil {                  //nolint:gosec // G302: a mode change, the test's own file
 		t.Fatal(err)
 	}
 	if err := os.Remove(filepath.Join(r, "gone.txt")); err != nil { // deleted
@@ -440,8 +440,8 @@ func TestGitDiscardRefusals(t *testing.T) {
 	gatetest.WriteFile(t, filepath.Join(repo, "d"), "file\n", 0o644)
 	both("file in the way", m{"repo": repo}, "bad_request", "include_untracked")
 	pv := g.preview(t, true)
-	if r := g.discard(&pv); !r.OK || contentOf(t, filepath.Join(repo, "d", "a.txt")) != "a\n" {
-		t.Fatalf("file in the way with include_untracked: %+v", r.Error)
+	if rr := g.discard(&pv); !rr.OK || contentOf(t, filepath.Join(repo, "d", "a.txt")) != "a\n" {
+		t.Fatalf("file in the way with include_untracked: %+v", rr.Error)
 	}
 	// A directory holding ignored files where a tracked file was: never
 	// resolved, since ignored files are never removed.

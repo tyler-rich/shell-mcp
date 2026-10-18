@@ -117,12 +117,12 @@ func (f *FS) ObserveWorktree(p string, budget *int64) (WorktreeEntry, error) {
 		return w, nil
 	}
 	err = f.inParent(p, func(l *loc, pfd int, pid *ident) error {
-		id, err := statxAt(pfd, l.base, 0)
-		if errors.Is(err, fs.ErrNotExist) {
+		id, serr := statxAt(pfd, l.base, 0)
+		if errors.Is(serr, fs.ErrNotExist) {
 			return nil
 		}
-		if err != nil {
-			return mapErr(err)
+		if serr != nil {
+			return mapErr(serr)
 		}
 		if crossesMount(pid, &id) {
 			return errf(protocol.CodePathDenied, "the path is a mount point (or the root of another filesystem), which is never discarded")
@@ -139,9 +139,9 @@ func (f *FS) ObserveWorktree(p string, budget *int64) (WorktreeEntry, error) {
 		default:
 			return errf(protocol.CodePathDenied, "the path is not a regular file, a symlink or a directory")
 		}
-		sum, err := contentHash(pfd, l.base, &id, budget, true)
-		if err != nil {
-			return err
+		sum, herr := contentHash(pfd, l.base, &id, budget, true)
+		if herr != nil {
+			return herr
 		}
 		w.SHA256 = sum
 		return nil
@@ -224,7 +224,7 @@ func contentHash(dfd int, name string, want *ident, budget *int64, strict bool) 
 	if err != nil {
 		return "", mapErr(&fs.PathError{Op: "open", Path: name, Err: err})
 	}
-	file := os.NewFile(uintptr(fd), name) //nolint:gosec // G115: a descriptor
+	file := os.NewFile(uintptr(fd), name)
 	defer func() { _ = file.Close() }()
 	got, err := statxAt(fd, "", unix.AT_EMPTY_PATH)
 	if err != nil {
@@ -520,14 +520,14 @@ func (f *FS) LockGitIndex(repo string) (*GitIndexLock, error) {
 	}
 	k := &GitIndexLock{gd: gd, real: gr}
 	err = withRootFD(gd, func(gfd int) error {
-		fd, err := unix.Openat(gfd, "index.lock", unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o644)
-		if errors.Is(err, syscall.EEXIST) {
+		fd, oerr := unix.Openat(gfd, "index.lock", unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0o644)
+		if errors.Is(oerr, syscall.EEXIST) {
 			return errIndexLocked(lockedByGate(gfd))
 		}
-		if err != nil {
-			return mapErr(&fs.PathError{Op: "open", Path: "index.lock", Err: err})
+		if oerr != nil {
+			return mapErr(&fs.PathError{Op: "open", Path: "index.lock", Err: oerr})
 		}
-		file := os.NewFile(uintptr(fd), "index.lock") //nolint:gosec // G115: a descriptor
+		file := os.NewFile(uintptr(fd), "index.lock")
 		defer func() { _ = file.Close() }()
 		// The identity is taken after the marker is written, so Release can
 		// tell this file (object, size and change time) from one that
@@ -537,9 +537,9 @@ func (f *FS) LockGitIndex(repo string) (*GitIndexLock, error) {
 		if werr == nil {
 			k.id, serr = statxAt(fd, "", unix.AT_EMPTY_PATH)
 		}
-		if err := errors.Join(werr, serr); err != nil {
+		if jerr := errors.Join(werr, serr); jerr != nil {
 			_ = unix.Unlinkat(gfd, "index.lock", 0)
-			return mapErr(err)
+			return mapErr(jerr)
 		}
 		k.held = true
 		return nil
@@ -558,7 +558,7 @@ func lockedByGate(gfd int) bool {
 	if err != nil {
 		return false
 	}
-	file := os.NewFile(uintptr(fd), "index.lock") //nolint:gosec // G115: a descriptor
+	file := os.NewFile(uintptr(fd), "index.lock")
 	defer func() { _ = file.Close() }()
 	b := make([]byte, len(indexLockMarker))
 	n, _ := io.ReadFull(file, b)

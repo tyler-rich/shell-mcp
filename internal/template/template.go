@@ -237,7 +237,7 @@ func Match(templates []Template, args []string, r Resolver) ([]string, error) {
 
 // MatchIndex is Match that also returns the index of the template that
 // matched (-1 when none did).
-func MatchIndex(templates []Template, args []string, r Resolver) (int, []string, error) {
+func MatchIndex(templates []Template, args []string, r Resolver) (index int, resolved []string, err error) {
 	if len(args) > MaxTokens {
 		return -1, nil, fmt.Errorf("more than %d arguments: %w", MaxTokens, ErrNoMatch)
 	}

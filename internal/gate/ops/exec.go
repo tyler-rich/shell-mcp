@@ -252,14 +252,14 @@ func (rx *resolvedExec) preview(policySHA string) execPreviewData {
 }
 
 // execPreview resolves a command exactly as exec would and runs nothing.
-func (s *server) execPreview(raw jsontext.Value) (data any, warns []string, failure error) {
+func (s *server) execPreview(raw jsontext.Value) (data any, failure error) {
 	var a execPreviewArgs
 	if err := decode(raw, &a); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	rx, err := s.resolveExec(a.CommandID, a.Args, a.Cwd)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return rx.preview(s.p.SHA256), nil, nil
+	return rx.preview(s.p.SHA256), nil
 }

@@ -86,7 +86,8 @@ func FuzzParseDiscardStatus(f *testing.F) {
 		if len(got) > maxEntries {
 			t.Fatalf("%d entries above the bound %d", len(got), maxEntries)
 		}
-		for _, e := range got {
+		for i := range got {
+			e := &got[i]
 			if len(e.XY) != 2 || len(e.Sub) != 4 || e.Path == "" || strings.IndexByte(e.Path, 0) >= 0 {
 				t.Fatalf("bad entry %+v", e)
 			}
@@ -100,7 +101,7 @@ func FuzzParseDiscardStatus(f *testing.F) {
 					t.Fatalf("bad oid in %+v", e)
 				}
 				again, _, err := ParseDiscardStatus([]byte(rec("1", e.XY, e.Sub, e.ModeHead, e.ModeIndex, e.ModeWorktree, e.OIDHead, e.OIDIndex, e.Path)), 1)
-				if err != nil || len(again) != 1 || again[0] != e {
+				if err != nil || len(again) != 1 || again[0] != *e {
 					t.Fatalf("round trip of %+v: %+v %v", e, again, err)
 				}
 			}
