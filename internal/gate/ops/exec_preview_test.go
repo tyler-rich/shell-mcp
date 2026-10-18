@@ -271,3 +271,29 @@ func FuzzExecPreviewMatchesExec(f *testing.F) {
 		}
 	})
 }
+
+// TestExecRaisedTierStopsAtTheCeiling: the server's unapproved exec for a
+// command whose preview said read goes at ceiling operator with the
+// preview's hash. A policy edit raising the command to destructive in
+// between is refused by the tier check, which comes before anything else,
+// and nothing runs.
+func TestExecRaisedTierStopsAtTheCeiling(t *testing.T) {
+	f := execPreviewFixture(t, "destructive")
+	out := filepath.Join(f.write, "raised")
+	args := m{"command_id": "probe-op", "args": []string{"write", out}}
+	r := f.callAt("destructive", "exec_preview", args)
+	var pv execPreview
+	if !r.OK || json.Unmarshal(r.Data, &pv) != nil || pv.Tier != "operator" {
+		t.Fatalf("preview %+v %s", r.Error, r.Data)
+	}
+	f.rawPolicy(strings.NewReplacer("{TIER}", "destructive", "{PRIV}", "", "{R}", f.read, "{W}", f.write, "{BIN}", f.bin).
+		Replace(strings.Replace(basePolicy, "    tier: operator\n    templates: [[\"write\", \"{path:write}\"]]", "    tier: destructive\n    templates: [[\"write\", \"{path:write}\"]]", 1) + wipeCommand))
+	withHash := m{"expected_preview_sha256": pv.PreviewSHA256}
+	for k, v := range args {
+		withHash[k] = v
+	}
+	f.deniedAt("operator", "exec", withHash, "ceiling operator")
+	if exists(out) {
+		t.Fatal("a command raised to destructive ran unapproved")
+	}
+}

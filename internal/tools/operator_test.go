@@ -64,6 +64,7 @@ func operatorReplies() map[string]gateReply {
 	r["chmod"] = gateReply{data: fakeChmod}
 	r["git_pull"] = gateReply{data: fakePull}
 	r["service_control"] = gateReply{data: fakeControl}
+	r["exec_preview"] = gateReply{data: fakeExecPreview(shaExec, "operator")}
 	return r
 }
 
@@ -531,6 +532,9 @@ func TestApprovalGuard(t *testing.T) {
 	h := operatorHarness(t, g)
 	h.deps.ApprovalTiers = []string{"operator", "destructive"}
 	for _, name := range operatorTools {
+		if name == "shell_run_command" {
+			continue // gated by the command's tier, after its preview (TestRunCommandPerTierWithoutApprovalMethod)
+		}
 		for _, args := range []map[string]any{operatorCallArgs[name], {"target": "app-host"}} {
 			env, res := h.call(name, args)
 			e, _ := env["error"].(map[string]any)

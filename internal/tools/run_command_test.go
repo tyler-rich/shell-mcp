@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -87,11 +88,12 @@ func operatorApprovalHarness(t *testing.T, g *recordingGate) *approvalHarness {
 }
 
 func TestRunCommandAdminApproval(t *testing.T) {
-	// Without an approval method the admin registration sends nothing.
+	// Without an approval method a destructive command is refused after its
+	// preview, and nothing runs.
 	g := newRecordingGate(runCommandReplies("destructive"))
 	h := readHarness(t, g)
 	if env, _ := h.call("shell_run_command", map[string]any{"command_id": "app-restart", "args": []string{"restart"}}); errCode(env) != "approval_unavailable" ||
-		len(g.requests()) != 0 {
+		!slices.Equal(g.ops(), []string{"exec_preview"}) {
 		t.Fatalf("method none: %v %v", env, g.ops())
 	}
 
@@ -209,3 +211,137 @@ func schemaOf(t *testing.T, r Registration) *jsonschema.Schema {
 	}
 	return s
 }
+
+// TestRunCommandPerTier: whether a shell_run_command call needs approval is
+// decided by the command's own tier, from exec_preview (D-006): destructive
+// always, operator when SHELL_MCP_APPROVAL_TIERS lists it, read never; the
+// admin profile is never stricter than the operator profile for the same
+// command. An approved exec carries the command's tier as its ceiling; an
+// unapproved one the highest tier that needs no approval, and both carry
+// the preview's hash, so a tier raised by a policy edit in between is
+// refused by the gate.
+func TestRunCommandPerTier(t *testing.T) {
+	for _, c := range []struct {
+		profile Profile
+		tiers   []string
+		command string // the command's tier, as exec_preview reports it
+		gated   bool
+		ceiling string // of the exec request
+	}{
+		{ProfileAdmin, []string{"destructive"}, "read", false, "operator"},
+		{ProfileAdmin, []string{"destructive"}, "operator", false, "operator"},
+		{ProfileAdmin, []string{"destructive"}, "destructive", true, "destructive"},
+		{ProfileAdmin, []string{"operator", "destructive"}, "read", false, "read"},
+		{ProfileAdmin, []string{"operator", "destructive"}, "operator", true, "operator"},
+		{ProfileAdmin, []string{"operator", "destructive"}, "destructive", true, "destructive"},
+		{ProfileOperator, []string{"destructive"}, "read", false, "operator"},
+		{ProfileOperator, []string{"destructive"}, "operator", false, "operator"},
+		{ProfileOperator, []string{"operator", "destructive"}, "read", false, "read"},
+		{ProfileOperator, []string{"operator", "destructive"}, "operator", true, "operator"},
+	} {
+		t.Run(fmt.Sprintf("%s/%v/%s", c.profile, c.tiers, c.command), func(t *testing.T) {
+			g := newRecordingGate(runCommandReplies(c.command))
+			a := newApprovalHarnessOn(t, g, approval.MethodWeb, []config.Target{targetOf(t, g)}, clientsOf(t, g), c.profile)
+			a.deps.ApprovalTiers = c.tiers
+			args := map[string]any{"command_id": "app-restart", "args": []string{"restart"}}
+			env, _ := a.call("shell_run_command", args)
+			if c.gated {
+				if errCode(env) != "approval_pending" || !slices.Equal(g.ops(), []string{"exec_preview"}) {
+					t.Fatalf("first call %v, ops %v", env, g.ops())
+				}
+				id := approvalOf(t, env)["id"].(string)
+				a.approve(id)
+				env, _ = a.call("shell_run_command", withID(args, id))
+			}
+			if env["ok"] != true {
+				t.Fatalf("call %v", env)
+			}
+			want := []string{"exec_preview", "exec"}
+			if c.gated {
+				want = []string{"exec_preview", "exec_preview", "exec"}
+			}
+			reqs := g.requests()
+			if ops := g.ops(); !slices.Equal(ops, want) {
+				t.Fatalf("ops %v, want %v", ops, want)
+			}
+			if last := reqs[len(reqs)-1]; last.Ceiling != c.ceiling {
+				t.Fatalf("exec at ceiling %s, want %s", last.Ceiling, c.ceiling)
+			}
+			if reqs[0].Ceiling != map[Profile]string{ProfileAdmin: "destructive", ProfileOperator: "operator"}[c.profile] {
+				t.Fatalf("exec_preview at ceiling %s", reqs[0].Ceiling)
+			}
+			if ea := g.args(t, "exec"); ea["expected_preview_sha256"] != shaExec {
+				t.Fatalf("exec args %v", ea)
+			}
+			if !c.gated && env["approval"] != nil {
+				t.Fatalf("an ungated call carries an approval: %v", env)
+			}
+		})
+	}
+}
+
+// TestRunCommandPerTierWithoutApprovalMethod: under SHELL_MCP_APPROVAL_METHOD
+// none, commands that need no approval still run in both profiles; one that
+// does is approval_unavailable after its preview, and nothing runs.
+func TestRunCommandPerTierWithoutApprovalMethod(t *testing.T) {
+	for _, p := range []Profile{ProfileOperator, ProfileAdmin} {
+		for tier, ok := range map[string]bool{"read": true, "operator": true, "destructive": false} {
+			if p == ProfileOperator && tier == "destructive" {
+				continue // refused at the operator ceiling (TestRunCommandOperatorPreviewIsExecPreview)
+			}
+			g := newRecordingGate(runCommandReplies(tier))
+			h := newHarnessWith(t, []config.Target{targetOf(t, g)}, clientsOf(t, g), "", func(d *Deps) { d.Principal.Profile = string(p) })
+			env, _ := h.call("shell_run_command", map[string]any{"command_id": "app-restart", "args": []string{"restart"}})
+			switch {
+			case ok && (env["ok"] != true || !slices.Equal(g.ops(), []string{"exec_preview", "exec"})):
+				t.Fatalf("%s/%s: %v %v", p, tier, env, g.ops())
+			case !ok && (errCode(env) != "approval_unavailable" || !slices.Equal(g.ops(), []string{"exec_preview"})):
+				t.Fatalf("%s/%s: %v %v", p, tier, env, g.ops())
+			}
+		}
+	}
+	// With operator listed, an operator command is refused too.
+	g := newRecordingGate(runCommandReplies("operator"))
+	h := newHarnessWith(t, []config.Target{targetOf(t, g)}, clientsOf(t, g), "", func(d *Deps) {
+		d.Principal.Profile = string(ProfileOperator)
+		d.ApprovalTiers = []string{"operator", "destructive"}
+	})
+	env, _ := h.call("shell_run_command", map[string]any{"command_id": "app-restart", "args": []string{"restart"}})
+	if errCode(env) != "approval_unavailable" || !slices.Equal(g.ops(), []string{"exec_preview"}) {
+		t.Fatalf("operator listed: %v %v", env, g.ops())
+	}
+}
+
+// TestRunCommandRaisedTierIsRefused: a policy edit that raises the command
+// to destructive between the preview and the exec: the unapproved exec,
+// sent at ceiling operator with the preview's hash, is refused by the gate
+// (tier_denied, its ceiling check comes first), and the refusal is the
+// result.
+func TestRunCommandRaisedTierIsRefused(t *testing.T) {
+	g := newRecordingGate(runCommandReplies("read"))
+	g.set("exec", gateReply{code: "tier_denied", msg: "command tier destructive exceeds the request's ceiling operator"})
+	h := newHarnessWith(t, []config.Target{targetOf(t, g)}, clientsOf(t, g), "", nil)
+	env, _ := h.call("shell_run_command", map[string]any{"command_id": "app-restart", "args": []string{"restart"}})
+	reqs := g.requests()
+	if errCode(env) != "tier_denied" || len(reqs) != 2 || reqs[1].Op != "exec" || reqs[1].Ceiling != "operator" {
+		t.Fatalf("env %v, requests %v", env, g.ops())
+	}
+}
+
+func targetOf(t *testing.T, g *recordingGate) config.Target {
+	t.Helper()
+	tg, c := sshTarget(t, g.exec)
+	clientCache.Store(g, c)
+	return tg
+}
+
+func clientsOf(t *testing.T, g *recordingGate) map[string]*sshx.Client {
+	t.Helper()
+	c, ok := clientCache.Load(g)
+	if !ok {
+		t.Fatal("targetOf first")
+	}
+	return map[string]*sshx.Client{"app-host": c.(*sshx.Client)}
+}
+
+var clientCache sync.Map
