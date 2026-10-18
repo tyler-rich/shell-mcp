@@ -141,13 +141,14 @@ func ValidPreviewSHA256(s string) bool {
 type ident struct {
 	dev, ino, mnt uint64
 	typ           uint32 // S_IFMT bits
+	perm          uint32 // permission bits (git_discard compares them; a delete does not)
 	size          int64
 	ctime, btime  unix.StatxTimestamp
 	hasBtime      bool
 }
 
 const (
-	statxWant = unix.STATX_TYPE | unix.STATX_INO | unix.STATX_SIZE | unix.STATX_CTIME | unix.STATX_BTIME | unix.STATX_MNT_ID
+	statxWant = unix.STATX_TYPE | unix.STATX_MODE | unix.STATX_INO | unix.STATX_SIZE | unix.STATX_CTIME | unix.STATX_BTIME | unix.STATX_MNT_ID
 	statxNeed = unix.STATX_TYPE | unix.STATX_INO | unix.STATX_SIZE | unix.STATX_CTIME | unix.STATX_MNT_ID
 )
 
@@ -164,7 +165,7 @@ func statxAt(dfd int, name string, flags int) (ident, error) {
 			"(statx, Linux 5.8 or later) that a delete needs; nothing was deleted")
 	}
 	return ident{
-		dev: unix.Mkdev(st.Dev_major, st.Dev_minor), ino: st.Ino, mnt: st.Mnt_id, typ: uint32(st.Mode) & unix.S_IFMT,
+		dev: unix.Mkdev(st.Dev_major, st.Dev_minor), ino: st.Ino, mnt: st.Mnt_id, typ: uint32(st.Mode) & unix.S_IFMT, perm: uint32(st.Mode) & 0o7777,
 		size: int64(st.Size), ctime: st.Ctime, btime: st.Btime, hasBtime: st.Mask&unix.STATX_BTIME != 0, //nolint:gosec // G115: file sizes fit int64
 	}, nil
 }

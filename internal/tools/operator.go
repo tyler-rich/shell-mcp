@@ -608,6 +608,9 @@ type runCommandIn struct {
 	Stdin     string   `json:"stdin,omitzero" jsonschema:"Standard input: UTF-8 text of at most 1048576 bytes and at most the target policy's max_stdin_bytes. Default: none."`
 	timeoutArg
 	outputArg
+	// expectedPreview is set only by an approved call: the preview_sha256
+	// of its fresh exec_preview (never an input).
+	expectedPreview string
 }
 
 func (in *runCommandIn) validate() *envelope.Error {
@@ -626,6 +629,8 @@ type runCommandWire struct {
 	Cwd            string   `json:"cwd"`
 	StdinB64       string   `json:"stdin_b64"`
 	MaxOutputBytes int      `json:"max_output_bytes"`
+	// ExpectedPreviewSHA256 is sent only by an approved call.
+	ExpectedPreviewSHA256 string `json:"expected_preview_sha256,omitzero"`
 }
 
 func (w *runCommandWire) normalize() {
@@ -634,16 +639,26 @@ func (w *runCommandWire) normalize() {
 	}
 }
 
-func runCommand(d *Deps) Tool {
+// runCommand is shell_run_command at tier: operator (the operator profile:
+// commands of tier read or operator) or destructive (the admin profile:
+// commands up to destructive, every call approval-gated).
+func runCommand(d *Deps, tier Tier) Tool {
+	description := "Runs a read- or operator-tier command declared in the target policy with arguments matching one of its templates and optional standard input, and returns its exit status and redacted, size-capped output."
+	idDescription := "Id of a command declared in the target policy with tier read or operator."
+	if tier == TierDestructive {
+		description = "Runs a read-, operator- or destructive-tier command declared in the target policy with arguments matching one of its templates and optional standard input, exactly as its approved preview resolved it, and returns its exit status and redacted, size-capped output."
+		idDescription = "Id of a command declared in the target policy with tier read, operator or destructive."
+	}
 	return define(d, spec[runCommandIn, CommandOutput]{
 		name:        "shell_run_command",
 		title:       "Run command",
-		description: "Runs a read- or operator-tier command declared in the target policy with arguments matching one of its templates and optional standard input, and returns its exit status and redacted, size-capped output.",
-		tier:        TierOperator,
+		description: description,
+		tier:        tier,
 		idempotent:  false,
 		schema: func(s *jsonschema.Schema) {
 			boundCommand(s)
 			strIn(s, "stdin", anyPattern, maxStdinCeiling)
+			prop(s, "command_id").Description = idDescription
 		},
 		audit: func(in runCommandIn) map[string]any {
 			m := commandAudit(in.Target, in.CommandID, in.Args, in.Cwd)
@@ -654,7 +669,7 @@ func runCommand(d *Deps) Tool {
 		},
 		summary: commandSummary,
 		run: func(ctx context.Context, _ *mcp.CallToolRequest, in runCommandIn) envelope.Envelope[CommandOutput] {
-			w := runCommandWire{CommandID: in.CommandID, Args: in.Args, Cwd: in.Cwd}
+			w := runCommandWire{CommandID: in.CommandID, Args: in.Args, Cwd: in.Cwd, ExpectedPreviewSHA256: in.expectedPreview}
 			if in.Stdin != "" {
 				w.StdinB64 = base64.StdEncoding.EncodeToString([]byte(in.Stdin))
 			}
@@ -691,5 +706,6 @@ func runCommand(d *Deps) Tool {
 		preview: func(ctx context.Context, in runCommandIn, target string) (*preview, *envelope.Error) {
 			return d.runCommandPreview(ctx, &in, target)
 		},
+		precondition: func(in *runCommandIn, p *preview) { in.expectedPreview = p.contentSHA256 },
 	})
 }

@@ -4,11 +4,16 @@ package ops
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"path"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
+	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
+	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
 	"github.com/tyler-rich/shell-mcp/internal/template"
 )
@@ -21,7 +26,7 @@ type execArgs struct {
 	MaxOutputBytes int      `json:"max_output_bytes"`
 	// ExpectedPreviewSHA256, when given, is the preview_sha256 exec_preview
 	// returned for the same command, arguments and cwd.
-	ExpectedPreviewSHA256 string `json:"expected_preview_sha256"`
+	ExpectedPreviewSHA256 *string `json:"expected_preview_sha256"`
 }
 
 type execData struct {
@@ -65,28 +70,20 @@ func (s *server) exec(raw jsontext.Value) (data any, warns []string, failure err
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
 	}
-	c, ok := s.p.Command(a.CommandID)
-	if !ok {
-		return nil, nil, errf(protocol.CodePolicyDenied, "command_id is not declared in the policy")
-	}
-	// The command's tier is checked before anything else about the request,
-	// against max_tier and the request's ceiling.
-	if err := s.within("command", c.Tier, s.p.MaxTier, "max_tier"); err != nil {
-		return nil, nil, err
-	}
-	if len(a.Args) > template.MaxTokens {
-		return nil, nil, errf(protocol.CodeBadRequest, "at most %d arguments", template.MaxTokens)
-	}
-	args, err := template.Match(c.Templates, a.Args, resolver{s})
+	rx, err := s.resolveExec(a.CommandID, a.Args, a.Cwd)
 	if err != nil {
 		return nil, nil, err
 	}
-	dir := "/"
-	if a.Cwd != "" {
-		if dir, err = s.fs.ResolveDir(a.Cwd); err != nil {
-			return nil, nil, err
+	if a.ExpectedPreviewSHA256 != nil {
+		if !fsx.ValidPreviewSHA256(*a.ExpectedPreviewSHA256) {
+			return nil, nil, errf(protocol.CodeBadRequest, "expected_preview_sha256 must be the preview_sha256 (64 lowercase hex digits) that exec_preview returned")
+		}
+		if rx.preview(s.p.SHA256).PreviewSHA256 != *a.ExpectedPreviewSHA256 {
+			return nil, nil, errf(protocol.CodeExists, "the command resolves differently than its preview (its preview_sha256 differs: "+
+				"the policy, the command's binary, a path placeholder or the cwd changed); nothing was run")
 		}
 	}
+	c, args, dir := rx.c, rx.args, rx.dir
 	var stdin []byte
 	if a.StdinB64 != "" {
 		maxIn := s.p.Limits.MaxStdinBytes
@@ -164,7 +161,105 @@ func (s *server) exec(raw jsontext.Value) (data any, warns []string, failure err
 	return d, warnings, nil
 }
 
-// execPreview resolves a command as exec would, running nothing. Stub.
+// resolvedExec is a policy command resolved for one request: the command,
+// the template its arguments matched, the arguments as they are passed
+// (path placeholders resolved) and the working directory. exec and
+// exec_preview both get it from resolveExec, so what a preview shows is
+// what exec runs.
+type resolvedExec struct {
+	c        *policy.Command
+	template int
+	args     []string
+	dir      string
+}
+
+// resolveExec looks the command up, checks its tier first (against
+// max_tier and the request's ceiling), matches the arguments against its
+// templates and resolves the working directory.
+func (s *server) resolveExec(id string, args []string, cwd string) (*resolvedExec, error) {
+	c, ok := s.p.Command(id)
+	if !ok {
+		return nil, errf(protocol.CodePolicyDenied, "command_id is not declared in the policy")
+	}
+	// The command's tier is checked before anything else about the request,
+	// against max_tier and the request's ceiling.
+	if err := s.within("command", c.Tier, s.p.MaxTier, "max_tier"); err != nil {
+		return nil, err
+	}
+	if len(args) > template.MaxTokens {
+		return nil, errf(protocol.CodeBadRequest, "at most %d arguments", template.MaxTokens)
+	}
+	i, out, err := template.MatchIndex(c.Templates, args, resolver{s})
+	if err != nil {
+		return nil, err
+	}
+	dir := "/"
+	if cwd != "" {
+		if dir, err = s.fs.ResolveDir(cwd); err != nil {
+			return nil, err
+		}
+	}
+	return &resolvedExec{c: c, template: i, args: out, dir: dir}, nil
+}
+
+type execPreviewArgs struct {
+	CommandID string   `json:"command_id"`
+	Args      []string `json:"args"`
+	Cwd       string   `json:"cwd"`
+}
+
+// execPreviewData is exec_preview's result.
+type execPreviewData struct {
+	CommandID      string   `json:"command_id"`
+	Tier           string   `json:"tier"`
+	Description    string   `json:"description"`
+	RootEquivalent bool     `json:"root_equivalent"`
+	Template       []string `json:"template"`
+	Argv           []string `json:"argv"`
+	Cwd            string   `json:"cwd"`
+	PolicySHA256   string   `json:"policy_sha256"`
+	PreviewSHA256  string   `json:"preview_sha256"`
+}
+
+const execPreviewDomain = "shell-mcp exec preview v1\x00"
+
+// preview describes the resolved command; preview_sha256 covers every
+// field, the policy's SHA-256 included, each length-prefixed and counted.
+func (rx *resolvedExec) preview(policySHA string) execPreviewData {
+	d := execPreviewData{
+		CommandID: rx.c.ID, Tier: rx.c.Tier.String(), Description: rx.c.Description, RootEquivalent: rx.c.RootEquivalent,
+		Template: rx.c.Templates[rx.template].String(), Argv: append([]string{rx.c.Resolved}, rx.args...), Cwd: rx.dir,
+		PolicySHA256: policySHA,
+	}
+	b := []byte(execPreviewDomain)
+	for _, f := range []string{d.PolicySHA256, d.CommandID, d.Tier, d.Description, d.Cwd} {
+		b = appendStr(b, f)
+	}
+	if d.RootEquivalent {
+		b = append(b, 1)
+	} else {
+		b = append(b, 0)
+	}
+	for _, list := range [][]string{d.Template, d.Argv} {
+		b = binary.AppendUvarint(b, uint64(len(list)))
+		for _, f := range list {
+			b = appendStr(b, f)
+		}
+	}
+	h := sha256.Sum256(b)
+	d.PreviewSHA256 = hex.EncodeToString(h[:])
+	return d
+}
+
+// execPreview resolves a command exactly as exec would and runs nothing.
 func (s *server) execPreview(raw jsontext.Value) (data any, warns []string, failure error) {
-	return nil, nil, errf(protocol.CodeInternal, "exec_preview is not implemented")
+	var a execPreviewArgs
+	if err := decode(raw, &a); err != nil {
+		return nil, nil, err
+	}
+	rx, err := s.resolveExec(a.CommandID, a.Args, a.Cwd)
+	if err != nil {
+		return nil, nil, err
+	}
+	return rx.preview(s.p.SHA256), nil, nil
 }

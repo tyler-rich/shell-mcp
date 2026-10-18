@@ -231,14 +231,21 @@ func CheckValue(v string) error {
 // a *ValueError, or a *PathError, preferring the most specific failure of a
 // template whose literals and token count matched.
 func Match(templates []Template, args []string, r Resolver) ([]string, error) {
+	_, out, err := MatchIndex(templates, args, r)
+	return out, err
+}
+
+// MatchIndex is Match that also returns the index of the template that
+// matched (-1 when none did).
+func MatchIndex(templates []Template, args []string, r Resolver) (int, []string, error) {
 	if len(args) > MaxTokens {
-		return nil, fmt.Errorf("more than %d arguments: %w", MaxTokens, ErrNoMatch)
+		return -1, nil, fmt.Errorf("more than %d arguments: %w", MaxTokens, ErrNoMatch)
 	}
 	var best error
-	for _, t := range templates {
+	for i, t := range templates {
 		out, err := t.match(args, r)
 		if err == nil {
-			return out, nil
+			return i, out, nil
 		}
 		if rank(err) > rank(best) {
 			best = err
@@ -247,7 +254,7 @@ func Match(templates []Template, args []string, r Resolver) ([]string, error) {
 	if best == nil {
 		best = ErrNoMatch
 	}
-	return nil, best
+	return -1, nil, best
 }
 
 func rank(err error) int {

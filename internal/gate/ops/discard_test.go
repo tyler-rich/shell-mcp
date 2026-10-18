@@ -416,24 +416,30 @@ func TestGitDiscardRefusals(t *testing.T) {
 	both("submodule", m{"repo": repo}, "policy_denied", "submodule")
 	gatetest.Git(t, repo, "reset", "-q")
 
-	// A directory where a tracked file was: refused without
-	// include_untracked (with a hint), discarded with it.
+	// A directory where a tracked file was: git clean does not list it as
+	// untracked (reset --hard would remove it), so it is refused with and
+	// without include_untracked, naming it, and left alone.
 	if err := os.Remove(filepath.Join(repo, "gone.txt")); err != nil {
 		t.Fatal(err)
 	}
 	gatetest.WriteFile(t, filepath.Join(repo, "gone.txt", "inner.txt"), "i\n", 0o644)
-	both("dir in the way", m{"repo": repo}, "bad_request", "include_untracked")
-	pv := g.preview(t, true)
-	if r := g.discard(&pv); !r.OK || contentOf(t, filepath.Join(repo, "gone.txt")) != "gone\n" {
-		t.Fatalf("dir in the way with include_untracked: %+v", r.Error)
+	both("dir in the way", m{"repo": repo}, "bad_request", `"gone.txt" removed`)
+	both("dir in the way, include_untracked", m{"repo": repo, "include_untracked": true}, "bad_request", "git clean does not list")
+	if contentOf(t, filepath.Join(repo, "gone.txt", "inner.txt")) != "i\n" {
+		t.Fatal("the directory in the way was touched")
 	}
-	// A file where a tracked directory was.
+	if err := os.RemoveAll(filepath.Join(repo, "gone.txt")); err != nil {
+		t.Fatal(err)
+	}
+	gatetest.Git(t, repo, "checkout", "--", "gone.txt")
+	// A file where a tracked directory was: git clean lists it, so
+	// include_untracked removes it and the directory is restored.
 	if err := os.RemoveAll(filepath.Join(repo, "d")); err != nil {
 		t.Fatal(err)
 	}
 	gatetest.WriteFile(t, filepath.Join(repo, "d"), "file\n", 0o644)
 	both("file in the way", m{"repo": repo}, "bad_request", "include_untracked")
-	pv = g.preview(t, true)
+	pv := g.preview(t, true)
 	if r := g.discard(&pv); !r.OK || contentOf(t, filepath.Join(repo, "d", "a.txt")) != "a\n" {
 		t.Fatalf("file in the way with include_untracked: %+v", r.Error)
 	}
@@ -727,19 +733,39 @@ func TestGitDiscardWindow(t *testing.T) {
 func TestGitDiscardConcurrentRacer(t *testing.T) {
 	g := discardRepo(t)
 	victim := filepath.Join(g.repo, "app.conf")
-	const runs = 100
+	const runs = 200
+	// The racer starts after a random delay of up to one and a half times a
+	// discard's median duration, so it lands anywhere in the discard.
+	var took []time.Duration
+	for range 5 {
+		resetRepo(t, g)
+		dirty(t, g)
+		pv := g.preview(t, false)
+		start := time.Now()
+		if r := g.discard(&pv); !r.OK {
+			t.Fatalf("baseline discard %+v", r.Error)
+		}
+		took = append(took, time.Since(start))
+	}
+	slices.Sort(took)
+	span := took[2] * 3 / 2
 	outcomes := map[string]int{}
 	racerFiles := 0
 	for i := range runs {
 		resetRepo(t, g)
 		dirty(t, g)
-		pv := g.preview(t, true)
+		// Without include_untracked, a created file does not refuse the
+		// discard at its recompute, so later windows are reached too.
+		pv := g.preview(t, i%2 == 0)
+		delay := time.Duration(rand.Int64N(int64(span))) //nolint:gosec // G404: test timing
+		var first time.Time
 		stop := make(chan struct{})
 		var wg sync.WaitGroup
 		var last string
 		var made []string
 		wg.Go(func() {
-			time.Sleep(time.Duration(rand.IntN(20)) * time.Millisecond) //nolint:gosec // G404: test timing
+			time.Sleep(delay)
+			first = time.Now()
 			for n := 0; ; n++ {
 				select {
 				case <-stop:
@@ -767,11 +793,15 @@ func TestGitDiscardConcurrentRacer(t *testing.T) {
 			}
 		})
 		r := g.discard(&pv)
+		end := time.Now()
 		close(stop)
 		wg.Wait()
 		out := "ok"
 		if !r.OK {
 			out = r.Error.Code
+		}
+		if first.IsZero() || first.After(end) {
+			out += " (racer after the discard)"
 		}
 		outcomes[out]++
 		if last != "" && contentOf(t, victim) != last {
@@ -784,7 +814,7 @@ func TestGitDiscardConcurrentRacer(t *testing.T) {
 		}
 		racerFiles += len(made)
 	}
-	t.Logf("concurrent racer: %d runs, outcomes %v, %d racer files, every one survived", runs, outcomes, racerFiles)
+	t.Logf("concurrent racer: %d runs (delay up to %v), outcomes %v, %d racer files, every one survived", runs, span, outcomes, racerFiles)
 }
 
 // TestGitDiscardNamesAStrandedEntry: an entry set aside whose name is taken

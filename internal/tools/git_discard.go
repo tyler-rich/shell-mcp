@@ -2,11 +2,13 @@ package tools
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/tyler-rich/shell-mcp/internal/envelope"
+	"github.com/tyler-rich/shell-mcp/internal/protocol"
 )
 
 // Git discard tools (docs/TOOLS.md): shell_preview_git_discard (read tier)
@@ -111,8 +113,25 @@ func previewGitDiscard(d *Deps) Tool {
 		schema:      boundDiscard,
 		audit:       discardAudit,
 		summary:     func(p *GitDiscardPreview) string { return discardSummary(p.Restore, p.Remove, p.Untracked) },
-		run: func(_ context.Context, _ *mcp.CallToolRequest, in discardIn) envelope.Envelope[GitDiscardPreview] {
-			return envelope.Failure[GitDiscardPreview](in.Target, envelope.Errorf("internal", "not implemented"))
+		run: func(ctx context.Context, _ *mcp.CallToolRequest, in discardIn) envelope.Envelope[GitDiscardPreview] {
+			r := fetch[gitDiscardWire](ctx, d, in.Target, protocol.OpGitDiscardPreview, discardPreviewWire{Repo: in.Repo, IncludeUntracked: in.IncludeUntracked}, d.budget())
+			if !r.OK {
+				return envelope.Failure[GitDiscardPreview](r.Target, r.Error)
+			}
+			x := r.Data
+			out := GitDiscardPreview{Repo: x.Repo, Head: x.Head, IncludeUntracked: x.IncludeUntracked, Restore: x.Restore, Remove: x.Remove,
+				Untracked: x.Untracked, UntrackedEntries: x.UntrackedEntries, Entries: x.Entries, First: x.First, Skipped: x.Skipped,
+				Truncated: x.Truncated, PreviewSHA256: x.PreviewSHA256}
+			if out.First == nil {
+				out.First = []GitDiscardEntry{}
+			}
+			if out.Skipped == nil {
+				out.Skipped = []string{}
+			}
+			out.Truncated = fitList(&out, &out.First, d.maxOutput()) || out.Truncated || len(out.First) < out.Entries
+			env := envelope.Success(r.Target, out)
+			env.Gate, env.Warnings = r.Gate, r.Warnings
+			return env
 		},
 	})
 }
@@ -126,8 +145,25 @@ func discardGitChanges(d *Deps) Tool {
 		schema:      boundDiscard,
 		audit:       discardAudit,
 		summary:     func(p *GitDiscard) string { return "discarded " + discardSummary(p.Restore, p.Remove, p.Untracked) },
-		run: func(_ context.Context, _ *mcp.CallToolRequest, in discardIn) envelope.Envelope[GitDiscard] {
-			return envelope.Failure[GitDiscard](in.Target, envelope.Errorf("internal", "not implemented"))
+		run: func(ctx context.Context, _ *mcp.CallToolRequest, in discardIn) envelope.Envelope[GitDiscard] {
+			// Only an approved call reaches this, with its fresh preview's
+			// hash; the gate refuses a discard without one anyway.
+			if in.expectedPreview == "" {
+				return envelope.Failure[GitDiscard](in.Target, envelope.Errorf("internal", "a discard needs the hash of an approved preview; nothing was sent"))
+			}
+			w := discardWire{Repo: in.Repo, IncludeUntracked: in.IncludeUntracked, ExpectedPreviewSHA256: in.expectedPreview}
+			r := fetch[gitDiscardWire](ctx, d, in.Target, protocol.OpGitDiscard, w, d.budget())
+			if !r.OK {
+				return envelope.Failure[GitDiscard](r.Target, r.Error)
+			}
+			x := r.Data
+			if !x.Applied || x.CleanAfter == nil {
+				return envelope.Failure[GitDiscard](r.Target, envelope.Errorf("internal", "the gate answered without confirming the discard; preview the repository to see what remains"))
+			}
+			env := envelope.Success(r.Target, GitDiscard{Repo: x.Repo, Head: x.Head, Restore: x.Restore, Remove: x.Remove, Untracked: x.Untracked,
+				Entries: x.Entries, Discarded: true, CleanAfter: *x.CleanAfter})
+			env.Gate, env.Warnings = r.Gate, r.Warnings
+			return env
 		},
 		approvalArgs: func(in discardIn) any {
 			return struct {
@@ -142,13 +178,46 @@ func discardGitChanges(d *Deps) Tool {
 			}
 			return what + " on " + target
 		},
-		preview: func(context.Context, discardIn, string) (*preview, *envelope.Error) {
-			return nil, envelope.Errorf("internal", "not implemented")
-		},
+		preview:      d.discardPreview,
 		precondition: func(in *discardIn, p *preview) { in.expectedPreview = p.contentSHA256 },
 	})
 }
 
 func discardSummary(restore, remove, untracked int) string {
 	return plural(restore, "path", "paths") + " restored, " + plural(remove+untracked, "path", "paths") + " removed"
+}
+
+// discardPreview is shell_discard_git_changes' approval preview: the gate's
+// git_discard_preview result. The hash the re-call sends back as the
+// precondition is taken from the gate's answer before the server's
+// redaction, which could otherwise rewrite it.
+func (d *Deps) discardPreview(ctx context.Context, in discardIn, target string) (*preview, *envelope.Error) {
+	resp, e := d.call(ctx, target, protocol.OpGitDiscardPreview, discardPreviewWire{Repo: in.Repo, IncludeUntracked: in.IncludeUntracked}, d.budget())
+	if e != nil {
+		return nil, e
+	}
+	policy := ""
+	if resp.Gate != nil {
+		policy = resp.Gate.PolicySHA256
+	}
+	env := envelope.FromGate[gitDiscardWire](target, resp)
+	if !env.OK {
+		return nil, env.Error
+	}
+	hash := env.Data.PreviewSHA256
+	if !sha256RE.MatchString(hash) {
+		return nil, envelope.Errorf("internal", "the gate's preview has no valid preview_sha256")
+	}
+	x := *env.Data
+	redactStrings(d.redactor(), reflect.ValueOf(&x))
+	if x.First == nil {
+		x.First = []GitDiscardEntry{}
+	}
+	if x.Skipped == nil {
+		x.Skipped = []string{}
+	}
+	value := map[string]any{"repo": x.Repo, "include_untracked": in.IncludeUntracked, "head": x.Head, "restore": x.Restore, "remove": x.Remove,
+		"untracked": x.Untracked, "untracked_entries": x.UntrackedEntries, "entries": x.Entries, "first": x.First, "skipped": x.Skipped,
+		"truncated": x.Truncated, "preview_sha256": hash}
+	return &preview{value: value, policy: policy, contentSHA256: hash}, nil
 }

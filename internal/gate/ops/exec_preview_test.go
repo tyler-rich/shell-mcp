@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
 )
 
 // exec_preview (ARCHITECTURE §4.3): the command resolved exactly as exec
@@ -155,30 +157,37 @@ func TestExecExpectedPreview(t *testing.T) {
 	if again.PolicySHA256 == before || again.PreviewSHA256 == pv.PreviewSHA256 {
 		t.Fatalf("the policy edit did not change the preview: %+v", again)
 	}
-	// A path placeholder that resolves elsewhere changes the preview.
-	link := filepath.Join(f.write, "via-link")
-	if err := os.Symlink(f.write, link); err != nil {
+	// A path placeholder that resolves elsewhere (a directory symlink on its
+	// way retargeted) changes the preview, and exec refuses the old hash.
+	for _, d := range []string{"a", "b"} {
+		gatetest.WriteFile(t, filepath.Join(f.read, d, "hello.txt"), d+"\n", 0o644)
+	}
+	link := filepath.Join(f.read, "via-link")
+	if err := os.Symlink("a", link); err != nil {
 		t.Fatal(err)
 	}
+	echo := m{"command_id": "probe-echo", "args": []string{"echo", "path", filepath.Join(link, "hello.txt")}}
 	var p1, p2 execPreview
-	f.ok("exec_preview", m{"command_id": "probe-io", "args": []string{"pwd"}, "cwd": link}, &p1)
+	f.ok("exec_preview", echo, &p1)
 	if err := os.Remove(link); err != nil {
 		t.Fatal(err)
 	}
-	mkdirOne(t, link)
-	f.ok("exec_preview", m{"command_id": "probe-io", "args": []string{"pwd"}, "cwd": link}, &p2)
-	if p1.Cwd == p2.Cwd || p1.PreviewSHA256 == p2.PreviewSHA256 {
-		t.Fatalf("a retargeted cwd did not change the preview: %+v %+v", p1, p2)
+	if err := os.Symlink("b", link); err != nil {
+		t.Fatal(err)
+	}
+	f.ok("exec_preview", echo, &p2)
+	if p1.Argv[3] != filepath.Join(f.read, "a", "hello.txt") || p2.Argv[3] != filepath.Join(f.read, "b", "hello.txt") || p1.PreviewSHA256 == p2.PreviewSHA256 {
+		t.Fatalf("a retargeted path did not change the preview: %v %v", p1.Argv, p2.Argv)
+	}
+	withOld := m{"expected_preview_sha256": p1.PreviewSHA256}
+	for k, v := range echo {
+		withOld[k] = v
+	}
+	if r := f.call("exec", withOld); r.OK || r.Error.Code != "exists" {
+		t.Fatalf("exec with the old hash: %+v", r.Error)
 	}
 	if r := call(again.PreviewSHA256); !r.OK || contentOf(t, out) != "probe" {
 		t.Fatalf("the fresh preview's hash: %+v", r.Error)
-	}
-}
-
-func mkdirOne(t *testing.T, p string) {
-	t.Helper()
-	if err := os.Mkdir(p, 0o755); err != nil {
-		t.Fatal(err)
 	}
 }
 

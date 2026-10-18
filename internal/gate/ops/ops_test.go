@@ -494,7 +494,7 @@ func TestProductionOptionsHaveNoTestHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.TestGitCAFile != "" || o.InjectReadBackFault != nil || o.InjectBeforeCommit != nil || o.InjectNoReplaceFault != nil || o.InjectDeleteStep != nil || o.Audit == nil ||
+	if o.TestGitCAFile != "" || o.InjectReadBackFault != nil || o.InjectBeforeCommit != nil || o.InjectNoReplaceFault != nil || o.InjectDeleteStep != nil || o.InjectDiscardStep != nil || o.Audit == nil ||
 		o.Systemctl != ops.SystemctlPath || o.Journalctl != ops.JournalctlPath || o.Git != ops.GitPath {
 		t.Fatalf("production options %+v", o)
 	}

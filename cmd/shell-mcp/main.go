@@ -397,6 +397,7 @@ type catalogueEntry struct {
 	Name               string               `json:"name"`
 	Title              string               `json:"title"`
 	Tier               string               `json:"tier"`
+	Profiles           []string             `json:"profiles"`
 	Privileged         bool                 `json:"privileged"`
 	Annotations        *mcp.ToolAnnotations `json:"annotations"`
 	Description        string               `json:"description"`
@@ -423,8 +424,14 @@ func cmdTools(args []string, lookup config.LookupFunc, stdout, stderr io.Writer)
 		return 1
 	}
 	entries := []catalogueEntry{}
-	for _, r := range reg.ToolsForProfile(tools.ProfileAdmin, nil) {
+	// Every registration, also those of profiles other than admin (a tool
+	// registered at another tier for another profile has a row of its own).
+	for _, r := range reg.All() {
 		def := r.Tool.Def
+		profiles := []string{}
+		for _, p := range tools.ProfilesOf(&r) {
+			profiles = append(profiles, string(p))
+		}
 		in, err1 := schemaHash(def.InputSchema)
 		out, err2 := schemaHash(def.OutputSchema)
 		if err := errors.Join(err1, err2); err != nil {
@@ -433,7 +440,7 @@ func cmdTools(args []string, lookup config.LookupFunc, stdout, stderr io.Writer)
 		}
 		rui, _ := def.Meta["anthropic/requiresUserInteraction"].(bool)
 		entries = append(entries, catalogueEntry{
-			Name: def.Name, Title: def.Title, Tier: r.Tier.String(), Privileged: r.Privileged,
+			Name: def.Name, Title: def.Title, Tier: r.Tier.String(), Profiles: profiles, Privileged: r.Privileged,
 			Annotations: def.Annotations, Description: def.Description, InputSchemaSHA256: in, OutputSchemaSHA256: out,
 			RequiresUserInteraction: rui,
 		})

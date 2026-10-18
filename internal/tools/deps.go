@@ -83,15 +83,20 @@ func Catalogue(d *Deps) (*Registry, error) {
 		{movePath(d), TierOperator},
 		{setPermissions(d), TierOperator},
 		{gitPull(d), TierOperator},
-		// Registered at operator in the operator and admin profiles; its
-		// admin registration at destructive comes with approval (S4b).
-		{runCommand(d), TierOperator},
 		{deletePath(d), TierDestructive},
 		{discardGitChanges(d), TierDestructive},
 	} {
 		if err := r.Register(reg.tool, reg.tier, false); err != nil {
 			return nil, err
 		}
+	}
+	// shell_run_command: at operator in the operator profile, at destructive
+	// (every call approval-gated) in admin.
+	if err := r.RegisterFor(runCommand(d, TierOperator), TierOperator, []Profile{ProfileOperator}); err != nil {
+		return nil, err
+	}
+	if err := r.RegisterFor(runCommand(d, TierDestructive), TierDestructive, []Profile{ProfileAdmin}); err != nil {
+		return nil, err
 	}
 	if err := registerDiag(r, d); err != nil {
 		return nil, err

@@ -46,6 +46,7 @@ func TestEveryToolSendsItsTierAsCeiling(t *testing.T) {
 	replies := operatorReplies()
 	replies["hello"] = gateReply{data: fakeHello}
 	replies["delete_preview"] = gateReply{data: fakeDeletePlan(shaTree, false)}
+	replies["git_discard_preview"] = gateReply{data: fakeDiscardPlan(shaDiscard, false, false)}
 	g := newRecordingGate(replies)
 	h := readHarness(t, g)
 	reg, err := Catalogue(h.deps)

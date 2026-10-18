@@ -108,6 +108,36 @@ const privPrefix = "shell_priv_"
 // are forwarded to the host's privileged helper and are only registered in
 // the admin profile.
 func (r *Registry) Register(tool Tool, tier Tier, privileged bool) error {
+	return r.add(Registration{Tool: tool, Tier: tier, Privileged: privileged})
+}
+
+// RegisterFor adds an unprivileged tool that only the given profiles
+// register (each still subject to its tier). The same name may be
+// registered again for other profiles, never for one it already has:
+// shell_run_command is registered at operator for the operator profile and
+// at destructive for admin.
+func (r *Registry) RegisterFor(tool Tool, tier Tier, profiles []Profile) error {
+	if len(profiles) == 0 {
+		return errors.New("tools: RegisterFor needs at least one profile")
+	}
+	for _, p := range profiles {
+		if p.maxTier() == 0 {
+			return fmt.Errorf("tools: unknown profile %q", p)
+		}
+		if tier > p.maxTier() {
+			return fmt.Errorf("tools: %s profile cannot register tier %s", p, tier)
+		}
+	}
+	return r.add(Registration{Tool: tool, Tier: tier, Profiles: slices.Clone(profiles)})
+}
+
+// registers reports whether g is registered for profile p.
+func (g *Registration) registers(p Profile) bool {
+	return g.Profiles == nil || slices.Contains(g.Profiles, p)
+}
+
+func (r *Registry) add(g Registration) error {
+	tool, tier, privileged := g.Tool, g.Tier, g.Privileged
 	if tool.Def == nil || tool.Install == nil {
 		return errors.New("tools: registration needs a definition and an installer")
 	}
@@ -124,11 +154,40 @@ func (r *Registry) Register(tool Tool, tier Tier, privileged bool) error {
 	if privileged != strings.HasPrefix(name, privPrefix) {
 		return fmt.Errorf("tools: %s: privileged tools, and only they, are named %s*", name, privPrefix)
 	}
-	if slices.ContainsFunc(r.regs, func(g Registration) bool { return g.Tool.Def.Name == name }) {
-		return fmt.Errorf("tools: %s registered twice", name)
+	for _, old := range r.regs {
+		if old.Tool.Def.Name != name {
+			continue
+		}
+		if old.Profiles == nil || g.Profiles == nil || slices.ContainsFunc(g.Profiles, old.registers) {
+			return fmt.Errorf("tools: %s registered twice for a profile", name)
+		}
 	}
-	r.regs = append(r.regs, Registration{Tool: tool, Tier: tier, Privileged: privileged})
+	r.regs = append(r.regs, g)
 	return nil
+}
+
+// All returns every registration, sorted by name and then tier (the
+// catalogue).
+func (r *Registry) All() []Registration {
+	out := slices.Clone(r.regs)
+	slices.SortStableFunc(out, func(a, b Registration) int {
+		if c := strings.Compare(a.Tool.Def.Name, b.Tool.Def.Name); c != 0 {
+			return c
+		}
+		return int(a.Tier) - int(b.Tier)
+	})
+	return out
+}
+
+// ProfilesOf returns the profiles that register g, in order.
+func ProfilesOf(g *Registration) []Profile {
+	out := []Profile{}
+	for _, p := range []Profile{ProfileReadOnly, ProfileOperator, ProfileAdmin} {
+		if g.registers(p) && g.Tier <= p.maxTier() && (!g.Privileged || p == ProfileAdmin) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // ToolsForProfile returns, sorted by name, the registrations profile p may
@@ -142,7 +201,7 @@ func (r *Registry) ToolsForProfile(p Profile, disabled []string) []Registration 
 		if limit == 0 || g.Tier > limit || slices.Contains(disabled, g.Tool.Def.Name) {
 			continue
 		}
-		if g.Privileged && p != ProfileAdmin {
+		if g.Privileged && p != ProfileAdmin || !g.registers(p) {
 			continue
 		}
 		out = append(out, g)
@@ -150,11 +209,3 @@ func (r *Registry) ToolsForProfile(p Profile, disabled []string) []Registration 
 	slices.SortFunc(out, func(a, b Registration) int { return strings.Compare(a.Tool.Def.Name, b.Tool.Def.Name) })
 	return out
 }
-
-// RegisterFor adds a tool that only the given profiles register. Stub.
-func (r *Registry) RegisterFor(tool Tool, tier Tier, profiles []Profile) error {
-	return errors.New("tools: RegisterFor is not implemented")
-}
-
-// All returns every registration, sorted by name and then tier. Stub.
-func (r *Registry) All() []Registration { return nil }

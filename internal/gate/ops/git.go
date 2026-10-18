@@ -5,11 +5,8 @@ package ops
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json/jsontext"
 	"errors"
-	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -140,6 +137,12 @@ func notFound(err error) bool {
 
 // run runs one git subcommand within the request's remaining time.
 func (r *gitRepo) run(maxOut int, sub ...string) (execx.Result, error) {
+	return r.runWith(nil, nil, maxOut, sub...)
+}
+
+// runWith is run with variables added to git's environment (only
+// GIT_INDEX_FILE, for git_discard's temporary index) and stdin.
+func (r *gitRepo) runWith(env []string, stdin []byte, maxOut int, sub ...string) (execx.Result, error) {
 	s := r.s
 	bin, err := s.builtin(s.o.Git, "git")
 	if err != nil {
@@ -150,8 +153,8 @@ func (r *gitRepo) run(maxOut int, sub ...string) (execx.Result, error) {
 		return execx.Result{}, errf(protocol.CodeTimeout, "git did not finish within the request timeout")
 	}
 	res, err := execx.Run(context.Background(), &execx.Spec{
-		Path: bin, Trampoline: s.o.Executable, Args: GitArgs(r.real, s.o.TestGitCAFile, sub...), Env: GitEnv(s.p.ServiceHome, r.real),
-		Dir: r.real, Timeout: left, MaxOutput: maxOut,
+		Path: bin, Trampoline: s.o.Executable, Args: GitArgs(r.real, s.o.TestGitCAFile, sub...), Env: append(GitEnv(s.p.ServiceHome, r.real), env...),
+		Dir: r.real, Stdin: stdin, Timeout: left, MaxOutput: maxOut,
 	})
 	if err != nil {
 		return execx.Result{}, err
@@ -164,8 +167,11 @@ func (r *gitRepo) run(maxOut int, sub ...string) (execx.Result, error) {
 
 // output runs a subcommand that must succeed and whose whole stdout is
 // needed.
-func (r *gitRepo) output(sub ...string) ([]byte, error) {
-	res, err := r.run(r.s.p.Limits.MaxOutputBytes, sub...)
+func (r *gitRepo) output(sub ...string) ([]byte, error) { return r.outputWith(nil, nil, sub...) }
+
+// outputWith is output with runWith's environment and stdin.
+func (r *gitRepo) outputWith(env []string, stdin []byte, sub ...string) ([]byte, error) {
+	res, err := r.runWith(env, stdin, r.s.p.Limits.MaxOutputBytes, sub...)
 	if err != nil {
 		return nil, err
 	}
@@ -453,137 +459,4 @@ func (s *server) gitPull(raw jsontext.Value) (data any, warns []string, failure 
 		d.ChangedFiles = bytes.Count(names, []byte{0})
 	}
 	return d, nil, nil
-}
-
-type gitDiscardData struct {
-	Repo      string   `json:"repo"`
-	Reset     []string `json:"reset"`
-	Remove    []string `json:"remove"`
-	Skipped   []string `json:"skipped"`
-	Truncated bool     `json:"truncated"`
-	Applied   bool     `json:"applied"`
-	CleanAt   *bool    `json:"clean_after,omitempty"`
-}
-
-// discardPreview lists exactly what `reset --hard` and `clean -f -d` would
-// change: tracked entries that differ from HEAD (both paths of a rename),
-// and the untracked files and directories clean would remove (ignored files
-// are kept; nested repositories are skipped).
-func (r *gitRepo) discardPreview() (gitDiscardData, error) {
-	d := gitDiscardData{Repo: r.path}
-	st, truncated, err := r.status("no", false)
-	if err != nil {
-		return d, err
-	}
-	d.Truncated = truncated
-	reset := []string{}
-	for _, e := range st.Entries {
-		reset = append(reset, e.Path)
-		if e.OrigPath != "" {
-			reset = append(reset, e.OrigPath)
-		}
-	}
-	slices.Sort(reset)
-	d.Reset = slices.Compact(reset)
-	out, err := r.output("clean", "-n", "-d")
-	if err != nil {
-		return d, err
-	}
-	rm, skip, err := gitx.ParseClean(out)
-	if err != nil {
-		return d, errf(protocol.CodeExecFailed, "git clean output could not be parsed")
-	}
-	slices.Sort(rm)
-	slices.Sort(skip)
-	d.Remove, d.Skipped = rm, skip
-	return d, nil
-}
-
-// discardPreviewArgs are git_discard_preview's arguments.
-type discardPreviewArgs struct {
-	Repo             string `json:"repo"`
-	IncludeUntracked bool   `json:"include_untracked"`
-}
-
-// discardArgs are git_discard's arguments.
-type discardArgs struct {
-	Repo                  string `json:"repo"`
-	IncludeUntracked      bool   `json:"include_untracked"`
-	ExpectedPreviewSHA256 string `json:"expected_preview_sha256"`
-}
-
-func (s *server) gitDiscardPreview(raw jsontext.Value) (data any, warns []string, failure error) {
-	var a discardPreviewArgs
-	if err := decode(raw, &a); err != nil {
-		return nil, nil, err
-	}
-	r, err := s.gitRepo(a.Repo, false)
-	if err != nil {
-		return nil, nil, err
-	}
-	if _, err = r.checkConfig(); err != nil {
-		return nil, nil, err
-	}
-	d, err := r.discardPreview()
-	if err != nil {
-		return nil, nil, err
-	}
-	return stubShape(&d, a.IncludeUntracked), nil, nil
-}
-
-// stubShape gives the S1b result the new shape, without binding anything
-// (stub for the failing tests).
-func stubShape(d *gitDiscardData, inc bool) map[string]any {
-	first := []map[string]string{}
-	for _, p := range d.Reset {
-		first = append(first, map[string]string{"path": p, "status": "", "action": "restore"})
-	}
-	for _, p := range d.Remove {
-		first = append(first, map[string]string{"path": p, "status": "??", "action": "remove"})
-	}
-	sum := sha256.Sum256([]byte(fmt.Sprint(d.Reset, d.Remove)))
-	out := map[string]any{"repo": d.Repo, "include_untracked": inc, "restore": len(d.Reset), "remove": 0, "untracked": len(d.Remove),
-		"entries": len(first), "first": first, "skipped": d.Skipped, "preview_sha256": hex.EncodeToString(sum[:]), "applied": d.Applied}
-	if d.CleanAt != nil {
-		out["clean_after"] = *d.CleanAt
-	}
-	return out
-}
-
-// gitDiscard runs `reset --hard` and `clean -f -d` on a repository inside a
-// write root and reports what it changed (the preview taken just before).
-func (s *server) gitDiscard(raw jsontext.Value) (data any, warns []string, failure error) {
-	var a discardArgs
-	if err := decode(raw, &a); err != nil {
-		return nil, nil, err
-	}
-	r, err := s.gitRepo(a.Repo, true)
-	if err != nil {
-		return nil, nil, err
-	}
-	if _, err = r.checkConfig(); err != nil {
-		return nil, nil, err
-	}
-	d, err := r.discardPreview()
-	if err != nil {
-		return nil, nil, err
-	}
-	if _, err = r.output("reset", "--hard", "-q"); err != nil {
-		return nil, nil, err
-	}
-	if _, err = r.output("clean", "-f", "-d", "-q"); err != nil {
-		return nil, nil, err
-	}
-	d.Applied = true
-	st, _, err := r.status("normal", false)
-	if err != nil {
-		return nil, nil, err
-	}
-	clean := len(st.Entries) == 0
-	d.CleanAt = &clean
-	var warnings []string
-	if !clean {
-		warnings = append(warnings, "the working tree still has changes after the discard (for example nested repositories, which are skipped)")
-	}
-	return stubShape(&d, a.IncludeUntracked), warnings, nil
 }
