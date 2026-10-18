@@ -271,6 +271,43 @@ func TestApprovalWebFlow(t *testing.T) {
 		}
 	})
 
+	// An approval for a create never becomes a replace. A file created out
+	// of band after approval is caught by the re-call's fresh preview first
+	// (approval_invalid: its hash covers current.state, which is no longer
+	// absent), before any write is sent; the gate's own refusal (exists) is
+	// for a file that appears between that preview and the write, which
+	// the unit tests cover at the commit itself.
+	t.Run("an approved create never replaces a file created after approval", func(t *testing.T) {
+		q := opsWork + "/approved-create.txt"
+		a := map[string]any{"path": q, "content": "approved\n"}
+		id := pendingID(t, srv.call(t, a))
+		srv.decide(t, h, id, "approve")
+		since := time.Now()
+		opOK(t, "shell_write_file", map[string]any{"path": q, "content": "out of band\n"})
+		refusal(t, srv.call(t, withApproval(a, id)), "approval_invalid", "changed since approval")
+		fileIs(t, q, "out of band\n")
+		time.Sleep(time.Second)
+		for _, j := range journal(t, "shell-mcp-gate", since) {
+			if strings.Contains(j.Message, `"principal":"`+opsWho+`"`) && strings.Contains(j.Message, `"op":"write_file"`) &&
+				strings.Contains(j.Message, `"expect_absent":true`) {
+				t.Fatalf("a write was sent after the preview changed: %s", j.Message)
+			}
+		}
+	})
+
+	t.Run("an approved create is sent with expect_absent", func(t *testing.T) {
+		q := opsWork + "/approved-create-2.txt"
+		a := map[string]any{"path": q, "content": "approved\n"}
+		id := pendingID(t, srv.call(t, a))
+		srv.decide(t, h, id, "approve")
+		since := time.Now()
+		okDataAs(t, srv.call(t, withApproval(a, id)), opsWho)
+		fileIs(t, q, "approved\n")
+		// The real gate, under its Landlock sandbox, committed it as a
+		// create-only write.
+		findJournal(t, "shell-mcp-gate", since, `"principal":"`+opsWho+`"`, `"op":"write_file"`, `"expect_absent":true`, q, `"outcome":"ok"`)
+	})
+
 	t.Run("a restart between approval and re-call invalidates it", func(t *testing.T) {
 		a := map[string]any{"path": p, "content": "v5\n"}
 		id := pendingID(t, srv.call(t, a))

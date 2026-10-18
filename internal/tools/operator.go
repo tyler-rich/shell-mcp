@@ -146,6 +146,10 @@ type writeIn struct {
 	Mode           string  `json:"mode,omitzero" jsonschema:"Octal mode for a new file (3 or 4 digits, such as 0640). Default: an existing file keeps its mode; a new one gets 0640. Setuid, setgid, sticky and world-writable modes are refused."`
 	Create         *bool   `json:"create,omitzero" jsonschema:"Create the file when it does not exist. Default true."`
 	ExpectedSHA256 string  `json:"expected_sha256,omitzero" jsonschema:"Lowercase hex SHA-256 of the file's current content; the write is refused when the file has changed since (optimistic concurrency)."`
+	// expectAbsent is set only by an approved call whose preview saw the
+	// file absent (never an input): the gate then refuses a file that
+	// appeared since.
+	expectAbsent bool
 }
 
 func (in *writeIn) validate() *envelope.Error {
@@ -189,6 +193,7 @@ type writeWire struct {
 	Mode           string `json:"mode"`
 	Create         bool   `json:"create"`
 	ExpectedSHA256 string `json:"expected_sha256"`
+	ExpectAbsent   bool   `json:"expect_absent,omitzero"`
 }
 
 // writeResultWire is the gate's write_file and copy data (fsx.WriteResult).
@@ -253,7 +258,7 @@ func writeFile(d *Deps) Tool {
 		},
 		run: func(ctx context.Context, _ *mcp.CallToolRequest, in writeIn) envelope.Envelope[WriteFile] {
 			w := writeWire{Path: in.Path, ContentB64: base64.StdEncoding.EncodeToString([]byte(*in.Content)), Mode: in.Mode,
-				Create: in.Create == nil || *in.Create, ExpectedSHA256: in.ExpectedSHA256}
+				Create: in.Create == nil || *in.Create, ExpectedSHA256: in.ExpectedSHA256, ExpectAbsent: in.expectAbsent}
 			r := fetch[writeResultWire](ctx, d, in.Target, protocol.OpWriteFile, w, d.budget())
 			if !r.OK {
 				return envelope.Failure[WriteFile](r.Target, r.Error)
@@ -278,10 +283,14 @@ func writeFile(d *Deps) Tool {
 			return d.writePreview(ctx, &in, target)
 		},
 		precondition: func(in *writeIn, p *preview) {
-			// The write is refused if the content changed after the fresh
-			// preview; a caller's own expected_sha256 is kept (it is bound).
+			// The write is refused if the file changed after the fresh
+			// preview: expected_sha256 of the content it saw, or, when it saw
+			// no file, expect_absent, so an approved create never replaces a
+			// file that appeared since. A caller's own expected_sha256 is kept
+			// (it is bound).
 			if in.ExpectedSHA256 == "" {
 				in.ExpectedSHA256 = p.contentSHA256
+				in.expectAbsent = p.absent
 			}
 		},
 	})

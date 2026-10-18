@@ -43,6 +43,7 @@ type writeArgs struct {
 	Group          string `json:"group"`
 	Create         *bool  `json:"create"`
 	ExpectedSHA256 string `json:"expected_sha256"`
+	ExpectAbsent   bool   `json:"expect_absent"`
 }
 
 type mkdirArgs struct {
@@ -206,7 +207,7 @@ func (s *server) writeFile(raw jsontext.Value) (data any, warns []string, failur
 		create = *a.Create
 	}
 	r, err := s.fs.WriteFile(a.Path, content, fsx.WriteOptions{
-		Mode: mode, Create: create, ExpectedSHA256: a.ExpectedSHA256, Owner: owner,
+		Mode: mode, Create: create, ExpectedSHA256: a.ExpectedSHA256, ExpectAbsent: a.ExpectAbsent, Owner: owner,
 		DefaultMode: defaultFileMode & s.p.ModesMax,
 	})
 	if err != nil {

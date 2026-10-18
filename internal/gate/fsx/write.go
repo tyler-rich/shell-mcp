@@ -38,6 +38,9 @@ func (f *FS) WriteFile(p string, content []byte, o WriteOptions) (WriteResult, e
 	if o.ExpectedSHA256 != "" && !isSHA256Hex(o.ExpectedSHA256) {
 		return WriteResult{}, errf(protocol.CodeBadRequest, "expected_sha256 must be 64 lowercase hex characters")
 	}
+	if o.ExpectAbsent && o.ExpectedSHA256 != "" {
+		return WriteResult{}, errf(protocol.CodeBadRequest, "expect_absent and expected_sha256 are mutually exclusive")
+	}
 	l, err := f.locate(p, true)
 	if err != nil {
 		return WriteResult{}, err
@@ -53,7 +56,7 @@ func (f *FS) WriteFile(p string, content []byte, o WriteOptions) (WriteResult, e
 		}
 		newMode = o.DefaultMode
 	}
-	return f.writeAtomic(l, content, &atomicOpts{mode: o.Mode, newMode: newMode, create: o.Create, overwrite: true, expected: o.ExpectedSHA256, owner: o.Owner})
+	return f.writeAtomic(l, content, &atomicOpts{mode: o.Mode, newMode: newMode, create: o.Create, overwrite: !o.ExpectAbsent, expected: o.ExpectedSHA256, owner: o.Owner})
 }
 
 func isSHA256Hex(s string) bool {
@@ -85,13 +88,16 @@ func countLines(b []byte) int {
 // directory (through the parent's os.Root), fsync, rename over the target,
 // fsync the directory, then re-open the target and compare SHA-256. An
 // existing file keeps its mode (unless mode is given) and, where the
-// service user may, its owner and group.
+// service user may, its owner and group. Without overwrite the commit is a
+// hard link of the temp file to the target instead of the rename: link(2)
+// fails with EEXIST if the target exists at that moment, so a file that
+// appeared after the checks is refused, never replaced.
 // atomicOpts are writeAtomic's options.
 type atomicOpts struct {
 	mode      *os.FileMode // requested mode (nil: keep, or newMode for a new file)
 	newMode   os.FileMode
 	create    bool
-	overwrite bool
+	overwrite bool   // false: create only (expect_absent, copy without overwrite)
 	expected  string // expected_sha256 of the current content
 	owner     *Owner // explicit owner (the helper only)
 }
@@ -217,10 +223,23 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 			return res, e
 		}
 	}
-	if err = l.parent.Rename(tmp, l.base); err != nil {
-		return res, mapErr(err)
+	if f.cfg.InjectBeforeCommit != nil {
+		f.cfg.InjectBeforeCommit()
 	}
-	committed = true
+	if overwrite {
+		if err = l.parent.Rename(tmp, l.base); err != nil {
+			return res, mapErr(err)
+		}
+		committed = true
+	} else {
+		if e := f.linkNoReplace(l.parent, tmp, l.base); e != nil {
+			return res, e
+		}
+		committed = true
+		if err = l.parent.Remove(tmp); err != nil {
+			return res, errf(protocol.CodeInternal, "the file was written, but its temporary name could not be removed")
+		}
+	}
 	if d, derr := l.parent.Open("."); derr == nil {
 		_ = d.Sync()
 		_ = d.Close()
@@ -541,9 +560,21 @@ func (f *FS) Move(src, dst string, overwrite bool) (MoveResult, error) {
 			return res, e
 		}
 	}
-	if ls.parentReal == ld.parentReal {
+	if f.cfg.InjectBeforeCommit != nil {
+		f.cfg.InjectBeforeCommit()
+	}
+	switch {
+	case !overwrite:
+		// Without overwrite the rename itself refuses an existing
+		// destination (RENAME_NOREPLACE), so one that appeared after the
+		// check above is never replaced.
+		if e := f.renameNoReplace(ls.parent, ls.base, ld.parent, ld.base); e != nil {
+			return res, e
+		}
+		err = nil // err still holds the destination's not-found Lstat
+	case ls.parentReal == ld.parentReal:
 		err = ls.parent.Rename(ls.base, ld.base)
-	} else {
+	default:
 		err = ls.top.Rename(ls.rel, ld.rel)
 	}
 	if err != nil {

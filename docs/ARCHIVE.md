@@ -1871,3 +1871,84 @@ The document gives exact replacement wording for D-006 and S-12, the config, env
   - `TestApproverFieldCannotInjectLogLines` (page): hostile approver names, a hostile `X-Forwarded-For` from the trusted proxy and a malformed path id produce one well-formed entry each, with an empty approver, in both formats.
   - A throwaway mutant that logs the raw name fails the page guard.
 - The alerts are dismissed by the maintainer, by hand.
+
+### 2026-10-17 — Atomic create-only commits: write_file expect_absent, copy and move without overwrite (PR #24, branch fix/atomic-create)
+**Decision:** An approval for "create" never becomes "replace". Copy and move without `overwrite` never replace a destination that appears after their check. S4b-1b recorded the write window; S1 recorded the copy/move one.
+- **Protocol (maintainer-approved change).** `write_file` and `priv_write_file` gain an optional `expect_absent: true`, mutually exclusive with `expected_sha256` (both is `bad_request`). Protocol v1 is amended in place, before any release. An older gate refuses the field as unknown; it never ignores it. ARCHITECTURE §3, §4.1 and §4.3.
+- **fsx (gate and helper).**
+  - With `expect_absent`, and for copy without overwrite, the temp file is committed with `os.Root.Link(tmp, name)` in the verified parent sub-root. The temp name is then removed, and the file is read back and verified as before.
+  - Move without overwrite uses `renameat2(2)` with `RENAME_NOREPLACE` (x/sys `unix.Renameat2`). It runs on descriptors of the two parent directories that `locate` opened through `os.Root` and re-checked via `/proc/self/fd`, with single-component names only (checked).
+  - `EEXIST` is `exists`. The other file is untouched and, in the helper, nothing is backed up.
+  - A refused hard link (`EPERM`, `EOPNOTSUPP`, `ENOSYS`) or an unsupported flag (`EINVAL`, `ENOSYS`) is `bad_request`, with a message naming the filesystem limitation. There is no check-then-rename fallback.
+  - Writes and moves that may replace keep `rename(2)`. Every existing write rule, the backup hook and read-back verification are unchanged.
+- **Server.** When an approved `shell_write_file`'s fresh preview saw the file absent (at the stat, or removed before the read), the write carries `expect_absent: true`. When it saw content, it carries `expected_sha256` as before, and a caller's own `expected_sha256` is kept. `expect_absent` is not a tool input, so the catalogue and its snapshot are unchanged, and ungated writes send the same bytes as before (`omitzero`). Copy and move without overwrite rely on the gate's atomic refusal.
+- **Audit.** The gate's and the helper's sanitized arguments include the `expect_absent` flag.
+- **Docs.** POLICY §3 (create-only commits); TOOLS.md (the write, copy, move and privileged copy/move rows, and the write preview's precondition); PRIVILEGED §6; ARCHITECTURE as above.
+
+**Verified at the source:**
+- **Go 1.27.2** (`os/root.go`, `os/root_openat.go` and `os/root_unix.go` in the pinned builder image).
+  - `Root.Link` is `linkat(oldparent, old, newparent, new, 0)` between directories it resolved inside the root. There is no `AT_SYMLINK_FOLLOW`, so a final symlink is linked, not followed.
+  - `Root.Rename` is `renameat(2)`, with no flags. Before it, it refuses a directory destination with its own `lstatat` (`EEXIST` unless the same file), which is itself a check-then-rename.
+  - `os` has no `RENAME_NOREPLACE` anywhere. `internal/syscall/unix` uses renameat2 only as the syscall number on loong64 and riscv64, with flags 0.
+- **Kernel** (man7.org `rename(2)`, `link(2)`).
+  - `RENAME_NOREPLACE` returns `EEXIST` if newpath exists. It needs filesystem support (ext4 from 3.15; btrfs, tmpfs and cifs from 3.17; xfs from 4.0; most others from 4.9) and otherwise fails with `EINVAL`.
+  - `link(2)` fails with `EEXIST` if newpath exists.
+  - A same-directory link or rename needs only `LANDLOCK_ACCESS_FS_MAKE_REG` and `REMOVE_FILE` on the directory. The gate's write roots already grant those, and `REFER` (for cross-directory moves).
+  - The e2e-host cases run both commits under the real Landlock rulesets and the helper's systemd sandbox.
+
+**Maintainer decision during the session (STOP: no atomic no-replace rename inside `os.Root`).**
+- **Options.**
+  - renameat2 on the Root-opened descriptors.
+  - Pure-`os.Root` link-then-unlink for move. It can unlink a source that another process atomically replaced in between. It also cannot move a directory, which leaves a window in which an empty directory is replaced.
+  - renameat2 for all three.
+- **Chosen.**
+  - `Root.Link` + `Root.Remove(tmp)` for write and copy.
+  - renameat2 with `RENAME_NOREPLACE` on the Root-opened parent descriptors for move, in the helper too.
+  - `EEXIST` as the existing "destination exists" refusal, and `EINVAL`/`ENOSYS` as a clear refusal naming the limitation. Never check-then-rename.
+  - Tests for files and directories, and an injected unsupported-flag error.
+
+**Tests (committed failing first, `0814a31`; output in the PR body).**
+- **Inert seams in that commit.**
+  - `fsx.Config.InjectBeforeCommit` is called after every check, immediately before the commit. `InjectNoReplaceFault` replaces the commit's system call.
+  - Both are passed through the gate's and the helper's `Options`. `TestProductionOptionsHaveNoTestHooks` checks that both are nil in production.
+  - The `expect_absent` fields were added too, ignored.
+- **`TestCreateOnlyCommitWindow`** (fsx, 200 runs each). The hook plants the destination.
+  - Old code: write, copy and file move replaced it on run 0.
+  - New code: `exists` every run, with the planted file intact, a refused move's source in place, and no temp file left.
+  - The **directory** case passes on old code too: `Root.Rename`'s own `lstatat` check refuses a directory destination. renameat2 closes that check's own window, which no hook can reach.
+- **`TestCreateOnlyConcurrentRace`** (fsx, 400 runs each, no hook). A goroutine creates the destination with `O_EXCL` after a random delay of up to twice the operation's measured duration. Both succeeding is a failure.
+  - Old code: write failed on run 3, copy on run 1 and file move on run 241. In an earlier run the move did not hit its window, because the old move has no fsync between its check and its rename.
+  - New code: never. In one run, the racer was first in 79, 70 and 36 runs (write, copy, move), and every one of those answered `exists` with the racer's content intact.
+- **`TestNoReplaceUnsupported`** (fsx) and **`TestPrivNoReplaceUnsupported`** (helper). Injected `EINVAL`/`ENOSYS` for move and `EPERM`/`EOPNOTSUPP` for the link are `bad_request` naming the limitation, and nothing changes. Plain writes and overwrite moves are unaffected.
+- **`TestExpectAbsentRules`** (fsx), **`TestWriteFileExpectAbsent`** (gate) and **`TestPrivWriteExpectAbsent`** (helper):
+  - create;
+  - `exists` on an existing file, which is unchanged, with no backup;
+  - `bad_request` with `expected_sha256`;
+  - one link left on the new file;
+  - the explicit owner kept.
+- **`TestGateCreateOnlyCommitWindow`** and **`TestPrivCreateOnlyCommitWindow`**: 100 runs per op through the gate's and the helper's request handling.
+- **`TestApprovalAbsentPreviewExpectsAbsent`** (server): stat absent, and removed before `read_file`. `TestApprovalApprovedRunsOnce` checks there is no `expect_absent` when the preview saw content.
+- **e2e-host.**
+  - `TestApprovalWebFlow` gains "an approved create never replaces a file created after approval" and "an approved create is sent with expect_absent". In the second, the gate's journal line carries `"expect_absent":true`.
+  - `TestHelperCreateOnly` runs the commits in the helper's core unit.
+
+**Which refusal fires first through the approval flow, and why.**
+- **A file created out of band after approval, before the re-call.** The re-call's fresh preview catches it: its hash covers `current.state`, which is no longer `absent`. The answer is `approval_invalid` ("changed since approval"), and no write is sent; the e2e checks that no `expect_absent` write line appears.
+- **The gate's `exists`.** It is for a file that appears between that fresh preview and the write, a window of one SSH round trip. The unit and window tests cover it at the commit itself.
+
+**Fuzzing:** none added. No parser or path-rule function changed: the commit functions take names that `locate` already validated, and check them again.
+
+**Alternatives rejected:**
+- Link-then-unlink for move. It unlinks whatever is at the source name at that moment, so a file another process atomically replaced there would be lost. It also cannot move directories.
+- renameat2 for write and copy too. It would refuse create-only writes on filesystems that have hard links but not `RENAME_NOREPLACE` (NFS), for no gain.
+- Falling back to check-then-rename on `EINVAL`: that is the race this change closes.
+- An `expect_absent` tool input. It was not asked for, and the precondition comes from the preview, so the catalogue stays the same.
+
+**Deferred / follow-ups:** none. S4b-2's destructive tools are out of scope.
+
+**Versions:**
+- **Go:** 1.27.2, the newest stable per go.dev (`go.dev/dl/?mode=json`, read 2026-10-17).
+- **Refresh:** `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing; `scripts/deps-current.sh` reports 13 modules in scope, all current.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Dependencies added:** none (x/sys/unix was already direct).
+- **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.

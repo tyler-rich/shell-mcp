@@ -208,7 +208,7 @@ func TestApprovalApprovedRunsOnce(t *testing.T) {
 	}
 	// The preview's precondition is passed: the write is refused if the
 	// file changed after the fresh preview.
-	if w := a.g.args(t, "write_file"); w["expected_sha256"] != shaOld {
+	if w := a.g.args(t, "write_file"); w["expected_sha256"] != shaOld || w["expect_absent"] != nil {
 		t.Fatalf("write args %v", w)
 	}
 	// A second re-call is invalid and sends nothing mutating.
@@ -218,6 +218,33 @@ func TestApprovalApprovedRunsOnce(t *testing.T) {
 	}
 	if got := a.mutatingOps(); len(got) != 1 {
 		t.Fatalf("mutating ops after the second re-call %v", got)
+	}
+}
+
+// An approval for a create never becomes a replace: when the preview saw
+// the file absent, the write carries expect_absent (and no
+// expected_sha256), so the gate refuses a file that appears after the fresh
+// preview.
+func TestApprovalAbsentPreviewExpectsAbsent(t *testing.T) {
+	for name, set := range map[string]func(*recordingGate){
+		"absent at stat": func(g *recordingGate) { g.set("stat", gateReply{code: "not_found", msg: "no such file"}) },
+		"removed before read_file": func(g *recordingGate) {
+			g.set("read_file", gateReply{code: "not_found", msg: "no such file"})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a := newApprovalHarness(t, approval.MethodWeb)
+			set(a.g)
+			id := a.pending("shell_write_file", writeArgs)
+			a.approve(id)
+			env, _ := a.call("shell_write_file", withID(writeArgs, id))
+			if env["ok"] != true {
+				t.Fatalf("approved re-call: %v", env)
+			}
+			if w := a.g.args(t, "write_file"); w["expect_absent"] != true || w["expected_sha256"] != "" {
+				t.Fatalf("write args %v", w)
+			}
+		})
 	}
 }
 

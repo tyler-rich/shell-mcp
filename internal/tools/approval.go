@@ -124,11 +124,13 @@ func splitApproval(raw stdjson.RawMessage, confirm bool) (stdjson.RawMessage, ap
 // from the gate's read operations. value is what is hashed and shown;
 // policy is the gate policy's SHA-256 reported with it; contentSHA256 is
 // the previewed content's hash, passed as a precondition where the
-// operation supports one (expected_sha256).
+// operation supports one (expected_sha256); absent says the preview saw no
+// file there (passed as expect_absent).
 type preview struct {
 	value         any
 	policy        string
 	contentSHA256 string
+	absent        bool
 }
 
 // policyAcc collects the policy hashes of a preview's requests.
@@ -152,6 +154,15 @@ func (p *policyAcc) result(value any, content string) (*preview, *envelope.Error
 		return nil, envelope.Errorf(envelope.CodeApprovalInvalid, "the target's policy changed while the preview was computed; call the tool again")
 	}
 	return &preview{value: value, policy: p.v, contentSHA256: content}, nil
+}
+
+// absentResult is result for a preview that saw no file at the path.
+func (p *policyAcc) absentResult(value any) (*preview, *envelope.Error) {
+	r, e := p.result(value, "")
+	if r != nil {
+		r.absent = true
+	}
+	return r, e
 }
 
 // plainRE is a path or name simple enough to appear in a description: no
