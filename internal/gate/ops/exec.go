@@ -19,6 +19,9 @@ type execArgs struct {
 	Cwd            string   `json:"cwd"`
 	StdinB64       string   `json:"stdin_b64"`
 	MaxOutputBytes int      `json:"max_output_bytes"`
+	// ExpectedPreviewSHA256, when given, is the preview_sha256 exec_preview
+	// returned for the same command, arguments and cwd.
+	ExpectedPreviewSHA256 string `json:"expected_preview_sha256"`
 }
 
 type execData struct {
@@ -159,4 +162,9 @@ func (s *server) exec(raw jsontext.Value) (data any, warns []string, failure err
 		}
 	}
 	return d, warnings, nil
+}
+
+// execPreview resolves a command as exec would, running nothing. Stub.
+func (s *server) execPreview(raw jsontext.Value) (data any, warns []string, failure error) {
+	return nil, nil, errf(protocol.CodeInternal, "exec_preview is not implemented")
 }

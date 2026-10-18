@@ -6,8 +6,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -58,6 +60,33 @@ func TestCatalogueSnapshot(t *testing.T) {
 		}
 		if gated == 0 {
 			t.Fatalf("%s: no tool requires user interaction", file)
+		}
+	}
+	// shell_run_command has a row per registration: operator in the
+	// operator profile, destructive (destructiveHint) in admin.
+	for file, out := range outs {
+		var rows []struct {
+			Name        string   `json:"name"`
+			Tier        string   `json:"tier"`
+			Profiles    []string `json:"profiles"`
+			Annotations struct {
+				DestructiveHint bool `json:"destructiveHint"`
+			} `json:"annotations"`
+		}
+		if err := json.Unmarshal(out, &rows); err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, r := range rows {
+			if len(r.Profiles) == 0 {
+				t.Fatalf("%s: %s has no profiles", file, r.Name)
+			}
+			if r.Name == "shell_run_command" {
+				got = append(got, fmt.Sprintf("%s %v %v", r.Tier, r.Profiles, r.Annotations.DestructiveHint))
+			}
+		}
+		if want := []string{"operator [operator] false", "destructive [admin] true"}; !slices.Equal(got, want) {
+			t.Fatalf("%s: shell_run_command rows %v, want %v", file, got, want)
 		}
 	}
 }

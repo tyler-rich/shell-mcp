@@ -72,7 +72,8 @@ func newApprovalHarness(t *testing.T, method approval.Method) *approvalHarness {
 	return newApprovalHarnessOn(t, g, method, []config.Target{tg}, map[string]*sshx.Client{"app-host": c})
 }
 
-func newApprovalHarnessOn(t *testing.T, g *recordingGate, method approval.Method, targets []config.Target, clients map[string]*sshx.Client) *approvalHarness {
+// newApprovalHarnessOn serves the admin profile, or the profile given.
+func newApprovalHarnessOn(t *testing.T, g *recordingGate, method approval.Method, targets []config.Target, clients map[string]*sshx.Client, profile ...Profile) *approvalHarness {
 	t.Helper()
 	logs := &syncBuffer{}
 	store := approval.NewStore(approval.Options{TTL: 300 * time.Second, Method: method, Wait: 300 * time.Millisecond,
@@ -82,6 +83,9 @@ func newApprovalHarnessOn(t *testing.T, g *recordingGate, method approval.Method
 		d.ApprovalMethod = method
 		d.Approvals = store
 		d.ApprovalPublicURL = approvalOrigin
+		if len(profile) == 1 {
+			d.Principal.Profile = string(profile[0])
+		}
 		d.Logger = slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	})
 	h.deps.MaxOutputBytes = 4096

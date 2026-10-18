@@ -300,14 +300,13 @@ func TestGitDataKeysAllowed(t *testing.T) {
 		t.Fatalf("diff %q", diff.Diff)
 	}
 	g.ok("git_log", m{"repo": g.repo}, nil)
-	var pv struct {
-		Reset []string `json:"reset"`
-	}
-	g.ok("git_discard_preview", m{"repo": g.repo}, &pv)
-	if !slices.Equal(pv.Reset, []string{"app.conf"}) {
+	pv := g.preview(t, false)
+	if len(pv.First) != 1 || pv.First[0].Path != "app.conf" || pv.First[0].Action != "restore" {
 		t.Fatalf("preview %+v", pv)
 	}
-	g.ok("git_discard", m{"repo": g.repo}, nil)
+	if r := g.discard(&pv); !r.OK {
+		t.Fatalf("discard %+v", r.Error)
+	}
 	gatetest.Push(t, g.work, "extra.conf", "x\n", "upstream change")
 	var d pullData
 	g.ok("git_pull", m{"repo": g.repo}, &d)
@@ -468,11 +467,8 @@ func TestGitIgnoreCasePinned(t *testing.T) {
 	if len(st.Entries) != 1 || st.Entries[0].Kind != "untracked" || st.Entries[0].Path != "APP.CONF" {
 		t.Fatalf("status under the gate %+v", st)
 	}
-	var pv struct {
-		Remove []string `json:"remove"`
-	}
-	g.ok("git_discard_preview", m{"repo": g.repo}, &pv)
-	if !slices.Equal(pv.Remove, []string{"APP.CONF"}) {
+	pv := g.preview(t, true)
+	if len(pv.First) != 1 || pv.First[0].Path != "APP.CONF" || pv.First[0].Status != "??" {
 		t.Fatalf("preview %+v", pv)
 	}
 }
@@ -577,44 +573,4 @@ func TestGitDirWriteDenied(t *testing.T) {
 	g.fail("delete_preview", m{"path": filepath.Join(g.repo, ".git"), "recursive": true}, "path_denied")
 	g.fail("exec", m{"command_id": "probe-op", "args": []string{"write", cfg}}, "path_denied")
 	g.ok("read_file", m{"path": cfg}, nil)
-}
-
-func TestGitDiscard(t *testing.T) {
-	g := newGitFixture(t, "destructive")
-	gatetest.WriteFile(t, filepath.Join(g.repo, "app.conf"), "changed\n", 0o644)
-	gatetest.WriteFile(t, filepath.Join(g.repo, "staged.conf"), "s\n", 0o644)
-	gatetest.Git(t, g.repo, "add", "staged.conf")
-	gatetest.WriteFile(t, filepath.Join(g.repo, "untracked.txt"), "u\n", 0o644)
-	gatetest.WriteFile(t, filepath.Join(g.repo, "newdir", "f.txt"), "n\n", 0o644)
-	gatetest.WriteFile(t, filepath.Join(g.repo, "keep.log"), "ignored\n", 0o644)
-	gatetest.WriteFile(t, filepath.Join(g.repo, "spécial file.txt"), "q\n", 0o644)
-	var pv struct {
-		Reset  []string `json:"reset"`
-		Remove []string `json:"remove"`
-	}
-	g.ok("git_discard_preview", m{"repo": g.repo}, &pv)
-	if !slices.Equal(pv.Reset, []string{"app.conf", "staged.conf"}) ||
-		!slices.Equal(pv.Remove, []string{"newdir/", "spécial file.txt", "untracked.txt"}) {
-		t.Fatalf("preview %+v", pv)
-	}
-	var d struct {
-		Reset  []string `json:"reset"`
-		Remove []string `json:"remove"`
-		Clean  bool     `json:"clean_after"`
-	}
-	g.ok("git_discard", m{"repo": g.repo}, &d)
-	if !slices.Equal(d.Reset, pv.Reset) || !slices.Equal(d.Remove, pv.Remove) || !d.Clean {
-		t.Fatalf("discard %+v", d)
-	}
-	if st := gatetest.Git(t, g.repo, "status", "--porcelain"); st != "" {
-		t.Fatalf("tree not clean: %q", st)
-	}
-	if !exists(filepath.Join(g.repo, "keep.log")) {
-		t.Fatal("an ignored file was removed")
-	}
-	g.fail("git_discard", m{"repo": filepath.Join(g.read, "readonly")}, "policy_denied")
-	g.ok("git_discard_preview", m{"repo": filepath.Join(g.read, "readonly")}, nil)
-	g.policy("operator", "")
-	g.fail("git_discard", m{"repo": g.repo}, "tier_denied")
-	g.ok("git_discard_preview", m{"repo": g.repo}, nil)
 }

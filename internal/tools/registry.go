@@ -85,6 +85,10 @@ type Registration struct {
 	Tool       Tool
 	Tier       Tier
 	Privileged bool
+	// Profiles, when set, are the only profiles that register the tool
+	// (each still subject to its tier); a name may then be registered again
+	// for other profiles.
+	Profiles []Profile
 }
 
 // Registry is the set of all tools the binary knows. It is built at startup
@@ -146,3 +150,11 @@ func (r *Registry) ToolsForProfile(p Profile, disabled []string) []Registration 
 	slices.SortFunc(out, func(a, b Registration) int { return strings.Compare(a.Tool.Def.Name, b.Tool.Def.Name) })
 	return out
 }
+
+// RegisterFor adds a tool that only the given profiles register. Stub.
+func (r *Registry) RegisterFor(tool Tool, tier Tier, profiles []Profile) error {
+	return errors.New("tools: RegisterFor is not implemented")
+}
+
+// All returns every registration, sorted by name and then tier. Stub.
+func (r *Registry) All() []Registration { return nil }

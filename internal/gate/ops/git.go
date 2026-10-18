@@ -5,8 +5,11 @@ package ops
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -496,8 +499,21 @@ func (r *gitRepo) discardPreview() (gitDiscardData, error) {
 	return d, nil
 }
 
+// discardPreviewArgs are git_discard_preview's arguments.
+type discardPreviewArgs struct {
+	Repo             string `json:"repo"`
+	IncludeUntracked bool   `json:"include_untracked"`
+}
+
+// discardArgs are git_discard's arguments.
+type discardArgs struct {
+	Repo                  string `json:"repo"`
+	IncludeUntracked      bool   `json:"include_untracked"`
+	ExpectedPreviewSHA256 string `json:"expected_preview_sha256"`
+}
+
 func (s *server) gitDiscardPreview(raw jsontext.Value) (data any, warns []string, failure error) {
-	var a repoArgs
+	var a discardPreviewArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
 	}
@@ -512,13 +528,32 @@ func (s *server) gitDiscardPreview(raw jsontext.Value) (data any, warns []string
 	if err != nil {
 		return nil, nil, err
 	}
-	return d, nil, nil
+	return stubShape(&d, a.IncludeUntracked), nil, nil
+}
+
+// stubShape gives the S1b result the new shape, without binding anything
+// (stub for the failing tests).
+func stubShape(d *gitDiscardData, inc bool) map[string]any {
+	first := []map[string]string{}
+	for _, p := range d.Reset {
+		first = append(first, map[string]string{"path": p, "status": "", "action": "restore"})
+	}
+	for _, p := range d.Remove {
+		first = append(first, map[string]string{"path": p, "status": "??", "action": "remove"})
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprint(d.Reset, d.Remove)))
+	out := map[string]any{"repo": d.Repo, "include_untracked": inc, "restore": len(d.Reset), "remove": 0, "untracked": len(d.Remove),
+		"entries": len(first), "first": first, "skipped": d.Skipped, "preview_sha256": hex.EncodeToString(sum[:]), "applied": d.Applied}
+	if d.CleanAt != nil {
+		out["clean_after"] = *d.CleanAt
+	}
+	return out
 }
 
 // gitDiscard runs `reset --hard` and `clean -f -d` on a repository inside a
 // write root and reports what it changed (the preview taken just before).
 func (s *server) gitDiscard(raw jsontext.Value) (data any, warns []string, failure error) {
-	var a repoArgs
+	var a discardArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
 	}
@@ -550,5 +585,5 @@ func (s *server) gitDiscard(raw jsontext.Value) (data any, warns []string, failu
 	if !clean {
 		warnings = append(warnings, "the working tree still has changes after the discard (for example nested repositories, which are skipped)")
 	}
-	return d, warnings, nil
+	return stubShape(&d, a.IncludeUntracked), warnings, nil
 }

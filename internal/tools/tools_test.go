@@ -103,7 +103,7 @@ func newHarnessWith(t *testing.T, targets []config.Target, clients map[string]*s
 		t.Fatal(err)
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "shell-mcp", Version: "test"}, nil)
-	for _, r := range reg.ToolsForProfile(ProfileAdmin, nil) {
+	for _, r := range reg.ToolsForProfile(Profile(d.Principal.Profile), nil) {
 		r.Tool.Install(server)
 	}
 	ct, st := mcp.NewInMemoryTransports()

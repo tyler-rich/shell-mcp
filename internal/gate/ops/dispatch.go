@@ -114,6 +114,9 @@ func (s *server) dispatch() *protocol.Response {
 	case op == protocol.OpExec:
 		data, warnings, err := s.exec(s.req.Args)
 		return s.result(data, warnings, err)
+	case op == protocol.OpExecPreview:
+		data, warnings, err := s.execPreview(s.req.Args)
+		return s.result(data, warnings, err)
 	}
 	spec, ok := opTable()[op]
 	if !ok {
