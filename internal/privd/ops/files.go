@@ -55,14 +55,52 @@ type mkdirArgs struct {
 }
 
 type chownArgs struct {
-	Path  string `json:"path"`
-	Owner string `json:"owner"`
-	Group string `json:"group"`
+	Path      string `json:"path"`
+	Owner     string `json:"owner"`
+	Group     string `json:"group"`
+	Recursive bool   `json:"recursive"`
+	// ExpectedPreviewSHA256 is priv_chown_preview's preview_sha256 (P-3).
+	ExpectedPreviewSHA256 string `json:"expected_preview_sha256"`
 }
 
 type chmodArgs struct {
-	Path string `json:"path"`
-	Mode string `json:"mode"`
+	Path      string `json:"path"`
+	Mode      string `json:"mode"`
+	Recursive bool   `json:"recursive"`
+	// ExpectedPreviewSHA256 is priv_chmod_preview's preview_sha256 (P-3).
+	ExpectedPreviewSHA256 string `json:"expected_preview_sha256"`
+}
+
+// STUB (S4c-3 failing-tests commit): the previews answer with fsx's stub plan.
+type chownPreviewArgs struct {
+	Path      string `json:"path"`
+	Owner     string `json:"owner"`
+	Group     string `json:"group"`
+	Recursive bool   `json:"recursive"`
+}
+
+type chmodPreviewArgs struct {
+	Path      string `json:"path"`
+	Mode      string `json:"mode"`
+	Recursive bool   `json:"recursive"`
+}
+
+func (s *server) chownPreview(raw jsontext.Value) (data any, warns []string, failure error) {
+	var a chownPreviewArgs
+	if err := decode(raw, &a); err != nil {
+		return nil, nil, err
+	}
+	r, err := s.fs.PreviewMeta(a.Path, fsx.MetaChange{Op: fsx.MetaChown}, a.Recursive, s.p.SHA256)
+	return map[string]any{"path": r.Path, "preview_sha256": r.PreviewSHA256}, nil, err
+}
+
+func (s *server) chmodPreview(raw jsontext.Value) (data any, warns []string, failure error) {
+	var a chmodPreviewArgs
+	if err := decode(raw, &a); err != nil {
+		return nil, nil, err
+	}
+	r, err := s.fs.PreviewMeta(a.Path, fsx.MetaChange{Op: fsx.MetaChmod}, a.Recursive, s.p.SHA256)
+	return map[string]any{"path": r.Path, "preview_sha256": r.PreviewSHA256}, nil, err
 }
 
 type srcDstArgs struct {

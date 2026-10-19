@@ -142,6 +142,8 @@ type ident struct {
 	dev, ino, mnt uint64
 	typ           uint32 // S_IFMT bits
 	perm          uint32 // permission bits (git_discard compares them; a delete does not)
+	uid, gid      uint32 // owner and group (the helper's chown and chmod)
+	nlink         uint32 // link count (the helper's chown and chmod)
 	size          int64
 	ctime, btime  unix.StatxTimestamp
 	hasBtime      bool

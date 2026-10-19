@@ -317,3 +317,29 @@ func TestCheckPolicyProbesRenameFlags(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckPolicyChecksTheChain (handoff N-1): check-policy warns about
+// every privileged write root with a directory on its path that another
+// account could write (owned by an untrusted uid, or group- or
+// world-writable): chmod and chown are refused under such a root.
+func TestCheckPolicyChecksTheChain(t *testing.T) {
+	y := strings.Replace(validPolicy, "write: [{D}/etc/example-app]", "write: [{D}/etc/example-app, {D}/srv/drop/app]", 1)
+	env, p := testEnv(t, y)
+	d := filepath.Dir(filepath.Dir(filepath.Dir(p)))
+	drop := filepath.Join(d, "srv", "drop")
+	gatetest.Mkdir(t, filepath.Join(drop, "app"), 0o755)
+	if err := os.Chmod(drop, 0o777); err != nil { //nolint:gosec // G302: another account's write access, simulated
+		t.Fatal(err)
+	}
+	var so, se bytes.Buffer
+	_ = checkPolicyWith([]string{"--policy", p}, &so, &se, env)
+	out := so.String()
+	for _, want := range []string{
+		"ok   privileged write root " + filepath.Join(d, "etc", "example-app") + ": every directory from / to it is root's",
+		"WARN privileged write root " + filepath.Join(drop, "app") + ": " + drop + " is group- or world-writable (mode 0777); chmod and chown are refused under it",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report lacks %q:\n%s", want, out)
+		}
+	}
+}

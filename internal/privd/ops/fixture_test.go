@@ -48,6 +48,8 @@ type fixture struct {
 	unreadAtSandbox int
 	unread          int
 	helperFD        int
+	// extraGroups are further groups the fake lookups know (withStaff).
+	extraGroups map[string]uint32
 	// statusReads and lookups count what the checks read from the host.
 	statusReads, lookups int
 }
@@ -122,6 +124,11 @@ func replace(from, to string) opt {
 		}
 		*s = strings.Replace(*s, from, to, 1)
 	}
+}
+
+// withStaff makes the fake lookups resolve the group staff to gid.
+func withStaff(gid uint32) opt {
+	return func(f *fixture, _ *string) { f.extraGroups = map[string]uint32{"staff": gid} }
 }
 
 func keep(n int) opt {
@@ -218,6 +225,9 @@ commands:
 				return 0, errors.New("unknown user")
 			}
 			o.LookupGroup = func(n string) (uint32, error) {
+				if id, ok := f.extraGroups[n]; ok {
+					return id, nil
+				}
 				if id, ok := groups[n]; ok {
 					return id, nil
 				}

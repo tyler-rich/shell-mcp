@@ -100,6 +100,16 @@ type Config struct {
 	// helper uses it to tell a failed operation that changed nothing from one
 	// that did; the gate leaves it nil.
 	OnCommit func()
+	// TrustedDirOwner decides whose directories PreviewMeta and ApplyMeta
+	// trust on the path to an entry and inside a tree: a directory must be
+	// owned by a uid it accepts and be neither group- nor world-writable
+	// (PRIVILEGED §6, handoff N-1). nil trusts uid 0 only. The helper sets
+	// it from its trust (root); the gate does not use those functions.
+	TrustedDirOwner func(uid uint32) bool
+	// InjectMetaStep, when non-nil, is called at each point of ApplyMeta's
+	// pass with the logical path of the entry concerned (the target's for
+	// MetaStepAfterCompare). Tests only; production code never sets it.
+	InjectMetaStep func(step MetaStep, path string)
 }
 
 // Meta is an inode's mode (permission and special bits), owner and group.

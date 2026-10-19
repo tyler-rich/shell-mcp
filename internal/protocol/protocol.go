@@ -163,6 +163,10 @@ const (
 	// OpPrivBackupCheck says whether an overwrite of a path would write a
 	// backup and whether it fits the backup store (handoff P-11; core).
 	OpPrivBackupCheck = "priv_backup_check"
+	// OpPrivChownPreview and OpPrivChmodPreview report what a chown or chmod
+	// would change, with the hash the operation requires (handoff P-2b; core).
+	OpPrivChownPreview = "priv_chown_preview"
+	OpPrivChmodPreview = "priv_chmod_preview"
 )
 
 // PrivOps lists every privileged operation.
@@ -171,6 +175,7 @@ var PrivOps = []string{
 	OpPrivChmod, OpPrivCopy, OpPrivMove, OpPrivListBackups, OpPrivRestoreBackup, OpPrivDelete,
 	OpPrivExec, OpPrivPkgUpdateIndex, OpPrivPkgInstall, OpPrivPkgUpgrade, OpPrivPkgRemove,
 	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPower, OpPrivBackupCheck,
+	OpPrivChownPreview, OpPrivChmodPreview,
 }
 
 // Tier names on the wire: a request's ceiling, and max_tier in the gate
