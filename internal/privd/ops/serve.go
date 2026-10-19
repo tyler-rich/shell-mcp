@@ -165,8 +165,12 @@ type server struct {
 	// provably unchanged (the audit line records them).
 	discarded []string
 	// changed are the entries chmod or chown changed, with their old
-	// values, for the audit line.
-	changed []auditChange
+	// values, for the audit line (bounded: recordChanges); changedTotal
+	// counts every one, changedBytes the list's encoded size.
+	changed          []auditChange
+	changedTotal     int
+	changedBytes     int
+	changedTruncated bool
 }
 
 // Serve handles one connection and returns the process exit code: 0 when a
@@ -451,7 +455,10 @@ func (s *server) run(nc net.Conn) *protocol.Response {
 		VerifyMetadata: true,
 		// Every replace is an exchange checked afterwards, so a destination
 		// changed after it was checked is never lost (S4c-2).
-		VerifyReplaced:              true,
+		VerifyReplaced: true,
+		// chmod and chown change an entry only when no account but root
+		// could have put it there (handoff N-1, PRIVILEGED §6).
+		TrustedDirOwner:             o.Trust.Owns,
 		InjectBeforeBackup:          o.InjectBeforeBackup,
 		InjectExchangeFault:         o.InjectExchangeFault,
 		InjectReadBackFault:         o.InjectReadBackFault,

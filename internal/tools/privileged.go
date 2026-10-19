@@ -23,7 +23,7 @@ import (
 // is defined with.
 func privilegedTools(d *Deps) []Tool {
 	return []Tool{privReadFile(d), privListDirectory(d), privStatPath(d), privListBackups(d),
-		privWriteFile(d), privMakeDirectory(d), privCopyPath(d), privMovePath(d)}
+		privWriteFile(d), privMakeDirectory(d), privCopyPath(d), privMovePath(d), privChangeOwner(d), privSetPermissions(d)}
 }
 
 type listBackupsIn struct {

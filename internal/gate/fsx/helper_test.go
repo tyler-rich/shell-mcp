@@ -96,35 +96,37 @@ func TestMkdirAsOwner(t *testing.T) {
 	}
 }
 
-func TestChown(t *testing.T) {
-	e := newEnv(t)
+// TestChownBound is S4c-0's TestChown through the helper's bound chown
+// (ApplyMeta), which replaced fsx.Chown.
+func TestChownBound(t *testing.T) {
+	e := newMetaEnv(t, 20)
 	uid, gid := ids(t)
 	p := filepath.Join(e.write, "app.yaml")
-	r, err := e.fs.Chown(p, Owner{GID: &gid})
+	r, err := bound(t, e, p, MetaChange{Op: MetaChown, GID: &gid}, false)
 	must(t, err)
-	if r.Path != p || r.GID != gid || r.UID != uid || r.OldUID != uid {
+	if r.Path != p || r.Top.NewGID != gid || r.Top.NewUID != uid || r.Top.UID != uid || !r.Done {
 		t.Fatalf("result %+v", r)
 	}
-	_, err = e.fs.Chown(p, Owner{})
+	_, err = bound(t, e, p, MetaChange{Op: MetaChown}, false)
 	wantCode(t, err, protocol.CodeBadRequest)
-	_, err = e.fs.Chown(filepath.Join(e.read, "hello.txt"), Owner{GID: &gid})
+	_, err = bound(t, e, filepath.Join(e.read, "hello.txt"), MetaChange{Op: MetaChown, GID: &gid}, false)
 	wantCode(t, err, protocol.CodePathDenied)
 	must(t, os.Symlink(p, filepath.Join(e.write, "link")))
-	_, err = e.fs.Chown(filepath.Join(e.write, "link"), Owner{GID: &gid})
+	_, err = bound(t, e, filepath.Join(e.write, "link"), MetaChange{Op: MetaChown, GID: &gid}, false)
 	wantCode(t, err, protocol.CodePathDenied)
 	put(t, filepath.Join(e.write, "locked"), "x")
-	_, err = e.fs.Chown(filepath.Join(e.write, "locked"), Owner{GID: &gid})
+	_, err = bound(t, e, filepath.Join(e.write, "locked"), MetaChange{Op: MetaChown, GID: &gid}, false)
 	wantCode(t, err, protocol.CodePathDenied)
 	sgid := filepath.Join(e.write, "sgid")
 	put(t, sgid, "x")
-	must(t, os.Chmod(sgid, 0o2750)) //nolint:gosec // G302: a deliberately insecure or test fixture mode
+	must(t, os.Chmod(sgid, 0o750|fs.ModeSetgid))
 	if fi, _ := os.Stat(sgid); fi.Mode()&fs.ModeSetgid != 0 {
-		_, err = e.fs.Chown(sgid, Owner{GID: &gid})
+		_, err = bound(t, e, sgid, MetaChange{Op: MetaChown, GID: &gid}, false)
 		wantCode(t, err, protocol.CodePolicyDenied)
 	}
 	if os.Getuid() != 0 {
 		root := uint32(0)
-		_, err = e.fs.Chown(p, Owner{UID: &root})
+		_, err = bound(t, e, p, MetaChange{Op: MetaChown, UID: &root}, false)
 		wantCode(t, err, protocol.CodePathDenied)
 	}
 }

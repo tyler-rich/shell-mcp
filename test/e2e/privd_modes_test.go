@@ -37,10 +37,15 @@ func TestHelperHardLinkChmodChown(t *testing.T) {
 		{"priv_chmod", map[string]any{"path": link, "mode": "0600"}},
 		{"priv_chown", map[string]any{"path": link, "owner": "example-app", "group": "example-app"}},
 	} {
-		r, _ := gate(t, svcShell, c.op, c.args)
+		r, _ := gate(t, svcShell, c.op+"_preview", c.args)
 		if r.code() != "path_denied" || !strings.Contains(r.Error.Message, link) || !strings.Contains(r.Error.Message, "2 links") {
 			t.Fatalf("%s through a hard link: %s %+v, want path_denied naming the path and 2 links", c.op, r.code(), r.Error)
 		}
+		a := map[string]any{"expected_preview_sha256": strings.Repeat("0", 64)}
+		for k, v := range c.args {
+			a[k] = v
+		}
+		wantGate(t, svcShell, c.op, a, "path_denied")
 	}
 	mode1, st1 := stat()
 	if mode1 != mode0 || st1.Uid != st0.Uid || st1.Gid != st0.Gid || st1.Ctim != st0.Ctim {
@@ -50,8 +55,8 @@ func TestHelperHardLinkChmodChown(t *testing.T) {
 	single := "/etc/example-app/e2e-single.conf"
 	mustGate(t, "priv_write_file", map[string]any{"path": single, "content_b64": "eAo="}, nil)
 	t.Cleanup(func() { _ = os.Remove(single) })
-	mustGate(t, "priv_chmod", map[string]any{"path": single, "mode": "0600"}, nil)
-	mustGate(t, "priv_chown", map[string]any{"path": single, "group": "example-app"}, nil)
+	mustGateMeta(t, "priv_chmod", map[string]any{"path": single, "mode": "0600"})
+	mustGateMeta(t, "priv_chown", map[string]any{"path": single, "group": "example-app"})
 }
 
 // In the core unit, a write over a file and a copy of a file whose modes

@@ -130,11 +130,14 @@ func TestChmodChownRefuseHardLinks(t *testing.T) {
 		{"priv_chown", m{"path": link, "group": "tester"}},
 		{"priv_chown", m{"path": link, "owner": "tester"}},
 	} {
-		r := f.serve(c.op, c.args)
+		r := f.serve(c.op+"_preview", c.args)
 		if r.OK || r.Error == nil || r.Error.Code != "path_denied" ||
 			!strings.Contains(r.Error.Message, link) || !strings.Contains(r.Error.Message, "2 links") {
 			t.Fatalf("%s through a hard link: ok=%v %+v, want path_denied naming the path and 2 links", c.op, r.OK, r.Error)
 		}
+		a := clone(c.args)
+		a["expected_preview_sha256"] = strings.Repeat("0", 64)
+		f.fail(c.op, a, "path_denied")
 	}
 	after := mustStat(t, outside)
 	if modeOf(t, outside) != 0o644 || after.Uid != before.Uid || after.Gid != before.Gid || after.Ctim != before.Ctim {
@@ -143,33 +146,36 @@ func TestChmodChownRefuseHardLinks(t *testing.T) {
 
 	// A single-link file and a directory (whose link count is 2 or more) are changed.
 	one := filepath.Join(f.write, "app.conf")
-	f.ok("priv_chmod", m{"path": one, "mode": "0600"}, nil)
-	f.ok("priv_chown", m{"path": one, "group": "tester"}, nil)
+	f.bound("priv_chmod", m{"path": one, "mode": "0600"}, nil)
+	f.bound("priv_chown", m{"path": one, "group": "tester"}, nil)
 	dir := filepath.Join(f.write, "dir")
 	gatetest.Mkdir(t, filepath.Join(dir, "sub"), 0o750)
 	if mustStat(t, dir).Nlink < 3 {
 		t.Fatalf("directory link count %d", mustStat(t, dir).Nlink)
 	}
-	f.ok("priv_chmod", m{"path": dir, "mode": "0700"}, nil)
-	f.ok("priv_chown", m{"path": dir, "group": "tester"}, nil)
+	f.bound("priv_chmod", m{"path": dir, "mode": "0700"}, nil)
+	f.bound("priv_chown", m{"path": dir, "group": "tester"}, nil)
 	if modeOf(t, one) != 0o600 || modeOf(t, dir) != 0o700 {
 		t.Fatalf("modes %04o %04o", modeOf(t, one), modeOf(t, dir))
 	}
 }
 
 // After fchmod or fchown the helper re-reads the inode through the same
-// descriptor; a mismatch is verify_failed, never a success.
+// descriptor; a mismatch is verify_failed, never a success. An entry
+// already as asked is not changed, so nothing is read back for it (a chown
+// to the test's own group; TestPrivMetaChownChanges reads back a real one
+// where the test has a supplementary group, and e2e-host as root).
 func TestChmodChownReadBack(t *testing.T) {
 	f := newFixture(t)
 	p := filepath.Join(f.write, "app.conf")
 	f.opts.InjectMetadataReadBackFault = func(m fsx.Meta) fsx.Meta { m.Mode ^= 0o040; return m }
-	f.fail("priv_chmod", m{"path": p, "mode": "0600"}, "verify_failed")
+	var pv metaPreview
+	f.ok("priv_chmod_preview", m{"path": p, "mode": "0600"}, &pv)
+	f.fail("priv_chmod", m{"path": p, "mode": "0600", "expected_preview_sha256": pv.PreviewSHA256}, "verify_failed")
 	f.opts.InjectMetadataReadBackFault = func(m fsx.Meta) fsx.Meta { m.GID++; return m }
-	f.fail("priv_chown", m{"path": p, "group": "tester"}, "verify_failed")
-	f.opts.InjectMetadataReadBackFault = func(m fsx.Meta) fsx.Meta { m.UID++; return m }
-	f.fail("priv_chown", m{"path": p, "owner": "tester"}, "verify_failed")
+	f.bound("priv_chown", m{"path": p, "group": "tester"}, nil) // already the test's group: nothing changed
 	f.opts.InjectMetadataReadBackFault = nil
-	f.ok("priv_chmod", m{"path": p, "mode": "0600"}, nil)
+	f.bound("priv_chmod", m{"path": p, "mode": "0640"}, nil)
 }
 
 // The helper's audit line records the old mode, owner and group of the
@@ -197,14 +203,15 @@ func TestChmodChownAuditOldValues(t *testing.T) {
 		return l.Changed
 	}
 	want := []change{{Path: p, OldMode: "0640", OldUID: f.uid, OldGID: f.gid}}
-	f.ok("priv_chmod", m{"path": p, "mode": "0600"}, nil)
+	f.bound("priv_chmod", m{"path": p, "mode": "0600"}, nil)
 	if got := changed(); len(got) != 1 || got[0] != want[0] {
 		t.Fatalf("chmod changed %+v, want %+v", got, want)
 	}
-	want[0].OldMode = "0600"
-	f.ok("priv_chown", m{"path": p, "group": "tester"}, nil)
-	if got := changed(); len(got) != 1 || got[0] != want[0] {
-		t.Fatalf("chown changed %+v, want %+v", got, want)
+	// A chown to the group the file already has changes nothing, and records
+	// nothing (TestPrivMetaChownChanges records a real one).
+	f.bound("priv_chown", m{"path": p, "group": "tester"}, nil)
+	if got := changed(); len(got) != 0 {
+		t.Fatalf("a chown that changed nothing recorded %+v", got)
 	}
 	f.fail("priv_chmod", m{"path": p, "mode": "0777"}, "policy_denied")
 	if got := changed(); len(got) != 0 {

@@ -106,9 +106,31 @@ type auditChange struct {
 	OldGID  uint32 `json:"old_gid"`
 }
 
-// recordChange notes an entry chmod or chown changed.
-func (s *server) recordChange(p string, before fsx.Meta) {
-	s.changed = append(s.changed, auditChange{Path: auditText(p), OldMode: fmt.Sprintf("%04o", before.Mode), OldUID: before.UID, OldGID: before.GID})
+// Bounds on the changed list of one audit line (handoff Q8, D4): at most
+// this many entries and this many bytes of them; the line then carries the
+// total and changed_truncated.
+const (
+	maxAuditChanged      = 100
+	maxAuditChangedBytes = 32 << 10
+)
+
+// recordChanges notes the entries chmod or chown changed, within the
+// bounds; every one counts in changed_total.
+func (s *server) recordChanges(cs []fsx.MetaChanged) {
+	for _, c := range cs {
+		s.changedTotal++
+		if s.changedTruncated {
+			continue
+		}
+		e := auditChange{Path: auditText(c.Path), OldMode: fmt.Sprintf("%04o", c.Before.Mode), OldUID: c.Before.UID, OldGID: c.Before.GID}
+		b, _ := json.Marshal(e) // a plain struct of strings and numbers
+		if len(s.changed) == maxAuditChanged || s.changedBytes+len(b)+1 > maxAuditChangedBytes {
+			s.changedTruncated = true
+			continue
+		}
+		s.changed = append(s.changed, e)
+		s.changedBytes += len(b) + 1 // and its comma
+	}
 }
 
 type auditLine struct {
@@ -123,10 +145,14 @@ type auditLine struct {
 	// failed provably unchanged.
 	BackupIDsDiscarded []string      `json:"backup_ids_discarded,omitempty"`
 	Changed            []auditChange `json:"changed,omitempty"`
-	Outcome            string        `json:"outcome"`
-	Check              string        `json:"check,omitempty"`
-	Detail             string        `json:"detail,omitempty"`
-	DurationMS         int64         `json:"duration_ms"`
+	// ChangedTotal is how many entries were changed, ChangedTruncated set
+	// when changed lists fewer of them (at most 100 entries or 32 KiB).
+	ChangedTotal     int    `json:"changed_total,omitempty"`
+	ChangedTruncated bool   `json:"changed_truncated,omitempty"`
+	Outcome          string `json:"outcome"`
+	Check            string `json:"check,omitempty"`
+	Detail           string `json:"detail,omitempty"`
+	DurationMS       int64  `json:"duration_ms"`
 }
 
 func (s *server) writeAudit(pri int, l *auditLine) {
@@ -171,7 +197,8 @@ func (s *server) auditRefusal(err error, code string) {
 // a refused operation.
 func (s *server) auditRequest(resp *protocol.Response) {
 	uid, pid := s.cred.UID, s.cred.PID
-	l := &auditLine{PeerUID: &uid, PeerPID: &pid, Outcome: "ok", BackupIDs: s.ids(), BackupIDsDiscarded: s.discarded, Changed: s.changed}
+	l := &auditLine{PeerUID: &uid, PeerPID: &pid, Outcome: "ok", BackupIDs: s.ids(), BackupIDsDiscarded: s.discarded, Changed: s.changed,
+		ChangedTotal: s.changedTotal, ChangedTruncated: s.changedTruncated}
 	if s.req != nil {
 		l.ID, l.Ceiling, l.Op, l.Args = s.req.ID, s.req.Ceiling, auditText(s.req.Op), sanitizeArgs(s.req.Args)
 	}

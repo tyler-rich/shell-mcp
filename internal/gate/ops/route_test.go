@@ -91,6 +91,8 @@ func TestRouting(t *testing.T) {
 	}{
 		"priv_stat":                {`{"path":"/etc/example-app"}`, "core"},
 		"priv_backup_check":        {`{"path":"/etc/example-app/x"}`, "core"},
+		"priv_chown_preview":       {`{"path":"/etc/example-app/x","owner":"root"}`, "core"},
+		"priv_chmod_preview":       {`{"path":"/etc/example-app/x","mode":"0640","recursive":true}`, "core"},
 		"priv_write_file":          {`{"path":"/etc/example-app/x","content_b64":"eA=="}`, "core"},
 		"priv_delete":              {`{"path":"/etc/example-app/x"}`, "core"},
 		"priv_exec":                {`{"command_id":"probe","args":[]}`, "core"},
@@ -191,5 +193,30 @@ func TestBackupCheckIsReadTier(t *testing.T) {
 	r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"priv_backup_check","args":{"path":"/etc/example-app/x"},"timeout_ms":2000}` + "\n")
 	if !r.OK || string(r.Data) != `{"from":"core"}` || h.count(coreSock) != 1 {
 		t.Fatalf("priv_backup_check at ceiling read: %s %+v", r.Data, r.Error)
+	}
+}
+
+// The chown and chmod previews (handoff P-2b) are read-tier core ops: sent
+// to the core socket under privileged.max_tier read at ceiling read, while
+// the operations themselves are refused there.
+func TestMetaPreviewsAreReadTier(t *testing.T) {
+	f := newFixture(t, "read")
+	pol := "privileged:\n  enabled: true\n  socket: " + coreSock + "\n  broad_socket: " + broadSock + "\n  max_tier: read\n"
+	h := startTwoHelpers(t, f, pol)
+	f.writePolicy("read", pol)
+	for _, op := range []string{`"priv_chown_preview","args":{"path":"/etc/example-app/x","group":"root"}`, `"priv_chmod_preview","args":{"path":"/etc/example-app/x","mode":"0640"}`} {
+		r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":` + op + `,"timeout_ms":2000}` + "\n")
+		if !r.OK || string(r.Data) != `{"from":"core"}` {
+			t.Fatalf("%s at ceiling read: %s %+v", op, r.Data, r.Error)
+		}
+	}
+	for _, op := range []string{`"priv_chown","args":{"path":"/etc/example-app/x","group":"root"}`, `"priv_chmod","args":{"path":"/etc/example-app/x","mode":"0640"}`} {
+		r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":` + op + `,"timeout_ms":2000}` + "\n")
+		if r.OK || r.Error == nil || r.Error.Code != "tier_denied" {
+			t.Fatalf("%s at ceiling read: %+v", op, r.Error)
+		}
+	}
+	if h.count(coreSock) != 2 || h.count(broadSock) != 0 {
+		t.Fatalf("core %d broad %d", h.count(coreSock), h.count(broadSock))
 	}
 }

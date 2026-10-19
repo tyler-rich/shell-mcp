@@ -445,8 +445,8 @@ func TestHelperOperations(t *testing.T) {
 	if st := fi.Sys().(*syscall.Stat_t); st.Uid != exampleApp || st.Gid != exampleApp {
 		t.Fatalf("owner %d:%d", st.Uid, st.Gid)
 	}
-	mustGate(t, "priv_chown", map[string]any{"path": f, "owner": "root", "group": "root"}, nil)
-	mustGate(t, "priv_chmod", map[string]any{"path": f, "mode": "0600"}, nil)
+	mustGateMeta(t, "priv_chown", map[string]any{"path": f, "owner": "root", "group": "root"})
+	mustGateMeta(t, "priv_chmod", map[string]any{"path": f, "mode": "0600"})
 	wantGate(t, svcShell, "priv_chown", map[string]any{"path": f, "owner": "svc-shell"}, "policy_denied")
 	wantGate(t, svcShell, "priv_chmod", map[string]any{"path": f, "mode": "4755"}, "policy_denied")
 	mustGate(t, "priv_copy", map[string]any{"source": f, "destination": dir + "/copy.conf"}, nil)

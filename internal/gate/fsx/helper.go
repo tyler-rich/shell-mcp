@@ -16,7 +16,7 @@ import (
 )
 
 // What the privileged helper adds to fsx (PRIVILEGED §6): an explicit owner
-// on writes and mkdir, Chown, and a backup hook called before every
+// on writes and mkdir, the bound chown and chmod (meta_exact.go), and a backup hook called before every
 // overwrite, move-over and delete. The gate sets none of them, so its
 // behaviour is unchanged.
 
@@ -26,16 +26,14 @@ type Owner struct {
 	UID, GID *uint32
 }
 
-// ChownResult is chown's result.
+// ChownResult is the helper's priv_chown result (the target's owner and
+// group before and after).
 type ChownResult struct {
 	Path   string `json:"path"`
 	OldUID uint32 `json:"old_uid"`
 	OldGID uint32 `json:"old_gid"`
 	UID    uint32 `json:"uid"`
 	GID    uint32 `json:"gid"`
-	// Before and Changed are as in ChmodResult (the helper's audit).
-	Before  Meta `json:"-"`
-	Changed bool `json:"-"`
 }
 
 // Backup kinds.
@@ -184,62 +182,6 @@ func (f *FS) openEntry(l *loc, e *treeEntry) (*os.File, error) {
 		return nil, e
 	}
 	return file, nil
-}
-
-// Chown sets the owner and/or group of p under a write root, through a
-// descriptor opened without following a final symlink. Only regular files
-// and directories; a file with setuid, setgid or sticky bits, or with more
-// than one link (singleLink), is refused.
-func (f *FS) Chown(p string, o Owner) (ChownResult, error) {
-	if o.UID == nil && o.GID == nil {
-		return ChownResult{}, errf(protocol.CodeBadRequest, "an owner or a group is required")
-	}
-	l, err := f.locate(p, true)
-	if err != nil {
-		return ChownResult{}, err
-	}
-	defer l.close()
-	file, err := f.openTarget(l)
-	if err != nil {
-		return ChownResult{}, err
-	}
-	defer func() { _ = file.Close() }()
-	fi, err := file.Stat()
-	if err != nil {
-		return ChownResult{}, mapErr(err)
-	}
-	if !fi.Mode().IsRegular() && !fi.IsDir() {
-		return ChownResult{}, errf(protocol.CodeBadRequest, "only regular files and directories")
-	}
-	if unixMode(fi)&0o7000 != 0 {
-		return ChownResult{}, errf(protocol.CodePolicyDenied, "files with setuid, setgid or sticky bits are never changed")
-	}
-	if e := singleLink(p, fi); e != nil {
-		return ChownResult{}, e
-	}
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return ChownResult{}, errf(protocol.CodeInternal, "no owner information")
-	}
-	res := ChownResult{Path: p, OldUID: st.Uid, OldGID: st.Gid, UID: st.Uid, GID: st.Gid, Before: metaOf(fi)}
-	uid, gid := -1, -1
-	if o.UID != nil {
-		uid, res.UID = int(*o.UID), *o.UID
-	}
-	if o.GID != nil {
-		gid, res.GID = int(*o.GID), *o.GID
-	}
-	if err := file.Chown(uid, gid); err != nil {
-		return ChownResult{}, mapErr(err)
-	}
-	f.commit()
-	res.Changed = true
-	want := res.Before
-	want.UID, want.GID = res.UID, res.GID
-	if e := f.verifyMeta(file, want); e != nil {
-		return res, e
-	}
-	return res, nil
 }
 
 // String renders an owner for messages.

@@ -54,17 +54,6 @@ type mkdirArgs struct {
 	Group   string `json:"group"`
 }
 
-type chownArgs struct {
-	Path  string `json:"path"`
-	Owner string `json:"owner"`
-	Group string `json:"group"`
-}
-
-type chmodArgs struct {
-	Path string `json:"path"`
-	Mode string `json:"mode"`
-}
-
 type srcDstArgs struct {
 	Source      string `json:"source"`
 	Destination string `json:"destination"`
@@ -283,44 +272,6 @@ func (s *server) mkdir(raw jsontext.Value) (data any, warns []string, failure er
 		return nil, nil, err
 	}
 	return mkdirData{MkdirResult: r, ownerData: s.ownerOf(r.UID, r.GID)}, nil, nil
-}
-
-func (s *server) chown(raw jsontext.Value) (data any, warns []string, failure error) {
-	var a chownArgs
-	if err := decode(raw, &a); err != nil {
-		return nil, nil, err
-	}
-	owner, err := s.owner(a.Owner, a.Group)
-	if err != nil {
-		return nil, nil, err
-	}
-	if owner == nil {
-		return nil, nil, errf(protocol.CodeBadRequest, "owner or group is required")
-	}
-	r, err := s.fs.Chown(a.Path, *owner)
-	if r.Changed {
-		s.recordChange(a.Path, r.Before)
-	}
-	return r, nil, err
-}
-
-func (s *server) chmod(raw jsontext.Value) (data any, warns []string, failure error) {
-	var a chmodArgs
-	if err := decode(raw, &a); err != nil {
-		return nil, nil, err
-	}
-	if a.Mode == "" {
-		return nil, nil, errf(protocol.CodeBadRequest, "mode is required")
-	}
-	mode, err := s.mode(a.Mode)
-	if err != nil {
-		return nil, nil, err
-	}
-	r, err := s.fs.Chmod(a.Path, *mode)
-	if r.Changed {
-		s.recordChange(a.Path, r.Before)
-	}
-	return r, nil, err
 }
 
 func (s *server) copy(raw jsontext.Value) (data any, warns []string, failure error) {

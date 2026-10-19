@@ -2463,3 +2463,102 @@ Every other write in fsx and the helper opens with `O_CREAT|O_EXCL` (temporary f
 - **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+
+### 2026-10-19 — Privileged chown and chmod, recursive, bound to their preview; N-1 and N-2 (PR #32, branch feat/priv-chown-chmod)
+**Decision:** Build the handoff's S4c-3 entry (`docs/handoff/S4C-PRIVILEGED.md` §5). Root changes the owner or mode of existing inodes in place, so before these tools are exposed the helper must change exactly the inodes the approver saw (D4), never an inode with another name outside the roots (F-2), and never an inode another account could have moved in and out again (N-1).
+- **fsx: `PreviewMeta` and `ApplyMeta`** (`internal/gate/fsx/meta_exact.go`, helper only).
+  - **The walk.** The delete's: each directory opened as an `os.Root` from its parent's handle and re-checked, no symlink followed, no other mount entered; shared primitives (`statxAt`, now also reporting owner, group, link count and the statx mask; `inDir`, factored out of `inSubdir`; `readAll`; `crossesMount`).
+  - **Refusals.** Roots (the target and a tree holding one); outside the write roots, denied, protected; final symlinks; mount points; device nodes, FIFOs and sockets in a tree; set-aside names; setuid, setgid and sticky entries; non-directories with more than one link; more than `max_delete_entries`.
+  - **The hash.** D4's list: the change (op, owner, group or mode), `recursive`, the caller's binding (the privileged policy's SHA-256) and every entry's path, type, device, inode, mount id, birth time, owner, group and mode, in walk order.
+  - **The pass.** `ApplyMeta` recomputes the hash (`exists`, nothing changed, on a mismatch). It then changes each entry that needs it, children before their directory and the target last. Each change is made on a descriptor opened by its single-component name from its parent's handle with `O_NOFOLLOW`. That descriptor's statx must show the walk's object (device, inode, type, mount id, birth time) with the walk's owner, group and mode, and a link count of 1 (F-2, on the descriptor that is changed). Then `fchown` or `fchmod`, then a read-back on the same descriptor (`verify_failed`). A stop says "N of M entries were changed and K were not". Symlinks in a tree are listed and never changed.
+- **The chain rule (N-1).** An entry is changed only when every directory from `/` to it is owned by a trusted uid (`Config.TrustedDirOwner`, the helper's trust: root; nil trusts root only) and is neither group- nor world-writable.
+  - The group bits are the ACL mask, an upper bound on every named ACL entry.
+  - `/` to the target's parent is checked by descriptor (`chainCheck`: `O_PATH|O_DIRECTORY|O_NOFOLLOW` from the previous descriptor, statx on each), and the last must be the parent fsx holds.
+  - Inside a tree, every directory that holds entries is checked as the walk opens it.
+  - `fsx.CheckRootChain` applies the rule to a directory itself.
+- **N-2.** `fsx.Chmod` (the gate's `shell_set_permissions`) refuses a file or directory with setuid, setgid or sticky bits (`policy_denied`). `fsx.Chown` is removed: the helper was its only user.
+- **Helper.** `priv_chown_preview` and `priv_chmod_preview` (read, core; P-2b). `priv_chown` and `priv_chmod` require `expected_preview_sha256` (P-3) and take `recursive` (P-4), with the owner allow-lists and `modes.max` checked first. `TrustedDirOwner` is the helper's trust. The audit line's `changed` is bounded at 100 entries or 32 KiB, with `changed_total` and `changed_truncated` (Q8).
+- **Gate.** Both previews are read-tier ops in `privTiers`, routed to the core socket.
+- **check-policy** (helper). One line per privileged write root: `ok   privileged write root <root>: every directory from / to it is root's and not group- or world-writable`, or a WARN naming the failing directory and why, saying chmod and chown are refused under it.
+- **Server.** `shell_priv_change_owner` and `shell_priv_set_permissions` (`internal/tools/priv_meta.go`): admin, operator tier, privileged (always gated), `destructiveHint: true`, `idempotentHint: true`.
+  - **The approval preview** is the helper's preview op's result, bound with both policies' hashes (`privPolicy`).
+  - **The re-call** sends the fresh preview's hash, taken before the server's redaction, as `expected_preview_sha256`.
+  - **Results** carry the approved preview's `entries` and `changed` counts and the target's values.
+  - Catalogue rows added; the snapshot diff is additions only.
+- **Docs.** PRIVILEGED §6 (the two preview rows, the chown and chmod row, "Chown and chmod": walk, chain rule and its consequence, binding, change, no backup) and §8 (the bounded `changed`); POLICY §3 (N-2, and the helper's rules); ARCHITECTURE §3 step 2, §4.1, §4.3; TOOLS.md (the rows, `shell_set_permissions`'s refusal, "Privileged tier: chown and chmod (S4c-3)"); the handoff (S4c-3, N-1, N-2, X-10 status).
+- **Not changed:** the error-code set, the envelope, Landlock (fchown and fchmod need no Landlock right; opening an entry needs `READ_FILE` or `READ_DIR`, which the write roots already grant), the generated units, either policy schema, any locked decision.
+
+**Maintainer decisions during the session (2026-10-19):**
+- **N-1: the chain rule** (recommended) over the owner allow-list. The alternative was rejected: `root` is on `owners.users` in practically every policy (the example policy too), so a root-owned `0600` file moved in, the handoff's own example, would still be changed, and an allow-listed account could take another allow-listed account's files. The trade-off was accepted as stated: everything under a directory an application account owns or can write is refused.
+- **N-2: refuse, the gate too** (recommended).
+- **The "helper self-check warning"**: the helper's self-checks fail closed and have no warning channel. Chosen: `check-policy` WARNs per write root, and at serve time the refusal's journal line is the record; no line per connection.
+
+**Premises checked, and pushback:**
+- **The N-1 alternative does not stop N-1** where `root` is allow-listed (above). Raised before implementing.
+- **D4's hash has no change time.** So on a filesystem that reports no birth time, an entry deleted and created again with the same inode number, owner and mode hashes the same; two of the hash-coverage cases did so on the test volume and were rewritten as replacements by rename. Accepted rather than adding the change time, which would make a busy directory (a log tree being written) unapprovable. Under the chain rule only root can recreate an entry in the directories it accepts. Documented in PRIVILEGED §6.
+- **D4's "roots" applies to the target too,** as in a delete. S4c-0's `priv_chmod` and `priv_chown` accepted a write root itself; now it is refused (a write root's own owner and mode feed the chain rule, and are an install decision).
+- **Entries already as asked are skipped:** no system call, no `changed` record, no read-back. So `changes` counts real changes. An unprivileged test can therefore only show a successful chown with a supplementary group (`TestPrivMetaChownChanges`, skipped where the process has none, as in `scripts/ci-local.sh`'s container). It was run locally with one, and e2e-host runs it as root.
+- **Before each change** the descriptor's owner, group and mode must still equal the walk's, not only its identity (D4 lists identity only). Nothing the operation did can have changed them, because a directory is changed after its children. So a concurrent change to an entry stops the operation instead of being overwritten.
+- **Read-back** moved from `VerifyMetadata` (S4c-0) into `ApplyMeta` unconditionally, since only the helper calls it; `VerifyMetadata` still governs the gate's `Chmod` (off there).
+- **The prompt's N-1 test** ("a root-owned file moved into the root by another account is never changed") cannot run as written in an unprivileged unit test. There, the other account's write access is a world- or group-writable directory, and an untrusted owner is the trust set without the test's uid. The real case runs in e2e-host: `example-app` moves a `root:root 0600` file from a directory it owns outside the roots into one it owns inside `/etc/example-app`.
+
+**Findings:**
+- **The same move-in for overwrites (not fixed; for the maintainer).** `priv_write_file` or `priv_copy` with `overwrite` over a moved-in file gives the new inode the old one's owner, and its mode masked by `modes.max`; `priv_restore_backup` over one is the same. The content was approved, but the account ends up with a root-owned file it chose the content of, wherever it moves it. The chain rule could apply to those destinations, at the cost of refusing every overwrite under an application-owned directory. Recorded in the handoff as N-6 (follow-up below).
+- **The gate's chmod has a non-escalating analogue:** another account that can write a gate write root could move the service account's own file in and have the gate chmod it. The service account could chmod its own file anyway, so nothing is gained beyond the roots' path limit. Not changed.
+
+**Tests (committed failing first, `573e5d0`; output in the PR body).** Inert stubs in that commit: `PreviewMeta` (the target alone, a fixed hash), `ApplyMeta` (S4c-0's chmod and chown of the target, ignoring the hash, recursion and the chain rule), `CheckRootChain` (nil), `appendMetaEntry` (the delete's encoding), the config fields, the op names with stub handlers, the arguments.
+- **fsx:** `TestPreviewMetaReportsTheTree`, `TestApplyMetaChangesThePlan` (children first, symlinks never changed, skipped entries, `EPERM` on the first change reported as nothing changed), `TestApplyMetaReadBack`, `TestApplyMetaRefusals` (every refusal, for both functions, nothing changed), `TestMetaRefusesAMountPoint`, `TestMetaChainRule`, `TestCheckRootChain`, `TestMetaHashCoversEveryEntry`, `TestMetaEntryEncodingCoversEveryField`, `TestChmodRefusesSpecialBits` (N-2), `TestChownBound` (S4c-0's chown test through the new path).
+- **Window tests (fsx, 200 runs each).** Each case is counted.
+  - `TestMetaWindowBeforeTheRecompute`: a newcomer, a replacement, a chmod or a removal after the preview gives `exists`, nothing changed, in all 200 runs.
+  - `TestMetaWindowAfterTheRecompute`: the same changes after the hash matched. 50 completed (newcomers, never changed) and 150 stopped with `exists`.
+  - `TestMetaWindowDuringThePass`: at each entry, before it is opened and between its descriptor check and its change, its name was taken by a newcomer or it gained a hard link from outside the roots. One run:
+    - before the open: 51 `exists` (newcomer), 50 `path_denied` (link);
+    - after the check: 51 completed (the checked inode changed, the newcomer untouched), 48 completed (link made after the check).
+- **Racer (fsx, 400 runs):** `TestMetaConcurrentRacer`. A racer adds newcomers, replaces entries and adds hard links (newcomers linked into the tree, tree files linked from outside the roots) until the operation returns. One run: 352 completed, 25 refused at the recompute, 21 stopped with `exists`, 2 with `path_denied`; 334 racer inodes, none changed. It also passes against the stubs, which change only the target, so it is a regression guard, not failing-first evidence.
+- **Helper:** `TestPrivMetaPreviews` (shape, names, read ceiling, refusals), `TestPrivMetaBindsThePreview` (missing, malformed and other hashes; a change after the preview kept; a privileged policy edit changes the hash), `TestPrivMetaRecursive` (the audit's old values, no hash in it), `TestPrivMetaChownChanges` (a real chgrp and its read-back fault; with `--group-add`, failing against the stubs), `TestPrivMetaAuditBounded` (151 entries: 100 listed; 81 long-named entries: cut by the 32 KiB bound), `TestPrivMetaMovedInRefused`, `TestPrivMetaHardLinkInTree`.
+- **Gate:** `TestRouting` (both previews to the core socket), `TestMetaPreviewsAreReadTier`. **check-policy:** `TestCheckPolicyChecksTheChain`.
+- **Server:** `TestPrivMetaToolsRegistered`, `TestPrivMetaToolsUnderNone`, `TestPrivMetaToolsApprovalFlow` (each tool: preview only, approve, preview again and the op once with the hash at ceiling operator, a second re-call `approval_invalid`, no hash in the logs), `TestPrivMetaChangedAfterApproval` (tree, privileged policy, gate policy), `TestPrivMetaPreviewRefusals`, `TestPrivMetaValidation`, `TestPrivMetaPreconditionIsTheHelpersHash`, `TestPrivMetaDescriptions`.
+- **e2e-host (core unit):** `TestPrivMetaToolsApproval`:
+  - chown -R approved and run once, with the journal's `changed` list, its old values and `changed_total`; a second re-call is `approval_invalid`;
+  - the handed-over tree then refused for a recursive chmod and for one entry (N-1's consequence);
+  - chmod -R approved and run once;
+  - a tree changed after approval is `approval_invalid`;
+  - a hard link to `/etc/example-other/secret.txt` refuses the whole tree, through the tool and the gate, with that file unchanged.
+- **e2e-host (core unit):** `TestPrivMetaMovedInRefused`: the N-1 move-in as `example-app`, refused through the gate (both previews and both ops, alone and recursive) and through the tool, the file unchanged once moved back.
+- **Test fixes made with the implementation:**
+  - S4c-0's helper and e2e tests send the preview's hash (their refusals are checked at the preview); a chown to the group a file already has now changes and records nothing; fsx's S4c-0 chown tests became `TestChownBound`.
+  - The `PrivOps` count, the catalogue's privileged rows, and `TestPrivToolsListed`.
+  - In the new tests: an uppercase-hash case that was not uppercase; two inode-reuse cases (above); the audit test's mode 0640, which left its directories untraversable for cleanup.
+
+**Fuzzing (60 s each, golang container, no crashers):** `FuzzMetaEntryEncoding` (new; an entry's hash input decodes back to exactly that entry) about 26.0 M execs; `FuzzPreviewEntryEncoding` (the identity struct gained fields) about 25.6 M execs.
+
+**Alternatives rejected:**
+- The owner allow-list for N-1 (above).
+- The change time in the hash (above).
+- `O_PATH` descriptors with `fchmodat(AT_EMPTY_PATH)`: `fchmod` refuses an `O_PATH` descriptor, and the empty-path form needs `fchmodat2` (Linux 6.6). The helper opens the entry `O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_NOCTTY`, as S4c-0's chmod did.
+- Holding every directory open: descriptor limits, as for the delete.
+- A WARN at every helper start for each failing root (the maintainer's choice).
+
+**Deferred / follow-ups:** N-6, the move-in finding for overwrites (above; must be decided before S4c-5 ships); N-4 and N-5 unchanged; S4c-4 onward per the handoff.
+
+**Versions:**
+- **Go:** 1.27.2, the newest stable per go.dev (checked by `scripts/deps-current.sh` on 2026-10-19).
+- **Refresh:** `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing; `deps-current` reports 13 modules in scope, all current.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+
+**2026-10-19 — PR #32 follow-up: the first CI run, the maintainer's acceptance, N-6 and the documented route for application-owned trees.**
+- **First CI run (`c061171`): every job green.**
+  - e2e-host:
+    - `TestPrivMetaToolsApproval` passed, with all four subtests: chown -R approved and run once with its journal line; chmod -R; a tree changed after approval; a hard link refusing the tree.
+    - `TestPrivMetaMovedInRefused` passed, as did the updated `TestHelperOperations`, `TestHelperHardLinkChmodChown` and `TestPrivToolsListed`.
+  - `TestPrivMetaChownChanges` ran, and passed, on both Go runners: the runner user has supplementary groups.
+- **The maintainer accepted the decisions and deviations** recorded above.
+- **Documented** (PRIVILEGED §6 and TOOLS.md, at the maintainer's request):
+  - once a tree has been chowned to an application account, every later chown or chmod inside it is refused by the chain rule, a second `chown -R` of the same tree included;
+  - the intended way to manage application-owned trees is a fixed root command template in the privileged policy (`priv_exec`, S4c-6), which the operator writes and which still needs approval.
+- **N-6 (handoff §2.1).** `priv_write_file`, `priv_copy` with `overwrite` and `priv_restore_backup` over a moved-in file inherit its root ownership.
+  - **Proposed fix**, to decide in S4c-5 for all three: when the target's path fails the chain rule, a write, copy or restore over an existing file does not inherit that file's owner and group; it requires an explicit allow-listed owner and group, or is refused.
+  - **Must be decided before S4c-5 ships**; the S4c-5 entry carries it as a STOP.
+- Docs only; no code change.

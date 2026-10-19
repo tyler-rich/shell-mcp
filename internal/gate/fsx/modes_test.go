@@ -79,13 +79,14 @@ func TestModesMaxMasksNewInodes(t *testing.T) {
 	}
 }
 
-// Chmod (gate and helper) and Chown (helper) refuse a non-directory with
-// more than one link, read by fstat on the descriptor they would change:
-// its other name can lie outside the write roots. The other name's inode is
-// unchanged. Single-link files and directories are still changed.
-func TestChmodChownRefuseHardLinks(t *testing.T) {
+// The gate's Chmod refuses a non-directory with more than one link, read by
+// fstat on the descriptor it would change: its other name can lie outside
+// the write roots. The other name's inode is unchanged. Single-link files and
+// directories are still changed. (The helper's chown and chmod, ApplyMeta,
+// apply the same rule to every entry: TestApplyMetaRefusals and the window
+// tests in meta_exact_test.go.)
+func TestChmodRefusesHardLinks(t *testing.T) {
 	e := newEnv(t)
-	uid, gid := ids(t)
 	outside := filepath.Join(e.outside, "passwd")
 	must(t, os.Chmod(outside, 0o644)) //nolint:gosec // G302: a test fixture mode
 	link := filepath.Join(e.write, "linked")
@@ -97,8 +98,6 @@ func TestChmodChownRefuseHardLinks(t *testing.T) {
 	if fe := err.(*Error); !strings.Contains(fe.Msg, link) || !strings.Contains(fe.Msg, "2 links") { //nolint:errorlint // wantCode checked the type
 		t.Fatalf("message %q does not name the path and the link count", fe.Msg)
 	}
-	_, err = e.fs.Chown(link, Owner{UID: &uid, GID: &gid})
-	wantCode(t, err, protocol.CodePathDenied)
 	after := statOf(t, outside)
 	if permOf(t, outside) != 0o644 || after.Ctim != before.Ctim || after.Uid != before.Uid || after.Gid != before.Gid {
 		t.Fatalf("the outside inode changed: %04o ctime %v (was %v)", permOf(t, outside), after.Ctim, before.Ctim)
@@ -117,24 +116,20 @@ func TestChmodChownRefuseHardLinks(t *testing.T) {
 	must(t, os.Remove(filepath.Join(e.write, "linked2")))
 	_, err = e.fs.Chmod(link, 0o600)
 	must(t, err)
-	_, err = e.fs.Chown(link, Owner{GID: &gid})
-	must(t, err)
 	dir := filepath.Join(e.write, "dir")
 	must(t, os.MkdirAll(filepath.Join(dir, "sub"), 0o750))
 	_, err = e.fs.Chmod(dir, 0o700)
-	must(t, err)
-	_, err = e.fs.Chown(dir, Owner{GID: &gid})
 	must(t, err)
 	if permOf(t, link) != 0o600 || permOf(t, dir) != 0o700 {
 		t.Fatalf("modes %04o %04o", permOf(t, link), permOf(t, dir))
 	}
 }
 
-// With VerifyMetadata (the helper), Chmod and Chown re-read the inode
-// through the descriptor they changed and refuse a mismatch with
-// verify_failed; the results carry the values before the change. Without
-// it (the gate) nothing is re-read.
-func TestChmodChownReadBack(t *testing.T) {
+// With VerifyMetadata, Chmod re-reads the inode through the descriptor it
+// changed and refuses a mismatch with verify_failed; the result carries the
+// values before the change. Without it (the gate) nothing is re-read.
+// (ApplyMeta, the helper's, always reads back: TestApplyMetaReadBack.)
+func TestChmodReadBack(t *testing.T) {
 	e := newEnv(t)
 	uid, gid := ids(t)
 	p := filepath.Join(e.write, "app.yaml") // 0600
@@ -144,12 +139,6 @@ func TestChmodChownReadBack(t *testing.T) {
 	e.fs.cfg.VerifyMetadata = true
 	_, err = e.fs.Chmod(p, 0o600)
 	wantCode(t, err, protocol.CodeVerifyFailed)
-	e.fs.cfg.InjectMetadataReadBackFault = func(m Meta) Meta { m.GID++; return m }
-	_, err = e.fs.Chown(p, Owner{GID: &gid})
-	wantCode(t, err, protocol.CodeVerifyFailed)
-	e.fs.cfg.InjectMetadataReadBackFault = func(m Meta) Meta { m.UID++; return m }
-	_, err = e.fs.Chown(p, Owner{UID: &uid})
-	wantCode(t, err, protocol.CodeVerifyFailed)
 
 	e.fs.cfg.InjectMetadataReadBackFault = nil
 	must(t, os.Chmod(p, 0o640)) //nolint:gosec // G302: a test fixture mode
@@ -157,10 +146,5 @@ func TestChmodChownReadBack(t *testing.T) {
 	must(t, err)
 	if ch.Before != (Meta{Mode: 0o640, UID: uid, GID: gid}) || !ch.Changed {
 		t.Fatalf("chmod before %+v changed %v", ch.Before, ch.Changed)
-	}
-	co, err := e.fs.Chown(p, Owner{GID: &gid})
-	must(t, err)
-	if co.Before != (Meta{Mode: 0o600, UID: uid, GID: gid}) || !co.Changed {
-		t.Fatalf("chown before %+v changed %v", co.Before, co.Changed)
 	}
 }

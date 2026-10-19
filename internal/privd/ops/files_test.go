@@ -139,14 +139,14 @@ func TestMkdirChownChmod(t *testing.T) {
 		UID uint32 `json:"uid"`
 		GID uint32 `json:"gid"`
 	}
-	f.ok("priv_chown", m{"path": p, "group": "tester"}, &c)
+	f.bound("priv_chown", m{"path": p, "group": "tester"}, &c)
 	if c.GID != f.gid {
 		t.Fatalf("chown %+v", c)
 	}
 	f.fail("priv_chown", m{"path": p}, "bad_request")
 	f.fail("priv_chown", m{"path": p, "owner": "example-app"}, "policy_denied")
-	f.fail("priv_chown", m{"path": filepath.Join(f.read, "hello.txt"), "owner": "tester"}, "path_denied")
-	f.ok("priv_chmod", m{"path": p, "mode": "0600"}, nil)
+	f.fail("priv_chown_preview", m{"path": filepath.Join(f.read, "hello.txt"), "owner": "tester"}, "path_denied")
+	f.bound("priv_chmod", m{"path": p, "mode": "0600"}, nil)
 	if modeOf(t, p) != 0o600 {
 		t.Fatalf("chmod %04o", modeOf(t, p))
 	}
