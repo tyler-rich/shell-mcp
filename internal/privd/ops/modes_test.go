@@ -190,7 +190,8 @@ func TestChmodChownAuditOldValues(t *testing.T) {
 		var l struct {
 			Changed []change `json:"changed"`
 		}
-		if err := json.Unmarshal([]byte(line[strings.Index(line, "{"):]), &l); err != nil {
+		_, obj, _ := strings.Cut(line, ">") // "<priority>{...}"
+		if err := json.Unmarshal([]byte(obj), &l); err != nil {
 			t.Fatalf("audit line %q: %v", line, err)
 		}
 		return l.Changed

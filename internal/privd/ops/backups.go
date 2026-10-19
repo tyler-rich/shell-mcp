@@ -485,7 +485,7 @@ func (s *server) restoreBackup(raw jsontext.Value) (data any, warns []string, fa
 	}
 	// The recorded mode within modes.max; the recorded owner and group as
 	// they were, even outside owners (handoff F-3, Q3).
-	fm := s.newInodeMode(uint32(mode)) //nolint:gosec // G115: parsed with bitSize 32
+	fm := s.newInodeMode(uint32(mode))
 	uid, gid := m.UID, m.GID
 	owner := &fsx.Owner{UID: &uid, GID: &gid}
 	res := restoreData{ID: m.ID, Path: m.Path, Kind: m.Kind}

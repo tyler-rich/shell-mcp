@@ -53,20 +53,20 @@ func TestModesMaxMasksNewInodes(t *testing.T) {
 		must(t, err)
 		check("new file", filepath.Join(e.write, "new.txt"), r.Mode, want(0o640))
 
-		must(t, os.Chmod(filepath.Join(e.write, "app.yaml"), 0o664))
+		must(t, os.Chmod(filepath.Join(e.write, "app.yaml"), 0o664)) //nolint:gosec // G302: a test fixture mode
 		r, err = e.fs.WriteFile(filepath.Join(e.write, "app.yaml"), []byte("w"), WriteOptions{Create: true})
 		must(t, err)
 		check("write over a file", filepath.Join(e.write, "app.yaml"), r.Mode, want(0o664))
 
 		src := filepath.Join(e.read, "hello.txt")
-		must(t, os.Chmod(src, 0o644))
+		must(t, os.Chmod(src, 0o644)) //nolint:gosec // G302: a test fixture mode
 		r, err = e.fs.Copy(src, filepath.Join(e.write, "copy.txt"), false)
 		must(t, err)
 		check("copy", filepath.Join(e.write, "copy.txt"), r.Mode, want(0o644))
 
 		over := filepath.Join(e.write, "over.txt")
 		put(t, over, "old")
-		must(t, os.Chmod(over, 0o654))
+		must(t, os.Chmod(over, 0o654)) //nolint:gosec // G302: a test fixture mode
 		r, err = e.fs.Copy(src, over, true)
 		must(t, err)
 		check("copy over a file", over, r.Mode, want(0o654))
@@ -87,7 +87,7 @@ func TestChmodChownRefuseHardLinks(t *testing.T) {
 	e := newEnv(t)
 	uid, gid := ids(t)
 	outside := filepath.Join(e.outside, "passwd")
-	must(t, os.Chmod(outside, 0o644))
+	must(t, os.Chmod(outside, 0o644)) //nolint:gosec // G302: a test fixture mode
 	link := filepath.Join(e.write, "linked")
 	must(t, os.Link(outside, link))
 	before := statOf(t, outside)
@@ -152,7 +152,7 @@ func TestChmodChownReadBack(t *testing.T) {
 	wantCode(t, err, protocol.CodeVerifyFailed)
 
 	e.fs.cfg.InjectMetadataReadBackFault = nil
-	must(t, os.Chmod(p, 0o640))
+	must(t, os.Chmod(p, 0o640)) //nolint:gosec // G302: a test fixture mode
 	ch, err := e.fs.Chmod(p, 0o600)
 	must(t, err)
 	if ch.Before != (Meta{Mode: 0o640, UID: uid, GID: gid}) || !ch.Changed {
