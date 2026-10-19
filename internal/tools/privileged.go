@@ -22,7 +22,8 @@ import (
 // privilegedTools are the privileged tools, each registered at the tier it
 // is defined with.
 func privilegedTools(d *Deps) []Tool {
-	return []Tool{privReadFile(d), privListDirectory(d), privStatPath(d), privListBackups(d)}
+	return []Tool{privReadFile(d), privListDirectory(d), privStatPath(d), privListBackups(d),
+		privWriteFile(d), privMakeDirectory(d), privCopyPath(d), privMovePath(d)}
 }
 
 type listBackupsIn struct {

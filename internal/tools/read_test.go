@@ -94,7 +94,8 @@ func (g *recordingGate) exec(_ context.Context, s *sshtest.Session) uint32 {
 		helper = fmt.Sprintf(`,"helper":{"version":"0.1.0","principal":"shell-mcp-privd","policy_sha256":%q,"max_tier":"destructive","unit":"core","duration_ms":1}`, helperSHA)
 	}
 	if r.code != "" {
-		_, _ = fmt.Fprintf(s.Stdout, `{"v":1,"id":%q,"ok":false,"error":{"code":%q,"message":%q},"warnings":[]%s}`+"\n", id, r.code, r.msg, helper)
+		// A gate's refusal carries its own block, as a success does.
+		_, _ = fmt.Fprintf(s.Stdout, `{"v":1,"id":%q,"ok":false,"error":{"code":%q,"message":%q},"warnings":[],"gate":%s%s}`+"\n", id, r.code, r.msg, gate, helper)
 		return 0
 	}
 	var one bytes.Buffer

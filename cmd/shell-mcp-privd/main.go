@@ -305,6 +305,13 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 	}
 	pr("owners: users %s; groups %s", strings.Join(owners, " "), strings.Join(groups, " "))
 	pr("modes.max: %04o   backups.keep: %d", uint32(p.ModesMax), p.BackupsKeep)
+	if p.BackupsKeep > 0 {
+		use := "its current use could not be read"
+		if n, err := ops.StoreUsage(units.BackupDir, env.trust); err == nil {
+			use = fmt.Sprintf("%d bytes used now", n)
+		}
+		pr("backups.max_store_bytes: %d (the backup store, %s: %s)", p.BackupsMaxStoreBytes, units.BackupDir, use)
+	}
 	pr("core unit capability bounding set: %s", strings.Join(p.Capabilities, " "))
 	if p.UsesBroad() {
 		pr("broad unit: yes, ROOT-EQUIVALENT (network, full root capabilities%s) for %s", map[bool]string{true: "", false: ", no ProtectClock="}[p.BroadProtectClock()], strings.Join(broadUsers(p), ", "))

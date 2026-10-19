@@ -70,6 +70,10 @@ modes:
 backups:
   # Previous versions kept per file in /var/lib/shell-mcp/backups (0..100).
   keep: 10
+  # Total size of the backup store, data and metadata together (64 MiB to
+  # 1 TiB; default 1 GiB). An overwrite or delete whose backup would take
+  # the store over it is refused (backup_failed) and changes nothing.
+  max_store_bytes: 1073741824
 
 # Commands run as root, matched against argv templates exactly as in the
 # gate policy (POLICY §4). A command whose binary is a power, kernel,

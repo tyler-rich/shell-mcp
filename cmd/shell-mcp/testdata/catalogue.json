@@ -497,6 +497,26 @@
     "requires_user_interaction": false
   },
   {
+    "name": "shell_priv_copy_path",
+    "title": "Copy file as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Copy file as root"
+    },
+    "description": "Copies a regular file as root to a destination within the host's privileged write roots, backing up a replaced destination and verifying by read-back; returns the hashes, mode, owner and backup ids.",
+    "input_schema_sha256": "768c0a0fec28cefbc42b397ced2df84eb5be904e427fa3ebc4bad8582c69d28a",
+    "output_schema_sha256": "91a89c0cffa31374ed95432354eb9f756275c57538e792850d1b617502abf1b1",
+    "requires_user_interaction": true
+  },
+  {
     "name": "shell_priv_list_backups",
     "title": "List backups",
     "tier": "read",
@@ -537,6 +557,46 @@
     "requires_user_interaction": false
   },
   {
+    "name": "shell_priv_make_directory",
+    "title": "Make directory as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Make directory as root"
+    },
+    "description": "Creates a directory as root, and optionally its missing parents, within the host's privileged write roots; returns its mode and owner.",
+    "input_schema_sha256": "29c94478723e1cc0ed3bd9db9578e604578237a499e1cf2de907b96a19f976eb",
+    "output_schema_sha256": "30c7f5810f88edcf44e5d1670687f3a40321f476a473033b7a1ee02e0ddaa1c9",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_move_path",
+    "title": "Move path as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Move path as root"
+    },
+    "description": "Renames a file or directory as root within one of the host's privileged write roots (same filesystem only), backing up a replaced destination file; returns what was moved and the backup ids.",
+    "input_schema_sha256": "768c0a0fec28cefbc42b397ced2df84eb5be904e427fa3ebc4bad8582c69d28a",
+    "output_schema_sha256": "406103841bc6a7f5ea54bca539af7cbdbb81712a1ee9ab81ff3cb1d75035efed",
+    "requires_user_interaction": true
+  },
+  {
     "name": "shell_priv_read_file",
     "title": "Read file as root",
     "tier": "read",
@@ -575,6 +635,26 @@
     "input_schema_sha256": "2af6ff11abe9191b4568e62addcb7bc71d353c46c7684eb247b1de81115b627a",
     "output_schema_sha256": "86435fb795786e7bc96d78f626e9d93da3f8b28bdf49b2e33ee82c89c0896cbc",
     "requires_user_interaction": false
+  },
+  {
+    "name": "shell_priv_write_file",
+    "title": "Write file as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Write file as root"
+    },
+    "description": "Atomically writes a text file as root within the host's privileged write roots, backing up what it replaces and verifying by read-back; returns the hashes, line counts, mode, owner and backup ids.",
+    "input_schema_sha256": "7e60b600ed18ee710864c3c47993cc10c03ba5018e23b6b42d5a96e5eec15f1b",
+    "output_schema_sha256": "8563e5a2f984f7df9290d702e45124f039f50ccc92fc433bf6472d78c10bd245",
+    "requires_user_interaction": true
   },
   {
     "name": "shell_read_file",

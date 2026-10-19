@@ -3,8 +3,11 @@
 package fsx
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"syscall"
@@ -87,8 +90,14 @@ func keyOf(fi fs.FileInfo) fileKey {
 }
 
 // backupFile hands the target to the backup hook through a verified
-// descriptor and returns what was backed up.
-func (f *FS) backupFile(l *loc) (fs.FileInfo, error) {
+// descriptor, with sha, the SHA-256 fsx computed of it just before (empty
+// when it computed none), and returns what was backed up. hashed, when
+// set, is the file as fsx hashed it: the file backed up must be that
+// version (sameVersion), or the backup is refused before the hook runs.
+func (f *FS) backupFile(l *loc, sha string, hashed fs.FileInfo) (fs.FileInfo, error) {
+	if f.cfg.InjectBeforeBackup != nil {
+		f.cfg.InjectBeforeBackup()
+	}
 	file, err := f.openTarget(l)
 	if err != nil {
 		return nil, err
@@ -101,10 +110,45 @@ func (f *FS) backupFile(l *loc) (fs.FileInfo, error) {
 	if !info.Mode().IsRegular() {
 		return nil, errf(protocol.CodeBackupFailed, "only regular files can be backed up; nothing was changed")
 	}
-	if err := f.cfg.Backup(&BackupSource{Path: l.p, Kind: BackupFile, Info: info, File: file}); err != nil {
+	if hashed != nil && !sameVersion(hashed, info) {
+		return nil, errf(protocol.CodeBackupFailed, "the file changed while it was being backed up; nothing was changed")
+	}
+	if err := f.cfg.Backup(&BackupSource{Path: l.p, Kind: BackupFile, Info: info, File: file, SHA256: sha}); err != nil {
 		return nil, backupErr(err)
 	}
 	return info, nil
+}
+
+// hashTarget opens the target through a verified descriptor and returns its
+// stat and, with hash, the SHA-256 of its content (a regular file of at
+// most maxHashBytes; a larger one is too_large).
+func (f *FS) hashTarget(l *loc, hash bool) (fs.FileInfo, string, error) {
+	file, err := f.openTarget(l)
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, "", mapErr(err)
+	}
+	if !hash || !info.Mode().IsRegular() {
+		return info, "", nil
+	}
+	if info.Size() > maxHashBytes {
+		return nil, "", errf(protocol.CodeTooLarge, "the destination is larger than the %d MiB the helper hashes", maxHashBytes>>20)
+	}
+	h := sha256.New()
+	if _, err := io.Copy(h, io.LimitReader(file, maxHashBytes+1)); err != nil {
+		return nil, "", mapErr(err)
+	}
+	return info, hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// sameVersion reports whether a and b describe the same file, unchanged:
+// the same inode, size and modification time.
+func sameVersion(a, b fs.FileInfo) bool {
+	return os.SameFile(a, b) && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
 }
 
 // unchangedSince refuses when name in dir is no longer the file that was
@@ -207,4 +251,31 @@ func (o Owner) String() string {
 		g = fmt.Sprint(*o.GID)
 	}
 	return u + ":" + g
+}
+
+// WriteTarget is the stat of p as the write operations find it (the
+// helper's priv_backup_check): p must be under a write root and pass the
+// deny list and the protected set; nil when nothing is there. A final
+// symlink is reported, not followed.
+func (f *FS) WriteTarget(p string) (fs.FileInfo, error) {
+	l, err := f.locate(p, true)
+	if err != nil {
+		return nil, err
+	}
+	defer l.close()
+	if l.parent == nil {
+		fi, err := l.top.Stat(".")
+		if err != nil {
+			return nil, mapErr(err)
+		}
+		return fi, nil
+	}
+	fi, err := l.parent.Lstat(l.base)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, nil
+	case err != nil:
+		return nil, mapErr(err)
+	}
+	return fi, nil
 }

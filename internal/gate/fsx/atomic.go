@@ -63,7 +63,7 @@ func (f *FS) renameNoReplace(srcDir *os.Root, srcName string, dstDir *os.Root, d
 	if f.cfg.InjectNoReplaceFault != nil {
 		err = f.cfg.InjectNoReplaceFault()
 	} else {
-		err = renameat2NoReplace(srcDir, srcName, dstDir, dstName)
+		err = renameat2(srcDir, srcName, dstDir, dstName, unix.RENAME_NOREPLACE)
 	}
 	switch {
 	case err == nil:
@@ -81,9 +81,63 @@ func singleComponent(name string) bool {
 	return name != "" && name != "." && name != ".." && !strings.Contains(name, "/")
 }
 
-// renameat2NoReplace runs renameat2(2) between the descriptors of two
+// Verified replaces (Config.VerifyReplaced, the helper only). Linux has no
+// conditional rename-over: rename(2) replaces whatever is under the name at
+// that moment, so a destination replaced or rewritten after the last check
+// would be lost, and the backup would not hold what was replaced. Instead
+// the commit exchanges the new file and the destination (renameat2 with
+// RENAME_EXCHANGE, atomic), then checks the inode it took out: it must be
+// the one that was checked and backed up (same inode, size and mtime);
+// anything else is exchanged back and the operation refused with exists.
+// Only then is the old inode's name removed. What remains is POLICY §3's
+// case for a delete: a process that holds the old file open for writing
+// and writes through that descriptor after the check (a few system calls)
+// writes into an inode that is then removed; and a process with write
+// access to the directory that swaps the exchanged-out name in the moment
+// between the exchange and its check (it could replace the destination
+// itself). A filesystem without RENAME_EXCHANGE is refused, never replaced
+// unchecked.
+
+// exchangeVerified commits a replace of dstName in dstDir by srcName in
+// srcDir (the new file: a temp file, or a move's source), verified against
+// want, the destination as last checked.
+func (f *FS) exchangeVerified(srcDir *os.Root, srcName string, dstDir *os.Root, dstName string, want fs.FileInfo) *Error {
+	if !singleComponent(srcName) || !singleComponent(dstName) {
+		return errf(protocol.CodeInternal, "rename names must be single path components")
+	}
+	var err error
+	if f.cfg.InjectExchangeFault != nil {
+		err = f.cfg.InjectExchangeFault()
+	} else {
+		err = renameat2(srcDir, srcName, dstDir, dstName, unix.RENAME_EXCHANGE)
+	}
+	switch {
+	case err == nil:
+	case errors.Is(err, syscall.ENOENT):
+		return errf(protocol.CodeNotFound, "the destination disappeared before the commit; nothing was replaced")
+	case errors.Is(err, syscall.EINVAL), errors.Is(err, syscall.ENOSYS):
+		return errf(protocol.CodeBadRequest, "the filesystem does not support RENAME_EXCHANGE, which replacing a file as root needs "+
+			"to refuse a destination that changed after it was checked; nothing was replaced")
+	default:
+		return mapErr(err)
+	}
+	got, err := srcDir.Lstat(srcName)
+	if err != nil || !got.Mode().IsRegular() || !os.SameFile(got, want) || got.Size() != want.Size() || !got.ModTime().Equal(want.ModTime()) {
+		if berr := renameat2(srcDir, srcName, dstDir, dstName, unix.RENAME_EXCHANGE); berr != nil {
+			return errf(protocol.CodeInternal, "the destination changed after it was checked, and could not be put back: the new file is at the "+
+				"destination and the other one is under the name %q beside the source", srcName)
+		}
+		return errf(protocol.CodeExists, "the destination changed after it was checked; it was not replaced, and nothing was changed")
+	}
+	if err := srcDir.Remove(srcName); err != nil {
+		return errf(protocol.CodeInternal, "the destination was replaced, but its previous version could not be removed from the name %q beside the source", srcName)
+	}
+	return nil
+}
+
+// renameat2 runs renameat2(2) with flags between the descriptors of two
 // os.Roots' directories.
-func renameat2NoReplace(srcDir *os.Root, srcName string, dstDir *os.Root, dstName string) error {
+func renameat2(srcDir *os.Root, srcName string, dstDir *os.Root, dstName string, flags uint) error {
 	sd, err := srcDir.Open(".")
 	if err != nil {
 		return err
@@ -97,7 +151,7 @@ func renameat2NoReplace(srcDir *os.Root, srcName string, dstDir *os.Root, dstNam
 	var rerr error
 	err = withFD(sd, func(sfd int) error {
 		return withFD(dd, func(dfd int) error {
-			rerr = unix.Renameat2(sfd, srcName, dfd, dstName, unix.RENAME_NOREPLACE)
+			rerr = unix.Renameat2(sfd, srcName, dfd, dstName, flags)
 			return nil
 		})
 	})

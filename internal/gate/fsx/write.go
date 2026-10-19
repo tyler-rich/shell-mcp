@@ -101,6 +101,9 @@ type atomicOpts struct {
 	overwrite bool   // false: create only (expect_absent, copy without overwrite)
 	expected  string // expected_sha256 of the current content
 	owner     *Owner // explicit owner (the helper only)
+	// destination: expected is a copy's expected_destination_sha256 (P-9):
+	// a destination that is not a regular file is then exists.
+	destination bool
 }
 
 func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, error) {
@@ -112,6 +115,12 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 		return res, mapErr(err)
 	}
 	var oldUID, oldGID uint32
+	// replaced is the file to be replaced as last checked: what a verified
+	// replace (Config.VerifyReplaced) requires to find at its commit.
+	var replaced fs.FileInfo
+	if exists && o.destination && expected != "" && !fi.Mode().IsRegular() {
+		return res, errf(protocol.CodeExists, "the destination is no longer a regular file; nothing was copied")
+	}
 	if exists {
 		switch {
 		case fi.Mode()&fs.ModeSymlink != 0:
@@ -131,6 +140,10 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 		if oerr != nil {
 			return res, oerr
 		}
+		if replaced, err = old.Stat(); err != nil {
+			_ = old.Close()
+			return res, mapErr(err)
+		}
 		h := sha256.New()
 		lines := &lineCounter{}
 		_, err = io.Copy(io.MultiWriter(h, lines), old)
@@ -141,6 +154,9 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 		res.OldSHA256 = hex.EncodeToString(h.Sum(nil))
 		res.LinesOld = lines.total()
 		if expected != "" && expected != res.OldSHA256 {
+			if o.destination {
+				return res, errf(protocol.CodeExists, "the destination's content does not match expected_destination_sha256; nothing was copied")
+			}
 			return res, errf(protocol.CodeExists, "current content does not match expected_sha256")
 		}
 		newMode = os.FileMode(um)
@@ -152,6 +168,9 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 			return res, errf(protocol.CodeNotFound, "file does not exist and create is false")
 		}
 		if expected != "" {
+			if o.destination {
+				return res, errf(protocol.CodeNotFound, "the destination does not exist but expected_destination_sha256 was given; nothing was copied")
+			}
 			return res, errf(protocol.CodeNotFound, "file does not exist but expected_sha256 was given")
 		}
 	}
@@ -159,13 +178,14 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 		newMode = *mode
 	}
 	newMode = f.maskMode(newMode)
-	// The helper backs up the version it is about to replace; a failed
-	// backup changes nothing.
+	// The helper backs up the version it is about to replace, handing the
+	// hook the hash it just computed; a failed backup changes nothing.
 	var backedUp fs.FileInfo
 	if exists && f.cfg.Backup != nil {
-		if backedUp, err = f.backupFile(l); err != nil {
+		if backedUp, err = f.backupFile(l, res.OldSHA256, replaced); err != nil {
 			return res, err
 		}
+		replaced = backedUp
 	}
 
 	tmp := tempPrefix + randHex(8) + ".tmp"
@@ -213,6 +233,11 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 			return res, mapErr(err)
 		}
 	}
+	if tfi, serr := tf.Stat(); serr == nil {
+		if st, ok := tfi.Sys().(*syscall.Stat_t); ok {
+			res.UID, res.GID = st.Uid, st.Gid
+		}
+	}
 	if err = tf.Sync(); err != nil {
 		return res, mapErr(err)
 	}
@@ -228,12 +253,23 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 	if f.cfg.InjectBeforeCommit != nil {
 		f.cfg.InjectBeforeCommit()
 	}
-	if overwrite {
+	switch {
+	case overwrite && exists && f.cfg.VerifyReplaced:
+		// The helper: an exchange checked afterwards, so a file that
+		// replaced or rewrote the destination since it was checked is
+		// exchanged back, never lost (exchangeVerified).
+		if e := f.exchangeVerified(l.parent, tmp, l.parent, l.base, replaced); e != nil {
+			return res, e
+		}
+		committed = true
+	case overwrite && (exists || !f.cfg.VerifyReplaced):
+		// (In the helper, a file that was absent when checked is committed
+		// create-only below: it replaces only what it checked.)
 		if err = l.parent.Rename(tmp, l.base); err != nil {
 			return res, mapErr(err)
 		}
 		committed = true
-	} else {
+	default:
 		if e := f.linkNoReplace(l.parent, tmp, l.base); e != nil {
 			return res, e
 		}
@@ -321,7 +357,7 @@ func (f *FS) MkdirAs(p string, mode *os.FileMode, parents bool, owner *Owner) (M
 		if l.parent == nil {
 			return res, errf(protocol.CodeExists, "directory exists")
 		}
-		created, err := f.mkdirIn(l, l.parent, l.parentReal, l.base, m, owner)
+		created, err := f.mkdirIn(l, l.parent, l.parentReal, l.base, m, owner, &res)
 		if err != nil {
 			return res, err
 		}
@@ -357,7 +393,11 @@ func (f *FS) MkdirAs(p string, mode *os.FileMode, parents bool, owner *Owner) (M
 	cur, curReal := top, l.rootReal
 	comps := strings.Split(rel, "/")
 	for i, c := range comps {
-		created, err := f.mkdirIn(l, cur, curReal, c, m, owner)
+		var out *MkdirResult
+		if i == len(comps)-1 {
+			out = &res
+		}
+		created, err := f.mkdirIn(l, cur, curReal, c, m, owner, out)
 		if err != nil {
 			if cur != top {
 				_ = cur.Close()
@@ -385,8 +425,9 @@ func (f *FS) MkdirAs(p string, mode *os.FileMode, parents bool, owner *Owner) (M
 
 // mkdirIn creates name in dir unless it is already a directory, verifies
 // it, and sets its mode (mkdir(2) is subject to the umask). It reports
-// whether it created the directory.
-func (f *FS) mkdirIn(l *loc, dir *os.Root, dirReal, name string, m os.FileMode, owner *Owner) (bool, error) {
+// whether it created the directory; out, when set, gets the directory's
+// owner and group (read from its descriptor when it was created).
+func (f *FS) mkdirIn(l *loc, dir *os.Root, dirReal, name string, m os.FileMode, owner *Owner, out *MkdirResult) (bool, error) {
 	fi, err := dir.Lstat(name)
 	switch {
 	case err == nil && fi.Mode()&fs.ModeSymlink != 0:
@@ -394,6 +435,10 @@ func (f *FS) mkdirIn(l *loc, dir *os.Root, dirReal, name string, m os.FileMode, 
 	case err == nil && !fi.IsDir():
 		return false, errf(protocol.CodeNotADirectory, "a path component exists and is not a directory")
 	case err == nil:
+		if out != nil {
+			mo := metaOf(fi)
+			out.UID, out.GID = mo.UID, mo.GID
+		}
 		return false, nil
 	case !errors.Is(err, fs.ErrNotExist):
 		return false, mapErr(err)
@@ -430,15 +475,27 @@ func (f *FS) mkdirIn(l *loc, dir *os.Root, dirReal, name string, m os.FileMode, 
 			return false, mapErr(err)
 		}
 	}
+	if out != nil {
+		if dfi, serr := d.Stat(); serr == nil {
+			mo := metaOf(dfi)
+			out.UID, out.GID = mo.UID, mo.GID
+		}
+	}
 	return true, nil
 }
 
-// Copy copies the regular file src (any root) to dst (a write root). The
+// CopyExpecting copies the regular file src (any root) to dst (a write root). The
 // copy is bounded by max_read_bytes, refused for files holding a private
 // key, and read-back verified. A new copy takes the source's mode, a copy
 // over a file the destination's, without setuid, setgid, sticky or
-// world-write, and masked by ModesMax in the helper.
-func (f *FS) Copy(src, dst string, overwrite bool) (WriteResult, error) {
+// world-write, and masked by ModesMax in the helper. With overwrite and
+// expected (expected_destination_sha256, P-9), the destination must be a
+// regular file with that content: otherwise exists (not_found when it is
+// gone), and nothing changes.
+func (f *FS) CopyExpecting(src, dst string, overwrite bool, expected string) (WriteResult, error) {
+	if e := checkExpectedDestination(overwrite, expected); e != nil {
+		return WriteResult{}, e
+	}
 	ls, err := f.locate(src, false)
 	if err != nil {
 		return WriteResult{}, err
@@ -482,28 +539,46 @@ func (f *FS) Copy(src, dst string, overwrite bool) (WriteResult, error) {
 		return WriteResult{}, errf(protocol.CodeIsADirectory, "destination is a directory")
 	}
 	srcMode := os.FileMode(unixMode(fi)) &^ 0o7002
-	return f.writeAtomic(ld, data, &atomicOpts{newMode: srcMode, create: true, overwrite: overwrite})
+	return f.writeAtomic(ld, data, &atomicOpts{newMode: srcMode, create: true, overwrite: overwrite, expected: expected, destination: expected != ""})
 }
 
-// CopyExpecting is Copy whose destination, with overwrite, must be a
-// regular file with the SHA-256 expected (handoff P-9).
-func (f *FS) CopyExpecting(src, dst string, overwrite bool, _ string) (WriteResult, error) {
-	return f.Copy(src, dst, overwrite)
+// Copy copies src to dst (CopyExpecting without a destination hash).
+func (f *FS) Copy(src, dst string, overwrite bool) (WriteResult, error) {
+	return f.CopyExpecting(src, dst, overwrite, "")
 }
 
-// MoveExpecting is Move whose destination, with overwrite, must be a
-// regular file with the SHA-256 expected (handoff P-9).
-func (f *FS) MoveExpecting(src, dst string, overwrite bool, _ string) (MoveResult, error) {
-	return f.Move(src, dst, overwrite)
+// checkExpectedDestination validates expected_destination_sha256 (P-9):
+// only with overwrite, 64 lowercase hex digits.
+func checkExpectedDestination(overwrite bool, expected string) *Error {
+	switch {
+	case expected == "":
+		return nil
+	case !overwrite:
+		return errf(protocol.CodeBadRequest, "expected_destination_sha256 is valid only with overwrite")
+	case !isSHA256Hex(expected):
+		return errf(protocol.CodeBadRequest, "expected_destination_sha256 must be 64 lowercase hex characters")
+	}
+	return nil
 }
 
-// Move renames src to dst. Both must be under the same write root; a
-// directory is moved only if no entry in it is denied or protected at its
-// old or new path. A rename within one directory goes through that
-// directory's verified os.Root; otherwise through the root's, and the moved
-// entry is then re-identified by device and inode.
+// Move renames src to dst (MoveExpecting without a destination hash).
 func (f *FS) Move(src, dst string, overwrite bool) (MoveResult, error) {
+	return f.MoveExpecting(src, dst, overwrite, "")
+}
+
+// MoveExpecting renames src to dst. Both must be under the same write
+// root; a directory is moved only if no entry in it is denied or protected
+// at its old or new path. A rename within one directory goes through that
+// directory's verified os.Root; otherwise through the root's, and the moved
+// entry is then re-identified by device and inode. With overwrite and
+// expected (expected_destination_sha256, P-9), the destination must be a
+// regular file with that content: otherwise exists (not_found when it is
+// gone), and nothing changes.
+func (f *FS) MoveExpecting(src, dst string, overwrite bool, expected string) (MoveResult, error) {
 	res := MoveResult{Source: src, Destination: dst}
+	if e := checkExpectedDestination(overwrite, expected); e != nil {
+		return res, e
+	}
 	ls, err := f.locate(src, true)
 	if err != nil {
 		return res, err
@@ -554,6 +629,10 @@ func (f *FS) Move(src, dst string, overwrite bool) (MoveResult, error) {
 	}
 	dfi, err := ld.parent.Lstat(ld.base)
 	switch {
+	case expected != "" && errors.Is(err, fs.ErrNotExist):
+		return res, errf(protocol.CodeNotFound, "the destination does not exist but expected_destination_sha256 was given; nothing was moved")
+	case expected != "" && err == nil && !dfi.Mode().IsRegular():
+		return res, errf(protocol.CodeExists, "the destination is no longer a regular file; nothing was moved")
 	case err == nil && dfi.Mode()&fs.ModeSymlink != 0:
 		return res, errf(protocol.CodePathDenied, "destination is a symlink")
 	case err == nil && (dfi.IsDir() || sfi.IsDir()):
@@ -565,15 +644,26 @@ func (f *FS) Move(src, dst string, overwrite bool) (MoveResult, error) {
 	case !errors.Is(err, fs.ErrNotExist):
 		return res, mapErr(err)
 	}
-	var backedUp fs.FileInfo
-	if res.Replaced && f.cfg.Backup != nil {
-		if !dfi.Mode().IsRegular() {
-			return res, errf(protocol.CodeBackupFailed, "only regular files can be backed up; nothing was moved")
-		}
-		if backedUp, err = f.backupFile(ld); err != nil {
+	// replaced is the destination as last checked: what a verified replace
+	// requires to find at its commit.
+	var replaced fs.FileInfo
+	if res.Replaced && (expected != "" || f.cfg.Backup != nil || f.cfg.VerifyReplaced) {
+		var sha string
+		if replaced, sha, err = f.hashTarget(ld, expected != "" || f.cfg.Backup != nil); err != nil {
 			return res, err
 		}
-		if e := unchangedSince(ld.parent, ld.base, backedUp); e != nil {
+		if expected != "" && sha != expected {
+			return res, errf(protocol.CodeExists, "the destination's content does not match expected_destination_sha256; nothing was moved")
+		}
+		if f.cfg.Backup != nil {
+			if !replaced.Mode().IsRegular() {
+				return res, errf(protocol.CodeBackupFailed, "only regular files can be backed up; nothing was moved")
+			}
+			if replaced, err = f.backupFile(ld, sha, replaced); err != nil {
+				return res, err
+			}
+		}
+		if e := unchangedSince(ld.parent, ld.base, replaced); e != nil {
 			return res, e
 		}
 	}
@@ -581,7 +671,14 @@ func (f *FS) Move(src, dst string, overwrite bool) (MoveResult, error) {
 		f.cfg.InjectBeforeCommit()
 	}
 	switch {
-	case !overwrite:
+	case res.Replaced && f.cfg.VerifyReplaced:
+		// The helper: an exchange checked afterwards (exchangeVerified).
+		if e := f.exchangeVerified(ls.parent, ls.base, ld.parent, ld.base, replaced); e != nil {
+			return res, e
+		}
+	case !overwrite || f.cfg.VerifyReplaced:
+		// (In the helper, a destination that was absent when checked is
+		// committed create-only: overwrite replaces only what it checked.)
 		// Without overwrite the rename itself refuses an existing
 		// destination (RENAME_NOREPLACE), so one that appeared after the
 		// check above is never replaced.

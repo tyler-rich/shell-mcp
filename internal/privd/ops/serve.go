@@ -152,6 +152,9 @@ type server struct {
 	req       *protocol.Request
 	// backupIDs are the backups written for this request.
 	backupIDs []string
+	// precondition is the content hash the request's precondition named
+	// (expected_sha256, expected_destination_sha256), for its backups.
+	precondition string
 	// changed are the entries chmod or chown changed, with their old
 	// values, for the audit line.
 	changed []auditChange
@@ -417,7 +420,7 @@ func (s *server) sandbox() error {
 func (s *server) run(nc net.Conn) *protocol.Response {
 	o, p := s.o, s.p
 	s.red = redact.New(nil)
-	s.store = &store{dir: o.BackupDir, trust: o.Trust, keep: p.BackupsKeep, now: o.Now}
+	s.store = &store{dir: o.BackupDir, trust: o.Trust, keep: p.BackupsKeep, max: p.BackupsMaxStoreBytes, now: o.Now}
 	modesMax := p.ModesMax
 	cfg := &fsx.Config{
 		ReadRoots:  p.Paths.Read,
@@ -435,8 +438,13 @@ func (s *server) run(nc net.Conn) *protocol.Response {
 		},
 		// Every new inode within modes.max, and chmod and chown read back
 		// (PRIVILEGED §4, §6).
-		ModesMax:                    &modesMax,
-		VerifyMetadata:              true,
+		ModesMax:       &modesMax,
+		VerifyMetadata: true,
+		// Every replace is an exchange checked afterwards, so a destination
+		// changed after it was checked is never lost (S4c-2).
+		VerifyReplaced:              true,
+		InjectBeforeBackup:          o.InjectBeforeBackup,
+		InjectExchangeFault:         o.InjectExchangeFault,
 		InjectReadBackFault:         o.InjectReadBackFault,
 		InjectBeforeCommit:          o.InjectBeforeCommit,
 		InjectNoReplaceFault:        o.InjectNoReplaceFault,

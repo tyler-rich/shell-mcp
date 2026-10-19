@@ -69,6 +69,9 @@ type srcDstArgs struct {
 	Source      string `json:"source"`
 	Destination string `json:"destination"`
 	Overwrite   bool   `json:"overwrite"`
+	// ExpectedDestinationSHA256 binds an overwrite to the destination's
+	// content (handoff P-9): only with overwrite.
+	ExpectedDestinationSHA256 string `json:"expected_destination_sha256"`
 }
 
 type deleteArgs struct {
@@ -76,10 +79,43 @@ type deleteArgs struct {
 	Recursive bool   `json:"recursive"`
 }
 
-// Write-class results carry the ids of the backups written first.
+// Write-class results carry the ids of the backups written first, and a
+// new inode's owner and group (handoff P-12): the ids fsx read from its
+// descriptor, and their names when they are on the owners lists.
 type writeData struct {
 	fsx.WriteResult `json:",inline"`
+	ownerData       `json:",inline"`
 	BackupIDs       []string `json:"backup_ids"`
+}
+
+type ownerData struct {
+	UID   uint32 `json:"uid"`
+	GID   uint32 `json:"gid"`
+	Owner string `json:"owner,omitempty"`
+	Group string `json:"group,omitempty"`
+}
+
+type mkdirData struct {
+	fsx.MkdirResult `json:",inline"`
+	ownerData       `json:",inline"`
+}
+
+// ownerOf names uid and gid from the owners lists.
+func (s *server) ownerOf(uid, gid uint32) ownerData {
+	o := ownerData{UID: uid, GID: gid}
+	for _, u := range s.p.Owners.Users {
+		if u.ID == uid {
+			o.Owner = u.Name
+			break
+		}
+	}
+	for _, g := range s.p.Owners.Groups {
+		if g.ID == gid {
+			o.Group = g.Name
+			break
+		}
+	}
+	return o
 }
 
 type moveData struct {
@@ -214,6 +250,7 @@ func (s *server) writeFile(raw jsontext.Value) (data any, warns []string, failur
 	if a.Create != nil {
 		create = *a.Create
 	}
+	s.precondition = a.ExpectedSHA256
 	r, err := s.fs.WriteFile(a.Path, content, fsx.WriteOptions{
 		Mode: mode, Create: create, ExpectedSHA256: a.ExpectedSHA256, ExpectAbsent: a.ExpectAbsent, Owner: owner,
 		DefaultMode: defaultFileMode & s.p.ModesMax,
@@ -221,7 +258,7 @@ func (s *server) writeFile(raw jsontext.Value) (data any, warns []string, failur
 	if err != nil {
 		return nil, nil, err
 	}
-	return writeData{WriteResult: r, BackupIDs: s.ids()}, nil, nil
+	return writeData{WriteResult: r, ownerData: s.ownerOf(r.UID, r.GID), BackupIDs: s.ids()}, nil, nil
 }
 
 func (s *server) mkdir(raw jsontext.Value) (data any, warns []string, failure error) {
@@ -242,7 +279,10 @@ func (s *server) mkdir(raw jsontext.Value) (data any, warns []string, failure er
 		return nil, nil, err
 	}
 	r, err := s.fs.MkdirAs(a.Path, mode, a.Parents, owner)
-	return r, nil, err
+	if err != nil {
+		return nil, nil, err
+	}
+	return mkdirData{MkdirResult: r, ownerData: s.ownerOf(r.UID, r.GID)}, nil, nil
 }
 
 func (s *server) chown(raw jsontext.Value) (data any, warns []string, failure error) {
@@ -288,11 +328,12 @@ func (s *server) copy(raw jsontext.Value) (data any, warns []string, failure err
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
 	}
-	r, err := s.fs.Copy(a.Source, a.Destination, a.Overwrite)
+	s.precondition = a.ExpectedDestinationSHA256
+	r, err := s.fs.CopyExpecting(a.Source, a.Destination, a.Overwrite, a.ExpectedDestinationSHA256)
 	if err != nil {
 		return nil, nil, err
 	}
-	return writeData{WriteResult: r, BackupIDs: s.ids()}, nil, nil
+	return writeData{WriteResult: r, ownerData: s.ownerOf(r.UID, r.GID), BackupIDs: s.ids()}, nil, nil
 }
 
 func (s *server) move(raw jsontext.Value) (data any, warns []string, failure error) {
@@ -300,7 +341,8 @@ func (s *server) move(raw jsontext.Value) (data any, warns []string, failure err
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
 	}
-	r, err := s.fs.Move(a.Source, a.Destination, a.Overwrite)
+	s.precondition = a.ExpectedDestinationSHA256
+	r, err := s.fs.MoveExpecting(a.Source, a.Destination, a.Overwrite, a.ExpectedDestinationSHA256)
 	if err != nil {
 		return nil, nil, err
 	}

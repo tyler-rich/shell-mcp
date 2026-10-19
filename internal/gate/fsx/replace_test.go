@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -187,7 +188,7 @@ func TestVerifiedReplaceConcurrentRace(t *testing.T) {
 		start := time.Now()
 		must(t, op.run(probe, 999999))
 		took := time.Since(start)
-		first, wonOK := 0, 0
+		first, wonOK, after := 0, 0, 0
 		for i := range concurrentRuns {
 			dst := filepath.Join(e.write, fmt.Sprintf("race-%d", i))
 			put(t, dst, old)
@@ -217,14 +218,20 @@ func TestVerifiedReplaceConcurrentRace(t *testing.T) {
 					t.Fatalf("%s run %d: replaced something other than the approved content", op.name, i)
 				}
 			default:
-				first++
 				var fe *Error
-				if !errors.As(err, &fe) || (fe.Code != protocol.CodeExists && fe.Code != protocol.CodeBackupFailed && fe.Code != protocol.CodeVerifyFailed) {
+				switch {
+				case !errors.As(err, &fe):
+					t.Fatalf("%s run %d: %v", op.name, i, err)
+				case slices.Contains([]string{protocol.CodeExists, protocol.CodeBackupFailed, protocol.CodePathDenied}, fe.Code):
+					first++ // the racer first: refused, nothing replaced
+				case fe.Code == protocol.CodeVerifyFailed || fe.Code == protocol.CodeInternal && strings.Contains(fe.Msg, "could not be verified"):
+					after++ // the racer after the commit, seen by the read-back or the move's own check
+				default:
 					t.Fatalf("%s run %d: %v", op.name, i, err)
 				}
 			}
 		}
-		t.Logf("%s: %d runs, the operation first (then the racer replaced it) %d, the racer first (refused) %d", op.name, concurrentRuns, wonOK, first)
+		t.Logf("%s: %d runs: succeeded, then the racer replaced it %d; the racer after the commit, reported %d; the racer first, refused %d", op.name, concurrentRuns, wonOK, after, first)
 	}
 }
 
@@ -257,8 +264,10 @@ func TestVerifiedReplaceUnsupported(t *testing.T) {
 }
 
 // TestBackupHandedTheHash: the backup hook gets the hash fsx computed of
-// what it replaces, and a change between that hash and the backup is the
-// hook's to refuse (the helper's store compares them).
+// what it replaces. A file changed between that hash and the backup (a new
+// size or mtime, or another inode) is refused by fsx before the hook runs;
+// a change that keeps all three is the hook's to refuse, by content (the
+// helper's store compares the hash; privd TestBackupBoundToPrecondition).
 func TestBackupHandedTheHash(t *testing.T) {
 	e, backups := helperEnv(t)
 	p := filepath.Join(e.write, "app.yaml")
@@ -269,8 +278,21 @@ func TestBackupHandedTheHash(t *testing.T) {
 	}
 	e.fs.cfg.InjectBeforeBackup = func() { must(t, os.WriteFile(p, []byte("changed!\n"), 0o600)) }
 	_, err = e.fs.WriteFile(p, []byte("three\n"), WriteOptions{Create: true, ExpectedSHA256: hexSHA("two\n")})
-	must(t, err) // this hook records; the helper's store refuses (privd tests)
-	if b := (*backups)[1]; b.SHA256 != hexSHA("two\n") || !strings.HasSuffix(b.Path, "\x00changed!\n") {
+	wantCode(t, err, protocol.CodeBackupFailed)
+	if len(*backups) != 1 || read(t, p) != "changed!\n" {
+		t.Fatalf("the hook ran (%d backups) or the file changed: %q", len(*backups), read(t, p))
+	}
+	// Same size and mtime, other content: fsx hands the hook the hash of
+	// what it checked, and the hook reads other bytes.
+	fi, err := os.Stat(p)
+	must(t, err)
+	e.fs.cfg.InjectBeforeBackup = func() {
+		must(t, os.WriteFile(p, []byte("CHANGED!\n"), 0o600))
+		must(t, os.Chtimes(p, fi.ModTime(), fi.ModTime()))
+	}
+	_, err = e.fs.WriteFile(p, []byte("four\n"), WriteOptions{Create: true, ExpectedSHA256: hexSHA("changed!\n")})
+	must(t, err) // this test's hook only records; the helper's store refuses
+	if b := (*backups)[1]; b.SHA256 != hexSHA("changed!\n") || !strings.HasSuffix(b.Path, "\x00CHANGED!\n") {
 		t.Fatalf("the hook was not handed the hash fsx computed before the change: %+v", b)
 	}
 }

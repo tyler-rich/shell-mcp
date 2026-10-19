@@ -61,6 +61,7 @@ func newPrivWriteHarness(t *testing.T, method approval.Method) *approvalHarness 
 	t.Helper()
 	g := newRecordingGate(privWriteReplies())
 	g.setPath("priv_stat", privSrc, gateReply{data: privSrcSt})
+	g.setPath("priv_stat", "/etc/example-app", gateReply{data: privDirSt})
 	tg, c := sshTarget(t, g.exec)
 	logs := &syncBuffer{}
 	store := approval.NewStore(approval.Options{TTL: 300 * time.Second, Method: method, Wait: 300 * time.Millisecond,
@@ -240,7 +241,11 @@ func TestPrivWriteToolsChangeAfterApproval(t *testing.T) {
 				a.approve(id)
 				edit(a.g)
 				env, _ := a.call(name, withID(privWriteArgs[name], id))
-				if errCode(env) != "approval_invalid" || len(a.privMutatingOps()) != 0 {
+				want := "approval_invalid"
+				if name == "shell_priv_make_directory" && what == "target" {
+					want = "exists" // the directory appeared: the fresh preview refuses it
+				}
+				if errCode(env) != want || len(a.privMutatingOps()) != 0 {
 					t.Fatalf("re-call after the %s changed: %v, sent %v", what, env, a.g.ops())
 				}
 			})
@@ -258,7 +263,7 @@ func TestPrivWritePreconditions(t *testing.T) {
 		t.Helper()
 		a := newPrivWriteHarness(t, approval.MethodWeb)
 		if absent {
-			a.g.setPath("priv_stat", privConf, privNotFound())
+			privAbsent(a.g, privConf)
 		}
 		id := a.pending(name, privWriteArgs[name])
 		a.approve(id)
@@ -311,7 +316,7 @@ func TestPrivCopyPreviewShowsDestination(t *testing.T) {
 	}
 	// A new copy is root's (N-3), with the source's mode masked.
 	b := newPrivWriteHarness(t, approval.MethodWeb)
-	b.g.setPath("priv_stat", privConf, privNotFound())
+	privAbsent(b.g, privConf)
 	id = b.pending("shell_priv_copy_path", privWriteArgs["shell_priv_copy_path"])
 	p = previewMap(t, b, id)
 	if p["destination.state"] != "absent" || p["backup.written"] != "false" || !strings.Contains(p["set.owner"], "root") || !strings.Contains(p["set.mode"], "source") {
@@ -341,10 +346,10 @@ func TestPrivWritePreviewShowsOwnerAndBackup(t *testing.T) {
 		t.Fatalf("group %v", p)
 	}
 	b := newPrivWriteHarness(t, approval.MethodWeb)
-	b.g.setPath("priv_stat", privConf, privNotFound())
+	privAbsent(b.g, privConf)
 	id = b.pending("shell_priv_write_file", privWriteArgs["shell_priv_write_file"])
 	p = previewMap(t, b, id)
-	if ops := strings.Join(b.g.ops(), ","); ops != "priv_stat" {
+	if ops := strings.Join(b.g.ops(), ","); ops != "priv_stat,priv_backup_check" {
 		t.Fatalf("new-file preview ops %s", ops)
 	}
 	if p["current.state"] != "absent" || p["backup.written"] != "false" || !strings.Contains(p["set.owner"], "root") || !strings.Contains(p["set.mode"], "0640") {
@@ -512,4 +517,11 @@ func TestPrivWriteDescriptions(t *testing.T) {
 	if r, _ := a.store.Get(id); strings.Contains(r.Description, "ignore") {
 		t.Fatalf("a non-plain path entered the description: %q", r.Description)
 	}
+}
+
+// privAbsent makes p absent: priv_stat finds nothing, and priv_backup_check
+// says nothing would be backed up.
+func privAbsent(g *recordingGate, p string) {
+	g.setPath("priv_stat", p, privNotFound())
+	g.setPath("priv_backup_check", p, gateReply{data: `{"written":false,"bytes":0,"fits":true,"store_bytes":2048,"max_store_bytes":1073741824}`})
 }

@@ -52,6 +52,7 @@ func opTable() map[string]opSpec {
 		protocol.OpPrivListDir:       {policy.TierRead, (*server).listDir},
 		protocol.OpPrivStat:          {policy.TierRead, (*server).stat},
 		protocol.OpPrivListBackups:   {policy.TierRead, (*server).listBackups},
+		protocol.OpPrivBackupCheck:   {policy.TierRead, (*server).backupCheck},
 		protocol.OpPrivWriteFile:     {policy.TierOperator, (*server).writeFile},
 		protocol.OpPrivMkdir:         {policy.TierOperator, (*server).mkdir},
 		protocol.OpPrivChown:         {policy.TierOperator, (*server).chown},
@@ -115,6 +116,10 @@ func (s *server) dispatch() *protocol.Response {
 		return s.errResp(err)
 	}
 	data, warnings, err := spec.run(s, s.req.Args)
+	if err == nil {
+		// Retention only once the operation succeeded (handoff X-8).
+		s.store.pruneAfter(s.backupIDs)
+	}
 	return s.result(data, warnings, err)
 }
 

@@ -126,7 +126,8 @@ func TestOperatorToolAnnotations(t *testing.T) {
 	}
 	for _, r := range reg.ToolsForProfile(ProfileAdmin, nil) {
 		want, ok := operatorIdempotent[r.Tool.Def.Name]
-		if r.Tier != TierOperator {
+		if r.Tier != TierOperator || r.Privileged { // privileged: TestPrivWriteToolsRegistered
+
 			continue
 		}
 		if !ok {
