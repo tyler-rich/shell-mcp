@@ -50,10 +50,10 @@ func TestAuditNeverContent(t *testing.T) {
 	canary := "AUDIT-CANARY-CONTENT"
 	f.ok("priv_write_file", m{"path": filepath.Join(f.write, "app.conf"), "content_b64": b64(canary), "owner": "tester", "mode": "0640"}, nil)
 	f.ok("priv_read_file", m{"path": filepath.Join(f.write, "app.conf")}, nil)
-	f.ok("priv_delete", m{"path": filepath.Join(f.write, "app.conf")}, nil)
+	f.deleteBound(filepath.Join(f.write, "app.conf"), false)
 	lines := f.auditLines()
-	if len(lines) != 3 {
-		t.Fatalf("%d audit lines for 3 requests: %q", len(lines), lines)
+	if len(lines) != 4 {
+		t.Fatalf("%d audit lines for 4 requests: %q", len(lines), lines)
 	}
 	for _, l := range lines {
 		if strings.Contains(l, canary) || strings.Contains(l, b64(canary)) {

@@ -62,6 +62,13 @@ type BackupSource struct {
 	// through a verified descriptor. Only regular files and directories
 	// occur; anything else fails the walk.
 	Walk func(visit func(rel string, fi fs.FileInfo, open func() (*os.File, error)) error) error
+	// List visits the same entries as Walk, in the same order, from the
+	// delete's plan without opening anything (BackupTree; sizing the
+	// backup before it is written).
+	List func(visit func(rel string, fi fs.FileInfo) error) error
+	// Count is how many entries Walk visits (BackupTree from a plan): the
+	// backup must hold exactly that many.
+	Count int
 }
 
 // BackupFunc is called before every overwrite, move-over and delete. Its

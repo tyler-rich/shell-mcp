@@ -70,7 +70,13 @@ chown -R root:root "$bin"
 chmod 0755 "$bin"
 
 # --- Application directories and the backup store ---------------------------
+umount /etc/example-app/e2e-mounted/point 2>/dev/null || true # a rerun: the tmpfs below
 install -o root -g root -m 0755 -d /etc/example-app /etc/example-other /var/log/example-app
+# A tmpfs mounted inside the privileged write root (priv_delete_tools_test.go):
+# the helper's delete never deletes a mount point nor descends into one.
+install -o root -g root -m 0755 -d /etc/example-app/e2e-mounted /etc/example-app/e2e-mounted/point
+mount -t tmpfs -o size=1m,mode=0755 e2e-priv-delete-mount /etc/example-app/e2e-mounted/point
+printf 'on the mount\n' >/etc/example-app/e2e-mounted/point/inside.txt
 printf 'key: value\n' >/etc/example-app/app.conf
 chmod 0640 /etc/example-app/app.conf
 printf 'outside\n' >/etc/example-other/secret.txt

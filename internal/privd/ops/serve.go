@@ -100,6 +100,9 @@ type Options struct {
 	// only.
 	InjectBeforeBackup  func()
 	InjectExchangeFault func() error
+	// InjectDeleteStep is passed to fsx (DeleteExactBound's steps); tests
+	// only. STUB (S4c-4 failing-first commit): not passed yet.
+	InjectDeleteStep func(fsx.DeleteStep, string)
 	// DisableCommitReport leaves fsx's OnCommit unset, as a mutating site
 	// that never reports would; tests only.
 	DisableCommitReport bool

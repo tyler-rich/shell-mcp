@@ -461,7 +461,7 @@ func TestHelperOperations(t *testing.T) {
 	var del struct {
 		BackupIDs []string `json:"backup_ids"`
 	}
-	mustGate(t, "priv_delete", map[string]any{"path": dir, "recursive": true}, &del)
+	mustGateBound(t, "priv_delete", map[string]any{"path": dir, "recursive": true}, &del)
 	if len(del.BackupIDs) != 1 {
 		t.Fatalf("tree delete backups %v", del.BackupIDs)
 	}
@@ -469,7 +469,7 @@ func TestHelperOperations(t *testing.T) {
 	if readFile(t, f) != "x\n" {
 		t.Fatal("tree not restored")
 	}
-	mustGate(t, "priv_delete", map[string]any{"path": dir, "recursive": true}, nil)
+	mustGateBound(t, "priv_delete", map[string]any{"path": dir, "recursive": true}, nil)
 	var ex struct {
 		Stdout   string `json:"stdout"`
 		ExitCode *int   `json:"exit_code"`

@@ -104,6 +104,11 @@ const (
 	// DeleteStepBeforeUnlink: after that check, before the temporary name
 	// is removed.
 	DeleteStepBeforeUnlink
+	// DeleteStepBeforeBackupEntry: before a regular file of the plan is
+	// opened for the backup (the helper's DeleteExactBound).
+	DeleteStepBeforeBackupEntry
+	// DeleteStepAfterBackup: the backup was written; nothing is removed yet.
+	DeleteStepAfterBackup
 )
 
 // DeletePlan is the gate's delete_preview and delete result.
@@ -115,6 +120,12 @@ type DeletePlan struct {
 	First         []string `json:"first"`
 	PreviewSHA256 string   `json:"preview_sha256"`
 	Deleted       bool     `json:"deleted"`
+	// Removed are the logical paths a delete removed, in the order it
+	// removed them, also when it stopped part-way (the helper's audit).
+	Removed []string `json:"-"`
+	// Backup describes, from the plan, what a delete would back up
+	// (PreviewDeleteBound only; List set, never Walk or File).
+	Backup *BackupSource `json:"-"`
 }
 
 // deleteTempPrefix starts the temporary name an entry is set aside under.
@@ -744,4 +755,19 @@ func (d *deleter) stillListed(pre *ident, e *planEntry) bool {
 		return pre.sameObject(&e.id) && pre.size == e.id.size
 	}
 	return pre.unchanged(&e.id)
+}
+
+// PreviewDeleteBound is the helper's PreviewDelete: binding (its policy's
+// SHA-256) is part of the hash. STUB (S4c-4 failing-first commit).
+func (f *FS) PreviewDeleteBound(p string, recursive bool, binding string) (DeletePlan, error) {
+	_ = binding
+	return f.PreviewDelete(p, recursive)
+}
+
+// DeleteExactBound is the helper's DeleteExact. STUB (S4c-4 failing-first
+// commit): S1's delete, ignoring the binding and the hash.
+func (f *FS) DeleteExactBound(p string, recursive bool, binding, expected string) (DeletePlan, error) {
+	_, _ = binding, expected
+	r, err := f.Delete(p, recursive)
+	return DeletePlan{Path: r.Path, Type: r.Type, Entries: r.Entries, Bytes: r.Bytes, First: r.First, Deleted: r.Deleted}, err
 }

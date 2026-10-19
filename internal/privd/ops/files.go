@@ -66,6 +66,8 @@ type srcDstArgs struct {
 type deleteArgs struct {
 	Path      string `json:"path"`
 	Recursive bool   `json:"recursive"`
+	// ExpectedPreviewSHA256 is priv_delete_preview's preview_sha256 (P-3).
+	ExpectedPreviewSHA256 string `json:"expected_preview_sha256"`
 }
 
 // Write-class results carry the ids of the backups written first, and a
@@ -305,9 +307,24 @@ func (s *server) delete(raw jsontext.Value) (data any, warns []string, failure e
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
 	}
-	r, err := s.fs.Delete(a.Path, a.Recursive)
+	r, err := s.fs.DeleteExactBound(a.Path, a.Recursive, s.p.SHA256, a.ExpectedPreviewSHA256)
 	if err != nil {
 		return nil, nil, err
 	}
-	return deleteData{DeleteResult: r, BackupIDs: s.ids()}, nil, nil
+	return deleteData{DeleteResult: fsx.DeleteResult{Path: r.Path, Type: r.Type, Entries: r.Entries, Bytes: r.Bytes, First: r.First, Deleted: r.Deleted},
+		BackupIDs: s.ids()}, nil, nil
+}
+
+// deletePreview is priv_delete_preview. STUB (S4c-4 failing-first commit):
+// S1's preview, without the backup or a hash.
+func (s *server) deletePreview(raw jsontext.Value) (data any, warns []string, failure error) {
+	var a struct {
+		Path      string `json:"path"`
+		Recursive bool   `json:"recursive"`
+	}
+	if err := decode(raw, &a); err != nil {
+		return nil, nil, err
+	}
+	r, err := s.fs.DeletePreview(a.Path, a.Recursive)
+	return r, nil, err
 }
