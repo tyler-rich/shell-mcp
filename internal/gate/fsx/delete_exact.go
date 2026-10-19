@@ -579,6 +579,10 @@ type deleter struct {
 	deleted int
 	// removed are the logical paths unlinked, in order.
 	removed []string
+	// The accounting behind Error.Unchanged: setAsides counts entries
+	// renamed to a temporary name, putBacks those renamed back under their
+	// name, stranded those that could not be (deleted counts the unlinks).
+	setAsides, putBacks, stranded int
 	// setAside names an entry that could not be put back under its name
 	// (taken again meanwhile); it was not deleted.
 	setAside string
@@ -649,6 +653,7 @@ func (d *deleter) remove(dfd int, e *planEntry) error {
 	case err != nil:
 		return mapErr(err)
 	}
+	d.setAsides++
 	if !e.id.isDir() {
 		if d.touched == nil {
 			d.touched = map[[2]uint64]bool{}
@@ -688,9 +693,12 @@ func (d *deleter) remove(dfd int, e *planEntry) error {
 // replacing anything that took the name meanwhile.
 func (d *deleter) restore(dfd int, tmp string, e *planEntry) {
 	if err := unix.Renameat2(dfd, tmp, dfd, e.name, unix.RENAME_NOREPLACE); err != nil {
+		d.stranded++
 		d.setAside, d.setAsideFrom = join(dirOf(e.lp), tmp), e.lp
 		d.f.commit() // the tree changed: an entry stays under its temporary name
+		return
 	}
+	d.putBacks++
 }
 
 func dirOf(p string) string {
@@ -733,10 +741,17 @@ func (d *deleter) stopped(err error) error {
 	}
 	out := errf(code, "%s", msg)
 	out.SetAside = d.setAside
-	// Nothing unlinked and nothing left set aside: every entry set aside
-	// was put back, so the tree is as the walk saw it.
-	out.Unchanged = d.deleted == 0 && d.setAside == ""
+	out.Unchanged = d.unchanged()
 	return out
+}
+
+// unchanged is the explicit accounting behind Error.Unchanged: nothing was
+// unlinked, nothing was stranded, and every entry set aside was put back
+// under its name, so the tree is as the walk saw it. An entry set aside and
+// neither unlinked nor put back (a path that stopped between the two)
+// makes it false, whatever else happened.
+func (d *deleter) unchanged() bool {
+	return d.deleted == 0 && d.stranded == 0 && d.setAside == "" && d.putBacks == d.setAsides
 }
 
 // isDevice: a character or block device node. The gate's Landlock
