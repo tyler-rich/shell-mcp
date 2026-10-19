@@ -46,11 +46,13 @@ const (
 // carry the approval inputs.
 func gateable(t Tier) bool { return t == TierOperator || t == TierDestructive }
 
-// gated reports whether a call of a tool of tier t needs approval.
-// privileged is not yet looked at (S4c-1 stub).
+// gated reports whether a call of tier t needs approval (D-006): every
+// destructive one; an operator one when it is privileged (a shell_priv_*
+// tool, run as root by the host's helper), whatever
+// SHELL_MCP_APPROVAL_TIERS says, or when the tiers list operator; never a
+// read one.
 func (d *Deps) gated(t Tier, privileged bool) bool {
-	_ = privileged
-	return t == TierDestructive || t == TierOperator && slices.Contains(d.ApprovalTiers, t.String())
+	return t == TierDestructive || t == TierOperator && (privileged || slices.Contains(d.ApprovalTiers, t.String()))
 }
 
 func (d *Deps) method() approval.Method {
@@ -124,7 +126,8 @@ func splitApproval(raw stdjson.RawMessage, confirm bool) (stdjson.RawMessage, ap
 
 // preview is a server-computed preview of what a call would change, built
 // from the gate's read operations. value is what is hashed and shown;
-// policy is the gate policy's SHA-256 reported with it; contentSHA256 is
+// policy is the gate policy's SHA-256 reported with it (for a privileged
+// preview, the hash of both policies' hashes: privPolicy); contentSHA256 is
 // the previewed content's hash, passed as a precondition where the
 // operation supports one (expected_sha256); absent says the preview saw no
 // file there (passed as expect_absent).
@@ -368,8 +371,9 @@ func perTierCall[In, Out any](ctx context.Context, d *Deps, s spec[In, Out], req
 }
 
 // ungatedCeiling is the highest tier, up to max, whose operations need no
-// approval under SHELL_MCP_APPROVAL_TIERS: operator by default, read when
-// operator is listed.
+// approval: for an unprivileged tool, operator by default and read when
+// SHELL_MCP_APPROVAL_TIERS lists operator; for a privileged tool always
+// read, since its operator and destructive operations are always gated.
 func (d *Deps) ungatedCeiling(maxTier Tier, privileged bool) Tier {
 	for t := maxTier; t > TierRead; t-- {
 		if !d.gated(t, privileged) {

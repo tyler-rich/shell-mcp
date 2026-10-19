@@ -6,6 +6,7 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -86,6 +87,9 @@ func define[In, Out any](d *Deps, s spec[In, Out]) Tool {
 	out, err := jsonschema.For[envelope.Envelope[Out]](nil)
 	if err != nil {
 		panic(fmt.Sprintf("tools: %s: output schema: %v", s.name, err))
+	}
+	if s.privileged != strings.HasPrefix(s.name, privPrefix) {
+		panic(fmt.Sprintf("tools: %s: privileged tools, and only they, are named %s*", s.name, privPrefix))
 	}
 	canGate := gateable(s.tier)
 	if canGate {
