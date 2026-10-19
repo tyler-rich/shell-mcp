@@ -2503,7 +2503,7 @@ Every other write in fsx and the helper opens with `O_CREAT|O_EXCL` (temporary f
 - **The prompt's N-1 test** ("a root-owned file moved into the root by another account is never changed") cannot run as written in an unprivileged unit test. There, the other account's write access is a world- or group-writable directory, and an untrusted owner is the trust set without the test's uid. The real case runs in e2e-host: `example-app` moves a `root:root 0600` file from a directory it owns outside the roots into one it owns inside `/etc/example-app`.
 
 **Findings:**
-- **The same move-in for overwrites (not fixed; for the maintainer).** `priv_write_file` or `priv_copy` with `overwrite` over a moved-in file gives the new inode the old one's owner, and its mode masked by `modes.max`; `priv_restore_backup` over one is the same. The content was approved, but the account ends up with a root-owned file it chose the content of, wherever it moves it. The chain rule could apply to those destinations, at the cost of refusing every overwrite under an application-owned directory. Recorded in the handoff (N-1).
+- **The same move-in for overwrites (not fixed; for the maintainer).** `priv_write_file` or `priv_copy` with `overwrite` over a moved-in file gives the new inode the old one's owner, and its mode masked by `modes.max`; `priv_restore_backup` over one is the same. The content was approved, but the account ends up with a root-owned file it chose the content of, wherever it moves it. The chain rule could apply to those destinations, at the cost of refusing every overwrite under an application-owned directory. Recorded in the handoff as N-6 (follow-up below).
 - **The gate's chmod has a non-escalating analogue:** another account that can write a gate write root could move the service account's own file in and have the gate chmod it. The service account could chmod its own file anyway, so nothing is gained beyond the roots' path limit. Not changed.
 
 **Tests (committed failing first, `573e5d0`; output in the PR body).** Inert stubs in that commit: `PreviewMeta` (the target alone, a fixed hash), `ApplyMeta` (S4c-0's chmod and chown of the target, ignoring the hash, recursion and the chain rule), `CheckRootChain` (nil), `appendMetaEntry` (the delete's encoding), the config fields, the op names with stub handlers, the arguments.
@@ -2539,7 +2539,7 @@ Every other write in fsx and the helper opens with `O_CREAT|O_EXCL` (temporary f
 - Holding every directory open: descriptor limits, as for the delete.
 - A WARN at every helper start for each failing root (the maintainer's choice).
 
-**Deferred / follow-ups:** the move-in finding for overwrites (above); N-4 and N-5 unchanged; S4c-4 onward per the handoff.
+**Deferred / follow-ups:** N-6, the move-in finding for overwrites (above; must be decided before S4c-5 ships); N-4 and N-5 unchanged; S4c-4 onward per the handoff.
 
 **Versions:**
 - **Go:** 1.27.2, the newest stable per go.dev (checked by `scripts/deps-current.sh` on 2026-10-19).
@@ -2547,3 +2547,18 @@ Every other write in fsx and the helper opens with `O_CREAT|O_EXCL` (temporary f
 - **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+
+**2026-10-19 — PR #32 follow-up: the first CI run, the maintainer's acceptance, N-6 and the documented route for application-owned trees.**
+- **First CI run (`c061171`): every job green.**
+  - e2e-host:
+    - `TestPrivMetaToolsApproval` passed, with all four subtests: chown -R approved and run once with its journal line; chmod -R; a tree changed after approval; a hard link refusing the tree.
+    - `TestPrivMetaMovedInRefused` passed, as did the updated `TestHelperOperations`, `TestHelperHardLinkChmodChown` and `TestPrivToolsListed`.
+  - `TestPrivMetaChownChanges` ran, and passed, on both Go runners: the runner user has supplementary groups.
+- **The maintainer accepted the decisions and deviations** recorded above.
+- **Documented** (PRIVILEGED §6 and TOOLS.md, at the maintainer's request):
+  - once a tree has been chowned to an application account, every later chown or chmod inside it is refused by the chain rule, a second `chown -R` of the same tree included;
+  - the intended way to manage application-owned trees is a fixed root command template in the privileged policy (`priv_exec`, S4c-6), which the operator writes and which still needs approval.
+- **N-6 (handoff §2.1).** `priv_write_file`, `priv_copy` with `overwrite` and `priv_restore_backup` over a moved-in file inherit its root ownership.
+  - **Proposed fix**, to decide in S4c-5 for all three: when the target's path fails the chain rule, a write, copy or restore over an existing file does not inherit that file's owner and group; it requires an explicit allow-listed owner and group, or is refused.
+  - **Must be decided before S4c-5 ships**; the S4c-5 entry carries it as a STOP.
+- Docs only; no code change.
