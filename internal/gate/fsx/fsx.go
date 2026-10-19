@@ -123,6 +123,11 @@ type Error struct {
 	// SetAside, when set, is the path of an entry a delete set aside and
 	// could not put back under its name (it was not deleted).
 	SetAside string
+	// Unchanged is set only by a refusal that fsx made before any mutating
+	// system call of the operation, or after undoing the one it made (a
+	// verified replace exchanged back): the operation provably changed
+	// nothing. Never on the wire.
+	Unchanged bool
 }
 
 func (e *Error) Error() string { return e.Code + ": " + e.Msg }

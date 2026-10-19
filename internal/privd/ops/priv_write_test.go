@@ -447,9 +447,10 @@ func TestFailedOperationDiscardsItsBackup(t *testing.T) {
 		}
 		var line struct {
 			BackupIDs []string `json:"backup_ids"`
+			Discarded []string `json:"backup_ids_discarded"`
 		}
 		_, js, _ := strings.Cut(f.lastAudit(), "{")
-		if err := json.Unmarshal([]byte("{"+js), &line); err != nil || len(line.BackupIDs) != 0 {
+		if err := json.Unmarshal([]byte("{"+js), &line); err != nil || len(line.BackupIDs) != 0 || len(line.Discarded) != 1 {
 			t.Fatalf("%s: audit line %s", c.op, f.lastAudit())
 		}
 	}
@@ -477,5 +478,39 @@ func TestCommittedFailureKeepsItsBackup(t *testing.T) {
 	}
 	if a := f.lastAudit(); !strings.Contains(a, ms[0]["id"].(string)) {
 		t.Fatalf("audit line %s", a)
+	}
+}
+
+// TestUnreportedMutationKeepsItsBackup: the discard is fail-safe. A failure
+// after a mutation at a site that does not report its commit (simulated by
+// leaving fsx's OnCommit unset) is not provably unchanged, so the backup is
+// kept: only fsx's positive "nothing was changed" signal deletes one.
+func TestUnreportedMutationKeepsItsBackup(t *testing.T) {
+	f := newFixture(t)
+	p := filepath.Join(f.write, "app.conf")
+	f.opts.DisableCommitReport = true
+	f.opts.InjectReadBackFault = func(b []byte) []byte { return append(b, 'x') }
+	f.fail("priv_write_file", m{"path": p, "content_b64": b64("two\n")}, "verify_failed")
+	f.opts.InjectReadBackFault = nil
+	ms := f.metas()
+	if len(ms) != 1 || ms[0]["sha256"] != shaHex("key: value\n") || readFile(t, p) != "two\n" {
+		t.Fatalf("a failure after an unreported mutation discarded its backup: store %v, file %q", ms, readFile(t, p))
+	}
+	if a := f.lastAudit(); !strings.Contains(a, ms[0]["id"].(string)) || strings.Contains(a, "backup_ids_discarded") {
+		t.Fatalf("audit line %s", a)
+	}
+	// With commits unreported, a provably unchanged refusal still discards.
+	old := "kept\n"
+	writeTestFile(t, p, old)
+	f.opts.InjectBeforeCommit = func() {
+		writeTestFile(t, p+".racer", "racer\n")
+		if err := os.Rename(p+".racer", p); err != nil {
+			t.Error(err)
+		}
+	}
+	f.fail("priv_write_file", m{"path": p, "content_b64": b64("x\n"), "expected_sha256": shaHex(old)}, "exists")
+	f.opts.InjectBeforeCommit = nil
+	if len(f.metas()) != 1 {
+		t.Fatalf("store %v", f.metas())
 	}
 }

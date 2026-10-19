@@ -331,3 +331,44 @@ func TestProbeExchange(t *testing.T) {
 		t.Fatalf("a missing root: %v", err)
 	}
 }
+
+// TestUnchangedSignal: fsx marks a refusal Unchanged only when it made no
+// mutating system call, or undid the one it made; a failure after a commit
+// never carries it.
+func TestUnchangedSignal(t *testing.T) {
+	e, _ := helperEnv(t)
+	p := filepath.Join(e.write, "app.yaml")
+	unchanged := func(err error) bool {
+		var fe *Error
+		return errors.As(err, &fe) && fe.Unchanged
+	}
+	// Exchanged back after a racer replaced the destination.
+	e.fs.cfg.InjectBeforeCommit = func() { put(t, p+".r", "racer\n"); must(t, os.Rename(p+".r", p)) }
+	_, err := e.fs.WriteFile(p, []byte("x\n"), WriteOptions{Create: true, ExpectedSHA256: hexSHA("key: value\n")})
+	e.fs.cfg.InjectBeforeCommit = nil
+	if !unchanged(err) {
+		t.Fatalf("exchanged back: %v not marked unchanged", err)
+	}
+	// A create-only commit refused by link(2).
+	n := filepath.Join(e.write, "new.yaml")
+	e.fs.cfg.InjectBeforeCommit = func() { put(t, n, "planted\n") }
+	_, err = e.fs.WriteFile(n, []byte("x\n"), WriteOptions{Create: true, ExpectAbsent: true})
+	e.fs.cfg.InjectBeforeCommit = nil
+	if !unchanged(err) {
+		t.Fatalf("create-only refused: %v not marked unchanged", err)
+	}
+	// A changed file refused before its backup was written.
+	e.fs.cfg.InjectBeforeBackup = func() { put(t, p, "changed again\n") }
+	_, err = e.fs.WriteFile(p, []byte("y\n"), WriteOptions{Create: true})
+	e.fs.cfg.InjectBeforeBackup = nil
+	if !unchanged(err) {
+		t.Fatalf("changed before the backup: %v not marked unchanged", err)
+	}
+	// After the commit: never.
+	e.fs.cfg.InjectReadBackFault = func(b []byte) []byte { return append(b, 'x') }
+	_, err = e.fs.WriteFile(p, []byte("z\n"), WriteOptions{Create: true})
+	e.fs.cfg.InjectReadBackFault = nil
+	if err == nil || unchanged(err) {
+		t.Fatalf("a read-back failure after the commit: %v", err)
+	}
+}

@@ -100,6 +100,9 @@ type Options struct {
 	// only.
 	InjectBeforeBackup  func()
 	InjectExchangeFault func() error
+	// DisableCommitReport leaves fsx's OnCommit unset, as a mutating site
+	// that never reports would; tests only.
+	DisableCommitReport bool
 	// Now is the clock (backup ids and times).
 	Now func() time.Time
 }
@@ -448,7 +451,6 @@ func (s *server) run(nc net.Conn) *protocol.Response {
 		VerifyReplaced:              true,
 		InjectBeforeBackup:          o.InjectBeforeBackup,
 		InjectExchangeFault:         o.InjectExchangeFault,
-		OnCommit:                    func() { s.committed = true },
 		InjectReadBackFault:         o.InjectReadBackFault,
 		InjectBeforeCommit:          o.InjectBeforeCommit,
 		InjectNoReplaceFault:        o.InjectNoReplaceFault,
@@ -456,6 +458,9 @@ func (s *server) run(nc net.Conn) *protocol.Response {
 	}
 	if p.BackupsKeep > 0 {
 		cfg.Backup = s.backup
+	}
+	if !o.DisableCommitReport {
+		cfg.OnCommit = func() { s.committed = true }
 	}
 	s.fs = fsx.New(cfg)
 	rc := *cfg
