@@ -120,23 +120,31 @@ func fileSHA256(t *testing.T, p string) string {
 	return hex.EncodeToString(s[:])
 }
 
-// TestPrivToolsListed: the four read tools are in the admin catalogue
-// (and no privileged tool that changes anything yet).
+// TestPrivToolsListed: the four read tools (read-only) and the four write
+// tools of S4c-2 (destructiveHint, always approval-gated) are in the admin
+// catalogue, and no other privileged tool yet.
 func TestPrivToolsListed(t *testing.T) {
 	res, err := privServer(t).ListTools(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	writes := "shell_priv_copy_path shell_priv_make_directory shell_priv_move_path shell_priv_write_file"
 	var got []string
 	for _, tool := range res.Tools {
 		if strings.HasPrefix(tool.Name, "shell_priv_") {
 			got = append(got, tool.Name)
-			if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
-				t.Fatalf("%s is not read-only: %+v", tool.Name, tool.Annotations)
+			a := tool.Annotations
+			switch {
+			case strings.Contains(writes, tool.Name):
+				if a == nil || a.ReadOnlyHint || a.DestructiveHint == nil || !*a.DestructiveHint || tool.Meta["anthropic/requiresUserInteraction"] != true {
+					t.Fatalf("%s: annotations %+v meta %v", tool.Name, a, tool.Meta)
+				}
+			case a == nil || !a.ReadOnlyHint:
+				t.Fatalf("%s is not read-only: %+v", tool.Name, a)
 			}
 		}
 	}
-	if want := "shell_priv_list_backups shell_priv_list_directory shell_priv_read_file shell_priv_stat_path"; strings.Join(got, " ") != want {
+	if want := "shell_priv_copy_path shell_priv_list_backups shell_priv_list_directory shell_priv_make_directory shell_priv_move_path shell_priv_read_file shell_priv_stat_path shell_priv_write_file"; strings.Join(got, " ") != want {
 		t.Fatalf("privileged tools %v, want %s", got, want)
 	}
 }

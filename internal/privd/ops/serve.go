@@ -96,6 +96,10 @@ type Options struct {
 	InjectNoReplaceFault func() error
 	// InjectMetadataReadBackFault is passed to fsx; tests only.
 	InjectMetadataReadBackFault func(fsx.Meta) fsx.Meta
+	// InjectBeforeBackup and InjectExchangeFault are passed to fsx; tests
+	// only.
+	InjectBeforeBackup  func()
+	InjectExchangeFault func() error
 	// Now is the clock (backup ids and times).
 	Now func() time.Time
 }

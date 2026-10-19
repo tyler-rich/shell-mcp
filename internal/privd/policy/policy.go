@@ -77,9 +77,12 @@ type Policy struct {
 	// ModesMax is the mask no requested mode may exceed.
 	ModesMax    os.FileMode
 	BackupsKeep int
-	Commands    []Command
-	Packages    Packages
-	Power       Power
+	// BackupsMaxStoreBytes bounds the backup store's total size
+	// (backups.max_store_bytes).
+	BackupsMaxStoreBytes int64
+	Commands             []Command
+	Packages             Packages
+	Power                Power
 	// Capabilities is the core unit's bounding set: BaseCapabilities plus
 	// every capability a core-unit command declares, sorted by number.
 	Capabilities []string

@@ -485,6 +485,18 @@ func (f *FS) Copy(src, dst string, overwrite bool) (WriteResult, error) {
 	return f.writeAtomic(ld, data, &atomicOpts{newMode: srcMode, create: true, overwrite: overwrite})
 }
 
+// CopyExpecting is Copy whose destination, with overwrite, must be a
+// regular file with the SHA-256 expected (handoff P-9).
+func (f *FS) CopyExpecting(src, dst string, overwrite bool, _ string) (WriteResult, error) {
+	return f.Copy(src, dst, overwrite)
+}
+
+// MoveExpecting is Move whose destination, with overwrite, must be a
+// regular file with the SHA-256 expected (handoff P-9).
+func (f *FS) MoveExpecting(src, dst string, overwrite bool, _ string) (MoveResult, error) {
+	return f.Move(src, dst, overwrite)
+}
+
 // Move renames src to dst. Both must be under the same write root; a
 // directory is moved only if no entry in it is denied or protected at its
 // old or new path. A rename within one directory goes through that

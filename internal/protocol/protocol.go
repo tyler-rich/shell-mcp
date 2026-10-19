@@ -160,6 +160,9 @@ const (
 	OpPrivPkgRemovePreview  = "priv_pkg_remove_preview"
 	// OpPrivPower asks systemd to reboot or power off (broad unit).
 	OpPrivPower = "priv_power"
+	// OpPrivBackupCheck says whether an overwrite of a path would write a
+	// backup and whether it fits the backup store (handoff P-11; core).
+	OpPrivBackupCheck = "priv_backup_check"
 )
 
 // PrivOps lists every privileged operation.

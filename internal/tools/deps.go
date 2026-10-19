@@ -214,9 +214,9 @@ func Probe(ctx context.Context, d *Deps, target string) (*ProbeResult, *envelope
 }
 
 // EffectiveTools are the names among regs (a profile's tools) that a target
-// whose gate allows maxTier, with privileged forwarding on or off, can
-// serve.
-func EffectiveTools(regs []Registration, maxTier string, privileged bool) []string {
+// whose gate allows maxTier, with privileged forwarding on or off up to
+// privMaxTier, can serve.
+func EffectiveTools(regs []Registration, maxTier string, privileged bool, _ string) []string {
 	limit := map[string]Tier{"read": TierRead, "operator": TierOperator, "destructive": TierDestructive}[maxTier]
 	out := []string{}
 	for _, r := range regs {

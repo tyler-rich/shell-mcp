@@ -371,6 +371,8 @@ priv_policy '    capabilities: [CAP_KILL]
 priv_policy '' '    capabilities: [CAP_SYS_TIME]
 ' false >"$bin/privileged-sys-time.yaml"
 priv_policy '' '' true >"$bin/privileged-upgrade.yaml"
+# The smallest backup store cap (64 MiB), for the store-cap test.
+priv_policy '' '' false | sed 's/^  keep: 3$/  keep: 3\n  max_store_bytes: 67108864/' >"$bin/privileged-small-store.yaml"
 chmod 0600 "$bin"/privileged*.yaml
 install -o root -g root -m 0600 "$bin/privileged.yaml" /etc/shell-mcp/privileged.yaml
 

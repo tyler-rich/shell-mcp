@@ -55,6 +55,9 @@ type recordingGate struct {
 	// helperSHA is the privileged policy's hash in the helper block that
 	// answers to priv_* ops carry (handoff P-1).
 	helperSHA string
+	// byPath answers an op for one path (key "<op> <path>", the args' path,
+	// or else their destination, or else their source) before replies.
+	byPath map[string]gateReply
 }
 
 func newRecordingGate(replies map[string]gateReply) *recordingGate {
@@ -69,6 +72,9 @@ func (g *recordingGate) exec(_ context.Context, s *sshtest.Session) uint32 {
 	g.mu.Lock()
 	g.reqs = append(g.reqs, *req)
 	r, ok := g.replies[req.Op]
+	if pr, found := g.byPath[req.Op+" "+argPath(req.Args)]; found {
+		r, ok = pr, true
+	}
 	sha, helperSHA := g.sha, g.helperSHA
 	g.mu.Unlock()
 	if !ok {
@@ -950,4 +956,32 @@ func TestReadToolsAudit(t *testing.T) {
 			t.Fatalf("log contains %q", s)
 		}
 	}
+}
+
+// argPath is a request's path argument, else its destination, else its
+// source.
+func argPath(raw []byte) string {
+	var a struct {
+		Path        string `json:"path"`
+		Destination string `json:"destination"`
+		Source      string `json:"source"`
+	}
+	_ = json.Unmarshal(raw, &a)
+	switch {
+	case a.Path != "":
+		return a.Path
+	case a.Destination != "":
+		return a.Destination
+	}
+	return a.Source
+}
+
+// setPath answers op for one path.
+func (g *recordingGate) setPath(op, path string, r gateReply) { //nolint:gocritic // the fake gate stores replies by value
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.byPath == nil {
+		g.byPath = map[string]gateReply{}
+	}
+	g.byPath[op+" "+path] = r
 }

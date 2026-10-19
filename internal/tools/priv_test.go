@@ -368,8 +368,8 @@ func TestPrivReadToolsRegistered(t *testing.T) {
 			t.Fatalf("%s carries approval inputs or meta", want)
 		}
 	}
-	on := EffectiveTools(admin, "destructive", true)
-	off := EffectiveTools(admin, "destructive", false)
+	on := EffectiveTools(admin, "destructive", true, "destructive")
+	off := EffectiveTools(admin, "destructive", false, "destructive")
 	for _, n := range privReadTools {
 		if !slices.Contains(on, n) || slices.Contains(off, n) {
 			t.Fatalf("%s: effective with forwarding %v, without %v", n, slices.Contains(on, n), slices.Contains(off, n))

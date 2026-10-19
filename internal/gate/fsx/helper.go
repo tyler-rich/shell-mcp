@@ -53,6 +53,9 @@ type BackupSource struct {
 	Info fs.FileInfo
 	// File is the open target (BackupFile); fsx closes it.
 	File *os.File
+	// SHA256, when set, is the SHA-256 fsx computed of File's content just
+	// before: the backup must hold exactly that content, or fail.
+	SHA256 string
 	// Walk visits every entry beneath the tree root in pre-order
 	// (BackupTree): rel is relative to the root, open opens a regular file
 	// through a verified descriptor. Only regular files and directories

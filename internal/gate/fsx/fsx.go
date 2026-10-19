@@ -80,6 +80,20 @@ type Config struct {
 	// Chown read back before it is compared. Tests only; production code
 	// never sets it.
 	InjectMetadataReadBackFault func(Meta) Meta
+	// VerifyReplaced makes every commit that replaces an existing file an
+	// exchange (renameat2 RENAME_EXCHANGE) followed by a check that the
+	// inode exchanged out is the one that was checked and backed up; another
+	// is exchanged back and the operation refused with exists. The helper
+	// sets it; the gate does not.
+	VerifyReplaced bool
+	// InjectBeforeBackup, when non-nil, is called after a file to be
+	// replaced was hashed and before it is handed to the backup hook. Tests
+	// only; production code never sets it.
+	InjectBeforeBackup func()
+	// InjectExchangeFault, when non-nil, is called instead of the
+	// RENAME_EXCHANGE system call of a verified replace, and its error is
+	// that call's result. Tests only; production code never sets it.
+	InjectExchangeFault func() error
 }
 
 // Meta is an inode's mode (permission and special bits), owner and group.
@@ -190,6 +204,11 @@ type WriteResult struct {
 	LinesNew       int    `json:"lines_new"`
 	OwnerPreserved bool   `json:"owner_preserved"`
 	Verified       bool   `json:"verified"`
+	// UID and GID are the new inode's owner and group, read from its own
+	// descriptor after they were set; the helper reports them, the gate's
+	// wire does not carry them.
+	UID uint32 `json:"-"`
+	GID uint32 `json:"-"`
 }
 
 // MkdirResult is mkdir's result.
@@ -197,6 +216,9 @@ type MkdirResult struct {
 	Path    string `json:"path"`
 	Created bool   `json:"created"`
 	Mode    string `json:"mode"`
+	// UID and GID are the directory's owner and group (as WriteResult's).
+	UID uint32 `json:"-"`
+	GID uint32 `json:"-"`
 }
 
 // MoveResult is move's result.
