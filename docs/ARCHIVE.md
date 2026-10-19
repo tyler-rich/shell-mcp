@@ -2327,7 +2327,7 @@ Every other write in fsx and the helper opens with `O_CREAT|O_EXCL` (temporary f
 - **N-4 (the gate's chmod read-back):** a low-priority follow-up, outside S4c.
 - **Restore (R-1):** S4c-5 reports the resulting mode in the preview and in the result, so a narrowing is never silent. Any protocol field for it is pre-approved (handoff P-10).
 
-### 2026-10-18 — Privileged foundations: the helper block, the clamped timeout, privileged gating, the privileged read tools (S4c-1, branch feat/priv-foundations)
+### 2026-10-18 — Privileged foundations: the helper block, the clamped timeout, privileged gating, the privileged read tools (PR #29, branch feat/priv-foundations)
 **Decision:** Build the handoff's S4c-1 entry (`docs/handoff/S4C-PRIVILEGED.md` §5): the server sees and binds the privileged policy, privileged operations are gated per D-006, a forwarded request's timeout is the gate's own, and the first root tools are exposed, read-only.
 - **First commit (`b96bdb7`): handoff §7.1 verbatim.** D-006's re-call bullet, S-12's Record and Executing lines, and the CLAUDE.md "Approval" definition, with the privileged policy and a privileged command's unit; nothing else in them. D-021 unchanged.
 - **P-1, the helper block.** The helper's own response block gains `unit` (`GateInfo.Unit`, `omitempty`, set only by the helper). The gate's `forward` returns it as the response's `helper` block (`Response.Helper`), beside its own `gate` block, on a success and on a helper error that carried a block; a response the gate answers itself has none.
