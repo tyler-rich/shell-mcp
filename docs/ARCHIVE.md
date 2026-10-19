@@ -2453,7 +2453,9 @@ Every other write in fsx and the helper opens with `O_CREAT|O_EXCL` (temporary f
 - Verifying copy and move against the gate's own check without P-9: closes the commit window but not the approval's (the destination could still change between the approval and the gate's check); not chosen.
 - A gate-only copy of `exchangeVerified`, or a second server-side P-9: the maintainer asked to reuse both.
 
-**Deferred / follow-ups:** none from this change. S4c-3 onward per the handoff.
+**Deferred / follow-ups:** handoff N-5 (low priority, maintainer 2026-10-19): an approved overwrite's preview hashes the destination through `read_file` (`priv_read_file` for the helper), so a destination above 256 MiB, or one whose first 64 KiB contain a private key, is refused at the preview; a hash-only read-tier op would remove both limits. Documented in TOOLS.md. S4c-3 onward per the handoff.
+
+**First CI run:** every job green except e2e-host, and there only `TestApprovalWebFlow/changed_destination_refused/write_file`. A test fault, not the gate: `journal()` queries from a second before `since`, so the out-of-band change (itself a `write_file` to the same path, written just before `since`) matched the "no write sent" check. The check now starts 2.1 s after that write, as the test's setup already does. The copy and move cases, and both `an_approved_overwrite_commits_bound_to_the_destination` cases, passed on the runner.
 
 **Versions:**
 - **Go:** 1.27.2, the newest stable per go.dev (`go.dev/dl/?mode=json`, read 2026-10-19).

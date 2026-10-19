@@ -186,6 +186,11 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 **N-4. The gate's chmod has no metadata read-back.**
 - **Decision:** a low-priority follow-up, in no S4c session. It changes a gate tool, so it is its own PR.
 
+**N-5. Destination previews hash through `read_file` (recorded by PR #31).**
+- The approval preview of an overwrite (`shell_copy_path`, `shell_move_path`, and their privileged twins through `priv_read_file`) hashes the destination through the read op, so it inherits that op's limits: a destination above 256 MiB gets no hash (`too_large`), and one whose first 64 KiB contain a private key is refused (`path_denied`). Either way the overwrite cannot be approved, though the operation itself would replace the file without reading it out.
+- A hash-only read-tier op for destination previews (the SHA-256 of a regular file, no content, bounded by time rather than by a size cap) would remove both limits. It is a protocol change (a new op).
+- **Decision:** a low-priority follow-up, in no S4c session (maintainer, 2026-10-19). It is its own PR.
+
 **R-1. A restore's narrowed mode is not reported.**
 - S4c-0 clamps the restored mode but does not report it: the result has no `mode` field, and adding one was a protocol change.
 - **Decision:** S4c-5 reports the resulting mode in the preview and in the result, so a narrowing is never silent. Any protocol field for that is pre-approved (P-10, §4).
