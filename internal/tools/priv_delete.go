@@ -99,9 +99,6 @@ func privPreviewDelete(d *Deps) Tool {
 		audit:       privDeleteAudit,
 		summary:     func(p *PrivDeletePreview) string { return deleteSummary(p.Entries, p.Bytes) },
 		run: func(ctx context.Context, _ *mcp.CallToolRequest, in privDeleteIn) envelope.Envelope[PrivDeletePreview] {
-			if stubS4c4 {
-				return envelope.Failure[PrivDeletePreview](in.Target, envelope.Errorf("internal", "not implemented (S4c-4 stub)"))
-			}
 			r := fetch[privDeletePreviewWire](ctx, d, in.Target, protocol.OpPrivDeletePreview, deletePreviewWire{Path: in.Path, Recursive: in.Recursive}, d.budget())
 			if !r.OK {
 				return envelope.Failure[PrivDeletePreview](r.Target, r.Error)
@@ -176,9 +173,6 @@ func privDeletePath(d *Deps) Tool {
 // the helper's answer before the server's redaction, which could otherwise
 // rewrite it.
 func (d *Deps) privDeletePreview(ctx context.Context, in privDeleteIn, target string) (*preview, *envelope.Error) {
-	if stubS4c4 {
-		return nil, envelope.Errorf("internal", "not implemented (S4c-4 stub)")
-	}
 	resp, e := d.call(ctx, target, protocol.OpPrivDeletePreview, deletePreviewWire{Path: in.Path, Recursive: in.Recursive}, d.budget())
 	if e != nil {
 		return nil, e
@@ -208,6 +202,3 @@ func (d *Deps) privDeletePreview(ctx context.Context, in privDeleteIn, target st
 		"first": x.First, "truncated": x.Truncated || len(x.First) < x.Entries, "backup": backup, "preview_sha256": hash}
 	return &preview{value: value, policy: policy, contentSHA256: hash}, nil
 }
-
-// stubS4c4: STUB (S4c-4 failing-first commit).
-const stubS4c4 = true

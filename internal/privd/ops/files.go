@@ -5,6 +5,7 @@ package ops
 import (
 	"encoding/base64"
 	"encoding/json/jsontext"
+	"errors"
 	"os"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
@@ -307,7 +308,14 @@ func (s *server) delete(raw jsontext.Value) (data any, warns []string, failure e
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
 	}
+	// The backup records the preview it belongs to (handoff D3).
+	s.boundPreview = a.ExpectedPreviewSHA256
 	r, err := s.fs.DeleteExactBound(a.Path, a.Recursive, s.p.SHA256, a.ExpectedPreviewSHA256)
+	s.recordRemoved(r.Removed)
+	var fe *fsx.Error
+	if errors.As(err, &fe) {
+		s.setAside = fe.SetAside
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -315,16 +323,53 @@ func (s *server) delete(raw jsontext.Value) (data any, warns []string, failure e
 		BackupIDs: s.ids()}, nil, nil
 }
 
-// deletePreview is priv_delete_preview. STUB (S4c-4 failing-first commit):
-// S1's preview, without the backup or a hash.
+type deletePreviewArgs struct {
+	Path      string `json:"path"`
+	Recursive bool   `json:"recursive"`
+}
+
+// deleteBackup is what a delete backs up first (P-2a): nothing with
+// backups.keep 0, else the file or the tree's archive, of bytes.
+type deleteBackup struct {
+	Written bool   `json:"written"`
+	Kind    string `json:"kind,omitempty"`
+	Bytes   int64  `json:"bytes"`
+}
+
+// deletePreviewData is priv_delete_preview's data (handoff P-2a).
+type deletePreviewData struct {
+	Path          string       `json:"path"`
+	Type          string       `json:"type"`
+	Entries       int          `json:"entries"`
+	Bytes         int64        `json:"bytes"`
+	First         []string     `json:"first"`
+	Truncated     bool         `json:"truncated"`
+	Backup        deleteBackup `json:"backup"`
+	PolicySHA256  string       `json:"policy_sha256"`
+	PreviewSHA256 string       `json:"preview_sha256"`
+}
+
+// deletePreview is priv_delete_preview: what priv_delete would remove, from
+// the same walk (fsx.PreviewDeleteBound, with this policy's hash in
+// preview_sha256), and the backup it would write first, which must fit
+// (the store's cap, the 64 MiB bound, regular files and directories only):
+// otherwise it refuses as the delete would, so no approval is requested.
+// It changes nothing.
 func (s *server) deletePreview(raw jsontext.Value) (data any, warns []string, failure error) {
-	var a struct {
-		Path      string `json:"path"`
-		Recursive bool   `json:"recursive"`
-	}
+	var a deletePreviewArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
 	}
-	r, err := s.fs.DeletePreview(a.Path, a.Recursive)
-	return r, nil, err
+	r, err := s.fs.PreviewDeleteBound(a.Path, a.Recursive, s.p.SHA256)
+	if err != nil {
+		return nil, nil, err
+	}
+	out := deletePreviewData{Path: r.Path, Type: r.Type, Entries: r.Entries, Bytes: r.Bytes, First: r.First, Truncated: len(r.First) < r.Entries,
+		PolicySHA256: s.p.SHA256, PreviewSHA256: r.PreviewSHA256}
+	if s.p.BackupsKeep > 0 {
+		if out.Backup, err = s.store.check(r.Backup, protocol.OpPrivDelete, s.req.ID, s.o.Now()); err != nil {
+			return nil, nil, err
+		}
+	}
+	return out, nil, nil
 }

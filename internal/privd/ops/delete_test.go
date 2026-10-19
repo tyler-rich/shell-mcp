@@ -255,6 +255,23 @@ func (f *fixture) refusedBoth(p string, recursive bool, code, msg string, keep .
 	}
 }
 
+// refusedPreview: the preview refuses p with code (so no approval is
+// requested); without a preview's hash the delete refuses too, and nothing
+// changes. (fsx's tests show the delete itself refusing these.)
+func (f *fixture) refusedPreview(p string, recursive bool, code, msg string, keep ...string) {
+	f.t.Helper()
+	backups := len(f.metas())
+	r := f.serve("priv_delete_preview", m{"path": p, "recursive": recursive})
+	if r.OK || r.Error == nil || r.Error.Code != code || !strings.Contains(r.Error.Message, msg) {
+		f.t.Fatalf("priv_delete_preview %s: got ok=%v %+v, want %s (%q)", p, r.OK, r.Error, code, msg)
+	}
+	f.fail("priv_delete", m{"path": p, "recursive": recursive, "expected_preview_sha256": strings.Repeat("0", 64)}, "exists")
+	allPresent(f.t, keep...)
+	if len(f.metas()) != backups {
+		f.t.Fatalf("%s: a refusal left a backup", p)
+	}
+}
+
 // TestPrivDeleteRefusals: everything the gate's delete refuses, the
 // helper's refuses, at the preview (so no approval is requested) and at the
 // operation, changing nothing; plus what cannot be backed up while backups
@@ -294,12 +311,12 @@ func TestPrivDeleteRefusals(t *testing.T) {
 	if err := os.Symlink(conf, filepath.Join(dir, "b", "link")); err != nil {
 		t.Fatal(err)
 	}
-	f.refusedBoth(dir, true, "backup_failed", "symlink", append(paths, filepath.Join(dir, "b", "link"))...)
+	f.refusedPreview(dir, true, "backup_failed", "symlink", append(paths, filepath.Join(dir, "b", "link"))...)
 	fifo := filepath.Join(f.write, "fifo")
 	if err := unix.Mkfifo(fifo, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	f.refusedBoth(fifo, false, "backup_failed", "backed up", fifo)
+	f.refusedPreview(fifo, false, "backup_failed", "backed up", fifo)
 	if readFile(t, conf) != "key: value\n" {
 		t.Fatal("the symlink's target was changed")
 	}
@@ -517,14 +534,15 @@ func TestPrivDeleteAuditBounded(t *testing.T) {
 		t.Fatalf("150 files: %d listed, total %d, truncated %v", len(a.Removed), a.RemovedTotal, a.RemovedTruncated)
 	}
 	long := filepath.Join(f.write, "long")
+	sub := filepath.Join(long, strings.Repeat("d", 200))
 	name := strings.Repeat("n", 240)
 	for i := range 120 {
-		gatetest.WriteFile(t, filepath.Join(long, fmt.Sprintf("%s%03d", name, i)), "x", 0o600)
+		gatetest.WriteFile(t, filepath.Join(sub, fmt.Sprintf("%s%03d", name, i)), "x", 0o600)
 	}
 	f.deleteBound(long, true)
 	a, _ = f.lastAuditDelete()
 	b, _ := json.Marshal(a.Removed)
-	if len(a.Removed) >= 100 || len(b) > 32<<10 || a.RemovedTotal != 121 || !a.RemovedTruncated {
+	if len(a.Removed) >= 100 || len(b) > 32<<10 || a.RemovedTotal != 122 || !a.RemovedTruncated {
 		t.Fatalf("long names: %d listed (%d bytes), total %d, truncated %v", len(a.Removed), len(b), a.RemovedTotal, a.RemovedTruncated)
 	}
 }

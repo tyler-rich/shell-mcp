@@ -5,6 +5,7 @@ package ops
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -172,7 +173,7 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 // as preview_sha256 and, like the hash fsx computed (src.SHA256), required
 // of what is backed up. Older versions of the path are pruned only once
 // the operation has succeeded (pruneAfter), never here.
-func (st *store) save(src *fsx.BackupSource, op, requestID, precondition string) (string, error) {
+func (st *store) save(src *fsx.BackupSource, op, requestID, precondition, preview string) (string, error) {
 	root, err := st.open()
 	if err != nil {
 		return "", err
@@ -187,10 +188,10 @@ func (st *store) save(src *fsx.BackupSource, op, requestID, precondition string)
 	uid, gid := ownerIDs(src.Info)
 	m := meta{V: metaVersion, ID: newID(now), Kind: src.Kind, Path: src.Path, UID: uid, GID: gid,
 		Mode: fmt.Sprintf("%04o", unixMode(src.Info)), Created: now.UTC().Format(time.RFC3339Nano),
-		Seq: time.Now().UnixNano(), Op: op, RequestID: requestID, PreviewSHA256: precondition}
-	var size int64
-	if src.Kind == fsx.BackupFile {
-		size = src.Info.Size()
+		Seq: time.Now().UnixNano(), Op: op, RequestID: requestID, PreviewSHA256: cmp.Or(precondition, preview)}
+	size, err := backupSize(src)
+	if err != nil {
+		return "", err
 	}
 	r, err := st.room(root, src.Path, size, metaBound(&m))
 	switch {
@@ -250,6 +251,10 @@ func (st *store) save(src *fsx.BackupSource, op, requestID, precondition string)
 	if src.Kind == fsx.BackupFile && (src.SHA256 != "" && m.SHA256 != src.SHA256 || precondition != "" && m.SHA256 != precondition) {
 		return "", storeErr("the file changed while it was being backed up; nothing was changed")
 	}
+	// A tree from a delete's plan holds exactly the plan's entries.
+	if src.Kind == fsx.BackupTree && src.List != nil && m.Entries != src.Count {
+		return "", storeErr("the tree backup does not hold exactly the entries of the preview; nothing was deleted")
+	}
 	mb, err := json.Marshal(m, json.Deterministic(true))
 	if err == nil {
 		err = writeSmall(root, metaTmp, mb)
@@ -297,14 +302,13 @@ func writeTree(w io.Writer, src *fsx.BackupSource) (int, error) {
 	n := 0
 	err := src.Walk(func(rel string, fi fs.FileInfo, open func() (*os.File, error)) error {
 		n++
-		uid, gid := ownerIDs(fi)
-		hdr := &tar.Header{Name: rel, Mode: int64(unixMode(fi)), Uid: int(uid), Gid: int(gid),
-			ModTime: fi.ModTime(), Format: tar.FormatPAX}
+		hdr, err := treeHeader(rel, fi)
+		if err != nil {
+			return err
+		}
 		if fi.IsDir() {
-			hdr.Typeflag, hdr.Name = tar.TypeDir, rel+"/"
 			return tw.WriteHeader(hdr)
 		}
-		hdr.Typeflag, hdr.Size = tar.TypeReg, fi.Size()
 		f, err := open()
 		if err != nil {
 			return err
@@ -326,6 +330,100 @@ func writeTree(w io.Writer, src *fsx.BackupSource) (int, error) {
 		return n, err
 	}
 	return n, tw.Close()
+}
+
+// treeHeader is the archive header of one tree entry: a directory or a
+// regular file, with its mode, owner and modification time.
+func treeHeader(rel string, fi fs.FileInfo) (*tar.Header, error) {
+	uid, gid := ownerIDs(fi)
+	hdr := &tar.Header{Name: rel, Mode: int64(unixMode(fi)), Uid: int(uid), Gid: int(gid),
+		ModTime: fi.ModTime(), Format: tar.FormatPAX}
+	switch {
+	case fi.IsDir():
+		hdr.Typeflag, hdr.Name = tar.TypeDir, rel+"/"
+	case fi.Mode().IsRegular():
+		hdr.Typeflag, hdr.Size = tar.TypeReg, fi.Size()
+	default:
+		return nil, storeErr("the tree holds a symlink or special file, which cannot be backed up, so it is not deleted while backups are on")
+	}
+	return hdr, nil
+}
+
+// zeros is an endless reader of zero bytes (sizing an archive).
+type zeros struct{}
+
+func (zeros) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
+}
+
+// backupSize is the size of src's backup: a file's bytes, or, for a tree
+// from a delete's plan (List), its archive's, computed by writing the same
+// headers with zeros for the data, counted up to just over the per-backup
+// bound. Nothing is opened. A tree without List (none is made) counts 0
+// and is bounded while it is written.
+func backupSize(src *fsx.BackupSource) (int64, error) {
+	if src.Kind != fsx.BackupTree {
+		if !src.Info.Mode().IsRegular() {
+			return 0, storeErr("only regular files and directories can be backed up, so this is not deleted while backups are on")
+		}
+		return src.Info.Size(), nil
+	}
+	if src.List == nil {
+		return 0, nil
+	}
+	cw := &countingWriter{w: io.Discard, limit: maxBackupBytes + 1}
+	tw := tar.NewWriter(cw)
+	err := src.List(func(rel string, fi fs.FileInfo) error {
+		hdr, err := treeHeader(rel, fi)
+		if err != nil {
+			return err
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		_, err = io.CopyN(tw, zeros{}, hdr.Size)
+		return err
+	})
+	if err == nil {
+		err = tw.Close()
+	}
+	switch {
+	case errors.Is(err, errTooLarge):
+		return maxBackupBytes + 1, nil
+	case err != nil:
+		var fe *fsx.Error
+		if errors.As(err, &fe) {
+			return 0, fe
+		}
+		return 0, storeErr("the tree's backup could not be sized; nothing was changed")
+	}
+	return cw.n, nil
+}
+
+// check answers, for a delete's preview, what its backup of src would be
+// and whether it fits, counted exactly as save counts it, without writing
+// anything: a backup that would not fit is refused as the delete would
+// refuse it (backup_failed), so no approval is requested.
+func (st *store) check(src *fsx.BackupSource, op, requestID string, now time.Time) (deleteBackup, error) {
+	size, err := backupSize(src)
+	if err != nil {
+		return deleteBackup{}, err
+	}
+	root, err := st.open()
+	if err != nil {
+		return deleteBackup{}, err
+	}
+	defer func() { _ = root.Close() }()
+	r, err := st.room(root, src.Path, size, metaBound(&meta{Path: src.Path, Op: op, Kind: src.Kind, ID: newID(now),
+		Created: now.UTC().Format(time.RFC3339Nano), RequestID: requestID, PreviewSHA256: strings.Repeat("0", 64)}))
+	switch {
+	case err != nil:
+		return deleteBackup{}, err
+	case !r.fits:
+		return deleteBackup{}, r.refusal()
+	}
+	return deleteBackup{Written: true, Kind: src.Kind, Bytes: size}, nil
 }
 
 // metas reads every backup's metadata (bounded), newest first.
@@ -578,7 +676,7 @@ func (st *store) pruneAfter(own []string) {
 
 // backup is fsx's backup hook for this request.
 func (s *server) backup(src *fsx.BackupSource) error {
-	id, err := s.store.save(src, s.req.Op, s.req.ID, s.precondition)
+	id, err := s.store.save(src, s.req.Op, s.req.ID, s.precondition, s.boundPreview)
 	if err != nil {
 		return err
 	}

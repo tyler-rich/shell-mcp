@@ -18,7 +18,10 @@ import (
 // preview's hash as expected_preview_sha256. Every path, name and hash is
 // invented.
 
-func init() { alwaysGated = append(alwaysGated, "shell_priv_delete_path") }
+func init() {
+	alwaysGated = append(alwaysGated, "shell_priv_delete_path")
+	ceilingCallArgs["shell_priv_preview_delete"] = map[string]any{"path": "/etc/example-app/old.d", "recursive": true}
+}
 
 const (
 	privDelTree = "/etc/example-app/old.d"
@@ -135,7 +138,7 @@ func TestPrivDeletePathApprovalFlow(t *testing.T) {
 	}
 	pm := previewMap(t, a, id)
 	if pm["backup.kind"] != "tree" || pm["backup.written"] != "true" || pm["backup.bytes"] != "3584" || pm["preview_sha256"] != shaDel ||
-		pm["entries"] != "3" || pm["first.1"] != privDelTree+"/a.conf" || pm["recursive"] != "true" {
+		pm["entries"] != "3" || pm["first[1]"] != privDelTree+"/a.conf" || pm["recursive"] != "true" {
 		t.Fatalf("approval preview %v", pm)
 	}
 	a.approve(id)

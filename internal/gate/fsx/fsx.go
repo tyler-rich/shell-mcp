@@ -97,9 +97,10 @@ type Config struct {
 	InjectExchangeFault func() error
 	// OnCommit, when non-nil, is called after each commit that changes the
 	// filesystem (a file or directory created, replaced, moved, removed, or
-	// its metadata changed), and before a delete starts removing entries. The
-	// helper uses it to tell a failed operation that changed nothing from one
-	// that did; the gate leaves it nil.
+	// its metadata changed; for a delete, each entry unlinked, and an entry
+	// left set aside under its temporary name). The helper uses it to tell a
+	// failed operation that changed nothing from one that did; the gate
+	// leaves it nil.
 	OnCommit func()
 	// TrustedDirOwner decides whose directories PreviewMeta and ApplyMeta
 	// trust on the path to an entry and inside a tree: a directory must be
@@ -263,7 +264,8 @@ type ChmodResult struct {
 	Changed bool `json:"-"`
 }
 
-// DeleteResult is delete's and delete_preview's result.
+// DeleteResult is the helper's priv_delete result (the gate's delete and
+// delete_preview answer DeletePlan).
 type DeleteResult struct {
 	Path    string   `json:"path"`
 	Type    string   `json:"type"`

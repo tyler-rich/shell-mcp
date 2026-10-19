@@ -133,6 +133,26 @@ func (s *server) recordChanges(cs []fsx.MetaChanged) {
 	}
 }
 
+// recordRemoved notes the entries a delete removed, within the changed
+// list's bounds (at most 100 entries or 32 KiB of them); every one counts
+// in removed_total.
+func (s *server) recordRemoved(paths []string) {
+	for _, p := range paths {
+		s.removedTotal++
+		if s.removedTruncated {
+			continue
+		}
+		e := auditText(p)
+		b, _ := json.Marshal(e) // a string
+		if len(s.removed) == maxAuditChanged || s.removedBytes+len(b)+1 > maxAuditChangedBytes {
+			s.removedTruncated = true
+			continue
+		}
+		s.removed = append(s.removed, e)
+		s.removedBytes += len(b) + 1 // and its comma
+	}
+}
+
 type auditLine struct {
 	ID        string         `json:"id"`
 	Ceiling   string         `json:"ceiling"`
@@ -147,12 +167,19 @@ type auditLine struct {
 	Changed            []auditChange `json:"changed,omitempty"`
 	// ChangedTotal is how many entries were changed, ChangedTruncated set
 	// when changed lists fewer of them (at most 100 entries or 32 KiB).
-	ChangedTotal     int    `json:"changed_total,omitempty"`
-	ChangedTruncated bool   `json:"changed_truncated,omitempty"`
-	Outcome          string `json:"outcome"`
-	Check            string `json:"check,omitempty"`
-	Detail           string `json:"detail,omitempty"`
-	DurationMS       int64  `json:"duration_ms"`
+	ChangedTotal     int  `json:"changed_total,omitempty"`
+	ChangedTruncated bool `json:"changed_truncated,omitempty"`
+	// Removed are the entries a delete removed, RemovedTotal how many,
+	// RemovedTruncated set when removed lists fewer (the same bounds).
+	Removed          []string `json:"removed,omitempty"`
+	RemovedTotal     int      `json:"removed_total,omitempty"`
+	RemovedTruncated bool     `json:"removed_truncated,omitempty"`
+	// SetAside is an entry a delete left set aside and did not remove.
+	SetAside   string `json:"set_aside,omitempty"`
+	Outcome    string `json:"outcome"`
+	Check      string `json:"check,omitempty"`
+	Detail     string `json:"detail,omitempty"`
+	DurationMS int64  `json:"duration_ms"`
 }
 
 func (s *server) writeAudit(pri int, l *auditLine) {
@@ -198,7 +225,8 @@ func (s *server) auditRefusal(err error, code string) {
 func (s *server) auditRequest(resp *protocol.Response) {
 	uid, pid := s.cred.UID, s.cred.PID
 	l := &auditLine{PeerUID: &uid, PeerPID: &pid, Outcome: "ok", BackupIDs: s.ids(), BackupIDsDiscarded: s.discarded, Changed: s.changed,
-		ChangedTotal: s.changedTotal, ChangedTruncated: s.changedTruncated}
+		ChangedTotal: s.changedTotal, ChangedTruncated: s.changedTruncated, Removed: s.removed, RemovedTotal: s.removedTotal,
+		RemovedTruncated: s.removedTruncated, SetAside: s.setAside}
 	if s.req != nil {
 		l.ID, l.Ceiling, l.Op, l.Args = s.req.ID, s.req.Ceiling, auditText(s.req.Op), sanitizeArgs(s.req.Args)
 	}

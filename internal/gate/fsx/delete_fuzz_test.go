@@ -94,3 +94,39 @@ func FuzzHasSetAsideComponent(f *testing.F) {
 		}
 	})
 }
+
+// FuzzPreviewPrefix: the prefix a preview hash covers before the entries
+// decodes back to exactly its recursive flag and binding (or none, the
+// gate's), so two different pairs never hash the same input, and a bound
+// prefix never equals the gate's.
+func FuzzPreviewPrefix(f *testing.F) {
+	f.Add(false, false, "")
+	f.Add(true, true, "")
+	f.Add(true, true, strings.Repeat("ab", 32))
+	f.Add(false, true, "shell-mcp delete preview v1\x00\x01")
+	f.Fuzz(func(t *testing.T, recursive, bound bool, binding string) {
+		var bp *string
+		if bound {
+			bp = &binding
+		}
+		b := previewPrefix(recursive, bp)
+		var gotBound bool
+		var got string
+		switch {
+		case strings.HasPrefix(string(b), boundPreviewDomain):
+			rest := b[len(boundPreviewDomain):]
+			n, k := binary.Uvarint(rest)
+			if k <= 0 || uint64(len(rest)-k) < n { //nolint:gosec // G115: not negative here
+				t.Fatalf("bound prefix %q does not decode", b)
+			}
+			gotBound, got, b = true, string(rest[k:k+int(n)]), rest[k+int(n):] //nolint:gosec // G115: n is at most len(rest)
+		case strings.HasPrefix(string(b), previewDomain):
+			b = b[len(previewDomain):]
+		default:
+			t.Fatalf("prefix %q has no domain", b)
+		}
+		if len(b) != 1 || b[0] > 1 || (b[0] == 1) != recursive || gotBound != bound || got != binding && bound {
+			t.Fatalf("prefix decodes to recursive %v bound %v binding %q (rest %q), want %v %v %q", b[0] == 1, gotBound, got, b, recursive, bound, binding)
+		}
+	})
+}

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -232,6 +233,13 @@ func TestDeleteBackupRefusals(t *testing.T) {
 	_, err = e.fs.DeleteExactBound(dir, true, binding, pv.PreviewSHA256)
 	check("symlink", err, protocol.CodeBackupFailed, append(paths, dir+"/b/out"))
 
+	fifo := filepath.Join(e.write, "fifo")
+	must(t, syscall.Mkfifo(fifo, 0o600))
+	pv, err = e.fs.PreviewDeleteBound(fifo, false, binding)
+	must(t, err)
+	_, err = e.fs.DeleteExactBound(fifo, false, binding, pv.PreviewSHA256)
+	check("fifo", err, protocol.CodeBackupFailed, []string{fifo})
+
 	dir = filepath.Join(e.write, "hookfails")
 	paths = mkTree(t, dir)
 	pv, err = e.fs.PreviewDeleteBound(dir, true, binding)
@@ -329,5 +337,22 @@ func TestDeleteCommitSignals(t *testing.T) {
 	}
 	if read(t, victim) != "racer" {
 		t.Fatal("the racer's file was changed")
+	}
+}
+
+// TestDeleteBackupTooLarge: a tree above max_delete_entries is refused by
+// the walk, before anything is backed up or removed.
+func TestDeleteBackupTooLarge(t *testing.T) {
+	e, b, _ := newBoundEnv(t, 20)
+	dir := filepath.Join(e.write, "big")
+	for i := range 25 {
+		put(t, filepath.Join(dir, "f"+strings.Repeat("x", i)), "x")
+	}
+	_, err := e.fs.PreviewDeleteBound(dir, true, binding)
+	wantCode(t, err, protocol.CodeTooLarge)
+	_, err = e.fs.DeleteExactBound(dir, true, binding, zeroHash)
+	wantCode(t, err, protocol.CodeTooLarge)
+	if b.calls != 0 || !exists(filepath.Join(dir, "f")) {
+		t.Fatalf("backups %d", b.calls)
 	}
 }
