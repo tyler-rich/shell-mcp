@@ -81,8 +81,13 @@ func execBroad(args []byte) (bool, error) {
 
 // forward sends the request to the privileged helper and returns its
 // answer (ARCHITECTURE §3 step 4, PRIVILEGED §3). The request goes out as
-// received — the same v, id, op and timeout_ms, and the args bytes
-// unchanged — and one bounded, strictly decoded response comes back.
+// received — the same v, id, ceiling and op, and the args bytes unchanged
+// — except timeout_ms, which is the timeout the gate waits for: the
+// request's, clamped to the policy's max_timeout_s, or default_timeout_s
+// when it has none. So the helper's deadline is never later than the
+// gate's, and the gate does not answer timeout while the helper's command
+// or apt transaction is still within its own (handoff P-7). One bounded,
+// strictly decoded response comes back.
 // Failures map to closed-set codes: no connection is helper_unavailable; a
 // connection closed without a byte — only a peer that failed the helper's
 // SO_PEERCRED check gets that (PRIVILEGED §7) — is helper_refused, also
@@ -91,7 +96,9 @@ func execBroad(args []byte) (bool, error) {
 // malformed is helper_unavailable. A helper error passes through with its
 // own code, including the helper_* self-check codes, which the helper
 // answers before reading the request (without an id, and possibly before
-// the request is even sent). The envelope's gate block stays the gate's.
+// the request is even sent). The response's gate block stays the gate's;
+// the helper's own block (its policy hash and unit) is passed on as the
+// response's helper block, as received (handoff P-1).
 func (s *server) forward(socket string) *protocol.Response {
 	dial := s.o.DialHelper
 	if dial == nil {
@@ -108,9 +115,12 @@ func (s *server) forward(socket string) *protocol.Response {
 	if grace <= 0 {
 		grace = DefaultHelperGrace
 	}
-	_ = conn.SetDeadline(time.Now().Add(s.timeout() + grace))
+	timeout := s.timeout()
+	_ = conn.SetDeadline(time.Now().Add(timeout + grace))
 
-	line, err := protocol.Marshal(s.req)
+	fwd := *s.req
+	fwd.TimeoutMS = timeout.Milliseconds()
+	line, err := protocol.Marshal(&fwd)
 	if err != nil {
 		return s.errResp(errf(protocol.CodeInternal, "request could not be encoded"))
 	}
@@ -128,7 +138,7 @@ func (s *server) forward(socket string) *protocol.Response {
 	if resp.ID != s.req.ID && (resp.OK || resp.ID != "") {
 		return s.errResp(errf(protocol.CodeHelperUnavailable, "the privileged helper answered a different request"))
 	}
-	return &protocol.Response{OK: resp.OK, Data: resp.Data, Error: resp.Error, Warnings: resp.Warnings}
+	return &protocol.Response{OK: resp.OK, Data: resp.Data, Error: resp.Error, Warnings: resp.Warnings, Helper: resp.Gate}
 }
 
 func (s *server) forwardErr(err error) *protocol.Response {
