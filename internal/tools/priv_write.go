@@ -506,8 +506,14 @@ func (d *Deps) privMkdirPreview(ctx context.Context, in *privMkdirIn, target str
 			create = append([]string{p}, create...)
 		}
 	}
-	// The helper's write-root check for the path (nothing is backed up).
-	if _, e := d.backupPreview(ctx, target, in.Path, &acc); e != nil {
+	// The helper's write-root check (nothing is backed up), at the topmost
+	// directory to be created: the helper resolves a path only when its
+	// parent exists.
+	check := in.Path
+	if len(create) > 0 {
+		check = create[0]
+	}
+	if _, e := d.backupPreview(ctx, target, check, &acc); e != nil {
 		return nil, e
 	}
 	return acc.result(map[string]any{

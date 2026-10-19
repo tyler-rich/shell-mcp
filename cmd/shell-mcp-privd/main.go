@@ -19,6 +19,7 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/privd/ops"
@@ -248,6 +249,13 @@ func broadUsers(p *policy.Policy) []string {
 // item that needs review: list B binaries, persistence roots, capabilities
 // added to the core unit, root-equivalent commands, and warnings. The exit
 // code is 1 if serve would refuse the policy.
+// probeNoReplace and probeExchange are fsx's rename-flag probes; tests
+// replace them.
+var (
+	probeNoReplace = fsx.ProbeNoReplace
+	probeExchange  = fsx.ProbeExchange
+)
+
 func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int {
 	fs := flag.NewFlagSet("check-policy", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)

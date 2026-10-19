@@ -397,3 +397,84 @@ func TestProductionOptionsHaveNoTestHooks(t *testing.T) {
 		t.Fatalf("production options carry a test hook: %+v", o)
 	}
 }
+
+// storeUse is the store's size as the cap counts it.
+func (f *fixture) storeUse() int64 {
+	f.t.Helper()
+	n, err := ops.StoreUsage(f.backups, f.opts.Trust)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return n
+}
+
+// TestFailedOperationDiscardsItsBackup: an operation that fails after its
+// backup was written but before it committed anything deletes that backup,
+// so failed operations cannot fill the store; the cap's accounting goes back
+// down, and the room is there for the next operation.
+func TestFailedOperationDiscardsItsBackup(t *testing.T) {
+	f := newFixture(t, storeCap(minStore))
+	const size = 60000
+	p := filepath.Join(f.write, "big.conf")
+	old := strings.Repeat("o", size)
+	writeTestFile(t, p, old)
+	// Room for one backup of the file (with its metadata), not two.
+	f.junk(minStore - (size + 4096) - 1000)
+	before := f.storeUse()
+	racer := func() {
+		writeTestFile(t, p+".racer", "racer\n")
+		if err := os.Rename(p+".racer", p); err != nil {
+			t.Error(err)
+		}
+	}
+	for i, c := range []struct {
+		op   string
+		args m
+	}{
+		{"priv_write_file", m{"path": p, "content_b64": b64("new\n"), "expected_sha256": shaHex(old)}},
+		{"priv_copy", m{"source": filepath.Join(f.write, "app.conf"), "destination": p, "overwrite": true, "expected_destination_sha256": shaHex(old)}},
+		{"priv_move", m{"source": filepath.Join(f.write, "app.conf"), "destination": p, "overwrite": true, "expected_destination_sha256": shaHex(old)}},
+	} {
+		writeTestFile(t, p, old)
+		f.opts.InjectBeforeCommit = racer
+		f.fail(c.op, c.args, "exists")
+		f.opts.InjectBeforeCommit = nil
+		if len(f.metas()) != 0 {
+			t.Fatalf("%s: a failed operation that changed nothing left its backup: %v", c.op, f.metas())
+		}
+		if got := f.storeUse(); got != before {
+			t.Fatalf("%s (%d): the store holds %d bytes after the failed operation, %d before", c.op, i, got, before)
+		}
+		var line struct {
+			BackupIDs []string `json:"backup_ids"`
+		}
+		if err := json.Unmarshal([]byte(f.lastAudit()), &line); err != nil || len(line.BackupIDs) != 0 {
+			t.Fatalf("%s: audit line %s", c.op, f.lastAudit())
+		}
+	}
+	// The room is still there: the next write's backup fits.
+	writeTestFile(t, p, old)
+	var w writeOut
+	f.ok("priv_write_file", m{"path": p, "content_b64": b64("new\n"), "expected_sha256": shaHex(old)}, &w)
+	if len(w.BackupIDs) != 1 || f.storeUse() <= before {
+		t.Fatalf("write after the failures: %+v, store %d", w, f.storeUse())
+	}
+}
+
+// TestCommittedFailureKeepsItsBackup: an operation that fails after it
+// committed (its read-back failed) keeps its backup: it is the previous
+// version of a file that did change.
+func TestCommittedFailureKeepsItsBackup(t *testing.T) {
+	f := newFixture(t)
+	p := filepath.Join(f.write, "app.conf")
+	f.opts.InjectReadBackFault = func(b []byte) []byte { return append(b, 'x') }
+	f.fail("priv_write_file", m{"path": p, "content_b64": b64("two\n")}, "verify_failed")
+	f.opts.InjectReadBackFault = nil
+	ms := f.metas()
+	if len(ms) != 1 || ms[0]["sha256"] != shaHex("key: value\n") || readFile(t, p) != "two\n" {
+		t.Fatalf("store %v, file %q", ms, readFile(t, p))
+	}
+	if a := f.lastAudit(); !strings.Contains(a, ms[0]["id"].(string)) {
+		t.Fatalf("audit line %s", a)
+	}
+}

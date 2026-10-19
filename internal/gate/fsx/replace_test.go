@@ -315,3 +315,19 @@ func TestResultsCarryOwner(t *testing.T) {
 		t.Fatalf("on disk %d", st.Uid)
 	}
 }
+
+// TestProbeExchange: on a filesystem with RENAME_EXCHANGE the probe passes
+// and leaves nothing behind (check-policy runs it in each privileged write
+// root).
+func TestProbeExchange(t *testing.T) {
+	d := t.TempDir()
+	must(t, ProbeExchange(d))
+	ents, err := os.ReadDir(d)
+	must(t, err)
+	if len(ents) != 0 {
+		t.Fatalf("the probe left %v", ents)
+	}
+	if err := ProbeExchange(filepath.Join(d, "missing")); err == nil || errors.Is(err, ErrExchangeUnsupported) {
+		t.Fatalf("a missing root: %v", err)
+	}
+}

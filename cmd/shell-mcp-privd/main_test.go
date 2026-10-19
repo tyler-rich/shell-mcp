@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
+	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 	"github.com/tyler-rich/shell-mcp/internal/privd/units"
@@ -264,5 +265,55 @@ func TestTrampolineIsNotACommand(t *testing.T) {
 	var so, se bytes.Buffer
 	if code := run([]string{execx.TrampolineArg}, &so, &se); code != 2 || so.Len() != 0 || !strings.Contains(se.String(), "unknown command") {
 		t.Fatalf("exit %d, stdout %q, stderr %q", code, so.String(), se.String())
+	}
+}
+
+// TestCheckPolicyProbesRenameFlags: check-policy probes RENAME_NOREPLACE
+// (create-only commits, delete) and RENAME_EXCHANGE (every replace as root)
+// on each privileged write root, and warns naming the root and the flag.
+func TestCheckPolicyProbesRenameFlags(t *testing.T) {
+	env, p := testEnv(t, validPolicy)
+	pol, err := env.load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := pol.Paths.WriteRoots()
+	if len(roots) < 2 {
+		t.Fatalf("fixture write roots %v", roots)
+	}
+	probed := map[string]int{}
+	oldNR, oldEx := probeNoReplace, probeExchange
+	t.Cleanup(func() { probeNoReplace, probeExchange = oldNR, oldEx })
+	probeNoReplace = func(dir string) error {
+		probed[dir]++
+		if dir == roots[0] {
+			return fsx.ErrNoReplaceUnsupported
+		}
+		return nil
+	}
+	probeExchange = func(dir string) error {
+		probed[dir]++
+		if dir == roots[1] {
+			return fsx.ErrExchangeUnsupported
+		}
+		return nil
+	}
+	var so, se bytes.Buffer
+	_ = checkPolicyWith([]string{"--policy", p}, &so, &se, env)
+	out := so.String()
+	for _, want := range []string{
+		"WARN privileged write root " + roots[0] + ": the filesystem does not support RENAME_NOREPLACE",
+		"ok   privileged write root " + roots[0] + ": RENAME_EXCHANGE supported",
+		"ok   privileged write root " + roots[1] + ": RENAME_NOREPLACE supported",
+		"WARN privileged write root " + roots[1] + ": the filesystem does not support RENAME_EXCHANGE",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report lacks %q:\n%s", want, out)
+		}
+	}
+	for _, r := range roots {
+		if probed[r] != 2 {
+			t.Errorf("%s probed %d times, want 2 (both flags)", r, probed[r])
+		}
 	}
 }

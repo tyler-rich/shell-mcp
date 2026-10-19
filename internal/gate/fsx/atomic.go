@@ -176,3 +176,10 @@ func withFD(f *os.File, fn func(fd int) error) error {
 	}
 	return ferr
 }
+
+// ErrExchangeUnsupported is ProbeExchange's answer for a filesystem without
+// RENAME_EXCHANGE.
+var ErrExchangeUnsupported = errors.New("the filesystem does not support RENAME_EXCHANGE")
+
+// ProbeExchange reports whether dir's filesystem supports RENAME_EXCHANGE.
+func ProbeExchange(_ string) error { return nil }
