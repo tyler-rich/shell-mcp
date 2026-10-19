@@ -299,7 +299,7 @@ Columns: create-only · preview binding · set-aside/stranded · approval and re
 - **The backup's own content: MUST** (Q3). `readData` already compares the data with the recorded SHA-256, but answers a mismatch with `backup_failed`. It becomes `verify_failed`, and nothing is restored. The preview checks it too, so a tampered or damaged backup never reaches an approval.
 - **Owners and modes: MUST** (Q3). The recorded owner and group are kept, even outside `owners`; the recorded mode is clamped to `modes.max` (S4c-0), for files and for every entry of a tree. **Backups: OK** (the current version is backed up first, within the store cap, X-7). Pruning: X-8. **Read-back: OK** for files. For trees, each file is verified by `WriteFile`; add an entry-count check against the metadata.
 
-**`priv_delete`.**
+**`priv_delete`.** (Status: done in S4c-4, PR #PRNUM.)
 - **Preview binding and set-aside: MUST.** Port the gate's `PreviewDelete` and `DeleteExact` (`delete_exact.go`) into the helper's op, with:
   - `priv_delete_preview` (P-2) and a required `expected_preview_sha256` (P-3);
   - the walk's refusals: roots, mount points, devices, set-aside names;
@@ -719,6 +719,12 @@ All of them:
 
 ### S4c-4: delete
 
+- **Status: done (PR #PRNUM; ARCHIVE §14, S4c-4).** P-2a and P-3 as listed (no other protocol change; `priv_delete`'s result shape is unchanged). The gate's walk and set-aside deletion are shared, not copied: `fsx.PreviewDeleteBound` and `fsx.DeleteExactBound` call the gate's code with the privileged policy's hash in the preview hash (its own domain, so the gate's hash input is unchanged) and, with backups on, the backup written from the plan (D10) before anything is removed: files opened by name from their parent's handle and required to be the walk's objects with their size and change time (checked again after the read), directories re-opened with the walk's identity, the archive sized from the plan first (store cap and 64 MiB bound refused before anything is written) and holding exactly the plan's entries. S1's `Delete`, `DeletePreview`, `deleteOp`, `backupTree` and `removeTree` are removed. `set_aside` and a bounded `removed` list are in the helper's audit line. Both tools are in the catalogue. Decided or found beyond the entry:
+  - **No chain rule for delete** (maintainer, 2026-10-19). Unlinking or renaming an entry needs write access to its directory, so an account that could move an entry in, or swap entries during the delete, could unlink it itself; the set-aside and identity checks make root remove only the approved inodes. PRIVILEGED §6, "Delete".
+  - **No link-count refusal for delete** (maintainer, 2026-10-19), as in the gate: an unlink removes a name, never an inode. The prompt listed one as part of the S4b-2a machinery, which has none.
+  - **The fail-safe backup rule for delete.** A commit is reported at each unlink and when an entry is left set aside; a refusal that unlinked nothing and left nothing set aside is provably unchanged, so its backup is discarded; any other keeps it.
+  - **The preview reports the backup itself** (P-2a's `backup`), counted as the backup counts it: `priv_backup_check` (P-11) answers for an overwrite of a regular file only, so it cannot size a tree.
+  - **An entry replaced or changed while it is backed up is `exists`**, nothing deleted (D10 named only `backup_failed` for symlinks and special files).
 - **Includes.**
   - P-2a and P-3 (delete).
   - The helper's `delete` moves to `PreviewDelete`/`DeleteExact` with the backup from the plan (D10).
