@@ -195,10 +195,10 @@ func ProbeExchange(dir string) error {
 	defer func() { _ = r.Close() }()
 	a, b := probePrefix+randHex(16), probePrefix+randHex(16)
 	for _, n := range []string{a, b} {
-		fh, err := r.OpenFile(n, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-		if err != nil {
+		fh, oerr := r.OpenFile(n, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if oerr != nil {
 			_ = r.Remove(a)
-			return err
+			return oerr
 		}
 		if err = fh.Close(); err != nil {
 			_ = r.Remove(a)
