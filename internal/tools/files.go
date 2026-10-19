@@ -79,15 +79,63 @@ type listDirWire struct {
 	Limit         int    `json:"limit"`
 }
 
+// fileTool names one variant of a file read tool: the gate's own op, or
+// the privileged helper's (shell_priv_*), which reads as root within the
+// privileged policy's roots. Both variants share inputs, checks, data
+// shapes, redaction and caps; only the name, title, description, op and
+// the roots the path inputs name differ.
+type fileTool struct {
+	name, title, description, op string
+	privileged                   bool
+}
+
+// gateRoots and privRoots are how a path input's description names the
+// roots that confine it.
+const (
+	gateRoots = "the target policy's read roots"
+	privRoots = "the target's privileged policy's read or write roots"
+)
+
+// rootsIn names, in a privileged variant, the privileged policy's roots in
+// the description of each path input.
+func (f fileTool) rootsIn(s *jsonschema.Schema, props ...string) {
+	if !f.privileged {
+		return
+	}
+	for _, p := range props {
+		desc := prop(s, p).Description
+		if !strings.Contains(desc, gateRoots) {
+			panic("tools: the description of " + p + " does not name the roots")
+		}
+		prop(s, p).Description = strings.Replace(desc, gateRoots, privRoots, 1)
+	}
+}
+
 func listDirectory(d *Deps) Tool {
-	return define(d, spec[listDirIn, DirList]{
-		name:        "shell_list_directory",
-		title:       "List directory",
+	return listDirTool(d, fileTool{
+		name: "shell_list_directory", title: "List directory", op: protocol.OpListDir,
 		description: "Lists a directory's entries with type, size, mode, owner, group and modification time; symlink targets are reported, not followed.",
+	})
+}
+
+func privListDirectory(d *Deps) Tool {
+	return listDirTool(d, fileTool{
+		name: "shell_priv_list_directory", title: "List directory as root", op: protocol.OpPrivListDir, privileged: true,
+		description: "Lists, as root, a directory's entries under the privileged policy's roots with type, size, mode, owner, group and modification time; symlink targets are reported, not followed.",
+	})
+}
+
+func listDirTool(d *Deps, f fileTool) Tool {
+	return define(d, spec[listDirIn, DirList]{
+		name:        f.name,
+		title:       f.title,
+		description: f.description,
 		tier:        TierRead,
+		privileged:  f.privileged,
 		schema: func(s *jsonschema.Schema) {
 			boundPath(s)
 			intIn(s, "limit", 1, 5000)
+			f.rootsIn(s, "path")
 		},
 		audit:   func(in listDirIn) map[string]any { return map[string]any{"target": in.Target, "path": in.Path} },
 		summary: func(l *DirList) string { return plural(len(l.Entries), "entry", "entries") + truncated(l.Truncated) },
@@ -96,7 +144,7 @@ func listDirectory(d *Deps) Tool {
 			if in.Limit != nil {
 				w.Limit = *in.Limit
 			}
-			env := fetch[DirList](ctx, d, in.Target, protocol.OpListDir, w, d.budget())
+			env := fetch[DirList](ctx, d, in.Target, f.op, w, d.budget())
 			if env.OK && fitList(env.Data, &env.Data.Entries, d.maxOutput()) {
 				env.Data.Truncated = true
 			}
@@ -106,16 +154,34 @@ func listDirectory(d *Deps) Tool {
 }
 
 func statPath(d *Deps) Tool {
-	return define(d, spec[pathIn, Entry]{
-		name:        "shell_stat_path",
-		title:       "Stat path",
+	return statTool(d, fileTool{
+		name: "shell_stat_path", title: "Stat path", op: protocol.OpStat,
 		description: "Returns one path's type, size, mode, owner, group and modification time without following a final symlink, whose target is reported.",
+	})
+}
+
+func privStatPath(d *Deps) Tool {
+	return statTool(d, fileTool{
+		name: "shell_priv_stat_path", title: "Stat path as root", op: protocol.OpPrivStat, privileged: true,
+		description: "Returns, as root, one path's type, size, mode, owner, group and modification time under the privileged policy's roots, without following a final symlink, whose target is reported.",
+	})
+}
+
+func statTool(d *Deps, f fileTool) Tool {
+	return define(d, spec[pathIn, Entry]{
+		name:        f.name,
+		title:       f.title,
+		description: f.description,
 		tier:        TierRead,
-		schema:      boundPath,
-		audit:       pathAudit,
-		summary:     func(*Entry) string { return "1 entry" },
+		privileged:  f.privileged,
+		schema: func(s *jsonschema.Schema) {
+			boundPath(s)
+			f.rootsIn(s, "path")
+		},
+		audit:   pathAudit,
+		summary: func(*Entry) string { return "1 entry" },
 		run: func(ctx context.Context, _ *mcp.CallToolRequest, in pathIn) envelope.Envelope[Entry] {
-			return fetch[Entry](ctx, d, in.Target, protocol.OpStat, pathWire{Path: in.Path}, d.budget())
+			return fetch[Entry](ctx, d, in.Target, f.op, pathWire{Path: in.Path}, d.budget())
 		},
 	})
 }
@@ -165,16 +231,32 @@ type readFileWire struct {
 }
 
 func readFile(d *Deps) Tool {
-	return define(d, spec[readFileIn, FileContent]{
-		name:        "shell_read_file",
-		title:       "Read file",
+	return readFileTool(d, fileTool{
+		name: "shell_read_file", title: "Read file", op: protocol.OpReadFile,
 		description: "Reads a bounded part of a text file, or its last lines, redacted; a binary file returns only its size and SHA-256.",
+	})
+}
+
+func privReadFile(d *Deps) Tool {
+	return readFileTool(d, fileTool{
+		name: "shell_priv_read_file", title: "Read file as root", op: protocol.OpPrivReadFile, privileged: true,
+		description: "Reads, as root, a bounded part of a text file under the privileged policy's roots, or its last lines, redacted; a binary file returns only its size and SHA-256.",
+	})
+}
+
+func readFileTool(d *Deps, f fileTool) Tool {
+	return define(d, spec[readFileIn, FileContent]{
+		name:        f.name,
+		title:       f.title,
+		description: f.description,
 		tier:        TierRead,
+		privileged:  f.privileged,
 		schema: func(s *jsonschema.Schema) {
 			boundPath(s)
 			intIn(s, "offset", 0, maxSafeInt)
 			intIn(s, "max_bytes", 1, maxOutputCeiling)
 			intIn(s, "tail_lines", 1, 5000)
+			f.rootsIn(s, "path")
 		},
 		audit: func(in readFileIn) map[string]any { return map[string]any{"target": in.Target, "path": in.Path} },
 		summary: func(f *FileContent) string {
@@ -194,7 +276,7 @@ func readFile(d *Deps) Tool {
 			if in.TailLines != nil {
 				w.TailLines = *in.TailLines
 			}
-			env := fetch[FileContent](ctx, d, in.Target, protocol.OpReadFile, w, d.budget())
+			env := fetch[FileContent](ctx, d, in.Target, f.op, w, d.budget())
 			if env.OK && capText(d.redactor(), &env.Data.Content, d.maxOutput()) {
 				env.Data.Truncated = true
 			}
