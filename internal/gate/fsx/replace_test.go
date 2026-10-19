@@ -426,3 +426,21 @@ func TestUnchangedSignal(t *testing.T) {
 		t.Fatalf("a read-back failure after the commit: %v", err)
 	}
 }
+
+// FuzzCheckExpectedDestination: expected_destination_sha256, which the
+// gate's copy and move now take from the wire as the helper's do, is
+// accepted exactly when it is empty, or 64 lowercase hex digits with
+// overwrite; anything else is bad_request.
+func FuzzCheckExpectedDestination(f *testing.F) {
+	for _, s := range []string{"", "0", hexSHA("x"), hexSHA("x") + "0", "ABCDEF" + hexSHA("x")[6:], hexSHA("x")[:63] + "\n", hexSHA("x")[:63] + "é"} {
+		f.Add(true, s)
+		f.Add(false, s)
+	}
+	f.Fuzz(func(t *testing.T, overwrite bool, s string) {
+		e := checkExpectedDestination(overwrite, s)
+		want := s == "" || overwrite && previewSHA256RE.MatchString(s)
+		if (e == nil) != want || e != nil && e.Code != protocol.CodeBadRequest {
+			t.Fatalf("checkExpectedDestination(%v, %q) = %v, want accepted %v", overwrite, s, e, want)
+		}
+	})
+}
