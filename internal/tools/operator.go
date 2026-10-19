@@ -375,6 +375,10 @@ type srcDstIn struct {
 	Source      string `json:"source" jsonschema:"Absolute, clean path of the source."`
 	Destination string `json:"destination" jsonschema:"Absolute, clean path of the destination under a write root of the target policy."`
 	Overwrite   bool   `json:"overwrite,omitzero" jsonschema:"Replace an existing destination file. Default false."`
+	// expectedDest and createOnly are set only by an approved call from what
+	// its fresh preview saw (never inputs; destPrecondition).
+	expectedDest string
+	createOnly   bool
 }
 
 func (in *srcDstIn) validate() *envelope.Error {
@@ -412,10 +416,41 @@ func srcDstAudit(in srcDstIn) map[string]any {
 	return map[string]any{"target": in.Target, "source": in.Source, "destination": in.Destination, "overwrite": in.Overwrite}
 }
 
+// srcDstWire is the args of copy and move, and of priv_copy and priv_move:
+// expected_destination_sha256 (P-9) is sent only by an approved call.
 type srcDstWire struct {
-	Source      string `json:"source"`
-	Destination string `json:"destination"`
-	Overwrite   bool   `json:"overwrite"`
+	Source                    string `json:"source"`
+	Destination               string `json:"destination"`
+	Overwrite                 bool   `json:"overwrite"`
+	ExpectedDestinationSHA256 string `json:"expected_destination_sha256,omitzero"`
+}
+
+// newSrcDstWire is a copy's or move's args with the precondition an
+// approved call passes on (destPrecondition): the destination's content
+// hash, or overwrite false when its preview saw no destination.
+func newSrcDstWire(source, destination string, overwrite bool, expectedDest string, createOnly bool) srcDstWire {
+	return srcDstWire{Source: source, Destination: destination, Overwrite: overwrite && !createOnly, ExpectedDestinationSHA256: expectedDest}
+}
+
+// destPrecondition passes on what the fresh preview of a copy or move saw
+// of the destination (P-9): its content hash when it saw a file and the
+// call overwrites, or that it saw none, so the operation is sent without
+// overwrite and an approved overwrite never replaces a file that appeared.
+// The gate's and the helper's copy and move share it.
+func destPrecondition(overwrite bool, p *preview) (expectedDest string, createOnly bool) {
+	switch {
+	case p.absent:
+		return "", true
+	case overwrite:
+		return p.contentSHA256, false
+	}
+	return "", false
+}
+
+// srcDstPrecondition is shell_copy_path's and shell_move_path's
+// precondition (destPrecondition).
+func srcDstPrecondition(in *srcDstIn, p *preview) {
+	in.expectedDest, in.createOnly = destPrecondition(in.Overwrite, p)
 }
 
 // CopyPath is shell_copy_path's data. The envelope's verified is true: the
@@ -443,7 +478,7 @@ func copyPath(d *Deps) Tool {
 			return "copied, " + plural(c.Bytes, "byte", "bytes") + ", verified"
 		},
 		run: func(ctx context.Context, _ *mcp.CallToolRequest, in srcDstIn) envelope.Envelope[CopyPath] {
-			w := srcDstWire{Source: in.Source, Destination: in.Destination, Overwrite: in.Overwrite}
+			w := newSrcDstWire(in.Source, in.Destination, in.Overwrite, in.expectedDest, in.createOnly)
 			r := fetch[writeResultWire](ctx, d, in.Target, protocol.OpCopy, w, d.budget())
 			if !r.OK {
 				return envelope.Failure[CopyPath](r.Target, r.Error)
@@ -454,7 +489,10 @@ func copyPath(d *Deps) Tool {
 		},
 		approvalArgs: srcDstCanonical,
 		describe:     srcDstDescribe("Copy"),
-		preview:      d.srcDstPreview,
+		preview: func(ctx context.Context, in srcDstIn, target string) (*preview, *envelope.Error) {
+			return d.srcDstPreview(ctx, &in, target, true)
+		},
+		precondition: srcDstPrecondition,
 	})
 }
 
@@ -482,12 +520,15 @@ func movePath(d *Deps) Tool {
 			return "moved"
 		},
 		run: func(ctx context.Context, _ *mcp.CallToolRequest, in srcDstIn) envelope.Envelope[MovePath] {
-			w := srcDstWire{Source: in.Source, Destination: in.Destination, Overwrite: in.Overwrite}
+			w := newSrcDstWire(in.Source, in.Destination, in.Overwrite, in.expectedDest, in.createOnly)
 			return fetch[MovePath](ctx, d, in.Target, protocol.OpMove, w, d.budget())
 		},
 		approvalArgs: srcDstCanonical,
 		describe:     srcDstDescribe("Move"),
-		preview:      d.srcDstPreview,
+		preview: func(ctx context.Context, in srcDstIn, target string) (*preview, *envelope.Error) {
+			return d.srcDstPreview(ctx, &in, target, false)
+		},
+		precondition: srcDstPrecondition,
 	})
 }
 

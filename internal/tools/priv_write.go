@@ -113,14 +113,23 @@ func (d *Deps) backupPreview(ctx context.Context, target, p string, acc *policyA
 // the two reads). A file the helper gives no hash for (above 256 MiB)
 // cannot be bound and is refused.
 func (d *Deps) privFilePreview(ctx context.Context, target string, st *Entry, acc *policyAcc) (map[string]any, *FileContent, *envelope.Error) {
-	f, warns, pol, e := previewFetch[FileContent](ctx, d, target, protocol.OpPrivReadFile, readFileWire{Path: st.Path}, true)
+	return d.boundFilePreview(ctx, target, protocol.OpPrivReadFile, "helper", st, acc)
+}
+
+// boundFilePreview is a regular file's state with its content hash, read
+// through op (the gate's read_file or the helper's priv_read_file; who
+// names it in a refusal): its stat and the whole-file SHA-256 (nil when it
+// was removed between the two reads). A file given no hash (above 256 MiB)
+// cannot be bound and is refused.
+func (d *Deps) boundFilePreview(ctx context.Context, target, op, who string, st *Entry, acc *policyAcc) (map[string]any, *FileContent, *envelope.Error) {
+	f, warns, pol, e := previewFetch[FileContent](ctx, d, target, op, readFileWire{Path: st.Path}, true)
 	acc.add(pol)
 	if e != nil || f == nil {
 		return nil, nil, e
 	}
 	if f.SHA256 == "" {
 		return nil, nil, envelope.Errorf(protocol.CodeTooLarge,
-			"the file is larger than the helper hashes (256 MiB), so an approval could not be bound to its content; nothing was requested")
+			"the file is larger than the %s hashes (256 MiB), so an approval could not be bound to its content; nothing was requested", who)
 	}
 	cur := entryPreview(st)
 	cur["state"], cur["sha256"] = "file", f.SHA256
@@ -548,15 +557,8 @@ func (in *privSrcDstIn) validate() *envelope.Error {
 	return checkPath("destination", in.Destination)
 }
 
-type privSrcDstWire struct {
-	Source                    string `json:"source"`
-	Destination               string `json:"destination"`
-	Overwrite                 bool   `json:"overwrite"`
-	ExpectedDestinationSHA256 string `json:"expected_destination_sha256,omitzero"`
-}
-
-func (in *privSrcDstIn) wire() privSrcDstWire {
-	return privSrcDstWire{Source: in.Source, Destination: in.Destination, Overwrite: in.Overwrite && !in.createOnly, ExpectedDestinationSHA256: in.expectedDest}
+func (in *privSrcDstIn) wire() srcDstWire {
+	return newSrcDstWire(in.Source, in.Destination, in.Overwrite, in.expectedDest, in.createOnly)
 }
 
 func privSrcDstSpec(verb string) (canon func(privSrcDstIn) any, describe func(privSrcDstIn, string) string, audit func(privSrcDstIn) map[string]any) {
@@ -581,16 +583,9 @@ func privSrcDstSpec(verb string) (canon func(privSrcDstIn) any, describe func(pr
 }
 
 // precondition passes on what the fresh preview saw of the destination
-// (P-9): its content hash when it saw a file, or overwrite false when it
-// saw none, so an approved overwrite never replaces a file that appeared.
+// (P-9, destPrecondition).
 func (in *privSrcDstIn) precondition(p *preview) {
-	if p.absent {
-		in.createOnly = true
-		return
-	}
-	if in.Overwrite {
-		in.expectedDest = p.contentSHA256
-	}
+	in.expectedDest, in.createOnly = destPrecondition(in.Overwrite, p)
 }
 
 // privSrcDstPreview: the source's stat, the destination's state (absent, or
@@ -620,17 +615,8 @@ func (d *Deps) privSrcDstPreview(ctx context.Context, in *privSrcDstIn, target s
 	var cur map[string]any
 	var f *FileContent
 	if dst != nil {
-		switch {
-		case dst.Type == "symlink":
-			return nil, envelope.Errorf(protocol.CodePathDenied, "the destination is a symlink, which is never followed or replaced; nothing was requested")
-		case dst.Type == "dir" && isCopy:
-			return nil, envelope.Errorf(protocol.CodeIsADirectory, "the destination is a directory; nothing was requested")
-		case dst.Type == "dir" || src.Type == "dir":
-			return nil, envelope.Errorf(protocol.CodeExists, "the destination exists, and directories are never replaced; nothing was requested")
-		case dst.Type != "file":
-			return nil, envelope.Errorf(protocol.CodeBadRequest, "the destination is not a regular file; nothing was requested")
-		case !in.Overwrite:
-			return nil, envelope.Errorf(protocol.CodeExists, "the destination exists (pass overwrite to replace it); nothing was requested")
+		if e = refuseDestination(dst, src.Type, isCopy, in.Overwrite); e != nil {
+			return nil, e
 		}
 		if cur, f, e = d.privFilePreview(ctx, target, dst, &acc); e != nil {
 			return nil, e
