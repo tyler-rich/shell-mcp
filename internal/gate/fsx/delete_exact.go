@@ -661,8 +661,8 @@ func (d *deleter) remove(dfd int, e *planEntry) error {
 		d.touched[key2(&e.id)] = true
 	}
 	if f.cfg.InjectStopAfterSetAside != nil {
-		if err := f.cfg.InjectStopAfterSetAside(e.lp); err != nil {
-			return err
+		if serr := f.cfg.InjectStopAfterSetAside(e.lp); serr != nil {
+			return serr
 		}
 	}
 	f.step(DeleteStepAfterRename, e.lp)
