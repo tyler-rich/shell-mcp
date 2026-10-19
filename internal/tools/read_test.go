@@ -42,6 +42,8 @@ type gateReply struct {
 	msg      string
 	warnings []string
 	noID     bool
+	// noHelper answers a priv_* op without the helper block (an older gate).
+	noHelper bool
 }
 
 // recordingGate answers each op from replies and records every request.
@@ -50,10 +52,13 @@ type recordingGate struct {
 	reqs    []protocol.Request
 	replies map[string]gateReply
 	sha     string
+	// helperSHA is the privileged policy's hash in the helper block that
+	// answers to priv_* ops carry (handoff P-1).
+	helperSHA string
 }
 
 func newRecordingGate(replies map[string]gateReply) *recordingGate {
-	return &recordingGate{replies: replies, sha: "ab12"}
+	return &recordingGate{replies: replies, sha: "ab12", helperSHA: "cafe"}
 }
 
 func (g *recordingGate) exec(_ context.Context, s *sshtest.Session) uint32 {
@@ -64,7 +69,7 @@ func (g *recordingGate) exec(_ context.Context, s *sshtest.Session) uint32 {
 	g.mu.Lock()
 	g.reqs = append(g.reqs, *req)
 	r, ok := g.replies[req.Op]
-	sha := g.sha
+	sha, helperSHA := g.sha, g.helperSHA
 	g.mu.Unlock()
 	if !ok {
 		r = gateReply{code: "unknown_op", msg: "no reply for " + req.Op}
@@ -78,15 +83,19 @@ func (g *recordingGate) exec(_ context.Context, s *sshtest.Session) uint32 {
 		warn = []byte("[]")
 	}
 	gate := fmt.Sprintf(`{"version":"0.1.0","principal":"readonly-key","policy_sha256":%q,"max_tier":"operator","duration_ms":2}`, sha)
+	helper := ""
+	if strings.HasPrefix(req.Op, "priv_") && !r.noHelper {
+		helper = fmt.Sprintf(`,"helper":{"version":"0.1.0","principal":"shell-mcp-privd","policy_sha256":%q,"max_tier":"destructive","unit":"core","duration_ms":1}`, helperSHA)
+	}
 	if r.code != "" {
-		_, _ = fmt.Fprintf(s.Stdout, `{"v":1,"id":%q,"ok":false,"error":{"code":%q,"message":%q},"warnings":[]}`+"\n", id, r.code, r.msg)
+		_, _ = fmt.Fprintf(s.Stdout, `{"v":1,"id":%q,"ok":false,"error":{"code":%q,"message":%q},"warnings":[]%s}`+"\n", id, r.code, r.msg, helper)
 		return 0
 	}
 	var one bytes.Buffer
 	if err := json.Compact(&one, []byte(r.data)); err != nil {
 		panic(fmt.Sprintf("fake gate data for %s is not JSON: %v", req.Op, err))
 	}
-	_, _ = fmt.Fprintf(s.Stdout, `{"v":1,"id":%q,"ok":true,"data":%s,"warnings":%s,"gate":%s}`+"\n", id, one.String(), warn, gate)
+	_, _ = fmt.Fprintf(s.Stdout, `{"v":1,"id":%q,"ok":true,"data":%s,"warnings":%s,"gate":%s%s}`+"\n", id, one.String(), warn, gate, helper)
 	return 0
 }
 

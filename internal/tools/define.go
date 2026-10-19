@@ -22,6 +22,9 @@ import (
 type spec[In, Out any] struct {
 	name, title, description string
 	tier                     Tier
+	// privileged: a shell_priv_* tool, forwarded to the host's privileged
+	// helper (registered in the admin profile only).
+	privileged bool
 	// idempotent is the idempotentHint for operator tools; read tools are
 	// always idempotent and destructive ones never.
 	idempotent bool
@@ -97,7 +100,7 @@ func define[In, Out any](d *Deps, s spec[In, Out]) Tool {
 		Name: s.name, Title: s.title, Description: s.description,
 		Annotations: annotations(s.title, s.tier, s.idempotent), InputSchema: in, OutputSchema: out,
 	}
-	if canGate && d.gated(s.tier) {
+	if canGate && d.gated(s.tier, s.privileged) {
 		// Client-side defence in depth (handoff §3 a.2): Claude Code shows
 		// the permission prompt on every call. The server cannot verify it.
 		def.Meta = mcp.Meta{"anthropic/requiresUserInteraction": true}
@@ -120,7 +123,7 @@ func define[In, Out any](d *Deps, s spec[In, Out]) Tool {
 		if decodeErr == nil && s.audit != nil {
 			auditArgs = s.audit(args)
 		}
-		gated := canGate && d.gated(s.tier)
+		gated := canGate && d.gated(s.tier, s.privileged)
 		var apOutcome approvalOutcome
 		apID := ""
 		switch {

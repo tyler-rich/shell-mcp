@@ -47,7 +47,9 @@ const (
 func gateable(t Tier) bool { return t == TierOperator || t == TierDestructive }
 
 // gated reports whether a call of a tool of tier t needs approval.
-func (d *Deps) gated(t Tier) bool {
+// privileged is not yet looked at (S4c-1 stub).
+func (d *Deps) gated(t Tier, privileged bool) bool {
+	_ = privileged
 	return t == TierDestructive || t == TierOperator && slices.Contains(d.ApprovalTiers, t.String())
 }
 
@@ -352,7 +354,7 @@ func perTierCall[In, Out any](ctx context.Context, d *Deps, s spec[In, Out], req
 	if !p.tier.valid() || p.tier > s.tier {
 		return envelope.Failure[Out](tg.Name, envelope.Errorf("internal", "the preview named no tier within the tool's")), "", ""
 	}
-	if d.gated(p.tier) {
+	if d.gated(p.tier, s.privileged) {
 		if d.method() == approval.MethodNone || d.Approvals == nil {
 			return envelope.Failure[Out](tg.Name, envelope.Errorf(envelope.CodeApprovalUnavailable,
 				"this %s-tier operation needs a human approval and this server collects none (SHELL_MCP_APPROVAL_METHOD=none); nothing was run", p.tier)), "", ""
@@ -362,15 +364,15 @@ func perTierCall[In, Out any](ctx context.Context, d *Deps, s spec[In, Out], req
 	if s.precondition != nil {
 		s.precondition(&in, p)
 	}
-	return s.run(withCeiling(ctx, d.ungatedCeiling(s.tier)), req, in), "", ""
+	return s.run(withCeiling(ctx, d.ungatedCeiling(s.tier, s.privileged)), req, in), "", ""
 }
 
 // ungatedCeiling is the highest tier, up to max, whose operations need no
 // approval under SHELL_MCP_APPROVAL_TIERS: operator by default, read when
 // operator is listed.
-func (d *Deps) ungatedCeiling(maxTier Tier) Tier {
+func (d *Deps) ungatedCeiling(maxTier Tier, privileged bool) Tier {
 	for t := maxTier; t > TierRead; t-- {
-		if !d.gated(t) {
+		if !d.gated(t, privileged) {
 			return t
 		}
 	}

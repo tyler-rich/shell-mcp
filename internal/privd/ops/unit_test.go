@@ -150,3 +150,28 @@ func TestBroadCapabilitySetWithSysTime(t *testing.T) {
 		t.Fatalf("exit %d response %q", code, out)
 	}
 }
+
+// TestResponseBlockNamesUnit: the helper's response block says which unit
+// answered, with its policy hash, so that the gate can pass it to the
+// server as the `helper` block (handoff P-1).
+func TestResponseBlockNamesUnit(t *testing.T) {
+	for _, c := range []struct {
+		unit string
+		opts []opt
+	}{{"core", []opt{broadUsers()}}, {"broad", []opt{broadUsers(), asBroad()}}} {
+		t.Run(c.unit, func(t *testing.T) {
+			f := newFixture(t, c.opts...)
+			// Answered by this unit whatever the outcome (the broad unit
+			// refuses a core op).
+			r := f.serve("priv_stat", m{"path": f.read})
+			var g struct {
+				Principal string `json:"principal"`
+				Hash      string `json:"policy_sha256"`
+				Unit      string `json:"unit"`
+			}
+			if err := json.Unmarshal(r.Gate, &g); err != nil || g.Unit != c.unit || g.Hash != f.opts.ExpectedSHA256 || g.Principal != "shell-mcp-privd" {
+				t.Fatalf("block %s, want unit %s", r.Gate, c.unit)
+			}
+		})
+	}
+}

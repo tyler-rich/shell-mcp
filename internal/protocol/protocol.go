@@ -193,7 +193,12 @@ type Request struct {
 	TimeoutMS int64          `json:"timeout_ms,omitzero"`
 }
 
-// Response is one gate or helper response.
+// Response is one gate or helper response. Gate is the block of the
+// component that answered: the gate's own on a gate response, the helper's
+// on a helper response. Helper is set only by the gate, on a response it
+// forwarded from the privileged helper: the helper's own block, so that the
+// server sees the privileged policy's hash and the unit that answered
+// (ARCHITECTURE §4.2).
 type Response struct {
 	V        int            `json:"v"`
 	ID       string         `json:"id"`
@@ -202,6 +207,7 @@ type Response struct {
 	Error    *Error         `json:"error,omitempty"`
 	Warnings []string       `json:"warnings"`
 	Gate     *GateInfo      `json:"gate,omitempty"`
+	Helper   *GateInfo      `json:"helper,omitempty"`
 }
 
 // Error is the failure detail of a response. Message is one line and never
@@ -211,12 +217,15 @@ type Error struct {
 	Message string `json:"message"`
 }
 
-// GateInfo identifies the gate that answered.
+// GateInfo identifies the gate, or the privileged helper, that answered.
+// Unit is set by the helper only: the unit its instance runs in, core or
+// broad (empty when it refused before it knew).
 type GateInfo struct {
 	Version      string `json:"version"`
 	Principal    string `json:"principal"`
 	PolicySHA256 string `json:"policy_sha256,omitempty"`
 	MaxTier      string `json:"max_tier,omitempty"`
+	Unit         string `json:"unit,omitempty"`
 	DurationMS   int64  `json:"duration_ms"`
 }
 
