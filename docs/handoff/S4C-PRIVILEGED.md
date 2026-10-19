@@ -170,12 +170,15 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
   - To evaluate with it: a write root whose directories the application account owns or can write would then refuse every chmod and chown.
 - **Alternative:** refuse to change an inode whose current owner is not on the `owners` allow-list.
 - **Decision:** S4c-3 decides between the two with the maintainer.
+- **Status: done (S4c-3, PR #32).** The maintainer chose the recommended fix (2026-10-19). The alternative was rejected because `root` is on `owners.users` in practically every policy, so a root-owned file moved in would still be changed. `priv_chmod` and `priv_chown`, alone and for every entry of a walk, change an entry only when every directory from `/` to it is root's and neither group- nor world-writable. The directories up to the target's parent are checked by descriptor (`O_PATH|O_NOFOLLOW` from the previous one, ending at the parent the operation holds), and inside a tree, every directory that holds entries. The helper's `check-policy` prints `ok` or a WARN per privileged write root; the refusal's journal line is the serve-time record (no per-connection warning, the maintainer's choice). PRIVILEGED §6, "Chown and chmod".
+- **Found while implementing it (not fixed; reported):** the same move-in works for `priv_write_file` and `priv_copy` with `overwrite` over a moved-in file (the new inode keeps the old one's owner and its mode masked by `modes.max`), and for `priv_restore_backup` over one. Their content is approved, but the account gets a root-owned file it chose the content of, placed where it moved the original from. The chain rule could apply to those destinations too, at the cost of refusing every overwrite under an application-owned directory. For the maintainer to scope.
 
 **N-2. Chmod of setuid, setgid and sticky files.**
 - `fsx.Chmod` (gate and helper) does not refuse them, unlike `fsx.Chown`.
 - It can only clear those bits, never set them, so it does not escalate.
 - §2.3's "setuid, setgid and sticky files are never changed" holds for chown only.
 - **Decision:** decided in S4c-3.
+- **Status: done (S4c-3, PR #32).** The maintainer chose to refuse them in the gate too (2026-10-19). `fsx.Chmod` (the gate's `shell_set_permissions`) refuses a file or directory with setuid, setgid or sticky bits with `policy_denied`, as chown always did, and the helper's walk refuses such entries for both ops. The cost: the gate can no longer chmod a setgid shared directory that the service account owns. POLICY §3.
 
 **N-3. Root-owned new inodes.**
 - A copy, a new file or a new directory without an explicit owner is the helper's (`root:root`), whether or not root is in `owners.users`.
@@ -209,6 +212,8 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 | X-8 | **Pruning runs before the operation commits.** `store.save` prunes as soon as the new backup exists. An operation that then fails (verify, a lost race) has still pruned an older version. A restore can also prune the very backup it is restoring, if that backup is the oldest kept (its data is already in memory, so the restore itself succeeds). | **MUST** (Q12) | Prune after the operation succeeded, and never the backup being restored (S4c-2 and S4c-5). |
 | X-9 | **Backups are not tied to approvals.** A backup's metadata records `op` and `request_id`, but not the preview it belongs to. | **MUST** (cheap) | The metadata records `preview_sha256` when the op carried one (a local file format, not the wire; D3). |
 | X-10 | **Read-back of metadata.** Chown and chmod do not re-read what they set. Writes verify their content. | **MUST** (cheap) | fstat the same descriptor after fchown or fchmod; a mismatch is `verify_failed` (S4c-0 for the non-recursive ops, S4c-3 for recursive). |
+
+**Status after S4c-3:** X-10 fixed for recursive ops too (every entry read back on the descriptor it was changed on).
 
 **Status after S4c-2:** X-7 fixed (the store cap, §4.1). X-8 fixed for every op but restore (S4c-5: never the backup being restored). X-9 fixed (`preview_sha256` in the metadata).
 
@@ -672,6 +677,12 @@ All of them:
 
 ### S4c-3: chown and chmod, recursive
 
+- **Status: done (PR #32; ARCHIVE §14, S4c-3).** P-2b, P-3 and P-4 as listed (no other protocol change). The R1 walk is `fsx.PreviewMeta` and `fsx.ApplyMeta`, sharing the delete's walk primitives (`statxAt`, `inDir`, `readAll`, `crossesMount`). The hash is D4's list, nothing more. F-2 holds on every entry, at the walk and on the descriptor that is changed. Each change is read back on that descriptor. The bounded `changed` audit list has `changed_total` and `changed_truncated`. Both tools are in the catalogue. N-1 is fixed with the chain rule, and N-2 refuses special bits in the gate too (§2.1). Beyond the entry, decided or found:
+  - The target being a configured root is refused too (D4's "roots", as in a delete; S4c-0's chmod allowed it).
+  - An entry already as asked is skipped: no system call and no `changed` record. So `changes` in the preview counts only real changes, and a chown to the group a file already has records nothing.
+  - Before each change, the descriptor's owner, group and mode must still be the walk's, not only its identity. Nothing the operation did can have changed them yet (children are changed before their directory).
+  - On a filesystem that reports no birth time, an entry deleted and created again with the same inode number, owner and mode hashes the same (D4 has no change time). The chain rule leaves only root able to do that. Documented in PRIVILEGED §6.
+  - The finding under N-1 (§2.1).
 - **Includes.**
   - P-2b, P-3 (chown and chmod) and P-4.
   - The R1 walk (D4) in `fsx`, shared with the delete's walk where possible.
