@@ -57,10 +57,14 @@ type mkdirArgs struct {
 	Parents bool   `json:"parents"`
 }
 
+// srcDstArgs: expected_destination_sha256 (P-9, as for priv_copy and
+// priv_move) binds an overwrite to the destination's content; fsx then
+// commits it as a verified replace.
 type srcDstArgs struct {
-	Source      string `json:"source"`
-	Destination string `json:"destination"`
-	Overwrite   bool   `json:"overwrite"`
+	Source                    string `json:"source"`
+	Destination               string `json:"destination"`
+	Overwrite                 bool   `json:"overwrite"`
+	ExpectedDestinationSHA256 string `json:"expected_destination_sha256"`
 }
 
 type chmodArgs struct {
@@ -190,7 +194,7 @@ func (s *server) copy(raw jsontext.Value) (data any, warns []string, failure err
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
 	}
-	r, err := s.fs.Copy(a.Source, a.Destination, a.Overwrite)
+	r, err := s.fs.CopyExpecting(a.Source, a.Destination, a.Overwrite, a.ExpectedDestinationSHA256)
 	return r, nil, err
 }
 
@@ -199,7 +203,7 @@ func (s *server) move(raw jsontext.Value) (data any, warns []string, failure err
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
 	}
-	r, err := s.fs.Move(a.Source, a.Destination, a.Overwrite)
+	r, err := s.fs.MoveExpecting(a.Source, a.Destination, a.Overwrite, a.ExpectedDestinationSHA256)
 	return r, nil, err
 }
 
