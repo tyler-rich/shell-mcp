@@ -345,6 +345,10 @@ func TestApprovalWebFlow(t *testing.T) {
 				id := pendingID(t, srv.callTool(t, c.tool, a))
 				srv.decide(t, h, id, "approve")
 				opOK(t, "shell_write_file", map[string]any{"path": dst, "content": "changed out of band\n"})
+				// The journal reads whole seconds (and journal() starts a
+				// second early): keep the out-of-band write, itself a
+				// write_file, out of the window.
+				time.Sleep(2100 * time.Millisecond)
 				since := time.Now()
 				refusal(t, srv.callTool(t, c.tool, withApproval(a, id)), "approval_invalid", "changed since approval")
 				fileIs(t, dst, "changed out of band\n")
