@@ -203,6 +203,8 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 | X-9 | **Backups are not tied to approvals.** A backup's metadata records `op` and `request_id`, but not the preview it belongs to. | **MUST** (cheap) | The metadata records `preview_sha256` when the op carried one (a local file format, not the wire; D3). |
 | X-10 | **Read-back of metadata.** Chown and chmod do not re-read what they set. Writes verify their content. | **MUST** (cheap) | fstat the same descriptor after fchown or fchmod; a mismatch is `verify_failed` (S4c-0 for the non-recursive ops, S4c-3 for recursive). |
 
+**Status after S4c-1:** X-1 fixed (P-1 and the combined hash; the dedicated preview ops' own hashes come with each op). X-2 fixed in the approval core (`gated(t, privileged)`, ceiling `read` for unapproved privileged operations); each tool session registers its tools. X-4: P-7 done; the `timeout` message for privileged ops is S4c-6's and S4c-7's. X-5 documented (PRIVILEGED §6). X-3 for the read tools.
+
 ### 2.3 Per operation
 
 Columns: create-only · preview binding · set-aside/stranded · approval and re-call · tier/ceiling · audit · sandbox · backups · owners · modes · read-back.
@@ -613,6 +615,9 @@ All of them:
 
 ### S4c-1: privileged binding, approval plumbing, read tools
 
+- **Status: done (branch `feat/priv-foundations`, PR into `dev`; ARCHIVE §14, S4c-1).** §7.1 applied verbatim in the first commit. P-1 (the helper's block names its `unit`; the gate passes it as `helper`), P-7 (the forwarded `timeout_ms` is the gate's clamped or default timeout), D1 (the combined policy hash in every privileged preview, through `previewFetch`), D9 (`gated(t, privileged)`, the privileged `ungatedCeiling`, the `privileged` flag on a tool's spec, "as root" in the descriptions), and the four read tools with their catalogue rows. §7.2 applied where this session's subject is concerned: ARCHITECTURE §3 step 4, §4.1, §4.2; PRIVILEGED §6's preview sentence; X-5's redaction note; §2.3's note on listing backups of former roots. The §7.2 items assigned to later sessions (TOOLS `stdin`, `recursive`, the restore preview; PRIVILEGED §6 `priv_exec` routing, §8's new audit fields) are left to them.
+  - **Tested beyond the entry below:** a privileged-policy edit and a gate-policy edit after approval are each `approval_invalid`, with a synthetic privileged operator tool in the unit tests (no catalogue tool is gated yet); the forwarded timeout and the gate's answer coming after the helper's run, in the gate's unit tests and in e2e-host in both units with a command that ignores `SIGTERM`.
+  - **Residual (X-4):** P-7 makes the helper's deadline the gate's, and the gate waits 15 s beyond it, so the gate's answer is the helper's, after the command has ended, unless an instance takes more than about 13 s to start or to end its command (the kill grace is 2 s). Closing that last window would need the helper to watch the connection and abort when the gate goes away, a behaviour this handoff does not specify; the `timeout` message for privileged ops (X-4, S4c-6 and S4c-7) stays the mitigation.
 - **Includes.**
   - The first commit applies §7: the approved D-006 and S-12 text exactly as in §7.1 (D-021 is unchanged), and §7.2's wording for the documents this session touches.
   - **P-1.** The helper's block gains `unit`; the gate's `forward` passes it as `helper`; protocol types; the server's `gateclient` decodes it; the approval binds the combined policy hash (D1).
