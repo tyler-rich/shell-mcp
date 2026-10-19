@@ -20,11 +20,12 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
 )
 
-// Replacing commits in the helper (S4c-2, handoff P-9): a copy or move with
-// overwrite binds the destination's content (expected_destination_sha256),
-// and every commit that replaces a file is an exchange checked afterwards
-// (Config.VerifyReplaced), so a destination replaced or rewritten after the
-// last check is exchanged back, never lost. The backup hook is told the
+// Replacing commits (S4c-2, handoff P-9; POLICY §3 for the gate): a copy
+// or move with overwrite binds the destination's content
+// (expected_destination_sha256), and every commit that replaces a file in
+// the helper (Config.VerifyReplaced), or a file whose content was bound in
+// the gate, is an exchange checked afterwards, so a destination replaced or
+// rewritten after the last check is exchanged back, never lost. The backup hook is told the
 // hash fsx computed, and the results carry the new inode's owner. Fixtures
 // are invented, under t.TempDir().
 
@@ -129,43 +130,63 @@ func replaceOps(e *env, oldContent string) []replaceOp {
 	}
 }
 
+// replaceEnv is one configuration whose conditional replaces are verified:
+// the helper's (Config.VerifyReplaced, with backups), or the gate's, where
+// a write with expected_sha256, and a copy or move with
+// expected_destination_sha256 (P-9), are verified replaces without the flag
+// and without backups (POLICY §3).
+type replaceEnv struct {
+	name    string
+	e       *env
+	backups *[]*BackupSource // nil for the gate
+}
+
+func replaceEnvs(t *testing.T) []replaceEnv {
+	t.Helper()
+	h, backups := helperEnv(t)
+	return []replaceEnv{{name: "helper", e: h, backups: backups}, {name: "gate", e: newEnv(t)}}
+}
+
 // TestVerifiedReplaceCommitWindow: the destination is replaced by another
 // file, or rewritten in place, after every check and immediately before the
 // commit. It is never lost: the operation answers exists and the racing
-// content stays at the destination; a refused move leaves its source.
+// content stays at the destination; a refused move leaves its source. In
+// the helper and in the gate.
 func TestVerifiedReplaceCommitWindow(t *testing.T) {
 	const old = "approved old\n"
 	for _, how := range []string{"replaced", "rewritten"} {
-		e, _ := helperEnv(t)
-		for _, op := range replaceOps(e, old) {
-			for i := range windowRuns {
-				dst := filepath.Join(e.write, fmt.Sprintf("win-%s-%d", how, i))
-				put(t, dst, old)
-				if op.prepare != nil {
-					op.prepare(t, i)
-				}
-				racer := fmt.Sprintf("racer %d\n", i)
-				e.fs.cfg.InjectBeforeCommit = func() {
-					if how == "replaced" {
-						tmp := dst + ".racer"
-						put(t, tmp, racer)
-						must(t, os.Rename(tmp, dst))
-						return
+		for _, re := range replaceEnvs(t) {
+			e := re.e
+			for _, op := range replaceOps(e, old) {
+				for i := range windowRuns {
+					dst := filepath.Join(e.write, fmt.Sprintf("win-%s-%d", how, i))
+					put(t, dst, old)
+					if op.prepare != nil {
+						op.prepare(t, i)
 					}
-					time.Sleep(2 * time.Millisecond) // a new mtime, whatever the clock's granularity
-					must(t, os.WriteFile(dst, []byte(racer), 0o600))
+					racer := fmt.Sprintf("racer %d\n", i)
+					e.fs.cfg.InjectBeforeCommit = func() {
+						if how == "replaced" {
+							tmp := dst + ".racer"
+							put(t, tmp, racer)
+							must(t, os.Rename(tmp, dst))
+							return
+						}
+						time.Sleep(2 * time.Millisecond) // a new mtime, whatever the clock's granularity
+						must(t, os.WriteFile(dst, []byte(racer), 0o600))
+					}
+					err := op.run(dst, i)
+					e.fs.cfg.InjectBeforeCommit = nil
+					if got := read(t, dst); got != racer {
+						t.Fatalf("%s: %s, destination %s, run %d: the racing content was lost (op error %v): %q", re.name, op.name, how, i, err, got)
+					}
+					wantCode(t, err, protocol.CodeExists)
+					if op.srcLeft != nil && !op.srcLeft(t, i) {
+						t.Fatalf("%s: %s run %d: a refused move moved its source", re.name, op.name, i)
+					}
 				}
-				err := op.run(dst, i)
-				e.fs.cfg.InjectBeforeCommit = nil
-				wantCode(t, err, protocol.CodeExists)
-				if got := read(t, dst); got != racer {
-					t.Fatalf("%s, destination %s, run %d: the racing content was lost: %q", op.name, how, i, got)
-				}
-				if op.srcLeft != nil && !op.srcLeft(t, i) {
-					t.Fatalf("%s run %d: a refused move moved its source", op.name, i)
-				}
+				t.Logf("%s: %s, destination %s before the commit: exists in %d of %d runs, the racing content kept", re.name, op.name, how, windowRuns, windowRuns)
 			}
-			t.Logf("%s, destination %s before the commit: exists in %d of %d runs, the racing content kept", op.name, how, windowRuns, windowRuns)
 		}
 	}
 }
@@ -173,94 +194,127 @@ func TestVerifiedReplaceCommitWindow(t *testing.T) {
 // TestVerifiedReplaceConcurrentRace: a goroutine replaces the destination
 // (write a temp file, rename it over) after a random delay of up to twice
 // the operation's measured duration. Whatever the order, the racer's
-// content is never lost: it ends at the destination. When the operation
-// succeeds it replaced the approved content only.
+// content is never lost: it ends at the destination. In the helper, an
+// operation that succeeds replaced the approved content only (its backup
+// holds it). Every run is counted, and the test fails at the end if any
+// run lost the racer's content or ended in an unexpected error.
 func TestVerifiedReplaceConcurrentRace(t *testing.T) {
 	const old = "approved old\n"
-	e, backups := helperEnv(t)
-	for _, op := range replaceOps(e, old) {
-		// Measure the operation once.
-		probe := filepath.Join(e.write, "race-probe")
-		put(t, probe, old)
-		if op.prepare != nil {
-			op.prepare(t, 999999)
+	for _, re := range replaceEnvs(t) {
+		e, backups := re.e, re.backups
+		refusedFirst := []string{protocol.CodeExists, protocol.CodePathDenied}
+		if backups != nil {
+			refusedFirst = append(refusedFirst, protocol.CodeBackupFailed)
 		}
-		start := time.Now()
-		must(t, op.run(probe, 999999))
-		took := time.Since(start)
-		first, wonOK, after := 0, 0, 0
-		for i := range concurrentRuns {
-			dst := filepath.Join(e.write, fmt.Sprintf("race-%d", i))
-			put(t, dst, old)
+		for _, op := range replaceOps(e, old) {
+			// Measure the operation once.
+			probe := filepath.Join(e.write, "race-probe")
+			put(t, probe, old)
 			if op.prepare != nil {
-				op.prepare(t, i)
+				op.prepare(t, 999999)
 			}
-			racer := fmt.Sprintf("racer %d\n", i)
-			delay := time.Duration(rand.Int64N(int64(2*took) + 1)) //nolint:gosec // G404: test timing
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				time.Sleep(delay)
-				tmp := dst + ".racer"
-				_ = os.WriteFile(tmp, []byte(racer), 0o600)
-				_ = os.Rename(tmp, dst)
-			}()
-			nb := len(*backups)
-			err := op.run(dst, i)
-			<-done
-			if got := read(t, dst); got != racer {
-				t.Fatalf("%s run %d: the racer's content was lost (op error %v): %q", op.name, i, err, got)
-			}
-			switch err {
-			case nil:
-				wonOK++
-				if len(*backups) != nb+1 || !strings.HasSuffix((*backups)[nb].Path, "\x00"+old) {
-					t.Fatalf("%s run %d: replaced something other than the approved content", op.name, i)
+			start := time.Now()
+			must(t, op.run(probe, 999999))
+			took := time.Since(start)
+			first, wonOK, after, lost := 0, 0, 0, 0
+			var unexpected []string
+			for i := range concurrentRuns {
+				dst := filepath.Join(e.write, fmt.Sprintf("race-%d", i))
+				put(t, dst, old)
+				if op.prepare != nil {
+					op.prepare(t, i)
 				}
-			default:
+				racer := fmt.Sprintf("racer %d\n", i)
+				delay := time.Duration(rand.Int64N(int64(2*took) + 1)) //nolint:gosec // G404: test timing
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					time.Sleep(delay)
+					tmp := dst + ".racer"
+					_ = os.WriteFile(tmp, []byte(racer), 0o600)
+					_ = os.Rename(tmp, dst)
+				}()
+				nb := 0
+				if backups != nil {
+					nb = len(*backups)
+				}
+				err := op.run(dst, i)
+				<-done
+				if got := read(t, dst); got != racer {
+					lost++
+					continue
+				}
 				var fe *Error
 				switch {
+				case err == nil:
+					wonOK++
+					if backups != nil && (len(*backups) != nb+1 || !strings.HasSuffix((*backups)[nb].Path, "\x00"+old)) {
+						t.Fatalf("%s: %s run %d: replaced something other than the approved content", re.name, op.name, i)
+					}
 				case !errors.As(err, &fe):
-					t.Fatalf("%s run %d: %v", op.name, i, err)
-				case slices.Contains([]string{protocol.CodeExists, protocol.CodeBackupFailed, protocol.CodePathDenied}, fe.Code):
+					unexpected = append(unexpected, err.Error())
+				case slices.Contains(refusedFirst, fe.Code):
 					first++ // the racer first: refused, nothing replaced
 				case fe.Code == protocol.CodeVerifyFailed || fe.Code == protocol.CodeInternal && strings.Contains(fe.Msg, "could not be verified"):
 					after++ // the racer after the commit, seen by the read-back or the move's own check
 				default:
-					t.Fatalf("%s run %d: %v", op.name, i, err)
+					unexpected = append(unexpected, err.Error())
 				}
 			}
+			t.Logf("%s: %s: %d runs: succeeded, then the racer replaced it %d; the racer after the commit, reported %d; the racer first, refused %d; the racer's content lost %d; unexpected errors %d",
+				re.name, op.name, concurrentRuns, wonOK, after, first, lost, len(unexpected))
+			if lost != 0 || len(unexpected) != 0 {
+				t.Errorf("%s: %s: the racer's content was lost in %d of %d runs; unexpected errors: %v", re.name, op.name, lost, concurrentRuns, unexpected)
+			}
 		}
-		t.Logf("%s: %d runs: succeeded, then the racer replaced it %d; the racer after the commit, reported %d; the racer first, refused %d", op.name, concurrentRuns, wonOK, after, first)
 	}
 }
 
 // TestVerifiedReplaceUnsupported: a filesystem without RENAME_EXCHANGE is
-// refused with bad_request naming it, never replaced unchecked.
+// refused with bad_request naming it, never replaced unchecked: in the
+// helper, and for the gate's conditional replaces.
 func TestVerifiedReplaceUnsupported(t *testing.T) {
 	const old = "approved old\n"
-	e, _ := helperEnv(t)
-	for _, op := range replaceOps(e, old) {
-		for _, errno := range []error{syscall.EINVAL, syscall.ENOSYS} {
-			dst := filepath.Join(e.write, "unsupported")
-			put(t, dst, old)
-			if op.prepare != nil {
-				op.prepare(t, 0)
-			}
-			e.fs.cfg.InjectExchangeFault = func() error { return errno }
-			err := op.run(dst, 0)
-			e.fs.cfg.InjectExchangeFault = nil
-			wantCode(t, err, protocol.CodeBadRequest)
-			if !strings.Contains(err.Error(), "RENAME_EXCHANGE") || read(t, dst) != old {
-				t.Fatalf("%s: %v, dst %q", op.name, err, read(t, dst))
+	for _, re := range replaceEnvs(t) {
+		e := re.e
+		for _, op := range replaceOps(e, old) {
+			for _, errno := range []error{syscall.EINVAL, syscall.ENOSYS} {
+				dst := filepath.Join(e.write, "unsupported")
+				put(t, dst, old)
+				if op.prepare != nil {
+					op.prepare(t, 0)
+				}
+				e.fs.cfg.InjectExchangeFault = func() error { return errno }
+				err := op.run(dst, 0)
+				e.fs.cfg.InjectExchangeFault = nil
+				if got := read(t, dst); got != old {
+					t.Fatalf("%s: %s: replaced unchecked (%v): %q", re.name, op.name, err, got)
+				}
+				wantCode(t, err, protocol.CodeBadRequest)
+				if !strings.Contains(err.Error(), "RENAME_EXCHANGE") {
+					t.Fatalf("%s: %s: %v", re.name, op.name, err)
+				}
 			}
 		}
 	}
-	// The gate does not verify replaces: its writes are unchanged.
+	// The gate's unconditional replaces (a write without expected_sha256, a
+	// copy or move with overwrite and no expected destination) keep
+	// rename(2): they replace whatever is there, and need no exchange.
 	g := newEnv(t)
 	g.fs.cfg.InjectExchangeFault = func() error { return syscall.EINVAL }
 	_, err := g.fs.WriteFile(filepath.Join(g.write, "app.yaml"), []byte("gate\n"), WriteOptions{Create: true})
 	must(t, err)
+	src, dst := filepath.Join(g.write, "u-src"), filepath.Join(g.write, "u-dst")
+	put(t, src, "copied\n")
+	put(t, dst, old)
+	_, err = g.fs.Copy(src, dst, true)
+	must(t, err)
+	put(t, dst, old)
+	_, err = g.fs.Move(src, dst, true)
+	must(t, err)
+	if got := read(t, dst); got != "copied\n" {
+		t.Fatalf("unconditional gate replaces: dst %q", got)
+	}
 }
 
 // TestBackupHandedTheHash: the backup hook gets the hash fsx computed of

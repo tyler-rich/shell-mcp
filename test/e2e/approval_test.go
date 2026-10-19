@@ -315,6 +315,70 @@ func TestApprovalWebFlow(t *testing.T) {
 		findJournal(t, "shell-mcp-gate", since, `"principal":"`+opsWho+`"`, `"op":"write_file"`, `"expect_absent":true`, q, `"outcome":"ok"`)
 	})
 
+	// What an approval binds of the destination (expected_sha256 for a
+	// write; expected_destination_sha256, P-9, for a copy or move with
+	// overwrite) changed out of band after approval: the re-call's fresh
+	// preview refuses it (approval_invalid) before any operation is sent,
+	// and the change survives. A change between that preview and the
+	// commit is the gate's own exists (verified replace), which the unit
+	// tests cover at the commit itself (fsx TestVerifiedReplaceCommitWindow,
+	// ops TestGateVerifiedReplaceCommitWindow).
+	boundCases := []struct {
+		tool, op string
+		args     func(src, dst string) map[string]any
+	}{
+		{"shell_write_file", "write_file", func(_, dst string) map[string]any { return map[string]any{"path": dst, "content": "new\n"} }},
+		{"shell_copy_path", "copy", func(src, dst string) map[string]any {
+			return map[string]any{"source": src, "destination": dst, "overwrite": true}
+		}},
+		{"shell_move_path", "move", func(src, dst string) map[string]any {
+			return map[string]any{"source": src, "destination": dst, "overwrite": true}
+		}},
+	}
+	t.Run("changed destination refused", func(t *testing.T) {
+		for _, c := range boundCases {
+			t.Run(c.op, func(t *testing.T) {
+				src, dst := opsWork+"/bound-"+c.op+".src", opsWork+"/bound-"+c.op+".txt"
+				opOK(t, "shell_write_file", map[string]any{"path": src, "content": "new\n"})
+				opOK(t, "shell_write_file", map[string]any{"path": dst, "content": "approved old\n"})
+				a := c.args(src, dst)
+				id := pendingID(t, srv.callTool(t, c.tool, a))
+				srv.decide(t, h, id, "approve")
+				opOK(t, "shell_write_file", map[string]any{"path": dst, "content": "changed out of band\n"})
+				since := time.Now()
+				refusal(t, srv.callTool(t, c.tool, withApproval(a, id)), "approval_invalid", "changed since approval")
+				fileIs(t, dst, "changed out of band\n")
+				fileIs(t, src, "new\n")
+				time.Sleep(time.Second)
+				for _, j := range journal(t, "shell-mcp-gate", since) {
+					if strings.Contains(j.Message, `"principal":"`+opsWho+`"`) && strings.Contains(j.Message, `"op":"`+c.op+`"`) {
+						t.Fatalf("a %s was sent after the destination changed: %s", c.op, j.Message)
+					}
+				}
+			})
+		}
+	})
+
+	// An approved copy or move over a file is sent bound to the destination
+	// the approver saw, and the real gate, under its Landlock sandbox,
+	// commits it as a verified replace (RENAME_EXCHANGE, then the check).
+	t.Run("an approved overwrite commits bound to the destination", func(t *testing.T) {
+		for _, c := range boundCases[1:] {
+			t.Run(c.op, func(t *testing.T) {
+				src, dst := opsWork+"/bound-ok-"+c.op+".src", opsWork+"/bound-ok-"+c.op+".txt"
+				opOK(t, "shell_write_file", map[string]any{"path": src, "content": "new\n"})
+				opOK(t, "shell_write_file", map[string]any{"path": dst, "content": "approved old\n"})
+				a := c.args(src, dst)
+				id := pendingID(t, srv.callTool(t, c.tool, a))
+				srv.decide(t, h, id, "approve")
+				since := time.Now()
+				okDataAs(t, srv.callTool(t, c.tool, withApproval(a, id)), opsWho)
+				fileIs(t, dst, "new\n")
+				findJournal(t, "shell-mcp-gate", since, `"principal":"`+opsWho+`"`, `"op":"`+c.op+`"`, `"overwrite":true`, dst, `"outcome":"ok"`)
+			})
+		}
+	})
+
 	t.Run("a restart between approval and re-call invalidates it", func(t *testing.T) {
 		a := map[string]any{"path": p, "content": "v5\n"}
 		id := pendingID(t, srv.call(t, a))

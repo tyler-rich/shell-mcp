@@ -633,10 +633,13 @@ func TestApprovalPreviews(t *testing.T) {
 			"current.state": "absent", "new.bytes": "12", "new.lines": "1", "lines_delta": "1"}},
 		{"shell_write_file", writeArgs, map[string]gateReply{"read_file": {data: `{"path":"/srv/app/config/app.yaml","size":11,"sha256":"` + shaOld + `","binary":true,"offset":0,"truncated":false}`}},
 			"stat,read_file", map[string]string{"current.state": "file", "current.sha256": shaOld, "current.lines": "null", "lines_delta": "null"}},
-		{"shell_copy_path", operatorCallArgs["shell_copy_path"], map[string]gateReply{}, "stat,stat", map[string]string{
-			"source.state": "present", "source.type": "file", "source.mode": "0640", "source.size": "11", "destination.state": "present"}},
-		{"shell_move_path", operatorCallArgs["shell_move_path"], map[string]gateReply{}, "stat,stat", map[string]string{
-			"source.state": "present", "destination.state": "present"}},
+		{"shell_copy_path", withOverwrite(operatorCallArgs["shell_copy_path"]), map[string]gateReply{}, "stat,stat,read_file", map[string]string{
+			"source.state": "present", "source.type": "file", "source.mode": "0640", "source.size": "11",
+			"destination.state": "file", "destination.sha256": shaOld, "overwrite": "true"}},
+		{"shell_move_path", withOverwrite(operatorCallArgs["shell_move_path"]), map[string]gateReply{}, "stat,stat,read_file", map[string]string{
+			"source.state": "present", "destination.state": "file", "destination.sha256": shaOld}},
+		{"shell_copy_path", operatorCallArgs["shell_copy_path"], map[string]gateReply{"stat": {code: "not_found", msg: "no such file"}}, "stat,stat", map[string]string{
+			"source.state": "absent", "destination.state": "absent", "overwrite": "false"}},
 		{"shell_make_directory", operatorCallArgs["shell_make_directory"], map[string]gateReply{"stat": {code: "not_found", msg: "no such file"}}, "stat",
 			map[string]string{"path.state": "absent"}},
 		{"shell_set_permissions", operatorCallArgs["shell_set_permissions"], map[string]gateReply{"stat": {data: fakeDirStat}}, "stat",
