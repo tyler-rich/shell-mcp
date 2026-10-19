@@ -120,11 +120,12 @@ func (s *server) dispatch() *protocol.Response {
 	case err == nil:
 		// Retention only once the operation succeeded (handoff X-8).
 		s.store.pruneAfter(s.backupIDs)
-	case !s.committed:
-		// It failed before changing anything: its backups hold nothing that
-		// was lost, and must not fill the store.
+	case !s.committed && provablyUnchanged(err):
+		// It failed before changing anything (fsx says so positively): its
+		// backups hold nothing that was lost, and must not fill the store.
+		// Any other failure keeps them.
 		s.store.discard(s.backupIDs)
-		s.backupIDs = nil
+		s.discarded, s.backupIDs = s.backupIDs, nil
 	}
 	return s.result(data, warnings, err)
 }
@@ -188,4 +189,11 @@ func (s *server) errResp(err error) *protocol.Response {
 		code, msg = protocol.CodeExecFailed, "command could not be started"
 	}
 	return failure(code, msg)
+}
+
+// provablyUnchanged reports fsx's positive signal that a failed operation
+// changed nothing (fsx.Error.Unchanged); an unknown state is not unchanged.
+func provablyUnchanged(err error) bool {
+	var fe *fsx.Error
+	return errors.As(err, &fe) && fe.Unchanged
 }

@@ -43,10 +43,10 @@ func (f *FS) linkNoReplace(dir *os.Root, tmp, name string) *Error {
 	case err == nil:
 		return nil
 	case errors.Is(err, syscall.EEXIST):
-		return errf(protocol.CodeExists, "destination exists")
+		return unchanged(errf(protocol.CodeExists, "destination exists"))
 	case errors.Is(err, syscall.EPERM), errors.Is(err, syscall.EOPNOTSUPP), errors.Is(err, syscall.ENOSYS):
-		return errf(protocol.CodeBadRequest, "the filesystem refused the hard link that commits a create-only write "+
-			"(it may not support hard links), so an existing destination could not be refused atomically; nothing was written")
+		return unchanged(errf(protocol.CodeBadRequest, "the filesystem refused the hard link that commits a create-only write "+
+			"(it may not support hard links), so an existing destination could not be refused atomically; nothing was written"))
 	}
 	return mapErr(err)
 }
@@ -69,10 +69,10 @@ func (f *FS) renameNoReplace(srcDir *os.Root, srcName string, dstDir *os.Root, d
 	case err == nil:
 		return nil
 	case errors.Is(err, syscall.EEXIST):
-		return errf(protocol.CodeExists, "destination exists")
+		return unchanged(errf(protocol.CodeExists, "destination exists"))
 	case errors.Is(err, syscall.EINVAL), errors.Is(err, syscall.ENOSYS):
-		return errf(protocol.CodeBadRequest, "the filesystem does not support RENAME_NOREPLACE, which a move without "+
-			"overwrite needs to refuse an existing destination atomically; nothing was moved")
+		return unchanged(errf(protocol.CodeBadRequest, "the filesystem does not support RENAME_NOREPLACE, which a move without "+
+			"overwrite needs to refuse an existing destination atomically; nothing was moved"))
 	}
 	return mapErr(err)
 }
@@ -114,10 +114,10 @@ func (f *FS) exchangeVerified(srcDir *os.Root, srcName string, dstDir *os.Root, 
 	switch {
 	case err == nil:
 	case errors.Is(err, syscall.ENOENT):
-		return errf(protocol.CodeNotFound, "the destination disappeared before the commit; nothing was replaced")
+		return unchanged(errf(protocol.CodeNotFound, "the destination disappeared before the commit; nothing was replaced"))
 	case errors.Is(err, syscall.EINVAL), errors.Is(err, syscall.ENOSYS):
-		return errf(protocol.CodeBadRequest, "the filesystem does not support RENAME_EXCHANGE, which replacing a file as root needs "+
-			"to refuse a destination that changed after it was checked; nothing was replaced")
+		return unchanged(errf(protocol.CodeBadRequest, "the filesystem does not support RENAME_EXCHANGE, which replacing a file as root needs "+
+			"to refuse a destination that changed after it was checked; nothing was replaced"))
 	default:
 		return mapErr(err)
 	}
@@ -128,7 +128,7 @@ func (f *FS) exchangeVerified(srcDir *os.Root, srcName string, dstDir *os.Root, 
 			return errf(protocol.CodeInternal, "the destination changed after it was checked, and could not be put back: the new file is at the "+
 				"destination and the other one is under the name %q beside the source", srcName)
 		}
-		return errf(protocol.CodeExists, "the destination changed after it was checked; it was not replaced, and nothing was changed")
+		return unchanged(errf(protocol.CodeExists, "the destination changed after it was checked; it was not replaced, and nothing was changed"))
 	}
 	f.commit()
 	if err := srcDir.Remove(srcName); err != nil {

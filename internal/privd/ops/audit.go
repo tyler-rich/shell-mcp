@@ -112,18 +112,21 @@ func (s *server) recordChange(p string, before fsx.Meta) {
 }
 
 type auditLine struct {
-	ID         string         `json:"id"`
-	Ceiling    string         `json:"ceiling"`
-	PeerUID    *uint32        `json:"peer_uid"`
-	PeerPID    *int32         `json:"peer_pid"`
-	Op         string         `json:"op"`
-	Args       map[string]any `json:"args"`
-	BackupIDs  []string       `json:"backup_ids"`
-	Changed    []auditChange  `json:"changed,omitempty"`
-	Outcome    string         `json:"outcome"`
-	Check      string         `json:"check,omitempty"`
-	Detail     string         `json:"detail,omitempty"`
-	DurationMS int64          `json:"duration_ms"`
+	ID        string         `json:"id"`
+	Ceiling   string         `json:"ceiling"`
+	PeerUID   *uint32        `json:"peer_uid"`
+	PeerPID   *int32         `json:"peer_pid"`
+	Op        string         `json:"op"`
+	Args      map[string]any `json:"args"`
+	BackupIDs []string       `json:"backup_ids"`
+	// BackupIDsDiscarded are backups written and removed again: the operation
+	// failed provably unchanged.
+	BackupIDsDiscarded []string      `json:"backup_ids_discarded,omitempty"`
+	Changed            []auditChange `json:"changed,omitempty"`
+	Outcome            string        `json:"outcome"`
+	Check              string        `json:"check,omitempty"`
+	Detail             string        `json:"detail,omitempty"`
+	DurationMS         int64         `json:"duration_ms"`
 }
 
 func (s *server) writeAudit(pri int, l *auditLine) {
@@ -168,7 +171,7 @@ func (s *server) auditRefusal(err error, code string) {
 // a refused operation.
 func (s *server) auditRequest(resp *protocol.Response) {
 	uid, pid := s.cred.UID, s.cred.PID
-	l := &auditLine{PeerUID: &uid, PeerPID: &pid, Outcome: "ok", BackupIDs: s.ids(), Changed: s.changed}
+	l := &auditLine{PeerUID: &uid, PeerPID: &pid, Outcome: "ok", BackupIDs: s.ids(), BackupIDsDiscarded: s.discarded, Changed: s.changed}
 	if s.req != nil {
 		l.ID, l.Ceiling, l.Op, l.Args = s.req.ID, s.req.Ceiling, auditText(s.req.Op), sanitizeArgs(s.req.Args)
 	}

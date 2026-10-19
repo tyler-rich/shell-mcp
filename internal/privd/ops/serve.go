@@ -161,6 +161,9 @@ type server struct {
 	// committed reports that the request changed the filesystem (fsx's
 	// OnCommit): a failed request that did not keeps no backup.
 	committed bool
+	// discarded are the backups removed again because the request failed
+	// provably unchanged (the audit line records them).
+	discarded []string
 	// changed are the entries chmod or chown changed, with their old
 	// values, for the audit line.
 	changed []auditChange

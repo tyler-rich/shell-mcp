@@ -111,7 +111,7 @@ func (f *FS) backupFile(l *loc, sha string, hashed fs.FileInfo) (fs.FileInfo, er
 		return nil, errf(protocol.CodeBackupFailed, "only regular files can be backed up; nothing was changed")
 	}
 	if hashed != nil && !sameVersion(hashed, info) {
-		return nil, errf(protocol.CodeBackupFailed, "the file changed while it was being backed up; nothing was changed")
+		return nil, unchanged(errf(protocol.CodeBackupFailed, "the file changed while it was being backed up; nothing was changed"))
 	}
 	if err := f.cfg.Backup(&BackupSource{Path: l.p, Kind: BackupFile, Info: info, File: file, SHA256: sha}); err != nil {
 		return nil, backupErr(err)
@@ -157,7 +157,7 @@ func sameVersion(a, b fs.FileInfo) bool {
 func unchangedSince(dir *os.Root, name string, backedUp fs.FileInfo) *Error {
 	cur, err := dir.Lstat(name)
 	if err != nil || !os.SameFile(cur, backedUp) || cur.Size() != backedUp.Size() || !cur.ModTime().Equal(backedUp.ModTime()) {
-		return errf(protocol.CodeBackupFailed, "the file changed while it was being backed up; nothing was changed")
+		return unchanged(errf(protocol.CodeBackupFailed, "the file changed while it was being backed up; nothing was changed"))
 	}
 	return nil
 }
@@ -286,4 +286,11 @@ func (f *FS) commit() {
 	if f.cfg.OnCommit != nil {
 		f.cfg.OnCommit()
 	}
+}
+
+// unchanged marks e as a refusal made before any mutating system call of
+// the operation, or after undoing it (Error.Unchanged).
+func unchanged(e *Error) *Error {
+	e.Unchanged = true
+	return e
 }
