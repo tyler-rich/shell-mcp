@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -177,6 +178,53 @@ func TestCheckPolicyProbesNoReplace(t *testing.T) {
 	}
 	probeNoReplace = func(string) error { return errors.New("permission denied") }
 	if out := run(); !strings.Contains(out, "WARN paths.write "+w1+": could not probe RENAME_NOREPLACE") {
+		t.Fatalf("check-policy:\n%s", out)
+	}
+}
+
+// TestCheckPolicyProbesExchange: check-policy probes each write root's
+// filesystem for RENAME_EXCHANGE, which a write with expected_sha256 and a
+// copy or move with a bound destination need (verified replaces, POLICY
+// §3), and warns, naming the root, where it is missing or could not be
+// probed.
+func TestCheckPolicyProbesExchange(t *testing.T) {
+	d := gatetest.SecureDir(t)
+	w1, w2 := filepath.Join(d, "srv", "one"), filepath.Join(d, "srv", "two")
+	gatetest.Mkdir(t, w1, 0o755)
+	gatetest.Mkdir(t, w2, 0o755)
+	gatetest.Mkdir(t, filepath.Join(d, "home"), 0o755)
+	p := filepath.Join(d, "etc", "policy.yaml")
+	gatetest.WriteFile(t, p, "version: 1\nmax_tier: destructive\nsandbox:\n  landlock: best-effort\npaths:\n  write: ["+w1+", "+w2+"]\n", 0o644)
+	run := func() string {
+		var out, errb bytes.Buffer
+		checkPolicyWith([]string{"--policy", p}, &out, &errb, gatetest.Trust(), filepath.Join(d, "home"))
+		return out.String()
+	}
+	// The real probe, on the test's own filesystem, leaving nothing behind.
+	if out := run(); !strings.Contains(out, "ok   paths.write "+w1+": RENAME_EXCHANGE supported") ||
+		!strings.Contains(out, "ok   paths.write "+w2+": RENAME_EXCHANGE supported") {
+		t.Fatalf("check-policy:\n%s", out)
+	}
+	for _, w := range []string{w1, w2} {
+		if ents, err := os.ReadDir(w); err != nil || len(ents) != 0 {
+			t.Fatalf("the probes left %v in %s (%v)", ents, w, err)
+		}
+	}
+	defer func(f func(string) error) { probeExchange = f }(probeExchange)
+	probeExchange = func(root string) error {
+		if root == w2 {
+			return fsx.ErrExchangeUnsupported
+		}
+		return nil
+	}
+	out := run()
+	if !strings.Contains(out, "WARN paths.write "+w2+": the filesystem does not support RENAME_EXCHANGE") ||
+		strings.Contains(out, "WARN paths.write "+w1) || !strings.Contains(out, "expected_sha256") {
+		t.Fatalf("check-policy:\n%s", out)
+	}
+	probeExchange = func(string) error { return errors.New("permission denied") }
+	if out := run(); !strings.Contains(out, "WARN paths.write "+w1+": could not probe RENAME_EXCHANGE") ||
+		!strings.Contains(out, "WARN paths.write "+w2+": could not probe RENAME_EXCHANGE") {
 		t.Fatalf("check-policy:\n%s", out)
 	}
 }

@@ -156,9 +156,11 @@ func (d *Deps) writePreview(ctx context.Context, in *writeIn, target string) (*p
 	return acc.result(value, f.SHA256)
 }
 
-// srcDstPreview: the stat of the source and of the destination (each
-// possibly absent).
-func (d *Deps) srcDstPreview(ctx context.Context, in srcDstIn, target string) (*preview, *envelope.Error) {
+// srcDstPreview: the stat of the source (possibly absent), overwrite, and
+// the destination's state: absent, or a regular file with its content hash
+// (P-9), which the re-call passes on (destPrecondition). A destination
+// that would not be replaced refuses the preview (refuseDestination).
+func (d *Deps) srcDstPreview(ctx context.Context, in *srcDstIn, target string, isCopy bool) (*preview, *envelope.Error) {
 	var acc policyAcc
 	src, e := d.statPreview(ctx, target, in.Source, &acc)
 	if e != nil {
@@ -168,7 +170,49 @@ func (d *Deps) srcDstPreview(ctx context.Context, in srcDstIn, target string) (*
 	if e != nil {
 		return nil, e
 	}
-	return acc.result(map[string]any{"source": entryPreview(src), "destination": entryPreview(dst)}, "")
+	value := map[string]any{"source": entryPreview(src), "overwrite": in.Overwrite}
+	var cur map[string]any
+	var f *FileContent
+	if dst != nil {
+		srcType := ""
+		if src != nil {
+			srcType = src.Type
+		}
+		if re := refuseDestination(dst, srcType, isCopy, in.Overwrite); re != nil {
+			return nil, re
+		}
+		if cur, f, e = d.boundFilePreview(ctx, target, protocol.OpReadFile, "gate", dst, &acc); e != nil {
+			return nil, e
+		}
+		delete(cur, "lines")
+	}
+	if cur == nil {
+		value["destination"] = map[string]any{"state": "absent"}
+		return acc.absentResult(value)
+	}
+	value["destination"] = cur
+	return acc.result(value, f.SHA256)
+}
+
+// refuseDestination refuses, at the preview of a copy or move (the gate's
+// or the helper's), a destination that would not be replaced: a symlink,
+// a directory (or any destination of a directory's move), anything but a
+// regular file, or a file without overwrite. srcType is the source's type
+// ("" when it is absent).
+func refuseDestination(dst *Entry, srcType string, isCopy, overwrite bool) *envelope.Error {
+	switch {
+	case dst.Type == "symlink":
+		return envelope.Errorf(protocol.CodePathDenied, "the destination is a symlink, which is never followed or replaced; nothing was requested")
+	case dst.Type == "dir" && isCopy:
+		return envelope.Errorf(protocol.CodeIsADirectory, "the destination is a directory; nothing was requested")
+	case dst.Type == "dir" || srcType == "dir":
+		return envelope.Errorf(protocol.CodeExists, "the destination exists, and directories are never replaced; nothing was requested")
+	case dst.Type != "file":
+		return envelope.Errorf(protocol.CodeBadRequest, "the destination is not a regular file; nothing was requested")
+	case !overwrite:
+		return envelope.Errorf(protocol.CodeExists, "the destination exists (pass overwrite to replace it); nothing was requested")
+	}
+	return nil
 }
 
 // pathPreview: the stat of one path (possibly absent).

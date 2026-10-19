@@ -92,7 +92,9 @@ func countLines(b []byte) int {
 // service user may, its owner and group. Without overwrite the commit is a
 // hard link of the temp file to the target instead of the rename: link(2)
 // fails with EEXIST if the target exists at that moment, so a file that
-// appeared after the checks is refused, never replaced.
+// appeared after the checks is refused, never replaced. A replace bound to
+// the content checked (expected), and every replace in the helper, is an
+// exchange checked afterwards instead of the rename (exchangeVerified).
 // atomicOpts are writeAtomic's options.
 type atomicOpts struct {
 	mode      *os.FileMode // requested mode (nil: keep, or newMode for a new file)
@@ -254,8 +256,9 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 		f.cfg.InjectBeforeCommit()
 	}
 	switch {
-	case overwrite && exists && f.cfg.VerifyReplaced:
-		// The helper: an exchange checked afterwards, so a file that
+	case overwrite && exists && (f.cfg.VerifyReplaced || expected != ""):
+		// The helper, and in the gate a replace bound to the content it
+		// checked (expected): an exchange checked afterwards, so a file that
 		// replaced or rewrote the destination since it was checked is
 		// exchanged back, never lost (exchangeVerified).
 		if e := f.exchangeVerified(l.parent, tmp, l.parent, l.base, replaced); e != nil {
@@ -264,6 +267,7 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 		committed = true
 		f.commit()
 	case overwrite && (exists || !f.cfg.VerifyReplaced):
+		// The gate's unconditional replace: rename(2) over whatever is there.
 		// (In the helper, a file that was absent when checked is committed
 		// create-only below: it replaces only what it checked.)
 		if err = l.parent.Rename(tmp, l.base); err != nil {
@@ -666,17 +670,20 @@ func (f *FS) MoveExpecting(src, dst string, overwrite bool, expected string) (Mo
 			if replaced, err = f.backupFile(ld, sha, replaced); err != nil {
 				return res, err
 			}
-		}
-		if e := unchangedSince(ld.parent, ld.base, replaced); e != nil {
-			return res, e
+			if e := unchangedSince(ld.parent, ld.base, replaced); e != nil {
+				return res, e
+			}
 		}
 	}
 	if f.cfg.InjectBeforeCommit != nil {
 		f.cfg.InjectBeforeCommit()
 	}
 	switch {
-	case res.Replaced && f.cfg.VerifyReplaced:
-		// The helper: an exchange checked afterwards (exchangeVerified).
+	case res.Replaced && (f.cfg.VerifyReplaced || expected != ""):
+		// The helper, and in the gate a replace bound to the content it
+		// hashed (expected): an exchange checked afterwards
+		// (exchangeVerified), which also refuses a destination changed
+		// since it was hashed.
 		if e := f.exchangeVerified(ls.parent, ls.base, ld.parent, ld.base, replaced); e != nil {
 			return res, e
 		}

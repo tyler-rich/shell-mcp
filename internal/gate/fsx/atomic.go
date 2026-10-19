@@ -81,13 +81,16 @@ func singleComponent(name string) bool {
 	return name != "" && name != "." && name != ".." && !strings.Contains(name, "/")
 }
 
-// Verified replaces (Config.VerifyReplaced, the helper only). Linux has no
-// conditional rename-over: rename(2) replaces whatever is under the name at
-// that moment, so a destination replaced or rewritten after the last check
-// would be lost, and the backup would not hold what was replaced. Instead
+// Verified replaces: every replace in the helper (Config.VerifyReplaced),
+// and in the gate every replace bound to the destination's content (a
+// write with expected_sha256, a copy or move with
+// expected_destination_sha256). Linux has no conditional rename-over:
+// rename(2) replaces whatever is under the name at that moment, so a
+// destination replaced or rewritten after the last check would be lost
+// (and in the helper the backup would not hold what was replaced). Instead
 // the commit exchanges the new file and the destination (renameat2 with
 // RENAME_EXCHANGE, atomic), then checks the inode it took out: it must be
-// the one that was checked and backed up (same inode, size and mtime);
+// the one that was checked (and backed up) (same inode, size and mtime);
 // anything else is exchanged back and the operation refused with exists.
 // Only then is the old inode's name removed. What remains is POLICY §3's
 // case for a delete: a process that holds the old file open for writing
@@ -116,7 +119,7 @@ func (f *FS) exchangeVerified(srcDir *os.Root, srcName string, dstDir *os.Root, 
 	case errors.Is(err, syscall.ENOENT):
 		return unchanged(errf(protocol.CodeNotFound, "the destination disappeared before the commit; nothing was replaced"))
 	case errors.Is(err, syscall.EINVAL), errors.Is(err, syscall.ENOSYS):
-		return unchanged(errf(protocol.CodeBadRequest, "the filesystem does not support RENAME_EXCHANGE, which replacing a file as root needs "+
+		return unchanged(errf(protocol.CodeBadRequest, "the filesystem does not support RENAME_EXCHANGE, which a verified replace needs "+
 			"to refuse a destination that changed after it was checked; nothing was replaced"))
 	default:
 		return mapErr(err)
@@ -184,7 +187,7 @@ func withFD(f *os.File, fn func(fd int) error) error {
 var ErrExchangeUnsupported = errors.New("the filesystem does not support RENAME_EXCHANGE")
 
 // ProbeExchange reports whether dir's filesystem supports RENAME_EXCHANGE,
-// which the helper's replacing commits need (verified replaces): it creates
+// which verified replaces need (the helper's, and the gate's bound ones): it creates
 // two files inside dir, exchanges them and removes both, as ProbeNoReplace
 // does for RENAME_NOREPLACE.
 func ProbeExchange(dir string) error {
