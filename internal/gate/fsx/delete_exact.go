@@ -542,8 +542,8 @@ func (f *FS) deleteExact(p string, recursive bool, binding *string, expected str
 	}
 	f.step(DeleteStepAfterCompare, p)
 	if f.cfg.Backup != nil {
-		if err := f.backupPlan(pl); err != nil {
-			return res, unchangedErr(err)
+		if berr := f.backupPlan(pl); berr != nil {
+			return res, unchangedErr(berr)
 		}
 		f.step(DeleteStepAfterBackup, p)
 	}

@@ -375,15 +375,15 @@ func backupSize(src *fsx.BackupSource) (int64, error) {
 	cw := &countingWriter{w: io.Discard, limit: maxBackupBytes + 1}
 	tw := tar.NewWriter(cw)
 	err := src.List(func(rel string, fi fs.FileInfo) error {
-		hdr, err := treeHeader(rel, fi)
-		if err != nil {
-			return err
+		hdr, herr := treeHeader(rel, fi)
+		if herr != nil {
+			return herr
 		}
-		if err := tw.WriteHeader(hdr); err != nil {
-			return err
+		if werr := tw.WriteHeader(hdr); werr != nil {
+			return werr
 		}
-		_, err = io.CopyN(tw, zeros{}, hdr.Size)
-		return err
+		_, cerr := io.CopyN(tw, zeros{}, hdr.Size)
+		return cerr
 	})
 	if err == nil {
 		err = tw.Close()

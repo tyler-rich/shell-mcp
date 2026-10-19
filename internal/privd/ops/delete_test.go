@@ -76,7 +76,7 @@ func delTree(t *testing.T, dir string) []string {
 	t.Helper()
 	gatetest.Mkdir(t, dir, 0o755)
 	gatetest.Mkdir(t, filepath.Join(dir, "b", "d"), 0o700)
-	if err := os.Chmod(filepath.Join(dir, "b"), 0o750); err != nil {
+	if err := os.Chmod(filepath.Join(dir, "b"), 0o750); err != nil { //nolint:gosec // G302: a fixture directory mode
 		t.Fatal(err)
 	}
 	gatetest.Mkdir(t, filepath.Join(dir, "f"), 0o755)
@@ -389,11 +389,12 @@ func TestPrivDeleteBackupRestorable(t *testing.T) {
 // cap, or would exceed 64 MiB, is refused at the preview (no approval is
 // requested) and at the operation, and changes nothing.
 func TestPrivDeleteStoreCap(t *testing.T) {
-	f := newFixture(t, storeCap(minStore))
+	const capacity = minStore + 1<<20
+	f := newFixture(t, storeCap(capacity))
 	dir := filepath.Join(f.write, "tree")
 	paths := delTree(t, dir)
 	pv := f.previewDelete(dir, true) // fits now
-	f.junk(minStore - 2000)
+	f.junk(capacity - 2000)
 	before := f.storeUse()
 	r := f.serve("priv_delete_preview", m{"path": dir, "recursive": true})
 	if r.OK || r.Error.Code != "backup_failed" || !strings.Contains(r.Error.Message, "full") {
