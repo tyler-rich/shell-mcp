@@ -179,8 +179,12 @@ func polkitWith(args []string, stdout, stderr io.Writer, trust policy.Trust) int
 // checkPolicyWith is checkPolicy with the trust set and the service home as
 // parameters; only tests pass anything but policy.RootTrust() and
 // ops.ServiceHome().
-// probeNoReplace is fsx.ProbeNoReplace; tests replace it.
-var probeNoReplace = fsx.ProbeNoReplace
+// probeNoReplace and probeExchange are fsx's rename-flag probes; tests
+// replace them.
+var (
+	probeNoReplace = fsx.ProbeNoReplace
+	probeExchange  = fsx.ProbeExchange
+)
 
 func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust, home string) int {
 	fs := flag.NewFlagSet("check-policy", flag.ContinueOnError)
@@ -241,17 +245,28 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust
 		for _, w := range p.Warnings {
 			pr("WARN %s", w)
 		}
-		// delete, and move without overwrite, need RENAME_NOREPLACE and are
-		// refused on a filesystem without it (POLICY §3): probe each write
-		// root (a file created, renamed and removed inside it).
+		// delete, and move without overwrite, need RENAME_NOREPLACE, and a
+		// write with expected_sha256 or a copy or move with a bound
+		// destination RENAME_EXCHANGE (verified replaces); each is refused
+		// on a filesystem without its flag (POLICY §3): probe each write
+		// root for both (files created, renamed and removed inside it).
 		for _, root := range p.Paths.Write {
-			switch err := probeNoReplace(root); {
-			case err == nil:
-				pr("ok   paths.write %s: RENAME_NOREPLACE supported", root)
-			case errors.Is(err, fsx.ErrNoReplaceUnsupported):
-				pr("WARN paths.write %s: the filesystem does not support RENAME_NOREPLACE; delete, and move without overwrite, are refused under this root", root)
-			default:
-				pr("WARN paths.write %s: could not probe RENAME_NOREPLACE (%v); delete, and move without overwrite, need it", root, err)
+			for _, pb := range []struct {
+				flag, needs string
+				probe       func(string) error
+				unsupported error
+			}{
+				{"RENAME_NOREPLACE", "delete, and move without overwrite,", probeNoReplace, fsx.ErrNoReplaceUnsupported},
+				{"RENAME_EXCHANGE", "write_file with expected_sha256, and copy and move with expected_destination_sha256,", probeExchange, fsx.ErrExchangeUnsupported},
+			} {
+				switch err := pb.probe(root); {
+				case err == nil:
+					pr("ok   paths.write %s: %s supported", root, pb.flag)
+				case errors.Is(err, pb.unsupported):
+					pr("WARN paths.write %s: the filesystem does not support %s; %s are refused under this root", root, pb.flag, pb.needs)
+				default:
+					pr("WARN paths.write %s: could not probe %s (%v); %s need it", root, pb.flag, err, pb.needs)
+				}
 			}
 		}
 	}
