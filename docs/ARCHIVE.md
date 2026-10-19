@@ -2307,7 +2307,7 @@ Every other write in fsx and the helper opens with `O_CREAT|O_EXCL` (temporary f
 - Masking in the helper's handlers instead of fsx: copy has no mode input, and fsx is the one place every new inode passes.
 - Read-back in the gate's chmod: beyond item 4 (N-4).
 
-**Deferred / follow-ups:** N-1 to N-4 above. The restore result's `mode` (S4c-5, or a maintainer decision). Recursive chown and chmod (S4c-3) apply the link-count rule to every entry.
+**Deferred / follow-ups:** N-1 to N-4 above, and the restore result's `mode` (R-1); the maintainer's decisions on each are below. Recursive chown and chmod (S4c-3) apply the link-count rule to every entry.
 
 **Versions:**
 - **Go:** 1.27.2, the newest stable per go.dev (`go.dev/dl/?mode=json`, read 2026-10-18).
@@ -2315,3 +2315,14 @@ Every other write in fsx and the helper opens with `O_CREAT|O_EXCL` (temporary f
 - **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+
+**2026-10-18 — Maintainer decisions on the S4c-0 findings (PR #28 follow-up).** Recorded in the handoff's §2.1 and in the target sessions' entries in §5. Docs only.
+- **First CI run on the PR (`a65a96f`): green.** All ten checks passed. In e2e-host, 150 tests passed and none failed or skipped, among them the new `TestHelperHardLinkChmodChown` and `TestHelperModesMaxClamp`.
+- **N-1 (move in, change, move out): must fix before exposure, in S4c-3.**
+  - Recommended fix to evaluate there: `priv_chmod` and `priv_chown`, including every entry of a recursive walk, are refused unless every directory from `/` to the target is root-owned and neither group- nor world-writable. This is checked by descriptor along the walk, with no separate path lookups. `check-policy` and a helper self-check warn about privileged write roots that fail it.
+  - The alternative: refuse an inode whose owner is not on the `owners` allow-list.
+  - S4c-3 decides between them with the maintainer (a STOP in its entry).
+- **N-2:** decided in S4c-3.
+- **N-3:** documented in PRIVILEGED §6 by S4c-2.
+- **N-4 (the gate's chmod read-back):** a low-priority follow-up, outside S4c.
+- **Restore (R-1):** S4c-5 reports the resulting mode in the preview and in the result, so a narrowing is never silent. Any protocol field for it is pre-approved (handoff P-10).
