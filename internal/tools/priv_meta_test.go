@@ -171,7 +171,7 @@ func TestPrivMetaChangedAfterApproval(t *testing.T) {
 	edits := map[string]func(g *recordingGate, op string){
 		"tree":              func(g *recordingGate, op string) { g.set(op+"_preview", gateReply{data: fakeMetaPreview(shaMeta2)}) },
 		"privileged policy": func(g *recordingGate, _ string) { g.setHelperSHA("beef") },
-		"gate policy":       func(g *recordingGate, _ string) { g.setSHA("cd34") },
+		"gate policy":       func(g *recordingGate, _ string) { g.setSHA("ef56") },
 	}
 	for _, name := range privMetaTools {
 		for what, edit := range edits {

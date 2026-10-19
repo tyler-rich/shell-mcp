@@ -21,7 +21,7 @@ const privMetaDir = "/etc/example-app/e2e-priv-meta"
 
 // mustGateMeta previews op's change through the gate (op + "_preview") and
 // sends op with the preview's hash.
-func mustGateMeta(t *testing.T, op string, args map[string]any, into any) {
+func mustGateMeta(t *testing.T, op string, args map[string]any) {
 	t.Helper()
 	var pv struct {
 		PreviewSHA256 string `json:"preview_sha256"`
@@ -31,7 +31,7 @@ func mustGateMeta(t *testing.T, op string, args map[string]any, into any) {
 	for k, v := range args {
 		a[k] = v
 	}
-	mustGate(t, op, a, into)
+	mustGate(t, op, a, nil)
 }
 
 // asUser runs a fixed command as uid (its own group).
@@ -46,7 +46,7 @@ func asUser(t *testing.T, uid uint32, name string, args ...string) {
 	}
 }
 
-func statOwner(t *testing.T, p string) (os.FileMode, uint32, uint32, syscall.Timespec) {
+func statOwner(t *testing.T, p string) (mode os.FileMode, uid, gid uint32, ctime syscall.Timespec) {
 	t.Helper()
 	fi, err := os.Lstat(p)
 	if err != nil {
@@ -64,7 +64,7 @@ func metaTreeAt(t *testing.T, dir string) []string {
 		t.Fatal(err)
 	}
 	for _, d := range []string{dir, dir + "/sub"} {
-		if err := os.Mkdir(d, 0o755); err != nil {
+		if err := os.Mkdir(d, 0o755); err != nil { //nolint:gosec // G301: a fixture directory, as setup.sh makes them
 			t.Fatal(err)
 		}
 		if err := os.Chmod(d, 0o755); err != nil { //nolint:gosec // G302: a fixture directory
@@ -78,7 +78,7 @@ func metaTreeAt(t *testing.T, dir string) []string {
 
 func TestPrivMetaToolsApproval(t *testing.T) {
 	srv, h := privWriteServer(t)
-	if err := os.MkdirAll(privMetaDir, 0o755); err != nil {
+	if err := os.MkdirAll(privMetaDir, 0o755); err != nil { //nolint:gosec // G301: a fixture directory on a root-only path
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(privMetaDir) })
@@ -180,7 +180,7 @@ func TestPrivMetaMovedInRefused(t *testing.T) {
 	drop := "/etc/example-app/e2e-meta-drop"
 	for _, d := range []string{incoming, drop} {
 		_ = os.RemoveAll(d)
-		if err := os.Mkdir(d, 0o755); err != nil {
+		if err := os.Mkdir(d, 0o755); err != nil { //nolint:gosec // G301: a directory example-app writes, as on a real host
 			t.Fatal(err)
 		}
 		if err := os.Chown(d, int(exampleApp), int(exampleApp)); err != nil {

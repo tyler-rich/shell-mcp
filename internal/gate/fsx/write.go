@@ -778,8 +778,11 @@ func (f *FS) verifyMeta(file *os.File, want Meta) *Error {
 }
 
 // Chmod sets the mode of p under a write root, through a descriptor opened
-// without following a final symlink. A file with more than one link is
-// refused (singleLink).
+// without following a final symlink (the gate's chmod; the helper's is
+// ApplyMeta). A file with setuid, setgid or sticky bits (handoff N-2: chmod
+// could only clear them, and clearing a shared directory's sticky bit or a
+// setgid directory's bit is not harmless), or with more than one link
+// (singleLink), is refused.
 func (f *FS) Chmod(p string, mode os.FileMode) (ChmodResult, error) {
 	if e := checkMode(mode); e != nil {
 		return ChmodResult{}, e
@@ -800,6 +803,9 @@ func (f *FS) Chmod(p string, mode os.FileMode) (ChmodResult, error) {
 	}
 	if !fi.Mode().IsRegular() && !fi.IsDir() {
 		return ChmodResult{}, errf(protocol.CodeBadRequest, "only regular files and directories")
+	}
+	if unixMode(fi)&0o7000 != 0 {
+		return ChmodResult{}, errf(protocol.CodePolicyDenied, "files with setuid, setgid or sticky bits are never changed")
 	}
 	if e := singleLink(p, fi); e != nil {
 		return ChmodResult{}, e

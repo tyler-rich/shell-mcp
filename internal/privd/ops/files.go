@@ -54,55 +54,6 @@ type mkdirArgs struct {
 	Group   string `json:"group"`
 }
 
-type chownArgs struct {
-	Path      string `json:"path"`
-	Owner     string `json:"owner"`
-	Group     string `json:"group"`
-	Recursive bool   `json:"recursive"`
-	// ExpectedPreviewSHA256 is priv_chown_preview's preview_sha256 (P-3).
-	ExpectedPreviewSHA256 string `json:"expected_preview_sha256"`
-}
-
-type chmodArgs struct {
-	Path      string `json:"path"`
-	Mode      string `json:"mode"`
-	Recursive bool   `json:"recursive"`
-	// ExpectedPreviewSHA256 is priv_chmod_preview's preview_sha256 (P-3).
-	ExpectedPreviewSHA256 string `json:"expected_preview_sha256"`
-}
-
-// STUB (S4c-3 failing-tests commit): the previews answer with fsx's stub plan.
-type chownPreviewArgs struct {
-	Path      string `json:"path"`
-	Owner     string `json:"owner"`
-	Group     string `json:"group"`
-	Recursive bool   `json:"recursive"`
-}
-
-type chmodPreviewArgs struct {
-	Path      string `json:"path"`
-	Mode      string `json:"mode"`
-	Recursive bool   `json:"recursive"`
-}
-
-func (s *server) chownPreview(raw jsontext.Value) (data any, warns []string, failure error) {
-	var a chownPreviewArgs
-	if err := decode(raw, &a); err != nil {
-		return nil, nil, err
-	}
-	r, err := s.fs.PreviewMeta(a.Path, fsx.MetaChange{Op: fsx.MetaChown}, a.Recursive, s.p.SHA256)
-	return map[string]any{"path": r.Path, "preview_sha256": r.PreviewSHA256}, nil, err
-}
-
-func (s *server) chmodPreview(raw jsontext.Value) (data any, warns []string, failure error) {
-	var a chmodPreviewArgs
-	if err := decode(raw, &a); err != nil {
-		return nil, nil, err
-	}
-	r, err := s.fs.PreviewMeta(a.Path, fsx.MetaChange{Op: fsx.MetaChmod}, a.Recursive, s.p.SHA256)
-	return map[string]any{"path": r.Path, "preview_sha256": r.PreviewSHA256}, nil, err
-}
-
 type srcDstArgs struct {
 	Source      string `json:"source"`
 	Destination string `json:"destination"`
@@ -321,44 +272,6 @@ func (s *server) mkdir(raw jsontext.Value) (data any, warns []string, failure er
 		return nil, nil, err
 	}
 	return mkdirData{MkdirResult: r, ownerData: s.ownerOf(r.UID, r.GID)}, nil, nil
-}
-
-func (s *server) chown(raw jsontext.Value) (data any, warns []string, failure error) {
-	var a chownArgs
-	if err := decode(raw, &a); err != nil {
-		return nil, nil, err
-	}
-	owner, err := s.owner(a.Owner, a.Group)
-	if err != nil {
-		return nil, nil, err
-	}
-	if owner == nil {
-		return nil, nil, errf(protocol.CodeBadRequest, "owner or group is required")
-	}
-	r, err := s.fs.Chown(a.Path, *owner)
-	if r.Changed {
-		s.recordChange(a.Path, r.Before)
-	}
-	return r, nil, err
-}
-
-func (s *server) chmod(raw jsontext.Value) (data any, warns []string, failure error) {
-	var a chmodArgs
-	if err := decode(raw, &a); err != nil {
-		return nil, nil, err
-	}
-	if a.Mode == "" {
-		return nil, nil, errf(protocol.CodeBadRequest, "mode is required")
-	}
-	mode, err := s.mode(a.Mode)
-	if err != nil {
-		return nil, nil, err
-	}
-	r, err := s.fs.Chmod(a.Path, *mode)
-	if r.Changed {
-		s.recordChange(a.Path, r.Before)
-	}
-	return r, nil, err
 }
 
 func (s *server) copy(raw jsontext.Value) (data any, warns []string, failure error) {

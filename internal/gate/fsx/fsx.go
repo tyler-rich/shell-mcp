@@ -72,12 +72,13 @@ type Config struct {
 	// directory created. The helper sets it to its modes.max (PRIVILEGED
 	// §4); the gate leaves it nil.
 	ModesMax *os.FileMode
-	// VerifyMetadata makes Chmod and Chown re-read the mode, owner and group
-	// through the descriptor they changed; a mismatch is verify_failed. The
-	// helper sets it; the gate does not.
+	// VerifyMetadata makes Chmod re-read the mode, owner and group through
+	// the descriptor it changed; a mismatch is verify_failed. The helper sets
+	// it; the gate does not. (The helper's chown and chmod, ApplyMeta, always
+	// read back.)
 	VerifyMetadata bool
 	// InjectMetadataReadBackFault, when non-nil, transforms what Chmod and
-	// Chown read back before it is compared. Tests only; production code
+	// ApplyMeta read back before it is compared. Tests only; production code
 	// never sets it.
 	InjectMetadataReadBackFault func(Meta) Meta
 	// VerifyReplaced makes every commit that replaces an existing file an

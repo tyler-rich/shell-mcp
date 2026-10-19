@@ -242,9 +242,10 @@ func TestCodesClosedSet(t *testing.T) {
 		t.Fatalf("Codes = %v", Codes)
 	}
 	// PRIVILEGED §6: the core operations, priv_exec, the four package
-	// operations, their three read-tier previews, priv_power, and
-	// priv_backup_check (handoff P-11).
-	if len(PrivOps) != 22 {
+	// operations, their three read-tier previews, priv_power,
+	// priv_backup_check (handoff P-11), and the chown and chmod previews
+	// (P-2b).
+	if len(PrivOps) != 24 {
 		t.Fatalf("PrivOps has %d entries", len(PrivOps))
 	}
 }

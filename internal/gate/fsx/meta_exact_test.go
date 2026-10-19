@@ -131,7 +131,7 @@ func TestPreviewMetaReportsTheTree(t *testing.T) {
 	e := newMetaEnv(t, 50)
 	dir := filepath.Join(e.write, "tree")
 	mkMetaTree(t, e, dir)
-	must(t, os.Chmod(filepath.Join(dir, "a.txt"), 0o700))
+	must(t, os.Chmod(filepath.Join(dir, "a.txt"), 0o700)) //nolint:gosec // G302: a test fixture mode
 	pv, err := e.fs.PreviewMeta(dir, chmodTo(0o700), true, testBind)
 	must(t, err)
 	// 9 entries; a.txt already 0700 and the two symlinks are not changed.
@@ -183,8 +183,8 @@ func TestApplyMetaChangesThePlan(t *testing.T) {
 	dir := filepath.Join(e.write, "tree")
 	paths := mkMetaTree(t, e, dir)
 	outside := filepath.Join(e.outside, "passwd")
-	must(t, os.Chmod(outside, 0o604)) //nolint:gosec // G302: a test fixture mode
-	must(t, os.Chmod(filepath.Join(dir, "a.txt"), 0o700))
+	must(t, os.Chmod(outside, 0o604))                     //nolint:gosec // G302: a test fixture mode
+	must(t, os.Chmod(filepath.Join(dir, "a.txt"), 0o700)) //nolint:gosec // G302: a test fixture mode
 	links := map[string]os.FileMode{}
 	for _, l := range []string{dir + "/out-link", dir + "/b/in-link"} {
 		fi, err := os.Lstat(l)
@@ -197,8 +197,8 @@ func TestApplyMetaChangesThePlan(t *testing.T) {
 		t.Fatalf("result %+v", r)
 	}
 	for _, p := range paths {
-		fi, err := os.Lstat(p)
-		must(t, err)
+		fi, lerr := os.Lstat(p)
+		must(t, lerr)
 		if fi.Mode()&os.ModeSymlink != 0 {
 			if fi.Mode() != links[p] {
 				t.Fatalf("symlink %s changed: %v", p, fi.Mode())
@@ -310,7 +310,7 @@ func TestApplyMetaRefusals(t *testing.T) {
 		},
 		"fifo": func(dir string) { must(t, unix.Mkfifo(filepath.Join(dir, "pipe"), 0o600)) },
 		"socket": func(dir string) {
-			l, err := net.Listen("unix", filepath.Join(dir, "sock"))
+			l, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", filepath.Join(dir, "sock"))
 			must(t, err)
 			t.Cleanup(func() { _ = l.Close() })
 		},
@@ -357,7 +357,7 @@ func TestApplyMetaRefusals(t *testing.T) {
 	// The hash: required, well-formed, and the current one.
 	p := filepath.Join(e.write, "app.yaml")
 	before := statesUnder(t, e.write)
-	for _, h := range []string{"", "xyz", strings.ToUpper(zeroHash[:1]) + zeroHash[1:]} {
+	for _, h := range []string{"", "xyz", "A" + zeroHash[1:]} {
 		_, err := e.fs.ApplyMeta(p, ch, false, testBind, h)
 		wantCode(t, err, protocol.CodeBadRequest)
 	}
@@ -505,15 +505,22 @@ func TestMetaHashCoversEveryEntry(t *testing.T) {
 		"renamed":         func(dir string) { must(t, os.Rename(filepath.Join(dir, "a.txt"), filepath.Join(dir, "z.txt"))) },
 		"moved":           func(dir string) { must(t, os.Rename(filepath.Join(dir, "a.txt"), filepath.Join(dir, "f", "a.txt"))) },
 		"replaced":        func(dir string) { replaceFile(t, staging, filepath.Join(dir, "b", "c.txt"), "cc") },
-		"chmod-ed":        func(dir string) { must(t, os.Chmod(filepath.Join(dir, "b", "d", "e.txt"), 0o640)) },
-		"chmod-ed dir":    func(dir string) { must(t, os.Chmod(filepath.Join(dir, "f"), 0o700)) },
+		"chmod-ed":        func(dir string) { must(t, os.Chmod(filepath.Join(dir, "b", "d", "e.txt"), 0o640)) }, //nolint:gosec // G302: a test fixture mode
+		"chmod-ed dir":    func(dir string) { must(t, os.Chmod(filepath.Join(dir, "f"), 0o700)) },               //nolint:gosec // G302: a test fixture mode
+		// Replaced by a new inode while the old one still exists, so the
+		// inode number differs. On a filesystem without birth times, an inode
+		// number reused by an entry deleted and created again with the same
+		// owner and mode cannot be told apart (the hash has no change time,
+		// D4); only root can do that in the directories the chain rule
+		// accepts.
 		"symlink replaced": func(dir string) {
-			must(t, os.Remove(filepath.Join(dir, "l")))
-			must(t, os.Symlink("b", filepath.Join(dir, "l")))
+			must(t, os.Symlink("b", filepath.Join(staging, "l")))
+			must(t, os.Rename(filepath.Join(staging, "l"), filepath.Join(dir, "l")))
 		},
-		"dir recreated": func(dir string) {
+		"dir replaced": func(dir string) {
+			must(t, os.Mkdir(filepath.Join(staging, "f"), 0o750))
 			must(t, os.Remove(filepath.Join(dir, "f")))
-			must(t, os.Mkdir(filepath.Join(dir, "f"), 0o750))
+			must(t, os.Rename(filepath.Join(staging, "f"), filepath.Join(dir, "f")))
 		},
 	}
 	for name, change := range cases {
@@ -715,13 +722,12 @@ func TestMetaWindowAfterTheRecompute(t *testing.T) {
 		}
 		_, err = e.fs.ApplyMeta(dir, chmodTo(0o700), true, testBind, pv.PreviewSHA256)
 		e.fs.cfg.InjectMetaStep = nil
-		switch {
-		case err == nil:
+		if err == nil {
 			outcomes["completed"]++
 			if i%4 != 0 {
 				t.Fatalf("run %d: completed after change %d", i, i%4)
 			}
-		default:
+		} else {
 			wantCode(t, err, protocol.CodeExists)
 			outcomes["stopped"]++
 		}
@@ -768,10 +774,9 @@ func TestMetaWindowDuringThePass(t *testing.T) {
 		_, err = e.fs.ApplyMeta(dir, chmodTo(0o700), true, testBind, pv.PreviewSHA256)
 		e.fs.cfg.InjectMetaStep = nil
 		key := fmt.Sprintf("step %d kind %d: ", step, kind)
-		switch {
-		case err == nil:
+		if err == nil {
 			outcomes[key+"completed"]++
-		default:
+		} else {
 			var fe *Error
 			if !errors.As(err, &fe) || (fe.Code != protocol.CodeExists && fe.Code != protocol.CodePathDenied) {
 				t.Fatalf("run %d: %v", i, err)

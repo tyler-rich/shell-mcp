@@ -249,11 +249,12 @@ func broadUsers(p *policy.Policy) []string {
 // item that needs review: list B binaries, persistence roots, capabilities
 // added to the core unit, root-equivalent commands, and warnings. The exit
 // code is 1 if serve would refuse the policy.
-// probeNoReplace and probeExchange are fsx's rename-flag probes; tests
-// replace them.
+// probeNoReplace and probeExchange are fsx's rename-flag probes, and
+// checkRootChain its chain rule for a write root; tests may replace them.
 var (
 	probeNoReplace = fsx.ProbeNoReplace
 	probeExchange  = fsx.ProbeExchange
+	checkRootChain = fsx.CheckRootChain
 )
 
 func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int {
@@ -324,6 +325,21 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 			default:
 				pr("WARN privileged write root %s: could not probe %s (%v); %s without it", root, pb.flag, err, pb.needs)
 			}
+		}
+	}
+	// chmod and chown change an entry only when no account but root could
+	// have put it there (PRIVILEGED §6, handoff N-1): every directory from /
+	// to it root's and neither group- nor world-writable. Check each write
+	// root's own path the same way, by descriptor.
+	for _, root := range p.Paths.WriteRoots() {
+		var ce *fsx.ChainError
+		switch err := checkRootChain(root, env.trust.Owns); {
+		case err == nil:
+			pr("ok   privileged write root %s: every directory from / to it is root's and not group- or world-writable", root)
+		case errors.As(err, &ce):
+			pr("WARN privileged write root %s: %v; chmod and chown are refused under it (another account could move files in and out again)", root, ce)
+		default:
+			pr("WARN privileged write root %s: could not check the directories on its path (%v); chmod and chown are refused under it unless they pass", root, err)
 		}
 	}
 	var owners []string

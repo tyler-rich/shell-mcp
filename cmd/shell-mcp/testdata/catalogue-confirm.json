@@ -497,6 +497,26 @@
     "requires_user_interaction": false
   },
   {
+    "name": "shell_priv_change_owner",
+    "title": "Change owner as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Change owner as root"
+    },
+    "description": "Changes the owner and/or group of a file or directory as root (with recursive, also of everything under it) within the host's privileged write roots, exactly as its approved preview listed; returns the counts and the owner set.",
+    "input_schema_sha256": "bec1c8fb09ab645a9ff43b4aa47740852ab7a36a29e42868e8b51de7439e5340",
+    "output_schema_sha256": "74427cba1fe19b2fa005c1ddcfa8e361fd251aadb90200fd4a278815bb83660e",
+    "requires_user_interaction": true
+  },
+  {
     "name": "shell_priv_copy_path",
     "title": "Copy file as root",
     "tier": "operator",
@@ -615,6 +635,26 @@
     "input_schema_sha256": "062ac73f234b5f9c2277ef86f8b1d9778203a1c82b5c0a5f3c64d6a359cd4cf7",
     "output_schema_sha256": "c1d53a1021aab2f2f0f9339e00e2d15d8c31061dbc137b256cb5bd34b9ed700d",
     "requires_user_interaction": false
+  },
+  {
+    "name": "shell_priv_set_permissions",
+    "title": "Set permissions as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Set permissions as root"
+    },
+    "description": "Sets the mode of a file or directory as root (with recursive, also of everything under it) within the host's privileged write roots, exactly as its approved preview listed; returns the counts and the old and new mode.",
+    "input_schema_sha256": "f91a4706ac91cda1cf6bb5b35f072ebe515c235035fbb3de68189ef23342aabc",
+    "output_schema_sha256": "8dab790cc1445b7a7c6ea67252acacc291f28341ee0a6ece9b6374c9743b3429",
+    "requires_user_interaction": true
   },
   {
     "name": "shell_priv_stat_path",

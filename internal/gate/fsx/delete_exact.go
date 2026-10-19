@@ -144,13 +144,15 @@ type ident struct {
 	perm          uint32 // permission bits (git_discard compares them; a delete does not)
 	uid, gid      uint32 // owner and group (the helper's chown and chmod)
 	nlink         uint32 // link count (the helper's chown and chmod)
+	mask          uint32 // the statx fields the kernel reported
 	size          int64
 	ctime, btime  unix.StatxTimestamp
 	hasBtime      bool
 }
 
 const (
-	statxWant = unix.STATX_TYPE | unix.STATX_MODE | unix.STATX_INO | unix.STATX_SIZE | unix.STATX_CTIME | unix.STATX_BTIME | unix.STATX_MNT_ID
+	statxWant = unix.STATX_TYPE | unix.STATX_MODE | unix.STATX_INO | unix.STATX_SIZE | unix.STATX_CTIME | unix.STATX_BTIME | unix.STATX_MNT_ID |
+		unix.STATX_UID | unix.STATX_GID | unix.STATX_NLINK
 	statxNeed = unix.STATX_TYPE | unix.STATX_INO | unix.STATX_SIZE | unix.STATX_CTIME | unix.STATX_MNT_ID
 )
 
@@ -168,6 +170,7 @@ func statxAt(dfd int, name string, flags int) (ident, error) {
 	}
 	return ident{
 		dev: unix.Mkdev(st.Dev_major, st.Dev_minor), ino: st.Ino, mnt: st.Mnt_id, typ: uint32(st.Mode) & unix.S_IFMT, perm: uint32(st.Mode) & 0o7777,
+		uid: st.Uid, gid: st.Gid, nlink: st.Nlink, mask: st.Mask,
 		size: int64(st.Size), ctime: st.Ctime, btime: st.Btime, hasBtime: st.Mask&unix.STATX_BTIME != 0, //nolint:gosec // G115: file sizes fit int64
 	}, nil
 }
@@ -325,7 +328,14 @@ func crossesMount(parent, child *ident) bool {
 // inSubdir opens e (a directory in dir) as a verified sub-root, requires
 // the identity the walk saw, and calls fn with it and its descriptor.
 func (f *FS) inSubdir(l *loc, dir *os.Root, e *planEntry, fn func(sub *os.Root, sfd int) error) error {
-	sub, _, _, err := f.openSubdir(l, dir, e.rp, e.name)
+	return f.inDir(l, dir, e.name, e.rp, &e.id, fn)
+}
+
+// inDir opens name (a directory in dir whose real path is rp) as a
+// verified sub-root, requires the identity id, and calls fn with it and
+// its descriptor.
+func (f *FS) inDir(l *loc, dir *os.Root, name, rp string, id *ident, fn func(sub *os.Root, sfd int) error) error {
+	sub, _, _, err := f.openSubdir(l, dir, rp, name)
 	if err != nil {
 		return err
 	}
@@ -340,7 +350,7 @@ func (f *FS) inSubdir(l *loc, dir *os.Root, e *planEntry, fn func(sub *os.Root, 
 		if err != nil {
 			return mapErr(err)
 		}
-		if !sid.sameObject(&e.id) {
+		if !sid.sameObject(id) {
 			return errf(protocol.CodeExists, "a directory was replaced while the tree was read")
 		}
 		return fn(sub, sfd)

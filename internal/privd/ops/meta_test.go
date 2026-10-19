@@ -80,11 +80,10 @@ type auditMeta struct {
 	Outcome          string         `json:"outcome"`
 }
 
-func (f *fixture) lastAuditMeta() (auditMeta, string) {
+func (f *fixture) lastAuditMeta() (a auditMeta, obj string) {
 	f.t.Helper()
 	line := f.lastAudit()
-	_, obj, _ := strings.Cut(line, ">")
-	var a auditMeta
+	_, obj, _ = strings.Cut(line, ">")
 	if err := json.Unmarshal([]byte(obj), &a); err != nil {
 		f.t.Fatalf("audit line %q: %v", line, err)
 	}
@@ -299,22 +298,21 @@ func TestPrivMetaAuditBounded(t *testing.T) {
 	for i := range 150 {
 		gatetest.WriteFile(t, fmt.Sprintf("%s/f%03d", many, i), "x", 0o600)
 	}
-	f.bound("priv_chmod", m{"path": many, "mode": "0640", "recursive": true}, nil)
-	a, obj := f.lastAuditMeta()
-	if len(a.Changed) != 100 || a.ChangedTotal != 151 || !a.ChangedTruncated {
+	pv := f.bound("priv_chmod", m{"path": many, "mode": "0750", "recursive": true}, nil)
+	a, _ := f.lastAuditMeta()
+	if pv.Changes < 150 || len(a.Changed) != 100 || a.ChangedTotal != pv.Changes || !a.ChangedTruncated {
 		t.Fatalf("150 files: %d listed, total %d, truncated %v", len(a.Changed), a.ChangedTotal, a.ChangedTruncated)
 	}
 	long := filepath.Join(f.write, strings.Repeat("d", 200))
 	for i := range 80 {
 		gatetest.WriteFile(t, fmt.Sprintf("%s/%s%02d", long, strings.Repeat("n", 200), i), "x", 0o600)
 	}
-	f.bound("priv_chmod", m{"path": long, "mode": "0640", "recursive": true}, nil)
-	a, obj = f.lastAuditMeta()
+	pv = f.bound("priv_chmod", m{"path": long, "mode": "0750", "recursive": true}, nil)
+	a, _ = f.lastAuditMeta()
 	listed, _ := json.Marshal(a.Changed)
-	if len(a.Changed) >= 81 || len(listed) > 32<<10 || a.ChangedTotal != 81 || !a.ChangedTruncated {
+	if pv.Changes < 80 || len(a.Changed) >= pv.Changes || len(listed) > 32<<10 || a.ChangedTotal != pv.Changes || !a.ChangedTruncated {
 		t.Fatalf("long names: %d listed in %d bytes, total %d, truncated %v", len(a.Changed), len(listed), a.ChangedTotal, a.ChangedTruncated)
 	}
-	_ = obj
 }
 
 // TestPrivMetaMovedInRefused (N-1): a file another account moved into the
