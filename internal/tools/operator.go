@@ -394,7 +394,7 @@ func boundSrcDst(s *jsonschema.Schema) {
 	strIn(s, "destination", pathPattern, 4096)
 }
 
-func srcDstCanonical(in srcDstIn) any {
+var srcDstCanonical = func(in srcDstIn) any {
 	return struct {
 		Source      string `json:"source"`
 		Destination string `json:"destination"`
@@ -412,7 +412,7 @@ func srcDstDescribe(verb string) func(srcDstIn, string) string {
 	}
 }
 
-func srcDstAudit(in srcDstIn) map[string]any {
+var srcDstAudit = func(in srcDstIn) map[string]any {
 	return map[string]any{"target": in.Target, "source": in.Source, "destination": in.Destination, "overwrite": in.Overwrite}
 }
 

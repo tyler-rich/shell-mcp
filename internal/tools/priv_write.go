@@ -615,8 +615,8 @@ func (d *Deps) privSrcDstPreview(ctx context.Context, in *privSrcDstIn, target s
 	var cur map[string]any
 	var f *FileContent
 	if dst != nil {
-		if e = refuseDestination(dst, src.Type, isCopy, in.Overwrite); e != nil {
-			return nil, e
+		if re := refuseDestination(dst, src.Type, isCopy, in.Overwrite); re != nil {
+			return nil, re
 		}
 		if cur, f, e = d.privFilePreview(ctx, target, dst, &acc); e != nil {
 			return nil, e

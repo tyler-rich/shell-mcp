@@ -178,8 +178,8 @@ func (d *Deps) srcDstPreview(ctx context.Context, in *srcDstIn, target string, i
 		if src != nil {
 			srcType = src.Type
 		}
-		if e = refuseDestination(dst, srcType, isCopy, in.Overwrite); e != nil {
-			return nil, e
+		if re := refuseDestination(dst, srcType, isCopy, in.Overwrite); re != nil {
+			return nil, re
 		}
 		if cur, f, e = d.boundFilePreview(ctx, target, protocol.OpReadFile, "gate", dst, &acc); e != nil {
 			return nil, e
