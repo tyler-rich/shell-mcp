@@ -483,7 +483,9 @@ func (s *server) restoreBackup(raw jsontext.Value) (data any, warns []string, fa
 	if err != nil {
 		return nil, nil, storeErr("the backup's mode is unreadable; nothing was restored")
 	}
-	fm := os.FileMode(mode)
+	// The recorded mode within modes.max; the recorded owner and group as
+	// they were, even outside owners (handoff F-3, Q3).
+	fm := s.newInodeMode(uint32(mode))
 	uid, gid := m.UID, m.GID
 	owner := &fsx.Owner{UID: &uid, GID: &gid}
 	res := restoreData{ID: m.ID, Path: m.Path, Kind: m.Kind}
@@ -523,7 +525,8 @@ func readData(root *os.Root, m *meta) ([]byte, error) {
 
 // restoreTree recreates a deleted tree where nothing exists now: the root
 // directory, then every entry in archive order (parents first), each with
-// its recorded mode and owner, through the confined, verified operations.
+// its recorded owner and its recorded mode within modes.max, through the
+// confined, verified operations.
 func (s *server) restoreTree(m *meta, data []byte, rootMode os.FileMode, owner *fsx.Owner) (int, error) {
 	_, err := s.fs.Stat(m.Path)
 	var fe *fsx.Error
@@ -555,8 +558,8 @@ func (s *server) restoreTree(m *meta, data []byte, rootMode os.FileMode, owner *
 			return n, storeErr("the tree backup holds an unsafe name; the restore stopped")
 		}
 		target := m.Path + "/" + name
-		mode := os.FileMode(uint32(hdr.Mode) & 0o7777) //nolint:gosec // G115: a tar mode written by this helper
-		uid, gid := uint32(hdr.Uid), uint32(hdr.Gid)   //nolint:gosec // G115: ids written by this helper
+		mode := s.newInodeMode(uint32(hdr.Mode) & 0o7777) //nolint:gosec // G115: a tar mode written by this helper
+		uid, gid := uint32(hdr.Uid), uint32(hdr.Gid)      //nolint:gosec // G115: ids written by this helper
 		o := &fsx.Owner{UID: &uid, GID: &gid}
 		switch hdr.Typeflag {
 		case tar.TypeDir:

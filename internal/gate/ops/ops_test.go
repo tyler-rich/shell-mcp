@@ -363,6 +363,17 @@ func TestFileOps(t *testing.T) {
 	f.ok("move", m{"source": filepath.Join(f.write, "d1", "copy.txt"), "destination": filepath.Join(f.write, "moved.txt")}, nil)
 	f.ok("chmod", m{"path": filepath.Join(f.write, "moved.txt"), "mode": "0600"}, nil)
 	f.fail("chmod", m{"path": filepath.Join(f.write, "moved.txt")}, "bad_request")
+	// A hard link to a file outside the roots is refused, and the file
+	// keeps its mode.
+	outside := filepath.Join(f.dir, "outside-linked.txt")
+	gatetest.WriteFile(t, outside, "outside\n", 0o644)
+	if err := os.Link(outside, filepath.Join(f.write, "linked.txt")); err != nil {
+		t.Fatal(err)
+	}
+	f.fail("chmod", m{"path": filepath.Join(f.write, "linked.txt"), "mode": "0600"}, "path_denied")
+	if fi, err := os.Stat(outside); err != nil || fi.Mode().Perm() != 0o644 {
+		t.Fatalf("the linked file's mode changed: %v %v", fi.Mode(), err)
+	}
 	var pv struct {
 		Entries       int    `json:"entries"`
 		Deleted       bool   `json:"deleted"`

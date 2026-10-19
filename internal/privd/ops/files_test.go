@@ -211,7 +211,9 @@ func TestCopyMoveDelete(t *testing.T) {
 }
 
 // A new file's or directory's default mode (0640, 0750) is capped by
-// modes.max, like a requested one; an existing file keeps its mode.
+// modes.max, like a requested one; so is the mode an overwrite keeps from
+// the existing file (S4c-0, F-4: an existing 0640 file becomes 0600 under
+// 0700, where it used to stay 0640).
 func TestDefaultModesWithinMask(t *testing.T) {
 	f := newFixture(t, func(_ *fixture, s *string) { *s = strings.Replace(*s, `max: "0755"`, `max: "0700"`, 1) })
 	p := filepath.Join(f.write, "new.conf")
@@ -221,9 +223,9 @@ func TestDefaultModesWithinMask(t *testing.T) {
 	if modeOf(t, p) != 0o600 || modeOf(t, d) != 0o700 {
 		t.Fatalf("defaults %04o %04o, want 0600 0700", modeOf(t, p), modeOf(t, d))
 	}
-	// The existing 0640 file keeps its mode on overwrite.
+	// The existing 0640 file's mode is kept within the mask on overwrite.
 	f.ok("priv_write_file", m{"path": filepath.Join(f.write, "app.conf"), "content_b64": b64("y")}, nil)
-	if modeOf(t, filepath.Join(f.write, "app.conf")) != 0o640 {
-		t.Fatalf("existing mode changed to %04o", modeOf(t, filepath.Join(f.write, "app.conf")))
+	if modeOf(t, filepath.Join(f.write, "app.conf")) != 0o600 {
+		t.Fatalf("existing 0640 file written as %04o, want 0600 (0640 & modes.max 0700)", modeOf(t, filepath.Join(f.write, "app.conf")))
 	}
 }

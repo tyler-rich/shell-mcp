@@ -2248,3 +2248,81 @@ The document gives exact replacement wording for D-006 and S-12, the config, env
 - **CLAUDE.md "Approval" definition.** The maintainer confirmed it, with the same extension as D-006 and nothing more. S4c-1's first commit applies it verbatim, together with D-006 and S-12 (handoff §7.1).
 - **F-4.** The maintainer accepted it. S4c-0 must state the clamp's visible effect in PRIVILEGED.md: a file wider than `modes.max` is narrowed to the mask when the helper writes it, copies over it or restores it.
 - **CI.** The run on `e841498` passed (all ten checks).
+
+### 2026-10-18 — Every new helper inode within modes.max; no chmod or chown through a hard link (PR #28, branch fix/privd-mode-link)
+**Decision:** The privileged policy's mode mask holds for every inode the helper creates, and root never changes the mode or owner of an inode that has another name (handoff S4c-0: F-1, F-2, F-4, with X-10 and Q8 for the non-recursive ops).
+- **Mask (F-1, F-4, F-3's mode).** `fsx.Config.ModesMax` masks the mode of every new inode in `writeAtomic` (a new file, a write or copy over a file, a copy) and `MkdirAs` (every directory it creates). The helper sets it to `modes.max`; the gate leaves it nil and is unchanged. A restore gives a file, and every entry of a tree, its recorded mode with setuid, setgid, sticky and world-write removed and masked; the recorded owner and group are kept, even outside `owners` (Q3). Results report the mode set. Visible effect, stated in PRIVILEGED §4: a file wider than `modes.max` is narrowed to the mask when the helper writes it, copies over it or restores it. `TestDefaultModesWithinMask` now expects an existing `0640` file to be written as `0600` under `0700`, deliberately.
+- **Hard links (F-2).** `fsx.Chmod` and `fsx.Chown` refuse a non-directory whose link count is above 1: `path_denied`, naming the path and the count. The count comes from the `fstat` of the descriptor that `fchmod`/`fchown` then acts on (`singleLink`), never from a path lookup. A link made after the check is equivalent to one made after the change. Directories (link count 2 or more) are unaffected.
+- **Read-back (X-10, Q13).** With `fsx.Config.VerifyMetadata`, set by the helper only, chmod and chown re-read mode, owner and group through the same descriptor; a mismatch is `verify_failed`. Seam: `InjectMetadataReadBackFault`.
+- **Audit (Q8).** The helper's line gains `changed`: `[{path, old_mode, old_uid, old_gid}]` for the entry chmod or chown changed, also when its read-back then failed; absent otherwise. The results' `Before` and `Changed` carry it and are `json:"-"`, so the wire is unchanged.
+- **The gate (prompt item 4).** `fsx.Chmod` is shared, so `chmod` (`shell_set_permissions`) refuses hard links too. Same class: the service account can `fchmod` any file it owns, and an inode it owns with one name inside a write root and another outside would be changed outside its roots (Landlock has no chmod right). Small: the same check. No other gate behaviour changed; the gate gets no metadata read-back (beyond item 4). POLICY §3 and TOOLS.md say so.
+- **Docs.** PRIVILEGED §4 (the mask rule and its visible effect), §6 (the write, copy, move, chmod, chown and restore rows, Backups, results), §8 (`changed`); POLICY §3; TOOLS.md (four rows); the handoff marks F-1, F-2 and F-4 fixed.
+- **Not changed:** the protocol, the error-code set, the envelope, Landlock, the generated units, the policy schema.
+
+**Audit of every helper op that sets a mode or owner, or changes an inode in place:**
+
+| Op | What it sets | Before | After |
+|---|---|---|---|
+| `priv_write_file`, new file | new inode: mode (requested, else `0640 & modes.max`), owner (requested, else root's) | requested mode within the mask, owner allow-listed | unchanged, plus the fsx mask |
+| `priv_write_file` over a file | new inode (rename): mode (requested, else the existing file's), owner (requested, else the existing file's) | the existing mode kept **unmasked** (F-4); the existing owner kept (documented); an existing setuid/setgid/sticky/world-write file refused | the existing mode `& modes.max` |
+| `priv_mkdir` | each created directory: mode (requested, else `0750 & modes.max`), owner | mask and allow-list; existing directories never changed | unchanged, plus the fsx mask |
+| `priv_chmod` | an existing inode's mode, in place | mode within the mask, no special bits; symlinks and special files refused; **no link-count check** (F-2) | link count above 1 refused on the same descriptor; read-back; old values audited |
+| `priv_chown` | an existing inode's owner and group, in place | allow-list; setuid/setgid/sticky files refused; **no link-count check** (F-2) | as chmod |
+| `priv_copy` | new inode: the source's mode minus `7002`, owner root's | **no mask** (F-1) | `& modes.max` |
+| `priv_copy` with `overwrite` | new inode: the destination's mode and owner | **no mask** (F-4's kind) | `& modes.max` |
+| `priv_move` | nothing: the inode keeps its mode and owner; with `overwrite`, one name of the replaced inode goes | n/a | unchanged |
+| `priv_restore_backup`, file | new inode: the recorded mode, owner and group | recorded mode **unmasked**; a recorded setuid/setgid/sticky/world-write mode refused; owner outside `owners` kept (F-3, decided) | recorded mode minus `7002`, `& modes.max`; owner kept |
+| `priv_restore_backup`, tree | each new directory and file, as above | as above; a world-writable recorded mode **stopped the restore part-way** (`policy_denied`, partial tree left) | as above, per entry |
+| `priv_delete` | unlinks names; changes no metadata | n/a | unchanged (S4c-4) |
+| backup store | its own files, `0600` in a `0700` store | fixed modes | unchanged |
+| `priv_exec`, packages, power | no file-metadata operation of the helper's own (declared commands, apt, systemd) | out of scope | unchanged |
+| gate `chmod` | mode in place, as the service account (its own files only) | no special bits; **no link-count check** | link count above 1 refused (same descriptor) |
+
+Every other write in fsx and the helper opens with `O_CREAT|O_EXCL` (temporary files, the backup store, git's index lock) or renames; none changes an existing inode in place.
+
+**Premises checked, and corrections:**
+- The handoff's line references (`write.go` copy, `helper.go` Chown, `write.go` Chmod) and its list of ops unaffected by F-2 are right: write, copy and restore commit a new inode by rename or link; mkdir changes only a directory it just created (directories cannot be hard-linked).
+- **The handoff says chmod and chown never change setuid, setgid or sticky files (§2.3).** Only chown refuses them; `fsx.Chmod` changes such a file, always clearing the bits (a requested mode cannot carry them). Not this class; finding N-2 below.
+- **F-3 said restore checks neither owner nor mode.** It did check the mode, through fsx's own rule: a recorded setuid, setgid, sticky or world-write mode was refused, and for a tree that left a partial tree behind (`TestRestoreTreeWithinModesMax`, failing output). The clamp fixes that too.
+- **Prompt and handoff differ on scope.** The prompt's list omits two items the handoff's S4c-0 includes: metadata read-back for the non-recursive ops (X-10, Q13) and the old values in the audit line (Q8). Both are done, following the handoff.
+- **"Report the resulting mode in the response."** Write, copy and mkdir results already carry `mode`, now the masked one. A restore's result has none, and adding a field is a protocol change (STOP). Not added; S4c-5's `priv_restore_preview` carries `restore.mode` (P-2c). Raised in the PR.
+
+**Findings for later sessions (not fixed here):**
+- **N-1, rename in and out.** An account that can write a write root and the directory of a file elsewhere on the same filesystem can rename that file into the root, have `priv_chmod` or `priv_chown` change it, then rename it back. The link count is 1 throughout, so F-2's rule does not see it. Example: a root-owned `0600` file in a directory the application account can write is moved in, made `0644`, and moved out. The same holds for a directory, and for a write or copy over a moved-in file. It needs write access to the file's own directory, so it is narrower than F-2, and S4c-3's identity binding does not cover it either. For the maintainer to scope (for example, refusing to change an inode whose owner is outside `owners`).
+- **N-2, chmod of setuid/setgid/sticky files.** `fsx.Chmod` (gate and helper) does not refuse them, unlike Chown; PRIVILEGED §6's "never setuid/setgid/sticky" holds for what is set. It can only clear the bits, never add them, so it does not escalate. To decide in S4c-3 whether chmod refuses them as chown does.
+- **N-3, root-owned new inodes.** A copy, a new file or a new directory without an explicit owner is the helper's (`root:root`), whether or not root is in `owners.users`. The allow-list governs what may be *set*, so this is as documented, but worth a sentence in PRIVILEGED §6 when the write tools are exposed (S4c-2).
+- **N-4, the gate's chmod read-back.** The gate's `chmod` does not re-read the mode. Adding it would change a gate tool beyond item 4; left as a possible follow-up.
+
+**Tests (committed failing first, `d060ed8`; output in the PR body).** Inert seams in that commit: `fsx.Config.ModesMax`, `VerifyMetadata`, `InjectMetadataReadBackFault`, `fsx.Meta`, the results' `Before` and `Changed`, `ops.Options.InjectMetadataReadBackFault`.
+- **fsx:** `TestModesMaxMasksNewInodes` (a new file, a write over a `0664` file, a copy of `0644`, a copy over `0654`, mkdir with parents; masked and unmasked); `TestChmodChownRefuseHardLinks` (2 and 3 links named in the message; the outside inode's mode, owner and change time unchanged; changed once it has one link; directories); `TestChmodChownReadBack` (the gate does not re-read; the helper refuses a mode, gid or uid mismatch; `Before` and `Changed`).
+- **helper:** `TestNewInodesWithinModesMax` (under `0700`: a copy of `0644` gives `0600`, a copy over `0644` `0600`, a write over `0640` `0600`, a write over `0664` `0600` with the backup recording `0664`, its restore `0600`, mkdir `0700`; each result reports the mode set); `TestRestoreTreeWithinModesMax` (`0755` directories, a `0644` and a `0666` file, restored as `0700` and `0600`); `TestChmodChownRefuseHardLinks` (through the request handling; the outside file's mode, owner and change time unchanged; a single-link file and a directory still changed); `TestChmodChownReadBack`; `TestChmodChownAuditOldValues`; `TestDefaultModesWithinMask` changed as above.
+- **gate:** `TestFileOps` gains `chmod` through a hard link: `path_denied`, the linked file's mode unchanged.
+- **e2e-host (core unit):** `TestHelperHardLinkChmodChown` (a link in `/etc/example-app` to `/etc/example-other/secret.txt`: both refused, that file's mode, owner and change time unchanged; a single-link file still changed); `TestHelperModesMaxClamp` (under the e2e mask `0755`, a copy of a `0664` file and a write over it give `0644`, reported).
+
+**Fuzzing:** none added. No parser or path function changed: `singleLink`, `maskMode`, `verifyMeta` and `newInodeMode` take values fsx already validated.
+
+**Alternatives rejected:**
+- Refusing a copy whose source mode exceeds the mask (decided in the handoff: such files would be uncopyable).
+- Checking the link count by path (`Lstat`) before opening: a different lookup from the descriptor that is changed.
+- Masking in the helper's handlers instead of fsx: copy has no mode input, and fsx is the one place every new inode passes.
+- Read-back in the gate's chmod: beyond item 4 (N-4).
+
+**Deferred / follow-ups:** N-1 to N-4 above, and the restore result's `mode` (R-1); the maintainer's decisions on each are below. Recursive chown and chmod (S4c-3) apply the link-count rule to every entry.
+
+**Versions:**
+- **Go:** 1.27.2, the newest stable per go.dev (`go.dev/dl/?mode=json`, read 2026-10-18).
+- **Refresh:** `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+
+**2026-10-18 — Maintainer decisions on the S4c-0 findings (PR #28 follow-up).** Recorded in the handoff's §2.1 and in the target sessions' entries in §5. Docs only.
+- **First CI run on the PR (`a65a96f`): green.** All ten checks passed. In e2e-host, 150 tests passed and none failed or skipped, among them the new `TestHelperHardLinkChmodChown` and `TestHelperModesMaxClamp`.
+- **N-1 (move in, change, move out): must fix before exposure, in S4c-3.**
+  - Recommended fix to evaluate there: `priv_chmod` and `priv_chown`, including every entry of a recursive walk, are refused unless every directory from `/` to the target is root-owned and neither group- nor world-writable. This is checked by descriptor along the walk, with no separate path lookups. `check-policy` and a helper self-check warn about privileged write roots that fail it.
+  - The alternative: refuse an inode whose owner is not on the `owners` allow-list.
+  - S4c-3 decides between them with the maintainer (a STOP in its entry).
+- **N-2:** decided in S4c-3.
+- **N-3:** documented in PRIVILEGED §6 by S4c-2.
+- **N-4 (the gate's chmod read-back):** a low-priority follow-up, outside S4c.
+- **Restore (R-1):** S4c-5 reports the resulting mode in the preview and in the result, so a narrowing is never silent. Any protocol field for it is pre-approved (handoff P-10).

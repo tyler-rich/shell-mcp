@@ -46,7 +46,8 @@ Each is one PR, Opus 5.5 at High (D-022).
 - `recursive` on chown and chmod;
 - a hash on the package previews, and an `applied` list on package results;
 - the gate forwarding the clamped `timeout_ms`;
-- `priv_policy`.
+- `priv_policy`;
+- the restored mode on restore's preview and result (P-10, pre-approved after S4c-0).
 
 Plus one privileged-policy schema change: a total size cap on the backup store (`backups.max_store_bytes`, §4.1).
 
@@ -126,6 +127,7 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 - **Who can reach it.** Anything that can send `priv_copy` through the gate, which today means a compromised server or service account. That is exactly the threat the privileged policy defends against (PRIVILEGED §3).
 - **Who is exposed.** Other local users, not only the caller: a `0644` file inside a restricted directory becomes readable once copied out.
 - **Decision:** fix in S4c-0 by clamping, not refusing (§5).
+- **Status: fixed in S4c-0 (PR #28).** fsx masks every new inode's mode by `fsx.Config.ModesMax`, which the helper sets to `modes.max`; the result reports the mode set.
 
 **F-2. `priv_chown` and `priv_chmod` change an inode that can also have a name outside the write roots.**
 - **Severity:** medium (maintainer's rating: it can escalate, not only leak).
@@ -137,6 +139,7 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 - **Why no other layer stops it.** `ReadWritePaths=` limits paths, not inodes, and Landlock has no chmod or chown right.
 - **Not affected:** `priv_write_file`, `priv_mkdir`, `priv_copy`, `priv_move` and `priv_restore_backup`. Each one commits a new inode by rename, or creates a new entry.
 - **Decision:** fix in S4c-0. Refuse a non-directory whose link count is above 1, with the count read by fstat on the same descriptor that fchown or fchmod acts on (§5).
+- **Status: fixed in S4c-0 (PR #28).** `fsx.Chmod` and `fsx.Chown` refuse it with `path_denied` naming the path and the count. `fsx.Chmod` is shared, so the gate's `chmod` (`shell_set_permissions`) refuses it too: the same class of bug as the service account, within its own ownership (ARCHIVE §14, S4c-0).
 
 **F-3. Not a bug, but surfaced by the same audit.** `priv_restore_backup` restores the recorded owner and mode without checking either against `owners` or `modes.max`.
 - PRIVILEGED §6 says it does exactly that ("with its recorded owner and mode"), so the code matches the document.
@@ -146,6 +149,44 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 - **Code.** `writeAtomic` gives the new inode the existing file's mode when no mode is given (`write.go`, `newMode = os.FileMode(um)`). `TestDefaultModesWithinMask` asserts exactly that: an existing `0640` file stays `0640` under `modes.max: "0700"`.
 - **Decided (Q16; F-4 accepted by the maintainer):** a write's new inode is clamped to `modes.max` like every other new inode (S4c-0). That changes the tested result above to `0600`, deliberately.
 - **Visible effect, documented in PRIVILEGED.md by S4c-0:** a file whose mode is wider than `modes.max` is narrowed to the mask when the helper writes it, copies over it or restores it.
+- **Status: fixed in S4c-0 (PR #28),** with F-1; PRIVILEGED §4 states the visible effect. F-3's mode clamp is applied too (files and every tree entry); the rest of F-3 is S4c-5's.
+
+**Found in S4c-0 (PR #28), with the maintainer's decisions (2026-10-18).**
+
+**N-1. Move in, change, move out.**
+- **Severity:** must fix before `shell_priv_change_owner` or `shell_priv_set_permissions` is exposed (S4c-3).
+- **What.** An account that can write a write root *and* the directory that holds a file elsewhere on the same filesystem can:
+  - rename that file into the write root;
+  - have `priv_chmod` or `priv_chown` change it;
+  - rename it back.
+  The link count is 1 throughout, so F-2's rule does not see it, and S4c-3's identity binding (D4) does not either: the inode at the path is the one approved.
+- **Example.** A root-owned `0600` file in a directory the application account can write is moved in, made `0644`, and moved out. The same works for a directory, and for a write or copy over a moved-in file.
+- **Narrower than F-2,** because it needs write access to the file's own directory, but just as unbounded by `ReadWritePaths=` and Landlock, which confine paths.
+- **Recommended fix, to evaluate in S4c-3:**
+  - Refuse an in-place metadata change (`priv_chmod`, `priv_chown`, and every entry of a recursive walk) unless every directory from `/` to the target is owned by root and is neither group- nor world-writable.
+  - Check this by descriptor along the walk: each directory opened from its parent's handle and checked by `fstat`, with no separate path lookup.
+  - Add a `check-policy` warning and a helper self-check warning for any privileged write root that fails it.
+  - To evaluate with it: a write root whose directories the application account owns or can write would then refuse every chmod and chown.
+- **Alternative:** refuse to change an inode whose current owner is not on the `owners` allow-list.
+- **Decision:** S4c-3 decides between the two with the maintainer.
+
+**N-2. Chmod of setuid, setgid and sticky files.**
+- `fsx.Chmod` (gate and helper) does not refuse them, unlike `fsx.Chown`.
+- It can only clear those bits, never set them, so it does not escalate.
+- §2.3's "setuid, setgid and sticky files are never changed" holds for chown only.
+- **Decision:** decided in S4c-3.
+
+**N-3. Root-owned new inodes.**
+- A copy, a new file or a new directory without an explicit owner is the helper's (`root:root`), whether or not root is in `owners.users`.
+- The allow-list governs what may be *set*, so this is as documented.
+- **Decision:** documented in PRIVILEGED §6 by S4c-2.
+
+**N-4. The gate's chmod has no metadata read-back.**
+- **Decision:** a low-priority follow-up, in no S4c session. It changes a gate tool, so it is its own PR.
+
+**R-1. A restore's narrowed mode is not reported.**
+- S4c-0 clamps the restored mode but does not report it: the result has no `mode` field, and adding one was a protocol change.
+- **Decision:** S4c-5 reports the resulting mode in the preview and in the result, so a narrowing is never silent. Any protocol field for that is pre-approved (P-10, §4).
 
 ### 2.2 Cross-cutting gaps
 
@@ -503,6 +544,7 @@ Protocol v1 is amended in place before any release, as in PRs #18, #24, #25 and 
 | P-7 | `timeout_ms` forwarded clamped | gate → helper | the gate rewrites the forwarded `timeout_ms` to the timeout it will wait for (its `limits.max_timeout_s` bound), instead of forwarding it unchanged | X-4 |
 | P-8 | `priv_policy` (Q6: yes) | new op, read, core | `{policy_sha256, max_tier, limits, roots (read, write, persistence), owners, modes_max, backups_keep, backups_max_store_bytes, commands[] (id, tier, unit, description, templates, root_equivalent, capabilities), packages (enabled, install, remove, allow_update_index, allow_upgrade), power.allowed}`; never `paths.deny` values (only their count) and never `acknowledge` text | discoverability for the model (Q6) |
 | P-9 | `expected_destination_sha256` | args of `priv_copy`, `priv_move`; valid only with `overwrite: true` (otherwise `bad_request`) | 64 lowercase hex. The destination must exist as a regular file with that content when the commit is prepared; otherwise `exists` (`not_found` when it is gone), and nothing changes. It is checked through the descriptor the backup reads, and `unchangedSince` holds it to the commit, as `expected_sha256` does for writes. | Q15 (approved): an approved overwrite replaces exactly the destination the approver saw. A preview that saw no destination sends `overwrite: false` instead; one that saw a directory or symlink requests no approval. |
+| P-10 | the restored mode (pre-approved by the maintainer, 2026-10-18, R-1) | results of `priv_restore_backup`, and `priv_restore_preview` (P-2c) | S4c-5 designs the exact fields: the recorded and the resulting mode, for a file and for tree entries | A restore's narrowing to `modes.max` is never silent (S4c-0 clamps it but has no field to report it). |
 
 **Not protocol:** the backup metadata's new `preview_sha256` (a local file format), and the server's combined policy hash.
 
@@ -542,6 +584,7 @@ All of them:
 
 ### S4c-0: `fix(privd)`: every new inode within modes.max, hard links on chown and chmod, the mode/owner audit
 
+- **Status: done (PR #28).** One exception: a restore's result has no `mode` field, and adding one is a protocol change, so the restored mode is not reported yet. The maintainer moved that to S4c-5 (R-1, §2.1). ARCHIVE §14, S4c-0, has the audit table. The findings N-1 to N-4 and their target sessions are in §2.1.
 - **Includes.**
   - **One rule for every new inode the helper creates:** its mode lies within `modes.max`. The result reports the mode actually set.
   - **F-1: copy, by clamping, not refusing.** `priv_copy` has no mode input, so refusing would make such files uncopyable.
@@ -595,6 +638,7 @@ All of them:
   - The backup's SHA-256 asserted against the preview (for copy and move with `overwrite`, against `expected_destination_sha256`).
   - The metadata's `preview_sha256`.
   - Prune after commit (X-8, Q12; the restore part is in S4c-5).
+  - **N-3 (§2.1):** PRIVILEGED §6 says that a file, copy or directory created without an explicit owner is the helper's (`root:root`), whether or not root is in `owners.users`, and the tools' descriptions or previews show the owner that will be set.
 - **Excludes.** Chown, chmod, delete, restore.
 - **Tests (failing first).**
   - The approval web flow for each tool.
@@ -615,6 +659,11 @@ All of them:
   - F-2's link-count refusal for every entry of the walk (Q2), read on the descriptor that is changed, and read-back per entry.
   - The audit's `changed` list with old values, bounded (100 entries or 32 KiB, `changed_total`, `changed_truncated`; Q8).
   - `shell_priv_change_owner`, `shell_priv_set_permissions`.
+  - **N-1 (§2.1), must fix before these tools are exposed:** move in, change, move out.
+    - Evaluate the recommended fix: refuse an in-place metadata change, non-recursive or any entry of a walk, unless every directory from `/` to the target is root-owned and neither group- nor world-writable. Check it by descriptor along the walk, with no separate path lookups. Add a `check-policy` and helper self-check warning for privileged write roots that fail it.
+    - Evaluate the alternative: refuse an inode whose current owner is not on the `owners` allow-list.
+    - **Decide which with the maintainer before implementing it** (a STOP below).
+  - **N-2 (§2.1):** decide whether chmod refuses setuid, setgid and sticky files, as chown does. `fsx.Chmod` is shared with the gate, so a change there also changes `shell_set_permissions`.
 - **Excludes.** Metadata backups (Q8: none).
 - **Tests (failing first).**
   - Hash coverage: an entry added, removed, renamed, replaced, chmod-ed or chown-ed, changes it.
@@ -624,8 +673,9 @@ All of them:
   - Read-back.
   - The audit line: old values for every entry changed; a tree above the bound is truncated and flagged, with the right total.
   - **e2e-host (core):** a recursive chown of a tree with a hard link to a file outside the roots is refused and changes nothing; the approval flow; the journal line's `changed` list.
+  - **N-1:** a file moved into a write root from a directory the attacking account can write cannot be chmod-ed or chown-ed, non-recursively or inside a walk, with whichever fix is chosen. Covered in the unit tests and in e2e-host (core).
 - **Fuzz.** The entry encoding (as `FuzzPreviewEntryEncoding`).
-- **STOP.** If a change-time rule cannot be made to hold on the runner's filesystems.
+- **STOP.** If a change-time rule cannot be made to hold on the runner's filesystems. Before implementing N-1's fix: the choice between the two options is the maintainer's.
 
 ### S4c-4: delete
 
@@ -653,6 +703,7 @@ All of them:
   - Restore through `expected_sha256` or `expect_absent`.
   - Tree restore create-only, with an entry-count check.
   - Q3: the backup's recorded content hash verified at the preview and again before anything is written, `verify_failed` on a mismatch (today `backup_failed`); the recorded owner and group kept; the mode clamp (S4c-0) carried into the preview's `restore` values.
+  - **R-1 (§2.1):** the resulting mode is reported in the preview and in the result, so a narrowing is never silent: the recorded mode next to the mode set, for a file and for every entry of a tree (bounded as the preview's `first` list, with counts). The protocol field for it is pre-approved (P-10).
   - Prune never removes the backup being restored (Q12).
   - The current version's backup is within the store cap.
   - `shell_priv_restore_backup`.
@@ -661,6 +712,7 @@ All of them:
   - A file planted in a tree being restored: `exists`, the planted file intact.
   - A tampered data file: `verify_failed` at the preview (no approval requested), and `verify_failed` when it is tampered with after approval, with nothing restored.
   - The restored owner, group and mode per Q3.
+  - R-1: a backup whose recorded mode is wider than `modes.max` shows both modes in the preview and the result, for a file and for a tree entry.
   - The restored backup is kept.
   - **e2e-host (core):** write, then restore, then restore again (the restore's own backup).
 - **STOP.** If verifying the data before writing would need a second read of a file larger than the 64 MiB backup bound.

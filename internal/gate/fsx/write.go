@@ -87,7 +87,8 @@ func countLines(b []byte) int {
 // writeAtomic writes content to l's target: a temp file in the same
 // directory (through the parent's os.Root), fsync, rename over the target,
 // fsync the directory, then re-open the target and compare SHA-256. An
-// existing file keeps its mode (unless mode is given) and, where the
+// existing file keeps its mode (unless mode is given; masked by ModesMax in
+// the helper, like every new inode's) and, where the
 // service user may, its owner and group. Without overwrite the commit is a
 // hard link of the temp file to the target instead of the rename: link(2)
 // fails with EEXIST if the target exists at that moment, so a file that
@@ -157,6 +158,7 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 	if mode != nil {
 		newMode = *mode
 	}
+	newMode = f.maskMode(newMode)
 	// The helper backs up the version it is about to replace; a failed
 	// backup changes nothing.
 	var backedUp fs.FileInfo
@@ -308,6 +310,7 @@ func (f *FS) MkdirAs(p string, mode *os.FileMode, parents bool, owner *Owner) (M
 		}
 		m = *mode
 	}
+	m = f.maskMode(m)
 	res := MkdirResult{Path: p, Mode: fmt.Sprintf("%04o", uint32(m))}
 	if !parents {
 		l, err := f.locate(p, true)
@@ -432,7 +435,9 @@ func (f *FS) mkdirIn(l *loc, dir *os.Root, dirReal, name string, m os.FileMode, 
 
 // Copy copies the regular file src (any root) to dst (a write root). The
 // copy is bounded by max_read_bytes, refused for files holding a private
-// key, and read-back verified.
+// key, and read-back verified. A new copy takes the source's mode, a copy
+// over a file the destination's, without setuid, setgid, sticky or
+// world-write, and masked by ModesMax in the helper.
 func (f *FS) Copy(src, dst string, overwrite bool) (WriteResult, error) {
 	ls, err := f.locate(src, false)
 	if err != nil {
@@ -595,8 +600,65 @@ func (e *Error) orNil() error {
 	return e
 }
 
+// maskMode applies ModesMax (the helper's modes.max) to a new inode's mode.
+func (f *FS) maskMode(m os.FileMode) os.FileMode {
+	if f.cfg.ModesMax != nil {
+		return m & *f.cfg.ModesMax
+	}
+	return m
+}
+
+// metaOf is fi's mode, owner and group.
+func metaOf(fi fs.FileInfo) Meta {
+	m := Meta{Mode: unixMode(fi)}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		m.UID, m.GID = st.Uid, st.Gid
+	}
+	return m
+}
+
+// singleLink refuses a non-directory with more than one link. Chmod and
+// chown change the inode, not the name, and the inode's other names can lie
+// outside the write roots: roots, the unit's ReadWritePaths= and Landlock
+// all confine paths. fi must come from fstat of the descriptor the change
+// is then made through, so the inode checked is the inode changed. A link
+// made after this check is a link made after the change.
+func singleLink(p string, fi fs.FileInfo) *Error {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return errf(protocol.CodeInternal, "no link count")
+	}
+	if !fi.IsDir() && st.Nlink > 1 {
+		return errf(protocol.CodePathDenied, "%q has %d links: its mode and owner are changed only when it has one, since another name can lie outside the write roots", p, st.Nlink)
+	}
+	return nil
+}
+
+// verifyMeta re-reads the mode, owner and group of the inode a change was
+// made through, when VerifyMetadata is set (the helper); a mismatch with
+// want is verify_failed, never a success.
+func (f *FS) verifyMeta(file *os.File, want Meta) *Error {
+	if !f.cfg.VerifyMetadata {
+		return nil
+	}
+	fi, err := file.Stat()
+	if err != nil {
+		return errf(protocol.CodeVerifyFailed, "the change could not be read back")
+	}
+	got := metaOf(fi)
+	if f.cfg.InjectMetadataReadBackFault != nil {
+		got = f.cfg.InjectMetadataReadBackFault(got)
+	}
+	if got != want {
+		return errf(protocol.CodeVerifyFailed, "read back mode %04o and owner %d:%d, not the %04o and %d:%d that were set",
+			got.Mode, got.UID, got.GID, want.Mode, want.UID, want.GID)
+	}
+	return nil
+}
+
 // Chmod sets the mode of p under a write root, through a descriptor opened
-// without following a final symlink.
+// without following a final symlink. A file with more than one link is
+// refused (singleLink).
 func (f *FS) Chmod(p string, mode os.FileMode) (ChmodResult, error) {
 	if e := checkMode(mode); e != nil {
 		return ChmodResult{}, e
@@ -618,9 +680,18 @@ func (f *FS) Chmod(p string, mode os.FileMode) (ChmodResult, error) {
 	if !fi.Mode().IsRegular() && !fi.IsDir() {
 		return ChmodResult{}, errf(protocol.CodeBadRequest, "only regular files and directories")
 	}
-	res := ChmodResult{Path: p, OldMode: fmt.Sprintf("%04o", unixMode(fi)), Mode: fmt.Sprintf("%04o", uint32(mode))}
+	if e := singleLink(p, fi); e != nil {
+		return ChmodResult{}, e
+	}
+	res := ChmodResult{Path: p, OldMode: fmt.Sprintf("%04o", unixMode(fi)), Mode: fmt.Sprintf("%04o", uint32(mode)), Before: metaOf(fi)}
 	if err := file.Chmod(mode); err != nil {
 		return ChmodResult{}, mapErr(err)
+	}
+	res.Changed = true
+	want := res.Before
+	want.Mode = uint32(mode)
+	if e := f.verifyMeta(file, want); e != nil {
+		return res, e
 	}
 	return res, nil
 }

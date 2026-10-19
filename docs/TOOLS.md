@@ -72,7 +72,7 @@ Common optional inputs on tools that run a process: `timeout_seconds` (1..`SHELL
 | `shell_make_directory` | `mkdir` | `target`, `path`, `mode?`, `parents=false` | | S4a |
 | `shell_copy_path` | `copy` | `target`, `source`, `destination`, `overwrite=false` | Files only in v1; destination under a write root. Without `overwrite`, a destination that exists at the moment of the commit is refused with `exists`, never replaced. | S4a |
 | `shell_move_path` | `move` | `target`, `source`, `destination`, `overwrite=false` | Both ends under write roots; same filesystem only (rename). Without `overwrite`, a destination that exists at the moment of the rename is refused with `exists` (`RENAME_NOREPLACE`); a filesystem without it is refused, not moved by check-then-rename. | S4a |
-| `shell_set_permissions` | `chmod` | `target`, `path`, `mode` | Refuses setuid/setgid/world-writable. | S4a |
+| `shell_set_permissions` | `chmod` | `target`, `path`, `mode` | Refuses setuid/setgid/world-writable, and a file with more than one link (POLICY §3). | S4a |
 | `shell_git_pull` | `git_pull` | `target`, `repo` | Fast-forward only; refuses dirty trees and foreign remotes. Returns old/new HEAD and changed-file count. | S4a |
 | `shell_run_command` | `exec` | `target`, `command_id`, `args`, `cwd?`, `stdin?` (≤ `max_stdin_bytes`), `timeout_seconds?`, `max_output_bytes?` | Commands of tier `read` or `operator`, run unprivileged in the sandbox. In the `admin` profile this tool also accepts `destructive` commands and is registered with `destructiveHint: true`. In both, whether a call needs approval follows the command's own tier, which `exec_preview` resolves first (Destructive tier below). | S4a / S4b |
 
@@ -138,9 +138,9 @@ All run as root through the helper (`docs/PRIVILEGED.md`); paths, owners, modes,
 | `shell_priv_stat_path` | `priv_stat` | `target`, `path` | no | |
 | `shell_priv_write_file` | `priv_write_file` | `target`, `path`, `content`, `owner?`, `group?`, `mode?`, `create=true`, `expected_sha256?` | **yes** — preview: line-count diff, old/new SHA-256, owner/mode | Backup first; read-back verified. |
 | `shell_priv_make_directory` | `priv_mkdir` | `target`, `path`, `owner?`, `group?`, `mode?`, `parents=false` | **yes** | |
-| `shell_priv_change_owner` | `priv_chown` | `target`, `path`, `owner?`, `group?`, `recursive=false` | **yes** — preview: entries affected | Owners from the allow-list only. |
-| `shell_priv_set_permissions` | `priv_chmod` | `target`, `path`, `mode`, `recursive=false` | **yes** | Within the mode mask; never setuid/setgid/sticky. |
-| `shell_priv_copy_path` / `shell_priv_move_path` | `priv_copy` / `priv_move` | `target`, `source`, `destination`, `overwrite=false` | **yes** | Overwritten destinations are backed up. Without `overwrite`, a destination that exists at the moment of the commit is refused with `exists`. |
+| `shell_priv_change_owner` | `priv_chown` | `target`, `path`, `owner?`, `group?`, `recursive=false` | **yes** — preview: entries affected | Owners from the allow-list only; a file with more than one link is refused. |
+| `shell_priv_set_permissions` | `priv_chmod` | `target`, `path`, `mode`, `recursive=false` | **yes** | Within the mode mask; never setuid/setgid/sticky; a file with more than one link is refused. |
+| `shell_priv_copy_path` / `shell_priv_move_path` | `priv_copy` / `priv_move` | `target`, `source`, `destination`, `overwrite=false` | **yes** | Overwritten destinations are backed up. A copy's mode is masked by the mode mask. Without `overwrite`, a destination that exists at the moment of the commit is refused with `exists`. |
 | `shell_priv_list_backups` | `priv_list_backups` | `target`, `path?` | no | |
 | `shell_priv_restore_backup` | `priv_restore_backup` | `target`, `backup_id` | **yes** — preview: diff against current | The current version is backed up first. |
 | `shell_priv_delete_path` | `priv_delete` | `target`, `path`, `recursive=false` | **yes** — preview: entries and bytes | Destructive; backed up within `max_delete_entries`. |

@@ -94,6 +94,8 @@ type Options struct {
 	// only.
 	InjectBeforeCommit   func()
 	InjectNoReplaceFault func() error
+	// InjectMetadataReadBackFault is passed to fsx; tests only.
+	InjectMetadataReadBackFault func(fsx.Meta) fsx.Meta
 	// Now is the clock (backup ids and times).
 	Now func() time.Time
 }
@@ -146,6 +148,9 @@ type server struct {
 	req       *protocol.Request
 	// backupIDs are the backups written for this request.
 	backupIDs []string
+	// changed are the entries chmod or chown changed, with their old
+	// values, for the audit line.
+	changed []auditChange
 }
 
 // Serve handles one connection and returns the process exit code: 0 when a
@@ -408,6 +413,7 @@ func (s *server) run(nc net.Conn) *protocol.Response {
 	o, p := s.o, s.p
 	s.red = redact.New(nil)
 	s.store = &store{dir: o.BackupDir, trust: o.Trust, keep: p.BackupsKeep, now: o.Now}
+	modesMax := p.ModesMax
 	cfg := &fsx.Config{
 		ReadRoots:  p.Paths.Read,
 		WriteRoots: p.Paths.WriteRoots(),
@@ -422,9 +428,14 @@ func (s *server) run(nc net.Conn) *protocol.Response {
 			MaxFindDepth:     8,
 			MaxDeleteEntries: p.Limits.MaxDeleteEntries,
 		},
-		InjectReadBackFault:  o.InjectReadBackFault,
-		InjectBeforeCommit:   o.InjectBeforeCommit,
-		InjectNoReplaceFault: o.InjectNoReplaceFault,
+		// Every new inode within modes.max, and chmod and chown read back
+		// (PRIVILEGED §4, §6).
+		ModesMax:                    &modesMax,
+		VerifyMetadata:              true,
+		InjectReadBackFault:         o.InjectReadBackFault,
+		InjectBeforeCommit:          o.InjectBeforeCommit,
+		InjectNoReplaceFault:        o.InjectNoReplaceFault,
+		InjectMetadataReadBackFault: o.InjectMetadataReadBackFault,
 	}
 	if p.BackupsKeep > 0 {
 		cfg.Backup = s.backup
