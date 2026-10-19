@@ -356,3 +356,35 @@ func TestDeleteBackupTooLarge(t *testing.T) {
 		t.Fatalf("backups %d", b.calls)
 	}
 }
+
+// TestDeleteStopAfterSetAside: a deletion that stops right after setting an
+// entry aside, without unlinking it or putting it back (and so without
+// reporting a commit), is not unchanged: the entry is under its temporary
+// name, and only explicit accounting (every entry set aside put back, none
+// unlinked, none stranded) may say otherwise.
+func TestDeleteStopAfterSetAside(t *testing.T) {
+	e, _, commits := newBoundEnv(t, 100)
+	dir := filepath.Join(e.write, "tree")
+	mkTree(t, dir)
+	pv, err := e.fs.PreviewDeleteBound(dir, true, binding)
+	must(t, err)
+	victim := dir + "/a.txt" // the first entry the pass handles
+	e.fs.cfg.InjectStopAfterSetAside = func(p string) error {
+		if p == victim {
+			return errors.New("stopped after the set-aside")
+		}
+		return nil
+	}
+	r, err := e.fs.DeleteExactBound(dir, true, binding, pv.PreviewSHA256)
+	e.fs.cfg.InjectStopAfterSetAside = nil
+	if err == nil {
+		t.Fatal("the deletion did not stop")
+	}
+	if exists(victim) || tempNameIn(t, dir) == "" || len(r.Removed) != 0 || *commits != 0 {
+		t.Fatalf("victim exists %v, set aside %q, removed %v, commits %d", exists(victim), tempNameIn(t, dir), r.Removed, *commits)
+	}
+	var fe *Error
+	if !errors.As(err, &fe) || fe.Unchanged {
+		t.Fatalf("an entry left set aside, neither unlinked nor put back, was reported unchanged: %v", err)
+	}
+}

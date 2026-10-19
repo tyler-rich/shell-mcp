@@ -64,6 +64,12 @@ type Config struct {
 	// concerned (the target's for DeleteStepAfterCompare). Tests only;
 	// production code never sets it.
 	InjectDeleteStep func(step DeleteStep, path string)
+	// InjectStopAfterSetAside, when non-nil, is called right after a delete
+	// set an entry aside (its logical path); an error it returns stops the
+	// deletion there, without putting the entry back or unlinking it, as a
+	// path that stops unexpectedly would. Tests only; production code never
+	// sets it.
+	InjectStopAfterSetAside func(path string) error
 	// Backup, when non-nil, is called before every overwrite, move-over and
 	// delete; its error aborts the operation. The gate never sets it.
 	Backup BackupFunc

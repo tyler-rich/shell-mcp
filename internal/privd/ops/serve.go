@@ -103,6 +103,8 @@ type Options struct {
 	// InjectDeleteStep is passed to fsx (DeleteExactBound's steps); tests
 	// only.
 	InjectDeleteStep func(fsx.DeleteStep, string)
+	// InjectStopAfterSetAside is passed to fsx; tests only.
+	InjectStopAfterSetAside func(string) error
 	// DisableCommitReport leaves fsx's OnCommit unset, as a mutating site
 	// that never reports would; tests only.
 	DisableCommitReport bool
@@ -480,6 +482,7 @@ func (s *server) run(nc net.Conn) *protocol.Response {
 		InjectNoReplaceFault:        o.InjectNoReplaceFault,
 		InjectMetadataReadBackFault: o.InjectMetadataReadBackFault,
 		InjectDeleteStep:            o.InjectDeleteStep,
+		InjectStopAfterSetAside:     o.InjectStopAfterSetAside,
 	}
 	if p.BackupsKeep > 0 {
 		cfg.Backup = s.backup

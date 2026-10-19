@@ -4,6 +4,7 @@ package ops_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"os"
@@ -751,5 +752,32 @@ func TestPrivDeleteConcurrentRacer(t *testing.T) {
 	slices.Sort(keys)
 	for _, k := range keys {
 		t.Logf("| %-46s | %3d |", k, counts[k])
+	}
+}
+
+// TestPrivDeleteStopAfterSetAsideKeepsBackup: the operation stops right
+// after setting an entry aside, without unlinking it or putting it back,
+// so no commit is reported. The tree is not as the preview saw it (the
+// entry is under its temporary name), so the backup is kept.
+func TestPrivDeleteStopAfterSetAsideKeepsBackup(t *testing.T) {
+	f := newFixture(t)
+	dir := filepath.Join(f.write, "tree")
+	delTree(t, dir)
+	pv := f.previewDelete(dir, true)
+	victim := filepath.Join(dir, "a.txt") // the first entry the pass handles
+	f.opts.InjectStopAfterSetAside = func(p string) error {
+		if p == victim {
+			return errors.New("stopped after the set-aside")
+		}
+		return nil
+	}
+	r := f.serve("priv_delete", m{"path": dir, "recursive": true, "expected_preview_sha256": pv.PreviewSHA256})
+	f.opts.InjectStopAfterSetAside = nil
+	if r.OK || present(victim) {
+		t.Fatalf("result %+v, victim present %v", r.Error, present(victim))
+	}
+	a, _ := f.lastAuditDelete()
+	if len(f.metas()) != 1 || len(a.BackupIDs) != 1 || len(a.Discarded) != 0 || len(a.Removed) != 0 {
+		t.Fatalf("a delete that left an entry set aside, unrecorded, discarded its backup: store %v audit %+v", f.metas(), a)
 	}
 }
