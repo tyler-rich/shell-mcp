@@ -2563,7 +2563,7 @@ Every other write in fsx and the helper opens with `O_CREAT|O_EXCL` (temporary f
   - **Must be decided before S4c-5 ships**; the S4c-5 entry carries it as a STOP.
 - Docs only; no code change.
 
-### 2026-10-19 — Privileged delete bound to its preview, backed up from the plan (PR #PRNUM, branch feat/priv-delete)
+### 2026-10-19 — Privileged delete bound to its preview, backed up from the plan (PR #33, branch feat/priv-delete)
 **Decision:** Build the handoff's S4c-4 entry (`docs/handoff/S4C-PRIVILEGED.md` §5). Root deleting files must meet everything the gate's delete guarantees (only the approved entries are removed; anything that appears or is replaced during the delete survives; stranded set-aside entries are never deleted) plus backups before removal, the store cap and the fail-safe backup rule.
 - **Shared, not copied.** `fsx.PreviewDeleteBound` and `fsx.DeleteExactBound` are the gate's `PreviewDelete` and `DeleteExact` (`internal/gate/fsx/delete_exact.go`) with a binding and, when `Config.Backup` is set, a backup step; the gate's two functions call the same code with no binding.
   - **The hash.** The bound hash covers its own domain, the binding's length and bytes (the privileged policy's SHA-256), the recursive flag and the gate's entry list (`previewPrefix`). The gate's hash input is unchanged byte for byte, so no gate preview or delete changes.
