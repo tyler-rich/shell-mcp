@@ -48,6 +48,7 @@ Each is one PR, Opus 5.5 at High (D-022).
 - the gate forwarding the clamped `timeout_ms`;
 - `priv_policy`;
 - the restored mode on restore's preview and result (P-10, pre-approved after S4c-0).
+- `priv_backup_check` (P-11) and the owner in write results (P-12), approved during S4c-2.
 
 Plus one privileged-policy schema change: a total size cap on the backup store (`backups.max_store_bytes`, §4.1).
 
@@ -180,6 +181,7 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 - A copy, a new file or a new directory without an explicit owner is the helper's (`root:root`), whether or not root is in `owners.users`.
 - The allow-list governs what may be *set*, so this is as documented.
 - **Decision:** documented in PRIVILEGED §6 by S4c-2.
+- **Status: done (S4c-2, PR #30).** PRIVILEGED §6 says so, and the write tools' previews show the owner that will be set ("root (a new file without an owner is root's)").
 
 **N-4. The gate's chmod has no metadata read-back.**
 - **Decision:** a low-priority follow-up, in no S4c session. It changes a gate tool, so it is its own PR.
@@ -202,6 +204,8 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 | X-8 | **Pruning runs before the operation commits.** `store.save` prunes as soon as the new backup exists. An operation that then fails (verify, a lost race) has still pruned an older version. A restore can also prune the very backup it is restoring, if that backup is the oldest kept (its data is already in memory, so the restore itself succeeds). | **MUST** (Q12) | Prune after the operation succeeded, and never the backup being restored (S4c-2 and S4c-5). |
 | X-9 | **Backups are not tied to approvals.** A backup's metadata records `op` and `request_id`, but not the preview it belongs to. | **MUST** (cheap) | The metadata records `preview_sha256` when the op carried one (a local file format, not the wire; D3). |
 | X-10 | **Read-back of metadata.** Chown and chmod do not re-read what they set. Writes verify their content. | **MUST** (cheap) | fstat the same descriptor after fchown or fchmod; a mismatch is `verify_failed` (S4c-0 for the non-recursive ops, S4c-3 for recursive). |
+
+**Status after S4c-2:** X-7 fixed (the store cap, §4.1). X-8 fixed for every op but restore (S4c-5: never the backup being restored). X-9 fixed (`preview_sha256` in the metadata).
 
 **Status after S4c-1:** X-1 fixed (P-1 and the combined hash; the dedicated preview ops' own hashes come with each op). X-2 fixed in the approval core (`gated(t, privileged)`, ceiling `read` for unapproved privileged operations); each tool session registers its tools. X-4: P-7 done; the `timeout` message for privileged ops is S4c-6's and S4c-7's. X-5 documented (PRIVILEGED §6). X-3 for the read tools.
 
@@ -547,10 +551,12 @@ Protocol v1 is amended in place before any release, as in PRs #18, #24, #25 and 
 | P-8 | `priv_policy` (Q6: yes) | new op, read, core | `{policy_sha256, max_tier, limits, roots (read, write, persistence), owners, modes_max, backups_keep, backups_max_store_bytes, commands[] (id, tier, unit, description, templates, root_equivalent, capabilities), packages (enabled, install, remove, allow_update_index, allow_upgrade), power.allowed}`; never `paths.deny` values (only their count) and never `acknowledge` text | discoverability for the model (Q6) |
 | P-9 | `expected_destination_sha256` | args of `priv_copy`, `priv_move`; valid only with `overwrite: true` (otherwise `bad_request`) | 64 lowercase hex. The destination must exist as a regular file with that content when the commit is prepared; otherwise `exists` (`not_found` when it is gone), and nothing changes. It is checked through the descriptor the backup reads, and `unchangedSince` holds it to the commit, as `expected_sha256` does for writes. | Q15 (approved): an approved overwrite replaces exactly the destination the approver saw. A preview that saw no destination sends `overwrite: false` instead; one that saw a directory or symlink requests no approval. |
 | P-10 | the restored mode (pre-approved by the maintainer, 2026-10-18, R-1) | results of `priv_restore_backup`, and `priv_restore_preview` (P-2c) | S4c-5 designs the exact fields: the recorded and the resulting mode, for a file and for tree entries | A restore's narrowing to `modes.max` is never silent (S4c-0 clamps it but has no field to report it). |
+| P-11 | `priv_backup_check` (approved by the maintainer during S4c-2, 2026-10-18) | new op, read, core | args `{path}` → `{written, bytes, fits, store_bytes, max_store_bytes}` | The composed previews of write, copy and move (D2) cannot otherwise learn `backups.keep`, the store cap or its use, so they could not refuse an operation whose backup would not fit (D3 change 0). The path must be one the write ops may change, so it is also the previews' write-root check. |
+| P-12 | `uid`, `gid`, `owner?`, `group?` (approved by the maintainer during S4c-2, 2026-10-18) | results of `priv_write_file`, `priv_copy`, `priv_mkdir` | the new inode's owner and group as fsx read them from its descriptor; names when they are on `owners` | The tools report the owner and group actually set, as they report the mode. fsx keeps the ids `json:"-"`, so the gate's own `write_file`, `copy` and `mkdir` wire is unchanged. |
 
 **Not protocol:** the backup metadata's new `preview_sha256` (a local file format), and the server's combined policy hash.
 
-**Unchanged:** the error-code set (the store cap and a tampered backup reuse `backup_failed` and `verify_failed`); the request shape apart from P-7's value; and `priv_write_file` and `priv_mkdir`, whose preconditions are already enough (D2).
+**Unchanged:** the error-code set (the store cap and a tampered backup reuse `backup_failed` and `verify_failed`); the request shape apart from P-7's value; and `priv_write_file` and `priv_mkdir`'s arguments, whose preconditions are already enough (D2; their results gain P-12's fields).
 
 ### 4.1 Privileged policy schema change (approved, Q10)
 
@@ -636,6 +642,9 @@ All of them:
 
 ### S4c-2: write, mkdir, copy, move
 
+- **Status: done (PR #30; ARCHIVE §14, S4c-2).** The four tools (admin, operator, always gated, `destructiveHint: true`); previews composed per D2 plus `priv_backup_check` (P-11, approved during the session: without it a composed preview cannot see the store cap); P-9; the store cap (§4.1) checked before every backup, retention-aware, under a store lock, fail-closed, and by every preview that would back up; the backup's hash asserted against the hash fsx computed and the precondition, recorded as `preview_sha256` (for copy and move, `expected_destination_sha256`); prune after commit, never the request's own backups (the restore part stays S4c-5's); the owner and group in results (P-12, approved during the session); `shell-mcp check` follows `privileged.max_tier`; N-3 in PRIVILEGED §6.
+  - **Beyond the entry, found while testing:** with only `expected_destination_sha256` (or `expected_sha256`) and `unchangedSince`, a destination replaced in the moment after the last check is still replaced, and the window test of the handoff's own test list ("changed between the fresh preview and the commit (hook) is `exists`") failed on run 0. Every replace in the helper is now an exchange checked afterwards (`RENAME_EXCHANGE`, PRIVILEGED §6 "verified replaces"); an overwrite whose destination was absent commits create-only; and fsx itself requires the file backed up to be the version it hashed. Not a protocol change; a filesystem without `RENAME_EXCHANGE` (NFS) can no longer be overwritten as root. Accepted by the maintainer, with three additions in the same PR: the residual is documented (PRIVILEGED §6: the check compares inode, size and mtime, never the ctime, which the exchange itself changes, so an in-place edit that keeps the size and resets the mtime at that moment is overwritten); an operation that fails before committing anything deletes the backup it wrote; and the helper's `check-policy` probes `RENAME_EXCHANGE` and `RENAME_NOREPLACE` on each privileged write root.
+  - **The gate has the same commit window.** The gate's own `write_file` with `expected_sha256`, and its `copy` and `move` with `overwrite`, check the destination a few system calls before `rename(2)`, so a file replaced there is replaced. **To be fixed in a separate PR right after this one** (maintainer, 2026-10-19), as a gate change of its own.
 - **Includes.**
   - `shell_priv_write_file`, `shell_priv_make_directory`, `shell_priv_copy_path`, `shell_priv_move_path`, with previews composed per D2 and the preconditions passed through.
   - **P-9** (Q15): `expected_destination_sha256` on copy and move with `overwrite`, and `overwrite: false` on the re-call when the preview saw no destination.
@@ -721,6 +730,13 @@ All of them:
   - The restored backup is kept.
   - **e2e-host (core):** write, then restore, then restore again (the restore's own backup).
 - **STOP.** If verifying the data before writing would need a second read of a file larger than the 64 MiB backup bound.
+
+### Must fix before S4c-6 and S4c-7 ship (recorded by S4c-2, at the maintainer's request)
+
+S4c-1 left one exception to "the gate never answers `timeout` while the helper's command still runs" (S4c-1 status, residual X-4): P-7 makes the helper's deadline the gate's, and the gate waits 15 s beyond it, so the gate's answer is the helper's unless an instance takes more than about 13 s to start or to end its command (the kill grace is 2 s). For a read that only costs an honest `timeout`; for a root command or an apt transaction it means the caller is told nothing finished while root work carries on and may complete. So, before `shell_priv_run_command` (S4c-6) or any package tool (S4c-7) is exposed:
+- **(a) The helper kills its running command when the gate's connection drops.** It watches the connection while a command or apt-get runs, and on a hang-up or reset kills the process group (`SIGTERM`, then `SIGKILL` after the grace) before it exits, so the gate can never answer `timeout` while a root command keeps running. Tested in e2e-host in both units with a command that ignores `SIGTERM` and a gate killed mid-run.
+- **(b) A timeout on any state-changing privileged op is reported as "outcome unknown".** The `timeout` message for a privileged operator or destructive op says the operation may have completed on the host and must be checked there (preview again, or read the journal and the backups) before retrying; the approval stays consumed, and a re-call needs a new approval. This is X-4's message, made a requirement.
+- Both belong to S4c-6's and S4c-7's scope; neither changes the protocol (a hang-up is already a closed connection, and the message is text).
 
 ### S4c-6: exec
 

@@ -16,6 +16,7 @@ func FuzzParse(f *testing.F) {
 	f.Add([]byte(head + "paths:\n  write: [/srv/app]\n  persistence:\n    - path: /etc/cron.d\n      acknowledge: x\n"))
 	f.Add([]byte(head + "modes:\n  max: \"0750\"\nowners:\n  users: [root]\n"))
 	f.Add([]byte(head + "sandbox:\n  landlock: best-effort\nbackups:\n  keep: 0\n"))
+	f.Add([]byte(head + "backups:\n  keep: 3\n  max_store_bytes: 67108864\n"))
 	f.Add([]byte("version: 1\n---\n"))
 	fx := newFixture(f)
 	f.Fuzz(func(t *testing.T, data []byte) {
@@ -23,7 +24,8 @@ func FuzzParse(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if p.ClientUID == 0 || p.ModesMax&0o7002 != 0 || p.Limits.MaxTimeoutS > 1800 || p.BackupsKeep > 100 || p.Packages.Enabled {
+		if p.ClientUID == 0 || p.ModesMax&0o7002 != 0 || p.Limits.MaxTimeoutS > 1800 || p.BackupsKeep > 100 || p.Packages.Enabled ||
+			p.BackupsMaxStoreBytes < 64<<20 || p.BackupsMaxStoreBytes > 1<<40 {
 			t.Fatalf("accepted policy breaks an invariant: %+v", p)
 		}
 		for _, w := range p.Paths.WriteRoots() {

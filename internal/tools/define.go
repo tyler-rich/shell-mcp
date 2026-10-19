@@ -102,7 +102,7 @@ func define[In, Out any](d *Deps, s spec[In, Out]) Tool {
 	}
 	def := &mcp.Tool{
 		Name: s.name, Title: s.title, Description: s.description,
-		Annotations: annotations(s.title, s.tier, s.idempotent), InputSchema: in, OutputSchema: out,
+		Annotations: annotations(s.title, s.tier, s.idempotent, s.privileged), InputSchema: in, OutputSchema: out,
 	}
 	if canGate && d.gated(s.tier, s.privileged) {
 		// Client-side defence in depth (handoff §3 a.2): Claude Code shows
@@ -231,15 +231,19 @@ func result[Out any](env envelope.Envelope[Out], summary string) (*mcp.CallToolR
 // annotations per TOOLS.md: read → read-only, not destructive, idempotent,
 // open world; operator → not read-only, not destructive, idempotent per
 // tool, open world; destructive → destructive, not idempotent, open world.
-func annotations(title string, tier Tier, idempotent bool) *mcp.ToolAnnotations {
+// A privileged operator tool changes root-owned state, so it is
+// destructive, with idempotentHint per tool (handoff D9).
+func annotations(title string, tier Tier, idempotent, privileged bool) *mcp.ToolAnnotations {
 	t, f := true, false
 	a := &mcp.ToolAnnotations{Title: title, OpenWorldHint: &t}
-	switch tier {
-	case TierRead:
+	switch {
+	case tier == TierRead:
 		a.ReadOnlyHint, a.DestructiveHint, a.IdempotentHint = true, &f, true
-	case TierOperator:
+	case tier == TierOperator && privileged:
+		a.DestructiveHint, a.IdempotentHint = &t, idempotent
+	case tier == TierOperator:
 		a.DestructiveHint, a.IdempotentHint = &f, idempotent
-	case TierDestructive:
+	case tier == TierDestructive:
 		a.DestructiveHint = &t
 	}
 	return a

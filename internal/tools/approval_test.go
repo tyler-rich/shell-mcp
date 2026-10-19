@@ -567,8 +567,9 @@ func TestApprovalSchemaAndMeta(t *testing.T) {
 			if hasConfirm != c.confirm || (hasConfirm && (cf.Type != "boolean" || cf.Description == "")) {
 				t.Fatalf("%s under %s: confirm %v", r.Tool.Def.Name, c.method, hasConfirm)
 			}
-			// Destructive tools are gated whatever the configuration.
-			if want := c.gated || r.Tier == TierDestructive; meta != want {
+			// Destructive and privileged tools are gated whatever the
+			// configuration.
+			if want := c.gated || r.Tier == TierDestructive || r.Privileged; meta != want {
 				t.Fatalf("%s under %s %v: requiresUserInteraction %v", r.Tool.Def.Name, c.method, c.tiers, meta)
 			}
 			if out, _ := r.Tool.Def.OutputSchema.(*jsonschema.Schema); out.Properties["approval"] == nil {

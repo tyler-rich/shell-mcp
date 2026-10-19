@@ -52,6 +52,7 @@ func opTable() map[string]opSpec {
 		protocol.OpPrivListDir:       {policy.TierRead, (*server).listDir},
 		protocol.OpPrivStat:          {policy.TierRead, (*server).stat},
 		protocol.OpPrivListBackups:   {policy.TierRead, (*server).listBackups},
+		protocol.OpPrivBackupCheck:   {policy.TierRead, (*server).backupCheck},
 		protocol.OpPrivWriteFile:     {policy.TierOperator, (*server).writeFile},
 		protocol.OpPrivMkdir:         {policy.TierOperator, (*server).mkdir},
 		protocol.OpPrivChown:         {policy.TierOperator, (*server).chown},
@@ -115,6 +116,17 @@ func (s *server) dispatch() *protocol.Response {
 		return s.errResp(err)
 	}
 	data, warnings, err := spec.run(s, s.req.Args)
+	switch {
+	case err == nil:
+		// Retention only once the operation succeeded (handoff X-8).
+		s.store.pruneAfter(s.backupIDs)
+	case !s.committed && provablyUnchanged(err):
+		// It failed before changing anything (fsx says so positively): its
+		// backups hold nothing that was lost, and must not fill the store.
+		// Any other failure keeps them.
+		s.store.discard(s.backupIDs)
+		s.discarded, s.backupIDs = s.backupIDs, nil
+	}
 	return s.result(data, warnings, err)
 }
 
@@ -177,4 +189,11 @@ func (s *server) errResp(err error) *protocol.Response {
 		code, msg = protocol.CodeExecFailed, "command could not be started"
 	}
 	return failure(code, msg)
+}
+
+// provablyUnchanged reports fsx's positive signal that a failed operation
+// changed nothing (fsx.Error.Unchanged); an unknown state is not unchanged.
+func provablyUnchanged(err error) bool {
+	var fe *fsx.Error
+	return errors.As(err, &fe) && fe.Unchanged
 }

@@ -465,6 +465,25 @@ func TestBackups(t *testing.T) {
 	}
 }
 
+// TestBackupsMaxStoreBytes (handoff §4.1): default 1 GiB, range 64 MiB to
+// 1 TiB, refused by field name outside it.
+func TestBackupsMaxStoreBytes(t *testing.T) {
+	f := newFixture(t)
+	if p := f.mustLoad(t, head); p.BackupsMaxStoreBytes != 1<<30 {
+		t.Errorf("default %d", p.BackupsMaxStoreBytes)
+	}
+	for _, n := range []int64{64 << 20, 1 << 30, 1 << 40} {
+		if p := f.mustLoad(t, head+fmt.Sprintf("backups:\n  max_store_bytes: %d\n", n)); p.BackupsMaxStoreBytes != n {
+			t.Errorf("%d loaded as %d", n, p.BackupsMaxStoreBytes)
+		}
+	}
+	for _, bad := range []string{"0", "-1", "67108863", "1099511627777"} {
+		f.mustFail(t, head+"backups:\n  max_store_bytes: "+bad+"\n", "backups.max_store_bytes")
+	}
+	// Validated even when backups are off (it is then not used).
+	f.mustFail(t, head+"backups:\n  keep: 0\n  max_store_bytes: 1\n", "backups.max_store_bytes")
+}
+
 func cmd(id, path, extra string) string {
 	return fmt.Sprintf("  - id: %s\n    path: %s\n    tier: operator\n%s    templates: [[]]\n", id, path, extra)
 }

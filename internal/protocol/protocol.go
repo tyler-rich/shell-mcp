@@ -160,6 +160,9 @@ const (
 	OpPrivPkgRemovePreview  = "priv_pkg_remove_preview"
 	// OpPrivPower asks systemd to reboot or power off (broad unit).
 	OpPrivPower = "priv_power"
+	// OpPrivBackupCheck says whether an overwrite of a path would write a
+	// backup and whether it fits the backup store (handoff P-11; core).
+	OpPrivBackupCheck = "priv_backup_check"
 )
 
 // PrivOps lists every privileged operation.
@@ -167,7 +170,7 @@ var PrivOps = []string{
 	OpPrivReadFile, OpPrivListDir, OpPrivStat, OpPrivWriteFile, OpPrivMkdir, OpPrivChown,
 	OpPrivChmod, OpPrivCopy, OpPrivMove, OpPrivListBackups, OpPrivRestoreBackup, OpPrivDelete,
 	OpPrivExec, OpPrivPkgUpdateIndex, OpPrivPkgInstall, OpPrivPkgUpgrade, OpPrivPkgRemove,
-	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPower,
+	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPower, OpPrivBackupCheck,
 }
 
 // Tier names on the wire: a request's ceiling, and max_tier in the gate

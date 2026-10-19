@@ -23,6 +23,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/pathx"
@@ -68,6 +70,10 @@ type meta struct {
 	Seq       int64  `json:"seq"` // orders backups made within the same second
 	Op        string `json:"op"`
 	RequestID string `json:"request_id"`
+	// PreviewSHA256 is the content hash the request's precondition named
+	// (expected_sha256, expected_destination_sha256): what the approver's
+	// preview saw. Optional; absent in backups made before S4c-2.
+	PreviewSHA256 string `json:"preview_sha256,omitempty"`
 }
 
 func (m *meta) dataName() string {
@@ -81,6 +87,7 @@ type store struct {
 	dir   string
 	trust gpolicy.Trust
 	keep  int
+	max   int64 // backups.max_store_bytes
 	now   func() time.Time
 }
 
@@ -159,18 +166,39 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// save writes one backup of src and prunes older versions of its path.
-func (st *store) save(src *fsx.BackupSource, op, requestID string) (string, error) {
+// save writes one backup of src, within the store's size cap. precondition
+// is the content hash the request named (expected_sha256 of a write,
+// expected_destination_sha256 of a copy or move): recorded in the metadata
+// as preview_sha256 and, like the hash fsx computed (src.SHA256), required
+// of what is backed up. Older versions of the path are pruned only once
+// the operation has succeeded (pruneAfter), never here.
+func (st *store) save(src *fsx.BackupSource, op, requestID, precondition string) (string, error) {
 	root, err := st.open()
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = root.Close() }()
+	unlock, err := lockStore(root)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 	now := st.now()
 	uid, gid := ownerIDs(src.Info)
 	m := meta{V: metaVersion, ID: newID(now), Kind: src.Kind, Path: src.Path, UID: uid, GID: gid,
 		Mode: fmt.Sprintf("%04o", unixMode(src.Info)), Created: now.UTC().Format(time.RFC3339Nano),
-		Seq: time.Now().UnixNano(), Op: op, RequestID: requestID}
+		Seq: time.Now().UnixNano(), Op: op, RequestID: requestID, PreviewSHA256: precondition}
+	var size int64
+	if src.Kind == fsx.BackupFile {
+		size = src.Info.Size()
+	}
+	r, err := st.room(root, src.Path, size, metaBound(&m))
+	switch {
+	case err != nil:
+		return "", err
+	case !r.fits:
+		return "", r.refusal()
+	}
 	dataTmp, metaTmp := m.dataName()+tmpSuffix, m.ID+metaSuffix+tmpSuffix
 	committed := false
 	defer func() {
@@ -185,7 +213,7 @@ func (st *store) save(src *fsx.BackupSource, op, requestID string) (string, erro
 		return "", storeErr("the backup could not be created; nothing was changed")
 	}
 	h := sha256.New()
-	cw := &countingWriter{w: io.MultiWriter(f, h), limit: maxBackupBytes}
+	cw := &countingWriter{w: io.MultiWriter(f, h), limit: r.limit}
 	switch src.Kind {
 	case fsx.BackupFile:
 		_, err = io.Copy(cw, src.File)
@@ -204,6 +232,8 @@ func (st *store) save(src *fsx.BackupSource, op, requestID string) (string, erro
 		err = cerr
 	}
 	switch {
+	case errors.Is(err, errTooLarge) && r.limit < maxBackupBytes:
+		return "", r.fullErr()
 	case errors.Is(err, errTooLarge):
 		return "", storeErr("what would be replaced or removed exceeds the %d MiB backup limit; nothing was changed", maxBackupBytes>>20)
 	case err != nil:
@@ -214,6 +244,12 @@ func (st *store) save(src *fsx.BackupSource, op, requestID string) (string, erro
 		return "", storeErr("the backup could not be written; nothing was changed")
 	}
 	m.Size, m.SHA256 = cw.n, hex.EncodeToString(h.Sum(nil))
+	// What was backed up must be what fsx hashed, and what the request's
+	// precondition named: a file rewritten in place between the hash and
+	// this read (keeping its size and mtime) is refused here.
+	if src.Kind == fsx.BackupFile && (src.SHA256 != "" && m.SHA256 != src.SHA256 || precondition != "" && m.SHA256 != precondition) {
+		return "", storeErr("the file changed while it was being backed up; nothing was changed")
+	}
 	mb, err := json.Marshal(m, json.Deterministic(true))
 	if err == nil {
 		err = writeSmall(root, metaTmp, mb)
@@ -234,7 +270,6 @@ func (st *store) save(src *fsx.BackupSource, op, requestID string) (string, erro
 		_ = d.Sync()
 		_ = d.Close()
 	}
-	st.prune(root, src.Path)
 	return m.ID, nil
 }
 
@@ -312,6 +347,13 @@ func (st *store) metas(root *os.Root) ([]meta, bool) {
 			out = append(out, *m)
 		}
 	}
+	sortNewestFirst(out)
+	return out, truncated
+}
+
+// sortNewestFirst orders metadata newest first: by creation time, then by
+// sequence within the same second, then by id.
+func sortNewestFirst(out []meta) {
 	slices.SortFunc(out, func(a, b meta) int {
 		if c := strings.Compare(b.Created, a.Created); c != 0 {
 			return c
@@ -324,7 +366,6 @@ func (st *store) metas(root *os.Root) ([]meta, bool) {
 		}
 		return strings.Compare(b.ID, a.ID)
 	})
-	return out, truncated
 }
 
 // readMeta reads and strictly decodes one metadata file.
@@ -348,18 +389,187 @@ func readMeta(root *os.Root, id string) (*meta, error) {
 	return &m, nil
 }
 
-// prune keeps the newest backups.keep versions of p. Failures leave extra
-// versions behind; they never fail the operation that made the backup.
-func (st *store) prune(root *os.Root, p string) {
-	all, _ := st.metas(root)
-	kept := 0
-	for i := range all {
-		m := &all[i]
+// The store's size cap (backups.max_store_bytes, PRIVILEGED §4 and §6): the
+// bytes of every file in the store together, data and metadata, stray
+// files included. A backup is written only when the store as it will be
+// afterwards (this backup added, and the versions of the same path that
+// this backup's retention will prune once its operation succeeds taken
+// away) stays within the cap; the data written is bounded by the room left.
+// A store whose total cannot be counted refuses every backup.
+
+// storeLockWait bounds the wait for another helper instance's backup.
+const storeLockWait = 10 * time.Second
+
+// usage counts the store: its total bytes and every backup's metadata,
+// newest first. It fails closed: more names than it reads, an entry that
+// is not a regular file, or metadata that does not decode.
+func (st *store) usage(root *os.Root) (int64, []meta, error) {
+	d, err := root.Open(".")
+	if err != nil {
+		return 0, nil, storeErr("the backup store cannot be read; nothing was changed")
+	}
+	names, err := d.Readdirnames(maxStoreEntries + 1)
+	_ = d.Close()
+	if err != nil && !errors.Is(err, io.EOF) {
+		return 0, nil, storeErr("the backup store cannot be read; nothing was changed")
+	}
+	if len(names) > maxStoreEntries {
+		return 0, nil, storeErr("the backup store holds more than %d names, so its size cannot be counted; nothing was changed; remove old backups on the host", maxStoreEntries)
+	}
+	var used int64
+	var out []meta
+	for _, n := range names {
+		fi, err := root.Lstat(n)
+		if err != nil || !fi.Mode().IsRegular() {
+			return 0, nil, storeErr("the backup store holds an entry that is not a regular file, so its size cannot be counted; nothing was changed")
+		}
+		used += fi.Size()
+		if id, ok := strings.CutSuffix(n, metaSuffix); ok && backupIDRE.MatchString(id) {
+			m, err := readMeta(root, id)
+			if err != nil {
+				return 0, nil, storeErr("a backup's metadata in the store is unreadable, so the store's size cannot be counted; nothing was changed")
+			}
+			out = append(out, *m)
+		}
+	}
+	sortNewestFirst(out)
+	return used, out, nil
+}
+
+// backupRoom is what a backup may take.
+type backupRoom struct {
+	fits          bool
+	limit         int64 // data bytes it may write
+	used, max     int64
+	size          int64
+	overPerBackup bool
+}
+
+func (r *backupRoom) fullErr() error {
+	return storeErr("the backup store is full (%d of %d bytes used); nothing was changed; remove old backups on the host or raise backups.max_store_bytes", r.used, r.max)
+}
+
+func (r *backupRoom) refusal() error {
+	if r.overPerBackup {
+		return storeErr("what would be replaced or removed exceeds the %d MiB backup limit; nothing was changed", maxBackupBytes>>20)
+	}
+	return r.fullErr()
+}
+
+// room is whether a backup of p, size bytes of data and at most metaLen
+// of metadata, fits the store (an error only when the store cannot be
+// counted).
+func (st *store) room(root *os.Root, p string, size, metaLen int64) (*backupRoom, error) {
+	used, metas, err := st.usage(root)
+	if err != nil {
+		return nil, err
+	}
+	// This backup's retention, once its operation succeeds, prunes the
+	// versions of p beyond the newest keep-1.
+	var freed int64
+	n := 0
+	for i := range metas {
+		m := &metas[i]
 		if m.Path != p {
 			continue
 		}
-		kept++
-		if kept > st.keep {
+		n++
+		if n >= st.keep {
+			for _, name := range []string{m.ID + metaSuffix, m.dataName()} {
+				if fi, err := root.Lstat(name); err == nil {
+					freed += fi.Size()
+				}
+			}
+		}
+	}
+	base := used - freed + metaLen
+	r := &backupRoom{used: used, max: st.max, size: size, limit: min(int64(maxBackupBytes), st.max-base)}
+	switch {
+	case size > maxBackupBytes:
+		r.overPerBackup = true
+	case base+size <= st.max:
+		r.fits = true
+	}
+	return r, nil
+}
+
+// metaBound bounds the metadata file of m once its size and hash are known.
+func metaBound(m *meta) int64 {
+	c := *m
+	c.Size, c.Entries, c.SHA256 = maxBackupBytes, maxStoreEntries, strings.Repeat("0", 64)
+	b, err := json.Marshal(c, json.Deterministic(true))
+	if err != nil {
+		return maxMetaBytes
+	}
+	return int64(len(b)) + 64
+}
+
+// lockStore serializes backups across helper instances (one per
+// connection), so that two cannot both find room for their backup: an
+// exclusive flock on the store directory, waited for up to storeLockWait.
+func lockStore(root *os.Root) (func(), error) {
+	d, err := root.Open(".")
+	if err != nil {
+		return nil, storeErr("the backup store cannot be opened; nothing was changed")
+	}
+	sc, err := d.SyscallConn()
+	if err != nil {
+		_ = d.Close()
+		return nil, storeErr("the backup store cannot be locked; nothing was changed")
+	}
+	flock := func(how int) error {
+		var ferr error
+		if cerr := sc.Control(func(fd uintptr) { ferr = unix.Flock(int(fd), how) }); cerr != nil {
+			return cerr
+		}
+		return ferr
+	}
+	deadline := time.Now().Add(storeLockWait)
+	for {
+		err = flock(unix.LOCK_EX | unix.LOCK_NB)
+		if err == nil {
+			return func() { _ = flock(unix.LOCK_UN); _ = d.Close() }, nil
+		}
+		if !errors.Is(err, unix.EWOULDBLOCK) || time.Now().After(deadline) {
+			_ = d.Close()
+			return nil, storeErr("the backup store is busy (another request is writing a backup) or cannot be locked; nothing was changed")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// pruneAfter keeps the newest backups.keep versions of each path the
+// request backed up, once its operation has succeeded (handoff X-8). The
+// request's own backups are never removed and count among the versions
+// kept. Failures leave extra versions behind; they never fail the
+// operation.
+func (st *store) pruneAfter(own []string) {
+	if len(own) == 0 {
+		return
+	}
+	root, err := st.open()
+	if err != nil {
+		return
+	}
+	defer func() { _ = root.Close() }()
+	all, _ := st.metas(root)
+	mine := map[string]bool{}
+	for _, id := range own {
+		mine[id] = true
+	}
+	kept := map[string]int{}
+	for i := range all {
+		if mine[all[i].ID] {
+			kept[all[i].Path]++
+		}
+	}
+	for i := range all {
+		m := &all[i]
+		if _, ours := kept[m.Path]; !ours || mine[m.ID] {
+			continue
+		}
+		kept[m.Path]++
+		if kept[m.Path] > st.keep {
 			_ = root.Remove(m.ID + metaSuffix)
 			_ = root.Remove(m.dataName())
 		}
@@ -368,7 +578,7 @@ func (st *store) prune(root *os.Root, p string) {
 
 // backup is fsx's backup hook for this request.
 func (s *server) backup(src *fsx.BackupSource) error {
-	id, err := s.store.save(src, s.req.Op, s.req.ID)
+	id, err := s.store.save(src, s.req.Op, s.req.ID, s.precondition)
 	if err != nil {
 		return err
 	}
@@ -577,5 +787,87 @@ func (s *server) restoreTree(m *meta, data []byte, rootMode os.FileMode, owner *
 		default:
 			return n, storeErr("the tree backup holds an unexpected entry type; the restore stopped")
 		}
+	}
+}
+
+// backupCheckData is priv_backup_check's answer (handoff P-11): whether an
+// overwrite of the path now would write a backup, of how many bytes, and
+// whether it fits the store's cap, with the store's current use and cap.
+type backupCheckData struct {
+	Written       bool  `json:"written"`
+	Bytes         int64 `json:"bytes"`
+	Fits          bool  `json:"fits"`
+	StoreBytes    int64 `json:"store_bytes"`
+	MaxStoreBytes int64 `json:"max_store_bytes"`
+}
+
+// backupCheck answers priv_backup_check: the path must be one the write ops
+// may change (under a write root, not denied or protected); a regular file
+// there would be backed up when backups are on, and the store is counted
+// as the backup itself would count it (room). It changes nothing.
+func (s *server) backupCheck(raw jsontext.Value) (data any, warns []string, failure error) {
+	var a pathArgs
+	if err := decode(raw, &a); err != nil {
+		return nil, nil, err
+	}
+	out := backupCheckData{Fits: true, MaxStoreBytes: s.p.BackupsMaxStoreBytes}
+	fi, err := s.fs.WriteTarget(a.Path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if fi == nil || !fi.Mode().IsRegular() || s.p.BackupsKeep == 0 {
+		return out, nil, nil
+	}
+	root, err := s.store.open()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = root.Close() }()
+	r, err := s.store.room(root, a.Path, fi.Size(), metaBound(&meta{Path: a.Path, Op: protocol.OpPrivWriteFile, Kind: fsx.BackupFile,
+		ID: newID(s.o.Now()), Created: s.o.Now().UTC().Format(time.RFC3339Nano), RequestID: s.req.ID, PreviewSHA256: strings.Repeat("0", 64)}))
+	if err != nil {
+		return nil, nil, err
+	}
+	out.Written, out.Bytes, out.Fits, out.StoreBytes = true, fi.Size(), r.fits, r.used
+	return out, nil, nil
+}
+
+// StoreUsage is the backup store's total size as a backup counts it
+// (check-policy reports it beside backups.max_store_bytes).
+func StoreUsage(dir string, trust gpolicy.Trust) (int64, error) {
+	st := &store{dir: dir, trust: trust}
+	root, err := st.open()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = root.Close() }()
+	n, _, err := st.usage(root)
+	return n, err
+}
+
+// discard removes backups the request wrote when its operation failed
+// before committing anything: metadata first, so a backup exists exactly
+// while its metadata does. Under the store lock, like a backup.
+func (st *store) discard(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	root, err := st.open()
+	if err != nil {
+		return
+	}
+	defer func() { _ = root.Close() }()
+	unlock, err := lockStore(root)
+	if err != nil {
+		return
+	}
+	defer unlock()
+	for _, id := range ids {
+		m, err := readMeta(root, id)
+		if err != nil {
+			continue
+		}
+		_ = root.Remove(id + metaSuffix)
+		_ = root.Remove(m.dataName())
 	}
 }

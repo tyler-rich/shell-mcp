@@ -128,7 +128,7 @@ func (f *FS) deleteOp(p string, recursive, apply bool) (DeleteResult, error) {
 				if !fi.Mode().IsRegular() {
 					return res, errf(protocol.CodeBackupFailed, "only regular files and directories can be backed up; nothing was deleted")
 				}
-				backedUp, berr := f.backupFile(l)
+				backedUp, berr := f.backupFile(l, "", nil)
 				if berr != nil {
 					return res, berr
 				}
@@ -139,6 +139,7 @@ func (f *FS) deleteOp(p string, recursive, apply bool) (DeleteResult, error) {
 			if err = l.parent.Remove(l.base); err != nil {
 				return res, mapErr(err)
 			}
+			f.commit()
 			res.Deleted = true
 		}
 		return res, nil
@@ -178,6 +179,7 @@ func (f *FS) deleteOp(p string, recursive, apply bool) (DeleteResult, error) {
 			return res, err
 		}
 	}
+	f.commit() // from here on entries may be removed
 	removed := 0
 	if err := f.removeTree(l, sub, p, subReal, 1, &removed, backedUp); err != nil {
 		return res, err

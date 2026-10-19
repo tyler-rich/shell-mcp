@@ -87,8 +87,9 @@ func opTable() map[string]opSpec {
 var privTiers = map[string]policy.Tier{
 	protocol.OpPrivReadFile: policy.TierRead, protocol.OpPrivListDir: policy.TierRead,
 	protocol.OpPrivStat: policy.TierRead, protocol.OpPrivListBackups: policy.TierRead,
-	protocol.OpPrivExec:      policy.TierRead,
-	protocol.OpPrivWriteFile: policy.TierOperator, protocol.OpPrivMkdir: policy.TierOperator,
+	protocol.OpPrivBackupCheck: policy.TierRead,
+	protocol.OpPrivExec:        policy.TierRead,
+	protocol.OpPrivWriteFile:   policy.TierOperator, protocol.OpPrivMkdir: policy.TierOperator,
 	protocol.OpPrivChown: policy.TierOperator, protocol.OpPrivChmod: policy.TierOperator,
 	protocol.OpPrivCopy: policy.TierOperator, protocol.OpPrivMove: policy.TierOperator,
 	protocol.OpPrivRestoreBackup: policy.TierOperator, protocol.OpPrivPkgUpdateIndex: policy.TierOperator,

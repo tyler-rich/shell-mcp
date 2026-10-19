@@ -19,6 +19,7 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/privd/ops"
@@ -248,6 +249,13 @@ func broadUsers(p *policy.Policy) []string {
 // item that needs review: list B binaries, persistence roots, capabilities
 // added to the core unit, root-equivalent commands, and warnings. The exit
 // code is 1 if serve would refuse the policy.
+// probeNoReplace and probeExchange are fsx's rename-flag probes; tests
+// replace them.
+var (
+	probeNoReplace = fsx.ProbeNoReplace
+	probeExchange  = fsx.ProbeExchange
+)
+
 func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int {
 	fs := flag.NewFlagSet("check-policy", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -295,6 +303,29 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 	for _, e := range p.Paths.Persistence {
 		pr("persistence root: %s (acknowledge: %q)", e.Path, e.Acknowledge)
 	}
+	// Moves without overwrite need RENAME_NOREPLACE, and every replace as
+	// root RENAME_EXCHANGE (PRIVILEGED §6): probe each privileged write root
+	// for both (two files created, renamed and removed inside it, as the
+	// gate's check-policy does).
+	for _, root := range p.Paths.WriteRoots() {
+		for _, pb := range []struct {
+			flag, needs string
+			probe       func(string) error
+			unsupported error
+		}{
+			{"RENAME_NOREPLACE", "moves without overwrite are refused under this root", probeNoReplace, fsx.ErrNoReplaceUnsupported},
+			{"RENAME_EXCHANGE", "writes, copies and moves that replace a file are refused under this root", probeExchange, fsx.ErrExchangeUnsupported},
+		} {
+			switch err := pb.probe(root); {
+			case err == nil:
+				pr("ok   privileged write root %s: %s supported", root, pb.flag)
+			case errors.Is(err, pb.unsupported):
+				pr("WARN privileged write root %s: the filesystem does not support %s; %s", root, pb.flag, pb.needs)
+			default:
+				pr("WARN privileged write root %s: could not probe %s (%v); %s without it", root, pb.flag, err, pb.needs)
+			}
+		}
+	}
 	var owners []string
 	for _, u := range p.Owners.Users {
 		owners = append(owners, fmt.Sprintf("%s(%d)", u.Name, u.ID))
@@ -305,6 +336,13 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 	}
 	pr("owners: users %s; groups %s", strings.Join(owners, " "), strings.Join(groups, " "))
 	pr("modes.max: %04o   backups.keep: %d", uint32(p.ModesMax), p.BackupsKeep)
+	if p.BackupsKeep > 0 {
+		use := "its current use could not be read"
+		if n, err := ops.StoreUsage(units.BackupDir, env.trust); err == nil {
+			use = fmt.Sprintf("%d bytes used now", n)
+		}
+		pr("backups.max_store_bytes: %d (the backup store, %s: %s)", p.BackupsMaxStoreBytes, units.BackupDir, use)
+	}
 	pr("core unit capability bounding set: %s", strings.Join(p.Capabilities, " "))
 	if p.UsesBroad() {
 		pr("broad unit: yes, ROOT-EQUIVALENT (network, full root capabilities%s) for %s", map[bool]string{true: "", false: ", no ProtectClock="}[p.BroadProtectClock()], strings.Join(broadUsers(p), ", "))

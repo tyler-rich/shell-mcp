@@ -90,6 +90,7 @@ func TestRouting(t *testing.T) {
 		want string
 	}{
 		"priv_stat":                {`{"path":"/etc/example-app"}`, "core"},
+		"priv_backup_check":        {`{"path":"/etc/example-app/x"}`, "core"},
 		"priv_write_file":          {`{"path":"/etc/example-app/x","content_b64":"eA=="}`, "core"},
 		"priv_delete":              {`{"path":"/etc/example-app/x"}`, "core"},
 		"priv_exec":                {`{"command_id":"probe","args":[]}`, "core"},
@@ -178,5 +179,17 @@ func TestRoutingTiers(t *testing.T) {
 	f.fail("priv_power", m{}, "tier_denied")
 	if h.count(broadSock) != 4 {
 		t.Fatalf("broad got %d requests, want 4", h.count(broadSock))
+	}
+}
+
+// TestBackupCheckIsReadTier: priv_backup_check (handoff P-11) is a read op
+// the gate forwards at ceiling read, to the core socket.
+func TestBackupCheckIsReadTier(t *testing.T) {
+	f := newFixture(t, "read")
+	h := startTwoHelpers(t, f, "privileged:\n  enabled: true\n  socket: "+coreSock+"\n  broad_socket: "+broadSock+"\n  max_tier: read\n")
+	f.writePolicy("read", "privileged:\n  enabled: true\n  socket: "+coreSock+"\n  broad_socket: "+broadSock+"\n  max_tier: read\n")
+	r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"priv_backup_check","args":{"path":"/etc/example-app/x"},"timeout_ms":2000}` + "\n")
+	if !r.OK || string(r.Data) != `{"from":"core"}` || h.count(coreSock) != 1 {
+		t.Fatalf("priv_backup_check at ceiling read: %s %+v", r.Data, r.Error)
 	}
 }

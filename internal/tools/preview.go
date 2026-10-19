@@ -87,7 +87,12 @@ func entryPreview(e *Entry) map[string]any {
 }
 
 func (d *Deps) statPreview(ctx context.Context, target, path string, acc *policyAcc) (*Entry, *envelope.Error) {
-	e, _, pol, err := previewFetch[Entry](ctx, d, target, protocol.OpStat, pathWire{Path: path}, true)
+	return d.statPreviewOp(ctx, target, protocol.OpStat, path, acc)
+}
+
+// statPreviewOp is statPreview through op (stat, or the helper's priv_stat).
+func (d *Deps) statPreviewOp(ctx context.Context, target, op, path string, acc *policyAcc) (*Entry, *envelope.Error) {
+	e, _, pol, err := previewFetch[Entry](ctx, d, target, op, pathWire{Path: path}, true)
 	acc.add(pol)
 	return e, err
 }

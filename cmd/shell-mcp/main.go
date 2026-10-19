@@ -377,7 +377,7 @@ func cmdCheck(ctx context.Context, args []string, lookup config.LookupFunc, stdo
 			report.OK = false
 		} else {
 			tc.OK, tc.ProbeResult = true, res
-			tc.Tools = tools.EffectiveTools(regs, res.Gate.MaxTier, res.Privileged.Enabled)
+			tc.Tools = tools.EffectiveTools(regs, res.Gate.MaxTier, res.Privileged.Enabled, res.Privileged.MaxTier)
 		}
 		report.Targets = append(report.Targets, tc)
 	}

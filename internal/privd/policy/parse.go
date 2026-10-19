@@ -34,6 +34,12 @@ const (
 	maxText        = 256 // acknowledge and description
 	maxErrors      = 50
 	maxBackupsKeep = 100
+	// The backup store's total size cap (backups.max_store_bytes,
+	// PRIVILEGED §4): one backup's maximum (64 MiB) to 1 TiB, 1 GiB by
+	// default.
+	minStoreBytes     = 64 << 20
+	maxStoreBytes     = 1 << 40
+	defaultStoreBytes = 1 << 30
 	// MaxTimeoutCeiling is the hard ceiling on limits.max_timeout_s
 	// (PRIVILEGED §4).
 	MaxTimeoutCeiling = 1800
@@ -92,7 +98,8 @@ type rawModes struct {
 }
 
 type rawBackups struct {
-	Keep *int `yaml:"keep"`
+	Keep          *int   `yaml:"keep"`
+	MaxStoreBytes *int64 `yaml:"max_store_bytes"`
 }
 
 type rawCommand struct {
@@ -511,7 +518,19 @@ func (v *validator) modes(p *Policy, raw *rawModes) {
 
 func (v *validator) backups(p *Policy, raw *rawBackups) {
 	p.BackupsKeep = 10
-	if raw == nil || raw.Keep == nil {
+	p.BackupsMaxStoreBytes = defaultStoreBytes
+	if raw == nil {
+		return
+	}
+	// Validated even when keep is 0 (it is then not used).
+	if raw.MaxStoreBytes != nil {
+		if n := *raw.MaxStoreBytes; n < minStoreBytes || n > maxStoreBytes {
+			v.fail("backups.max_store_bytes", "%d is not in %d..%d (64 MiB to 1 TiB)", n, minStoreBytes, int64(maxStoreBytes))
+		} else {
+			p.BackupsMaxStoreBytes = n
+		}
+	}
+	if raw.Keep == nil {
 		return
 	}
 	if k := *raw.Keep; k < 0 || k > maxBackupsKeep {
