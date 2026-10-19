@@ -278,7 +278,7 @@ func TestPrivTimeoutAnswerAfterCommandEnded(t *testing.T) {
 			}
 			args, _ := json.Marshal(a)
 			req := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":"priv_exec","args":%s,"timeout_ms":40000}`+"\n", newID(), args)
-			cmd := exec.CommandContext(t.Context(), gateBin, "serve", "--policy", short, "--principal", "e2e") //nolint:gosec // G204: the installed gate and this test's policy
+			cmd := exec.CommandContext(t.Context(), gateBin, "serve", "--policy", short, "--principal", "e2e")
 			cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, svcShell)}
 			cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin"}
 			cmd.Dir = "/"
