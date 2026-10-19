@@ -456,21 +456,21 @@ func (r *backupRoom) refusal() error {
 	return r.fullErr()
 }
 
-// room is whether a backup of path, size bytes of data and at most metaLen
+// room is whether a backup of p, size bytes of data and at most metaLen
 // of metadata, fits the store (an error only when the store cannot be
 // counted).
-func (st *store) room(root *os.Root, path string, size, metaLen int64) (*backupRoom, error) {
+func (st *store) room(root *os.Root, p string, size, metaLen int64) (*backupRoom, error) {
 	used, metas, err := st.usage(root)
 	if err != nil {
 		return nil, err
 	}
 	// This backup's retention, once its operation succeeds, prunes the
-	// versions of path beyond the newest keep-1.
+	// versions of p beyond the newest keep-1.
 	var freed int64
 	n := 0
 	for i := range metas {
 		m := &metas[i]
-		if m.Path != path {
+		if m.Path != p {
 			continue
 		}
 		n++
@@ -519,7 +519,7 @@ func lockStore(root *os.Root) (func(), error) {
 	}
 	flock := func(how int) error {
 		var ferr error
-		if cerr := sc.Control(func(fd uintptr) { ferr = unix.Flock(int(fd), how) }); cerr != nil { //nolint:gosec // G115: a descriptor fits an int
+		if cerr := sc.Control(func(fd uintptr) { ferr = unix.Flock(int(fd), how) }); cerr != nil {
 			return cerr
 		}
 		return ferr

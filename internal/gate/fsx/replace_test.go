@@ -211,8 +211,8 @@ func TestVerifiedReplaceConcurrentRace(t *testing.T) {
 			if got := read(t, dst); got != racer {
 				t.Fatalf("%s run %d: the racer's content was lost (op error %v): %q", op.name, i, err, got)
 			}
-			switch {
-			case err == nil:
+			switch err {
+			case nil:
 				wonOK++
 				if len(*backups) != nb+1 || !strings.HasSuffix((*backups)[nb].Path, "\x00"+old) {
 					t.Fatalf("%s run %d: replaced something other than the approved content", op.name, i)

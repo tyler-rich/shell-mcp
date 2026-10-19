@@ -264,9 +264,9 @@ func (f *FS) WriteTarget(p string) (fs.FileInfo, error) {
 	}
 	defer l.close()
 	if l.parent == nil {
-		fi, err := l.top.Stat(".")
-		if err != nil {
-			return nil, mapErr(err)
+		fi, serr := l.top.Stat(".")
+		if serr != nil {
+			return nil, mapErr(serr)
 		}
 		return fi, nil
 	}

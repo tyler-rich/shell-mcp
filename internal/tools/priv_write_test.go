@@ -460,10 +460,10 @@ func TestPrivWriteResults(t *testing.T) {
 	} {
 		b := newPrivWriteHarness(t, approval.MethodWeb)
 		b.g.set(c.op, gateReply{data: c.data})
-		id := b.pending(c.tool, privWriteArgs[c.tool])
-		b.approve(id)
-		if env, _ := b.call(c.tool, withID(privWriteArgs[c.tool], id)); errCode(env) != "verify_failed" {
-			t.Fatalf("%s unverified: %v", c.tool, env)
+		bid := b.pending(c.tool, privWriteArgs[c.tool])
+		b.approve(bid)
+		if benv, _ := b.call(c.tool, withID(privWriteArgs[c.tool], bid)); errCode(benv) != "verify_failed" {
+			t.Fatalf("%s unverified: %v", c.tool, benv)
 		}
 	}
 	for _, name := range privWriteTools {
@@ -472,10 +472,10 @@ func TestPrivWriteResults(t *testing.T) {
 			b.g.setPath("priv_stat", privDir, privNotFound())
 		}
 		b.g.set(privWriteOp[name], gateReply{code: "exists", msg: "destination exists"})
-		id := b.pending(name, privWriteArgs[name])
-		b.approve(id)
-		if env, _ := b.call(name, withID(privWriteArgs[name], id)); errCode(env) != "exists" {
-			t.Fatalf("%s: helper refusal %v", name, env)
+		bid := b.pending(name, privWriteArgs[name])
+		b.approve(bid)
+		if benv, _ := b.call(name, withID(privWriteArgs[name], bid)); errCode(benv) != "exists" {
+			t.Fatalf("%s: helper refusal %v", name, benv)
 		}
 	}
 	m := newPrivWriteHarness(t, approval.MethodWeb)

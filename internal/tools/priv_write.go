@@ -333,8 +333,8 @@ func (d *Deps) privWritePreview(ctx context.Context, in *privWriteIn, target str
 		return nil, e
 	}
 	if st != nil {
-		if e := refuseNonFile("path", st); e != nil {
-			return nil, e
+		if re := refuseNonFile("path", st); re != nil {
+			return nil, re
 		}
 	}
 	var cur map[string]any

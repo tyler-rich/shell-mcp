@@ -56,11 +56,11 @@ func (f *fixture) metas() []map[string]any {
 		if !strings.HasSuffix(n, ".meta.json") {
 			continue
 		}
-		var m map[string]any
-		if err := json.Unmarshal([]byte(readFile(f.t, filepath.Join(f.backups, n))), &m); err != nil {
+		var md map[string]any
+		if err := json.Unmarshal([]byte(readFile(f.t, filepath.Join(f.backups, n))), &md); err != nil {
 			f.t.Fatal(err)
 		}
-		out = append(out, m)
+		out = append(out, md)
 	}
 	return out
 }
