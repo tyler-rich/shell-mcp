@@ -34,24 +34,26 @@ func TestCatalogueSnapshot(t *testing.T) {
 	for file, env := range catalogueVariants {
 		t.Run(file, func(t *testing.T) { outs[file] = checkCatalogue(t, file, env) })
 	}
-	// The variants differ exactly where they should: destructive tools are
-	// always gated; operator tools only when SHELL_MCP_APPROVAL_TIERS lists
-	// operator.
+	// The variants differ exactly where they should: destructive tools, and
+	// privileged tools of tier operator, are always gated; unprivileged
+	// operator tools only when SHELL_MCP_APPROVAL_TIERS lists operator;
+	// read tools never (D-006).
 	for file, want := range map[string]map[string]bool{
 		"catalogue.json":         {"destructive": true},
 		"catalogue-confirm.json": {"destructive": true, "operator": true},
 	} {
 		var rows []struct {
-			Name     string `json:"name"`
-			Tier     string `json:"tier"`
-			Requires bool   `json:"requires_user_interaction"`
+			Name       string `json:"name"`
+			Tier       string `json:"tier"`
+			Privileged bool   `json:"privileged"`
+			Requires   bool   `json:"requires_user_interaction"`
 		}
 		if err := json.Unmarshal(outs[file], &rows); err != nil {
 			t.Fatal(err)
 		}
 		gated := 0
 		for _, r := range rows {
-			if r.Requires != want[r.Tier] {
+			if r.Requires != (want[r.Tier] || r.Privileged && r.Tier == "operator") {
 				t.Fatalf("%s: %s (tier %s) requires_user_interaction %v", file, r.Name, r.Tier, r.Requires)
 			}
 			if r.Requires {
@@ -87,6 +89,29 @@ func TestCatalogueSnapshot(t *testing.T) {
 		}
 		if want := []string{"operator [operator] false", "destructive [admin] true"}; !slices.Equal(got, want) {
 			t.Fatalf("%s: shell_run_command rows %v, want %v", file, got, want)
+		}
+	}
+	// The privileged tools so far (S4c-1): read tier, admin only.
+	for file, out := range outs {
+		var rows []struct {
+			Name       string   `json:"name"`
+			Tier       string   `json:"tier"`
+			Profiles   []string `json:"profiles"`
+			Privileged bool     `json:"privileged"`
+		}
+		if err := json.Unmarshal(out, &rows); err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, r := range rows {
+			if r.Privileged {
+				got = append(got, fmt.Sprintf("%s %s %v", r.Name, r.Tier, r.Profiles))
+			}
+		}
+		want := []string{"shell_priv_list_backups read [admin]", "shell_priv_list_directory read [admin]",
+			"shell_priv_read_file read [admin]", "shell_priv_stat_path read [admin]"}
+		if !slices.Equal(got, want) {
+			t.Fatalf("%s: privileged rows %v, want %v", file, got, want)
 		}
 	}
 }

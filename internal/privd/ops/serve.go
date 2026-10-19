@@ -202,11 +202,12 @@ func Serve(o *Options) int {
 	return code
 }
 
-// respond writes resp with the helper's gate block; it returns 0 if the
-// response was written.
+// respond writes resp with the helper's own block (its version, policy
+// hash, max_tier and unit), which the gate passes to the server as the
+// response's `helper` block; it returns 0 if the response was written.
 func (s *server) respond(nc net.Conn, resp *protocol.Response) int {
 	resp.V = protocol.Version
-	resp.Gate = &protocol.GateInfo{Version: s.o.Version, Principal: "shell-mcp-privd", DurationMS: time.Since(s.start).Milliseconds()}
+	resp.Gate = &protocol.GateInfo{Version: s.o.Version, Principal: "shell-mcp-privd", Unit: string(s.unit), DurationMS: time.Since(s.start).Milliseconds()}
 	if s.p != nil {
 		resp.Gate.PolicySHA256, resp.Gate.MaxTier = s.p.SHA256, s.p.MaxTier.String()
 	}

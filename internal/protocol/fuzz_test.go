@@ -63,6 +63,10 @@ func FuzzDecodeResponse(f *testing.F) {
 	f.Add([]byte(`{"v":1,"id":"","ok":false,"error":{"code":"sandbox_unavailable","message":"m"},"warnings":[]}` + "\n"))
 	f.Add([]byte(`{"v":1,"id":"x","ok":true}`))
 	f.Add([]byte(""))
+	// A forwarded response with the helper's block (handoff P-1).
+	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000003","ok":true,"data":{},"warnings":[],` +
+		`"gate":{"version":"0.1.0","principal":"p","policy_sha256":"ab","max_tier":"read","duration_ms":1},` +
+		`"helper":{"version":"0.1.0","principal":"shell-mcp-privd","policy_sha256":"cd","max_tier":"operator","unit":"core","duration_ms":1}}` + "\n"))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		r, err := DecodeResponse(bytes.NewReader(b))
 		if err != nil {

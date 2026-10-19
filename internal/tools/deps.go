@@ -90,6 +90,12 @@ func Catalogue(d *Deps) (*Registry, error) {
 			return nil, err
 		}
 	}
+	// Privileged tools: admin only, each at the tier it is defined with.
+	for _, tool := range privilegedTools(d) {
+		if err := r.Register(tool, tool.Tier, true); err != nil {
+			return nil, err
+		}
+	}
 	// shell_run_command: at operator in the operator profile, at destructive
 	// (every call approval-gated) in admin.
 	if err := r.RegisterFor(runCommand(d, TierOperator), TierOperator, []Profile{ProfileOperator}); err != nil {

@@ -129,6 +129,13 @@ type response struct {
 		PolicySHA256 string `json:"policy_sha256"`
 		MaxTier      string `json:"max_tier"`
 	} `json:"gate"`
+	Helper *struct {
+		Version      string `json:"version"`
+		Principal    string `json:"principal"`
+		PolicySHA256 string `json:"policy_sha256"`
+		MaxTier      string `json:"max_tier"`
+		Unit         string `json:"unit"`
+	} `json:"helper"`
 }
 
 // orderReader records whether the sandbox had been applied when the gate

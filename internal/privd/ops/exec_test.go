@@ -3,9 +3,11 @@
 package ops_test
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type execData struct {
@@ -61,5 +63,35 @@ func TestAuditNeverContent(t *testing.T) {
 	if !strings.Contains(lines[0], `"owner":"tester"`) || !strings.Contains(lines[0], `"mode":"0640"`) ||
 		!strings.Contains(lines[0], `"path":"`+filepath.Join(f.write, "app.conf")+`"`) {
 		t.Fatalf("write audit lacks path, owner or mode: %q", lines[0])
+	}
+}
+
+// TestExecBoundedByOwnTimeout: whatever timeout_ms a request carries, the
+// helper runs a command for at most its own max_timeout_s, then SIGTERM and,
+// for a command that ignores it, SIGKILL after the kill grace; it answers
+// only once the command has ended (timed_out). The gate forwards the
+// timeout it waits for (handoff P-7); this is the helper's own bound behind
+// it.
+func TestExecBoundedByOwnTimeout(t *testing.T) {
+	f := newFixture(t,
+		replace("  default_timeout_s: 5\n  max_timeout_s: 10\n", "  default_timeout_s: 1\n  max_timeout_s: 1\n"),
+		func(f *fixture, s *string) {
+			*s = strings.Replace(*s, "  - id: probe-op\n", "  - id: probe-sleep\n    path: "+f.probe+"\n    tier: read\n    templates: [[\"ignore-term\", \"30s\"]]\n  - id: probe-op\n", 1)
+		})
+	start := time.Now()
+	out, _ := f.serveRaw(`{"v":1,"id":"` + reqID + `","ceiling":"read","op":"priv_exec","args":{"command_id":"probe-sleep","args":["ignore-term","30s"]},"timeout_ms":600000}` + "\n")
+	took := time.Since(start)
+	var r struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			TimedOut bool    `json:"timed_out"`
+			Signal   *string `json:"signal"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &r); err != nil || !r.OK || !r.Data.TimedOut || r.Data.Signal == nil || *r.Data.Signal != "SIGKILL" {
+		t.Fatalf("answer %q", out)
+	}
+	if took > 8*time.Second {
+		t.Fatalf("the helper ran %v under max_timeout_s 1", took)
 	}
 }

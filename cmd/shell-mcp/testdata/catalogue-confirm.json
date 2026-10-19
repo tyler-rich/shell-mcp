@@ -497,6 +497,86 @@
     "requires_user_interaction": false
   },
   {
+    "name": "shell_priv_list_backups",
+    "title": "List backups",
+    "tier": "read",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "List backups"
+    },
+    "description": "Lists, as root, the backups the privileged helper kept of what it overwrote or deleted, newest first: id, kind, original path, owner, mode, size, SHA-256, time and operation.",
+    "input_schema_sha256": "368eeaa3a79c677804c344d863c3dcdf56e78466bcc4fd49baaabc005223d92b",
+    "output_schema_sha256": "78596880487d04742635b50f04df91eaac4786e9daf67204478bdf2a5c74387f",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_priv_list_directory",
+    "title": "List directory as root",
+    "tier": "read",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "List directory as root"
+    },
+    "description": "Lists, as root, a directory's entries under the privileged policy's roots with type, size, mode, owner, group and modification time; symlink targets are reported, not followed.",
+    "input_schema_sha256": "4d58e3d0bb8ed0dcce42866300ba4d8940d551fd25d89cf0fbc5a4782344f401",
+    "output_schema_sha256": "284ccdf701e86f9b2a9416d09bf4f15a2d6906ce162264ea3d6a8edeb017a755",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_priv_read_file",
+    "title": "Read file as root",
+    "tier": "read",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Read file as root"
+    },
+    "description": "Reads, as root, a bounded part of a text file under the privileged policy's roots, or its last lines, redacted; a binary file returns only its size and SHA-256.",
+    "input_schema_sha256": "062ac73f234b5f9c2277ef86f8b1d9778203a1c82b5c0a5f3c64d6a359cd4cf7",
+    "output_schema_sha256": "c1d53a1021aab2f2f0f9339e00e2d15d8c31061dbc137b256cb5bd34b9ed700d",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_priv_stat_path",
+    "title": "Stat path as root",
+    "tier": "read",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Stat path as root"
+    },
+    "description": "Returns, as root, one path's type, size, mode, owner, group and modification time under the privileged policy's roots, without following a final symlink, whose target is reported.",
+    "input_schema_sha256": "2af6ff11abe9191b4568e62addcb7bc71d353c46c7684eb247b1de81115b627a",
+    "output_schema_sha256": "86435fb795786e7bc96d78f626e9d93da3f8b28bdf49b2e33ee82c89c0896cbc",
+    "requires_user_interaction": false
+  },
+  {
     "name": "shell_read_file",
     "title": "Read file",
     "tier": "read",

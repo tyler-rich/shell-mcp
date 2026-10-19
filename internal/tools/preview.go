@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"reflect"
+	"strings"
 
 	"github.com/tyler-rich/shell-mcp/internal/envelope"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
@@ -18,8 +19,13 @@ import (
 // so that a fresh preview hashes the same unless the target changed.
 
 // previewFetch sends one preview read and decodes its data strictly. With
-// absentOK a not_found answer is no error: data is nil. The policy hash of
-// the gate block is returned in every case the gate answered.
+// absentOK a not_found answer is no error: data is nil. The policy hash is
+// returned in every case the gate answered: the gate block's, or for a
+// privileged op (priv_*) the hash of the gate's and the helper's
+// (privPolicy), so that an approval is bound to both policies. A
+// privileged answer a preview uses (a success, or not_found under
+// absentOK) must carry both; any other refusal is the preview's result
+// as it is, whoever answered it.
 func previewFetch[T any](ctx context.Context, d *Deps, target, op string, args any, absentOK bool) (data *T, warnings []string, policy string, e *envelope.Error) {
 	resp, e := d.call(ctx, target, op, args, d.budget())
 	if e != nil {
@@ -28,7 +34,13 @@ func previewFetch[T any](ctx context.Context, d *Deps, target, op string, args a
 	if resp.Gate != nil {
 		policy = resp.Gate.PolicySHA256
 	}
-	if !resp.OK && absentOK && resp.Error != nil && resp.Error.Code == protocol.CodeNotFound {
+	absent := !resp.OK && absentOK && resp.Error != nil && resp.Error.Code == protocol.CodeNotFound
+	if strings.HasPrefix(op, privOpPrefix) && (resp.OK || absent) {
+		if policy, e = privPolicy(resp); e != nil {
+			return nil, nil, "", e
+		}
+	}
+	if absent {
 		return nil, nil, policy, nil
 	}
 	env := envelope.FromGate[T](target, resp)
@@ -37,6 +49,23 @@ func previewFetch[T any](ctx context.Context, d *Deps, target, op string, args a
 	}
 	redactStrings(d.redactor(), reflect.ValueOf(env.Data))
 	return env.Data, env.Warnings, policy, nil
+}
+
+// privOpPrefix starts every privileged (helper) operation's name.
+const privOpPrefix = "priv_"
+
+// privPolicy is the policy hash a privileged preview binds (handoff D1):
+// the SHA-256 of "gate:<gate policy hash>\nhelper:<privileged policy
+// hash>", so that an edit of either policy between the approval and the
+// re-call changes it (approval_invalid). A forwarded answer without the
+// helper block, or without either hash, cannot bind the privileged policy
+// and is refused: no approval is requested on it.
+func privPolicy(resp *protocol.Response) (string, *envelope.Error) {
+	if resp.Gate == nil || resp.Gate.PolicySHA256 == "" || resp.Helper == nil || resp.Helper.PolicySHA256 == "" {
+		return "", envelope.Errorf("internal",
+			"the gate's answer to a privileged operation carries no privileged policy hash (a gate older than this server?); nothing was requested")
+	}
+	return sha256Hex([]byte("gate:" + resp.Gate.PolicySHA256 + "\nhelper:" + resp.Helper.PolicySHA256)), nil
 }
 
 // entryPreview is a path's state: absent, or its stat.

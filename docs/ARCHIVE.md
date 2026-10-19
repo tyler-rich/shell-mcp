@@ -2326,3 +2326,49 @@ Every other write in fsx and the helper opens with `O_CREAT|O_EXCL` (temporary f
 - **N-3:** documented in PRIVILEGED §6 by S4c-2.
 - **N-4 (the gate's chmod read-back):** a low-priority follow-up, outside S4c.
 - **Restore (R-1):** S4c-5 reports the resulting mode in the preview and in the result, so a narrowing is never silent. Any protocol field for it is pre-approved (handoff P-10).
+
+### 2026-10-18 — Privileged foundations: the helper block, the clamped timeout, privileged gating, the privileged read tools (PR #29, branch feat/priv-foundations)
+**Decision:** Build the handoff's S4c-1 entry (`docs/handoff/S4C-PRIVILEGED.md` §5): the server sees and binds the privileged policy, privileged operations are gated per D-006, a forwarded request's timeout is the gate's own, and the first root tools are exposed, read-only.
+- **First commit (`b96bdb7`): handoff §7.1 verbatim.** D-006's re-call bullet, S-12's Record and Executing lines, and the CLAUDE.md "Approval" definition, with the privileged policy and a privileged command's unit; nothing else in them. D-021 unchanged.
+- **P-1, the helper block.** The helper's own response block gains `unit` (`GateInfo.Unit`, `omitempty`, set only by the helper). The gate's `forward` returns it as the response's `helper` block (`Response.Helper`), beside its own `gate` block, on a success and on a helper error that carried a block; a response the gate answers itself has none.
+- **P-7, the clamped timeout.** `forward` sends `timeout_ms` = the timeout the gate waits for (`s.timeout()`: the request's, clamped to `limits.max_timeout_s`, or `default_timeout_s` when absent). Everything else is forwarded as received.
+- **D1, binding.** `previewFetch` computes, for every `priv_*` answer a preview uses (a success, or `not_found` under `absentOK`), the policy hash SHA-256(`gate:<gate hash>\nhelper:<helper hash>`), and refuses one without both blocks' hashes with `internal` (no approval requested). Other refusals pass through with their own code, so a gate's `privileged_disabled` stays itself. The record struct is unchanged. Composed previews (S4c-2) get the binding without further code.
+- **D9, gating.** `Deps.gated(t, privileged)`: destructive always; operator when privileged or when `SHELL_MCP_APPROVAL_TIERS` lists it; read never. `ungatedCeiling(max, privileged)` is `read` for a privileged tool. `spec.privileged` drives both, and `define` panics when it disagrees with the `shell_priv_` name. Privileged tools register through `privilegedTools` at their defined tier (admin only, as before). `requiresUserInteraction` follows `gated`, so a privileged operator tool carries it in every catalogue variant; the snapshot test now checks that rule.
+- **Tools.** `shell_priv_read_file`, `shell_priv_list_directory`, `shell_priv_stat_path`: variants of the gate's own (`fileTool` in `files.go`: same inputs, checks, data shapes, redaction and caps; the path input names the privileged roots). `shell_priv_list_backups` (`privileged.go`): `path?` and `limit` 1..1000 (the helper's bound; TOOLS.md listed only `path?`), metadata only. All read tier, admin only, "as root" in the description. The catalogue gains their four rows and nothing else (the snapshot diff is additions only).
+- **Docs.** TOOLS.md (the privileged rows and "what the table leaves open (S4c-1)", the approval-code and preview-binding sentences), ARCHITECTURE §3 steps 2 and 4, §4.1 and §4.2 (`helper`), PRIVILEGED §3 (items 4 and 5) and §6 (§7.2's preview sentence, timeouts, redaction X-5, the backup list), the handoff (S4c-1's status, the X-items).
+- **Not changed:** the error-code set, the envelope (the tool result has no `helper` block), Landlock, the generated units, either policy schema, the approval record.
+
+**Premises checked, and pushback:**
+- **"The server can never report timeout while the helper's command keeps running (kill or wait as the handoff specifies)."** The handoff specifies P-7 only, and X-4 keeps a `timeout` message for privileged ops for S4c-6 and S4c-7, so it accepts a residual case. With P-7 the helper's deadline is the gate's, its kill grace is 2 s, and the gate waits 15 s beyond the deadline (the server 20 s beyond its budget, which is at least the gate's timeout): the gate's answer is the helper's, after the command ended, in both units (tested). Only a helper instance that takes more than about 13 s to start, or to finish its kill, lets the gate answer `timeout` first. A strict "never" would need the helper to watch its connection and abort when the gate goes away, which no document specifies; not built (raised in the PR).
+- **"For privileged commands the unit."** No privileged command tool or `priv_exec_preview` exists yet; D6 binds the unit through that preview's hash (S4c-6). This session adds the wording (§7.1) and the plumbing, nothing more.
+- **"A privileged policy edit after approval gives approval_invalid."** The handoff defers the end-to-end form to S4c-2 (no gated privileged tool yet). Tested here with a synthetic privileged operator tool through the real approval flow, for the privileged and for the gate policy.
+- **"The server receives and reports the privileged policy hash."** The gate client decodes `helper` and the approval binds it; e2e checks that the hash equals the installed privileged policy's SHA-256 and the unit is `core`. The tool envelope does not show it: an envelope field is beyond the handoff (a STOP condition), so it is offered as a follow-up.
+- **"The helper enforces its own bound."** It already did (`server.timeout`). `TestExecBoundedByOwnTimeout` covers it with a command that ignores `SIGTERM`; it passes on the old code too, so it is regression coverage, not failing-first evidence.
+- **First commit.** The handoff's S4c-1 entry also puts §7.2's wording in the first commit; the prompt limits that commit to §7.1. The prompt was followed; §7.2's relevant items are in the docs commit.
+
+**Findings:**
+- **A request without `timeout_ms` had the same X-4 problem.** The gate waited its `default_timeout_s` plus 15 s while the helper used its own `default_timeout_s`. The server always sends one, but the gate no longer depends on it: P-7 forwards the default.
+- **`EffectiveTools` ignores `privileged.max_tier`.** `shell-mcp check` caps privileged tools by the gate's `max_tier` only, so a privileged operator tool would be listed as effective on a target whose `privileged.max_tier` is read (the gate refuses it anyway, `tier_denied`). Harmless while every privileged tool is read; for S4c-2, with the first operator tool.
+
+**Tests (committed failing first, `92fbe2e`; output in the PR body).** Inert stubs in that commit: `Response.Helper`, `GateInfo.Unit`, `spec.privileged`, and the ignored `privileged` parameter of `gated` and `ungatedCeiling`.
+- **gate:** `TestForwardHelperBlock` (core and broad, a helper error, the gate's own answers), `TestForwardClampsTimeout` (above the limit, within it, none), `TestForwardAnswerAfterHelperRun` (a fake helper that runs for the forwarded timeout: before, the gate answered `timeout` while it ran).
+- **helper:** `TestResponseBlockNamesUnit`; `TestExecBoundedByOwnTimeout` (regression).
+- **server:** `TestPrivilegedGatingRule`, `TestPrivilegedOperatorAlwaysGated`, `TestPrivilegedApprovalBindsBothPolicies`, `TestPrivilegedPreviewNeedsHelperBlock`, `TestPrivilegedPerTierCeiling`, `TestPrivReadToolsRegistered`, `TestPrivReadTools`, `TestPrivReadToolsRefusals`; the ceiling table and the catalogue snapshot test (the privileged rows, the gating rule).
+- **e2e-host:** `TestPrivToolsListed`, `TestPrivToolReadFile` (a root-only file, the helper's and the server's redaction, the server's cap; outside the roots, the deny list, `/etc/shadow`, a private key, a final symlink, `max_bytes` above the policy's), `TestPrivToolListAndStat`, `TestPrivToolListBackups`, `TestPrivToolJournalJoin` (the helper's and the gate's lines join on the id), `TestPrivHelperBlockReachesServer`, `TestPrivTimeoutAnswerAfterCommandEnded` (core and broad, a `SIGTERM`-ignoring command, a gate `max_timeout_s` of 5 under a 40 s request).
+
+**Fuzzing:** `FuzzDecodeResponse` (a new seed with a `helper` block) and `FuzzDecodeRequest`, 60 s each, no failure.
+
+**Alternatives rejected:**
+- A separate `HelperInfo` type: the handoff calls `helper` the helper's own block plus `unit`; one type keeps them identical.
+- Requiring the helper block on every privileged answer, reads included: only what an approval binds needs it, and a read tool still works through a gate that predates P-1.
+- A `helper` block in the tool envelope: an envelope change beyond the handoff.
+- Aborting the helper's command when the gate disconnects: not specified; see the pushback.
+
+**Deferred / follow-ups:** the residual X-4 window (above); the envelope `helper` block, if wanted; `EffectiveTools` and `privileged.max_tier` (S4c-2); S4c-2 onwards per the handoff.
+
+**Versions:**
+- **Go:** 1.27.2, the newest stable per go.dev (`go.dev/dl/?mode=json`, read 2026-10-18).
+- **Refresh:** `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
