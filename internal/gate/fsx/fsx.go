@@ -94,6 +94,12 @@ type Config struct {
 	// RENAME_EXCHANGE system call of a verified replace, and its error is
 	// that call's result. Tests only; production code never sets it.
 	InjectExchangeFault func() error
+	// OnCommit, when non-nil, is called after each commit that changes the
+	// filesystem (a file or directory created, replaced, moved, removed, or
+	// its metadata changed), and before a delete starts removing entries. The
+	// helper uses it to tell a failed operation that changed nothing from one
+	// that did; the gate leaves it nil.
+	OnCommit func()
 }
 
 // Meta is an inode's mode (permission and special bits), owner and group.

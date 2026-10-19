@@ -124,11 +124,13 @@ func (f *FS) exchangeVerified(srcDir *os.Root, srcName string, dstDir *os.Root, 
 	got, err := srcDir.Lstat(srcName)
 	if err != nil || !got.Mode().IsRegular() || !os.SameFile(got, want) || got.Size() != want.Size() || !got.ModTime().Equal(want.ModTime()) {
 		if berr := renameat2(srcDir, srcName, dstDir, dstName, unix.RENAME_EXCHANGE); berr != nil {
+			f.commit() // the new file stays at the destination
 			return errf(protocol.CodeInternal, "the destination changed after it was checked, and could not be put back: the new file is at the "+
 				"destination and the other one is under the name %q beside the source", srcName)
 		}
 		return errf(protocol.CodeExists, "the destination changed after it was checked; it was not replaced, and nothing was changed")
 	}
+	f.commit()
 	if err := srcDir.Remove(srcName); err != nil {
 		return errf(protocol.CodeInternal, "the destination was replaced, but its previous version could not be removed from the name %q beside the source", srcName)
 	}
@@ -181,5 +183,36 @@ func withFD(f *os.File, fn func(fd int) error) error {
 // RENAME_EXCHANGE.
 var ErrExchangeUnsupported = errors.New("the filesystem does not support RENAME_EXCHANGE")
 
-// ProbeExchange reports whether dir's filesystem supports RENAME_EXCHANGE.
-func ProbeExchange(_ string) error { return nil }
+// ProbeExchange reports whether dir's filesystem supports RENAME_EXCHANGE,
+// which the helper's replacing commits need (verified replaces): it creates
+// two files inside dir, exchanges them and removes both, as ProbeNoReplace
+// does for RENAME_NOREPLACE.
+func ProbeExchange(dir string) error {
+	r, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+	a, b := probePrefix+randHex(16), probePrefix+randHex(16)
+	for _, n := range []string{a, b} {
+		fh, err := r.OpenFile(n, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			_ = r.Remove(a)
+			return err
+		}
+		if err = fh.Close(); err != nil {
+			_ = r.Remove(a)
+			_ = r.Remove(b)
+			return err
+		}
+	}
+	defer func() { _ = r.Remove(a); _ = r.Remove(b) }()
+	err = renameat2(r, a, r, b, unix.RENAME_EXCHANGE)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, syscall.EINVAL), errors.Is(err, syscall.ENOSYS):
+		return ErrExchangeUnsupported
+	}
+	return err
+}

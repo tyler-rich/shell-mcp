@@ -116,9 +116,15 @@ func (s *server) dispatch() *protocol.Response {
 		return s.errResp(err)
 	}
 	data, warnings, err := spec.run(s, s.req.Args)
-	if err == nil {
+	switch {
+	case err == nil:
 		// Retention only once the operation succeeded (handoff X-8).
 		s.store.pruneAfter(s.backupIDs)
+	case !s.committed:
+		// It failed before changing anything: its backups hold nothing that
+		// was lost, and must not fill the store.
+		s.store.discard(s.backupIDs)
+		s.backupIDs = nil
 	}
 	return s.result(data, warnings, err)
 }

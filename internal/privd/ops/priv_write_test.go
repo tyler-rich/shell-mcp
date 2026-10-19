@@ -448,7 +448,8 @@ func TestFailedOperationDiscardsItsBackup(t *testing.T) {
 		var line struct {
 			BackupIDs []string `json:"backup_ids"`
 		}
-		if err := json.Unmarshal([]byte(f.lastAudit()), &line); err != nil || len(line.BackupIDs) != 0 {
+		a := f.lastAudit()
+		if err := json.Unmarshal([]byte(a[strings.Index(a, "{"):]), &line); err != nil || len(line.BackupIDs) != 0 {
 			t.Fatalf("%s: audit line %s", c.op, f.lastAudit())
 		}
 	}

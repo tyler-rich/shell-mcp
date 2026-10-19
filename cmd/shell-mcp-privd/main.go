@@ -303,6 +303,29 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 	for _, e := range p.Paths.Persistence {
 		pr("persistence root: %s (acknowledge: %q)", e.Path, e.Acknowledge)
 	}
+	// Moves without overwrite need RENAME_NOREPLACE, and every replace as
+	// root RENAME_EXCHANGE (PRIVILEGED §6): probe each privileged write root
+	// for both (two files created, renamed and removed inside it, as the
+	// gate's check-policy does).
+	for _, root := range p.Paths.WriteRoots() {
+		for _, pb := range []struct {
+			flag, needs string
+			probe       func(string) error
+			unsupported error
+		}{
+			{"RENAME_NOREPLACE", "moves without overwrite are refused under this root", probeNoReplace, fsx.ErrNoReplaceUnsupported},
+			{"RENAME_EXCHANGE", "writes, copies and moves that replace a file are refused under this root", probeExchange, fsx.ErrExchangeUnsupported},
+		} {
+			switch err := pb.probe(root); {
+			case err == nil:
+				pr("ok   privileged write root %s: %s supported", root, pb.flag)
+			case errors.Is(err, pb.unsupported):
+				pr("WARN privileged write root %s: the filesystem does not support %s; %s", root, pb.flag, pb.needs)
+			default:
+				pr("WARN privileged write root %s: could not probe %s (%v); %s without it", root, pb.flag, err, pb.needs)
+			}
+		}
+	}
 	var owners []string
 	for _, u := range p.Owners.Users {
 		owners = append(owners, fmt.Sprintf("%s(%d)", u.Name, u.ID))

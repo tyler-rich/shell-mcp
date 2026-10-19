@@ -155,6 +155,9 @@ type server struct {
 	// precondition is the content hash the request's precondition named
 	// (expected_sha256, expected_destination_sha256), for its backups.
 	precondition string
+	// committed reports that the request changed the filesystem (fsx's
+	// OnCommit): a failed request that did not keeps no backup.
+	committed bool
 	// changed are the entries chmod or chown changed, with their old
 	// values, for the audit line.
 	changed []auditChange
@@ -445,6 +448,7 @@ func (s *server) run(nc net.Conn) *protocol.Response {
 		VerifyReplaced:              true,
 		InjectBeforeBackup:          o.InjectBeforeBackup,
 		InjectExchangeFault:         o.InjectExchangeFault,
+		OnCommit:                    func() { s.committed = true },
 		InjectReadBackFault:         o.InjectReadBackFault,
 		InjectBeforeCommit:          o.InjectBeforeCommit,
 		InjectNoReplaceFault:        o.InjectNoReplaceFault,

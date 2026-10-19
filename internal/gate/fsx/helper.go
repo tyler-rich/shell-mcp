@@ -232,6 +232,7 @@ func (f *FS) Chown(p string, o Owner) (ChownResult, error) {
 	if err := file.Chown(uid, gid); err != nil {
 		return ChownResult{}, mapErr(err)
 	}
+	f.commit()
 	res.Changed = true
 	want := res.Before
 	want.UID, want.GID = res.UID, res.GID
@@ -278,4 +279,11 @@ func (f *FS) WriteTarget(p string) (fs.FileInfo, error) {
 		return nil, mapErr(err)
 	}
 	return fi, nil
+}
+
+// commit reports a commit to Config.OnCommit.
+func (f *FS) commit() {
+	if f.cfg.OnCommit != nil {
+		f.cfg.OnCommit()
+	}
 }

@@ -262,6 +262,7 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 			return res, e
 		}
 		committed = true
+		f.commit()
 	case overwrite && (exists || !f.cfg.VerifyReplaced):
 		// (In the helper, a file that was absent when checked is committed
 		// create-only below: it replaces only what it checked.)
@@ -269,11 +270,13 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 			return res, mapErr(err)
 		}
 		committed = true
+		f.commit()
 	default:
 		if e := f.linkNoReplace(l.parent, tmp, l.base); e != nil {
 			return res, e
 		}
 		committed = true
+		f.commit()
 		if err = l.parent.Remove(tmp); err != nil {
 			return res, errf(protocol.CodeInternal, "the file was written, but its temporary name could not be removed")
 		}
@@ -449,6 +452,7 @@ func (f *FS) mkdirIn(l *loc, dir *os.Root, dirReal, name string, m os.FileMode, 
 	if err = dir.Mkdir(name, 0o700); err != nil {
 		return false, mapErr(err)
 	}
+	f.commit()
 	sub, _, _, err := f.openSubdir(l, dir, join(dirReal, name), name)
 	if err != nil {
 		return true, err
@@ -694,6 +698,7 @@ func (f *FS) MoveExpecting(src, dst string, overwrite bool, expected string) (Mo
 	if err != nil {
 		return res, mapErr(err)
 	}
+	f.commit()
 	nfi, err := ld.parent.Lstat(ld.base)
 	if err != nil || !os.SameFile(sfi, nfi) {
 		return res, errf(protocol.CodeInternal, "the moved entry could not be verified at its destination")
@@ -796,6 +801,7 @@ func (f *FS) Chmod(p string, mode os.FileMode) (ChmodResult, error) {
 	if err := file.Chmod(mode); err != nil {
 		return ChmodResult{}, mapErr(err)
 	}
+	f.commit()
 	res.Changed = true
 	want := res.Before
 	want.Mode = uint32(mode)

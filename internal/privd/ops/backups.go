@@ -844,3 +844,30 @@ func StoreUsage(dir string, trust gpolicy.Trust) (int64, error) {
 	n, _, err := st.usage(root)
 	return n, err
 }
+
+// discard removes backups the request wrote when its operation failed
+// before committing anything: metadata first, so a backup exists exactly
+// while its metadata does. Under the store lock, like a backup.
+func (st *store) discard(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	root, err := st.open()
+	if err != nil {
+		return
+	}
+	defer func() { _ = root.Close() }()
+	unlock, err := lockStore(root)
+	if err != nil {
+		return
+	}
+	defer unlock()
+	for _, id := range ids {
+		m, err := readMeta(root, id)
+		if err != nil {
+			continue
+		}
+		_ = root.Remove(id + metaSuffix)
+		_ = root.Remove(m.dataName())
+	}
+}
