@@ -370,6 +370,11 @@ func TestPrivMkdirPreviewListsParents(t *testing.T) {
 	if p["create[0]"] != "/etc/example-app/a" || p["create[1]"] != deep || p["create[2]"] != "" || !strings.Contains(p["set.owner"], "root") {
 		t.Fatalf("preview %v", p)
 	}
+	// The write-root check goes to the topmost directory to be created: the
+	// helper resolves a path only when its parent exists (e2e-host found it).
+	if q := a.g.args(t, "priv_backup_check"); q["path"] != "/etc/example-app/a" {
+		t.Fatalf("priv_backup_check of %v, want the topmost new directory", q["path"])
+	}
 	// Without parents, a missing parent is refused before any approval.
 	b := newPrivWriteHarness(t, approval.MethodWeb)
 	b.g.setPath("priv_stat", deep, privNotFound())
