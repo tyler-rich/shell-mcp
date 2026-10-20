@@ -630,10 +630,22 @@ func TestPrivRestoreConcurrentRacer(t *testing.T) {
 			counts["refused at the backup"]++
 		case resp.Error.Code == "exists":
 			counts["refused at the commit"]++
+		case resp.Error.Code == "path_denied" && strings.Contains(resp.Error.Message, "no stable path"):
+			// The racer renamed over the target between an open and the
+			// check of what was opened (fsx's openTarget): refused before
+			// anything was committed.
+			counts["refused at an open, the file replaced meanwhile"]++
 		case resp.Error.Code == "verify_failed":
 			counts["the racer after the commit, reported by the read-back"]++
 		default:
 			t.Fatalf("run %d: %+v", i, resp.Error)
+		}
+		// A refusal before the commit keeps no backup of its own: only the
+		// overwrite's backup that prep made is in the store.
+		if !resp.OK && resp.Error.Code != "verify_failed" {
+			if n := len(f.metas()); n != 1 {
+				t.Fatalf("run %d: refused with %s, but %d backups are in the store", i, resp.Error.Code, n)
+			}
 		}
 	}
 	t.Logf("concurrent racer through the helper: %d runs (a restore takes ~%v); the racer's file survived every run", runs, dur)
