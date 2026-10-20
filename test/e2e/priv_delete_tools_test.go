@@ -125,7 +125,7 @@ func TestPrivDeleteToolsApproval(t *testing.T) {
 			t.Fatalf("%d helper delete lines, want 1", n)
 		}
 		// The backup restores the tree as it was.
-		mustGate(t, "priv_restore_backup", map[string]any{"id": bid}, nil)
+		mustGateRestore(t, bid, nil)
 		if readFile(t, tree+"/a.conf") != "a\n" || readFile(t, tree+"/sub/b.conf") != "b\n" {
 			t.Fatal("the tree was not restored from its backup")
 		}

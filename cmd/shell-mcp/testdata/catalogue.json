@@ -677,6 +677,26 @@
     "requires_user_interaction": false
   },
   {
+    "name": "shell_priv_restore_backup",
+    "title": "Restore backup as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Restore backup as root"
+    },
+    "description": "Restores, as root, a backup the privileged helper kept, over exactly the version its approved preview showed (that version is backed up first), with the recorded owner and the recorded mode within the host's mask; returns the modes set and the new backup's id.",
+    "input_schema_sha256": "8144ebf25088ab3c69967b8ef08857a2054cc30fc328323be1eebd6bdbc1f257",
+    "output_schema_sha256": "250624220860d73c1c75e0933ef0b3e6c491b1ad4d5aa51dd46821b8fd3ea6a3",
+    "requires_user_interaction": true
+  },
+  {
     "name": "shell_priv_set_permissions",
     "title": "Set permissions as root",
     "tier": "operator",

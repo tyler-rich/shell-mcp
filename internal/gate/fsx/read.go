@@ -162,6 +162,11 @@ func (f *FS) ReadFile(p string, o ReadOptions) (ReadResult, error) {
 	if !fi.Mode().IsRegular() {
 		return ReadResult{}, errf(protocol.CodeBadRequest, "not a regular file")
 	}
+	// Another account could have moved the file in: it is read only when
+	// that account could read it itself (PRIVILEGED §6, handoff N-7).
+	if err := f.movedInRead(l, fi); err != nil {
+		return ReadResult{}, err
+	}
 	size := fi.Size()
 	head := make([]byte, min(int64(sniffKeyBytes), size))
 	if _, err := io.ReadFull(io.NewSectionReader(file, 0, size), head); err != nil {

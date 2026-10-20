@@ -331,15 +331,36 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 	// have put it there (PRIVILEGED §6, handoff N-1): every directory from /
 	// to it root's and neither group- nor world-writable. Check each write
 	// root's own path the same way, by descriptor.
+	// The moved-in rule for reads and overwrites (handoff N-6, N-7) checks
+	// the directories from each root down: an open directory above a root
+	// lets another account replace the root itself, which it cannot see, so
+	// read roots are reported too.
+	movedIn := func(root string, ce *fsx.ChainError) string {
+		if rp, err := filepath.EvalSymlinks(root); err == nil && ce.Dir == rp {
+			return "files under it are read as root only when another account could read them itself, and overwritten keeping their owner only when it could have written them"
+		}
+		return "another account could replace the root itself, which the per-request moved-in check does not see"
+	}
 	for _, root := range p.Paths.WriteRoots() {
 		var ce *fsx.ChainError
 		switch err := checkRootChain(root, env.trust.Owns); {
 		case err == nil:
 			pr("ok   privileged write root %s: every directory from / to it is root's and not group- or world-writable", root)
 		case errors.As(err, &ce):
-			pr("WARN privileged write root %s: %v; chmod and chown are refused under it (another account could move files in and out again)", root, ce)
+			pr("WARN privileged write root %s: %v; chmod and chown are refused under it (another account could move files in and out again); %s", root, ce, movedIn(root, ce))
 		default:
 			pr("WARN privileged write root %s: could not check the directories on its path (%v); chmod and chown are refused under it unless they pass", root, err)
+		}
+	}
+	for _, root := range p.Paths.Read {
+		var ce *fsx.ChainError
+		switch err := checkRootChain(root, env.trust.Owns); {
+		case err == nil:
+			pr("ok   privileged read root %s: every directory from / to it is root's and not group- or world-writable", root)
+		case errors.As(err, &ce):
+			pr("WARN privileged read root %s: %v; %s", root, ce, movedIn(root, ce))
+		default:
+			pr("WARN privileged read root %s: could not check the directories on its path (%v)", root, err)
 		}
 	}
 	var owners []string

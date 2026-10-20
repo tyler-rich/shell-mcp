@@ -322,6 +322,45 @@ func TestCheckPolicyProbesRenameFlags(t *testing.T) {
 // every privileged write root with a directory on its path that another
 // account could write (owned by an untrusted uid, or group- or
 // world-writable): chmod and chown are refused under such a root.
+// TestCheckPolicyChecksReadRootChains (S4c-5, N-6/N-7): the moved-in rule
+// checks the directories from a root down, so check-policy reports, for
+// each read root as for each write root, an open directory on its own path:
+// above the root another account could replace the root itself; the root
+// itself open makes the rule refuse what that account could not read.
+func TestCheckPolicyChecksReadRootChains(t *testing.T) {
+	y := strings.Replace(validPolicy, "read: [{D}/srv/app]", "read: [{D}/srv/app, {D}/srv/drop/logs, {D}/srv/shared]", 1)
+	env, p := testEnv(t, y)
+	d := filepath.Dir(filepath.Dir(filepath.Dir(p)))
+	drop, shared := filepath.Join(d, "srv", "drop"), filepath.Join(d, "srv", "shared")
+	gatetest.Mkdir(t, filepath.Join(drop, "logs"), 0o755)
+	gatetest.Mkdir(t, shared, 0o755)
+	if err := os.Chmod(drop, 0o777); err != nil { //nolint:gosec // G302: another account's write access, simulated
+		t.Fatal(err)
+	}
+	if err := os.Chmod(shared, 0o775); err != nil { //nolint:gosec // G302: a group-writable read root
+		t.Fatal(err)
+	}
+	var so, se bytes.Buffer
+	_ = checkPolicyWith([]string{"--policy", p}, &so, &se, env)
+	out := so.String()
+	for _, want := range []string{
+		"ok   privileged read root " + filepath.Join(d, "srv", "app") + ": every directory from / to it is root's",
+		"WARN privileged read root " + filepath.Join(drop, "logs") + ": " + drop + " is group- or world-writable (mode 0777); another account could replace the root itself",
+		"WARN privileged read root " + shared + ": " + shared + " is group- or world-writable (mode 0775); files under it are read as root only",
+		"WARN privileged write root " + filepath.Join(d, "etc", "example-app") + ": ",
+	} {
+		if strings.HasPrefix(want, "WARN privileged write root") {
+			if strings.Contains(out, want) {
+				t.Errorf("a closed write root got a WARN:\n%s", out)
+			}
+			continue
+		}
+		if !strings.Contains(out, want) {
+			t.Errorf("report lacks %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestCheckPolicyChecksTheChain(t *testing.T) {
 	y := strings.Replace(validPolicy, "write: [{D}/etc/example-app]", "write: [{D}/etc/example-app, {D}/srv/drop/app]", 1)
 	env, p := testEnv(t, y)

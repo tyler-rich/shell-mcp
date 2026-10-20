@@ -170,6 +170,9 @@ const (
 	// OpPrivDeletePreview reports what a delete would remove and back up,
 	// with the hash priv_delete requires (handoff P-2a; core).
 	OpPrivDeletePreview = "priv_delete_preview"
+	// OpPrivRestorePreview reports what a restore would do, with the hash
+	// priv_restore_backup requires (handoff P-2c, P-10; core).
+	OpPrivRestorePreview = "priv_restore_preview"
 )
 
 // PrivOps lists every privileged operation.
@@ -178,7 +181,7 @@ var PrivOps = []string{
 	OpPrivChmod, OpPrivCopy, OpPrivMove, OpPrivListBackups, OpPrivRestoreBackup, OpPrivDelete,
 	OpPrivExec, OpPrivPkgUpdateIndex, OpPrivPkgInstall, OpPrivPkgUpgrade, OpPrivPkgRemove,
 	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPower, OpPrivBackupCheck,
-	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview,
+	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview,
 }
 
 // Tier names on the wire: a request's ceiling, and max_tier in the gate

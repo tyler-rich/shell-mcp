@@ -65,7 +65,7 @@ func TestNewInodesWithinModesMax(t *testing.T) {
 	}
 
 	// A restore of that backup: the recorded 0664 is masked.
-	f.ok("priv_restore_backup", m{"id": wb.BackupIDs[0]}, nil)
+	f.restoreBound(wb.BackupIDs[0])
 	if readFile(t, wide) != "wide\n" || modeOf(t, wide) != 0o600 {
 		t.Errorf("restore: content %q mode %04o, want the old content at 0600", readFile(t, wide), modeOf(t, wide))
 	}
@@ -90,7 +90,7 @@ func TestRestoreTreeWithinModesMax(t *testing.T) {
 	gatetest.WriteFile(t, filepath.Join(tree, "a.txt"), "A", 0o644)
 	gatetest.WriteFile(t, filepath.Join(tree, "sub", "w.txt"), "W", 0o666)
 	_, del := f.deleteBound(tree, true)
-	f.ok("priv_restore_backup", m{"id": del.BackupIDs[0]}, nil)
+	f.restoreBound(del.BackupIDs[0])
 	for p, want := range map[string]os.FileMode{
 		tree:                                0o700,
 		filepath.Join(tree, "sub"):          0o700,

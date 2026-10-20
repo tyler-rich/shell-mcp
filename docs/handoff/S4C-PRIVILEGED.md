@@ -202,15 +202,27 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
   It ends up with a root-owned file whose content it chose, at a place of its choosing on that filesystem.
 - **Narrower than N-1:** the content is what the approver approved, and the account needs write access to both directories. But nothing ties the inherited owner to an owner the policy allows.
 - **Proposed fix (maintainer, 2026-10-19), to decide in S4c-5 for all three operations.** When the target's path fails N-1's chain rule (a directory on it is not root's, or is group- or world-writable), a write, copy or restore over an existing file does not inherit that file's owner and group: it requires an explicit owner and group from `owners`, or it is refused.
-- **Status: must be decided before S4c-5 ships.**
+- **Status: decided (maintainer, 2026-10-19, S4c-5) together with N-7, and done in S4c-5 (PR #34).** One test for both, "could another account have moved this file in?": the chain from the privileged root the path is resolved under (inclusive) down to the file's parent, by descriptor. Not the parent alone (a rename within one parent needs write access to that parent only, so an open directory higher in the root can swap a closed sibling into the path), and not the full chain from `/` (directories above a root are `check-policy`'s WARN, not checked per request; chmod and chown keep their full chain). A file is *owner-matched* when every directory in that chain is closed, or is owned by the file's owner and is neither group- nor world-writable. A write or copy over a file keeps its owner and group only when it is owner-matched; otherwise a write needs both an owner and a group from `owners`, a copy is refused (it has no owner inputs), and a restore applies the test to its recorded owner (for every file and tree entry it creates) and is refused otherwise. Pushback recorded: a restore never inherited the current file's owner (it sets the recorded one), so for restore the question was where the recorded owner lands. PRIVILEGED §6, "Files another account could have moved in".
 
 **N-7. Moved-in files are readable as root (found in S4c-4, PR #33).**
 - **What.** The chain rule (N-1) applies to chmod and chown only. An account that can write a directory under a privileged root and the directory of a root-only file elsewhere on the same filesystem can move that file in, have `priv_read_file` (read tier, never approval-gated) return its content as root, and move it back; the private-key refusal stops PEM keys only. The same move-in puts the file's SHA-256 into a delete's backup metadata, which `priv_list_backups` shows.
 - **Decision (maintainer, 2026-10-19):** decided together with N-6 in S4c-5. No separate session.
+- **Status: decided (maintainer, 2026-10-19, S4c-5) and done in S4c-5 (PR #34).** `priv_read_file` (the content, and a binary file's SHA-256) and `priv_copy`'s read of its source return a file only when it is owner-matched (N-6's test) or world-readable; otherwise `path_denied` naming the first directory that fails. `priv_stat`, `priv_list_dir` and `priv_list_backups` are unchanged (metadata). Documented consequence: a group-writable read root such as a `root:syslog 0775` `/var/log` refuses every file directly under it that is not world-readable; point read roots at closed subdirectories. The delete-backup hash is a documented residual. Because the composed write, copy and move previews hash an existing destination through `priv_read_file`, an overwrite of a file the read rule refuses is refused at its preview, even with an explicit owner.
+
+**N-8. New files in an open directory are root's (found in S4c-5).**
+- **What.** A file `priv_write_file` or `priv_copy` creates without an owner is `root:root` (N-3) in any directory. In a directory another account can write, that account can move it elsewhere on the filesystem with its approved content: N-6's gain, without a move-in. (`priv_mkdir` is not affected: a root-owned directory cannot be renamed into another parent without write access to it.)
+- **Decision (maintainer, 2026-10-19):** not in S4c-5; a follow-up. Options recorded with the decision: an explicit owner and group required there (a copy, which has no owner inputs, refused), or a default to the directory's owner and group where it is not group- or world-writable.
+- **Decision (maintainer, 2026-10-20):** decide together with N-9, before release, as one rule for files root creates in directories another account can write.
+
+**N-9. A restore applies the owner test to every restore (found in S4c-5, PR #34).**
+- **What.** `priv_restore_backup` applies N-6's owner-matched test to the owner it sets on every restore: a file whether or not one exists at its path now, and every entry of a tree, whose restored directories extend the chain. So a root-owned file inside an application-owned directory (for example a `root:example-app 0640` `.env` in the application's own directory) cannot be restored, although that is where it was.
+- **Why it is strict.** Restoring it gives the application account a root-owned file it could not have made itself, which it can move elsewhere on the filesystem (N-6's gain); a restore to an absent path is also a create (N-8).
+- **Decision (maintainer, 2026-10-20):** keep the strict behaviour for now; decide N-8 and N-9 together before release, as one rule for files root creates in directories another account can write.
 
 **R-1. A restore's narrowed mode is not reported.**
 - S4c-0 clamps the restored mode but does not report it: the result has no `mode` field, and adding one was a protocol change.
 - **Decision:** S4c-5 reports the resulting mode in the preview and in the result, so a narrowing is never silent. Any protocol field for that is pre-approved (P-10, §4).
+- **Status: done (S4c-5, PR #34).** The preview's `restore` carries `mode` beside `recorded_mode` (and `backup.mode`), `narrowed` (entries whose mode the mask changed), and for a tree `first` (≤ 50 entries with `recorded_mode` and `mode`) and `truncated`; the result carries the same.
 
 ### 2.2 Cross-cutting gaps
 
@@ -226,6 +238,8 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 | X-8 | **Pruning runs before the operation commits.** `store.save` prunes as soon as the new backup exists. An operation that then fails (verify, a lost race) has still pruned an older version. A restore can also prune the very backup it is restoring, if that backup is the oldest kept (its data is already in memory, so the restore itself succeeds). | **MUST** (Q12) | Prune after the operation succeeded, and never the backup being restored (S4c-2 and S4c-5). |
 | X-9 | **Backups are not tied to approvals.** A backup's metadata records `op` and `request_id`, but not the preview it belongs to. | **MUST** (cheap) | The metadata records `preview_sha256` when the op carried one (a local file format, not the wire; D3). |
 | X-10 | **Read-back of metadata.** Chown and chmod do not re-read what they set. Writes verify their content. | **MUST** (cheap) | fstat the same descriptor after fchown or fchmod; a mismatch is `verify_failed` (S4c-0 for the non-recursive ops, S4c-3 for recursive). |
+
+**Status after S4c-5:** X-8 fixed for restore too: the backup being restored is never pruned by the restore's own retention, nor counted as freed by the store's cap (`store.protect`).
 
 **Status after S4c-3:** X-10 fixed for recursive ops too (every entry read back on the descriptor it was changed on).
 
@@ -290,7 +304,7 @@ Columns: create-only · preview binding · set-aside/stranded · approval and re
 - **DOC: a directory move's contents are not previewed.** The move checks deny and protected rules at every new path (`walkTree`) and moves the inode, so the mode and owner are the inode's own.
 - **Backups: OK.** A replaced destination file is backed up. **Owners and modes: n/a**, since the inode is unchanged.
 
-**`priv_restore_backup`.**
+**`priv_restore_backup`.** (Status: done in S4c-5, PR #34; every MUST below, with the moved-in rule of N-6.)
 - **Preview: MUST.** There is none.
   - A dedicated `priv_restore_preview` (P-2) returns the backup's metadata (id, kind, path, size, SHA-256, owner, group, mode, created, op) and the current state at the path.
   - For a file, the current state is absent, or the file with its size, mode, owner and SHA-256; a tree needs nothing there now.
@@ -748,6 +762,7 @@ All of them:
 
 ### S4c-5: restore
 
+- **Status: done (PR #34; ARCHIVE §14, S4c-5).** P-2c, P-3 and P-10 as listed (no other protocol change). `restorePlan` is shared by `priv_restore_preview` and `priv_restore_backup`: the data verified against its recorded size and SHA-256 at both (`verify_failed`), the path re-checked, the recorded owner checked by the moved-in rule, a file's current version hashed under the read rule and its backup counted against the cap, a tree's archive parsed (`parseTreeArchive`, fuzzed) with its entry count equal to the metadata's; a file is restored by a verified replace bound to the previewed content or create-only, a tree with exclusive mkdirs and create-only files; `store.protect` keeps the backup being restored (Q12). `shell_priv_restore_backup` (operator, admin, always gated); no read-tier preview tool (Q7 does not name one). N-6 and N-7 decided with the maintainer and done (§2.1); N-8 found. Beyond the entry: `check-policy` reports read roots' chains too; `-timeout 20m` on the CI and ci-local race runs (prompt). Go stayed at 1.27.2 until PR #35 bumped it to 1.27.3, which this branch merged (ARCHIVE's temporary note, resolved).
 - **Must decide before S4c-5 ships: N-6 and N-7 (§2.1), together** (maintainer, 2026-10-19). For N-7: whether reads and backup listings follow the chain rule.
 - **N-6 (§2.1)**, for `priv_write_file`, `priv_copy` with `overwrite` and `priv_restore_backup` together. Proposed: over an existing file whose path fails the chain rule, the owner and group are not inherited; an explicit allow-listed owner and group are required, or the operation is refused. Decide with the maintainer (a STOP), then implement it in this session for all three.
 - **Includes.**

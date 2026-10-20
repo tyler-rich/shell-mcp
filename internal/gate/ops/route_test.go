@@ -96,6 +96,7 @@ func TestRouting(t *testing.T) {
 		"priv_write_file":          {`{"path":"/etc/example-app/x","content_b64":"eA=="}`, "core"},
 		"priv_delete":              {`{"path":"/etc/example-app/x"}`, "core"},
 		"priv_delete_preview":      {`{"path":"/etc/example-app/x","recursive":true}`, "core"},
+		"priv_restore_preview":     {`{"id":"20261019T120000Z-0123456789abcdef"}`, "core"},
 		"priv_exec":                {`{"command_id":"probe","args":[]}`, "core"},
 		"priv_exec/core":           {`{"command_id":"probe","args":[],"unit":"core"}`, "core"},
 		"priv_exec/broad":          {`{"command_id":"renew","args":[],"unit":"broad"}`, "broad"},
@@ -218,6 +219,27 @@ func TestMetaPreviewsAreReadTier(t *testing.T) {
 		}
 	}
 	if h.count(coreSock) != 2 || h.count(broadSock) != 0 {
+		t.Fatalf("core %d broad %d", h.count(coreSock), h.count(broadSock))
+	}
+}
+
+// The restore preview (handoff P-2c) is a read-tier core op: sent to the
+// core socket at ceiling read under privileged.max_tier read, while the
+// restore itself (operator) is refused there.
+func TestRestorePreviewIsReadTier(t *testing.T) {
+	f := newFixture(t, "read")
+	pol := "privileged:\n  enabled: true\n  socket: " + coreSock + "\n  broad_socket: " + broadSock + "\n  max_tier: read\n"
+	h := startTwoHelpers(t, f, pol)
+	f.writePolicy("read", pol)
+	r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"priv_restore_preview","args":{"id":"20261019T120000Z-0123456789abcdef"},"timeout_ms":2000}` + "\n")
+	if !r.OK || string(r.Data) != `{"from":"core"}` {
+		t.Fatalf("priv_restore_preview at ceiling read: %s %+v", r.Data, r.Error)
+	}
+	r, _ = f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"priv_restore_backup","args":{"id":"20261019T120000Z-0123456789abcdef"},"timeout_ms":2000}` + "\n")
+	if r.OK || r.Error == nil || r.Error.Code != "tier_denied" {
+		t.Fatalf("priv_restore_backup at ceiling read: %+v", r.Error)
+	}
+	if h.count(coreSock) != 1 || h.count(broadSock) != 0 {
 		t.Fatalf("core %d broad %d", h.count(coreSock), h.count(broadSock))
 	}
 }
