@@ -692,7 +692,7 @@
       "title": "Restore backup as root"
     },
     "description": "Restores, as root, a backup the privileged helper kept, over exactly the version its approved preview showed (that version is backed up first), with the recorded owner and the recorded mode within the host's mask; returns the modes set and the new backup's id.",
-    "input_schema_sha256": "e4f22778a4268a0ef7a508d46ff64a47fe4b6c8cce7140a66ad87c4e074a5744",
+    "input_schema_sha256": "c2f13feaafde0c8120e40b924a2fe50e3dc2c1d2c4da8b511db5b9d1eeb72619",
     "output_schema_sha256": "250624220860d73c1c75e0933ef0b3e6c491b1ad4d5aa51dd46821b8fd3ea6a3",
     "requires_user_interaction": true
   },

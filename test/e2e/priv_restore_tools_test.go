@@ -155,14 +155,14 @@ func TestPrivMovedInRules(t *testing.T) {
 		secret := incoming + "/secret.conf"
 		rootFile(t, secret, "root only\n", 0o600)
 		moved := appDir + "/secret.conf"
-		asUser(t, exampleApp, "/usr/bin/mv", secret, moved)
+		mvAsExampleApp(t, secret, moved)
 		r, _ := gate(t, svcShell, "priv_read_file", map[string]any{"path": moved})
 		if r.code() != "path_denied" || !strings.Contains(r.Error.Message, "the directory "+appDir+" is ") {
 			t.Fatalf("a moved-in root-only file: %s %+v", r.code(), r.Error)
 		}
 		refusal(t, srv.callTool(t, "shell_priv_read_file", map[string]any{"path": moved}), "path_denied", appDir)
 		wantGate(t, svcShell, "priv_copy", map[string]any{"source": moved, "destination": privWriteDir + "/copied"}, "path_denied")
-		asUser(t, exampleApp, "/usr/bin/mv", moved, secret)
+		mvAsExampleApp(t, moved, secret)
 		// The app's own 0600 file in its own directory is read.
 		own := appDir + "/own.conf"
 		rootFile(t, own, "own\n", 0o600)
@@ -182,7 +182,7 @@ func TestPrivMovedInRules(t *testing.T) {
 			t.Fatal(err)
 		}
 		rootFile(t, secrets+"/token", "token\n", 0o600)
-		asUser(t, exampleApp, "/usr/bin/mv", secrets, appDir+"/config")
+		mvAsExampleApp(t, secrets, appDir+"/config")
 		r, _ = gate(t, svcShell, "priv_read_file", map[string]any{"path": appDir + "/config/token"})
 		if r.code() != "path_denied" || !strings.Contains(r.Error.Message, "the directory "+appDir+" is ") {
 			t.Fatalf("a swapped-in directory: %s %+v", r.code(), r.Error)
@@ -210,7 +210,7 @@ func TestPrivMovedInRules(t *testing.T) {
 		secret := incoming + "/root.conf"
 		rootFile(t, secret, "root\n", 0o600)
 		moved := appDir + "/root.conf"
-		asUser(t, exampleApp, "/usr/bin/mv", secret, moved)
+		mvAsExampleApp(t, secret, moved)
 		src := privRestoreDir + "-src.conf"
 		rootFile(t, src, "src\n", 0o644)
 		t.Cleanup(func() { _ = os.Remove(src) })

@@ -41,15 +41,15 @@ func mustGateBound(t *testing.T, op string, args map[string]any, into any) {
 	mustGate(t, op, a, into)
 }
 
-// asUser runs a fixed command as uid (its own group).
-func asUser(t *testing.T, uid uint32, name string, args ...string) {
+// mvAsExampleApp renames from to to as example-app (its own group), with mv.
+func mvAsExampleApp(t *testing.T, from, to string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // G204: fixed test commands
-	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, uid)}
+	cmd := exec.CommandContext(ctx, "/usr/bin/mv", from, to) //nolint:gosec // G204: fixed test commands
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, exampleApp)}
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("%s %v as %d: %v\n%s", name, args, uid, err, out)
+		t.Fatalf("mv %s %s as example-app: %v\n%s", from, to, err, out)
 	}
 }
 
@@ -199,7 +199,7 @@ func TestPrivMetaMovedInRefused(t *testing.T) {
 	rootFile(t, secret, "root only\n", 0o600)
 	m0, u0, g0, _ := statOwner(t, secret)
 	moved := drop + "/secret.conf"
-	asUser(t, exampleApp, "/usr/bin/mv", secret, moved)
+	mvAsExampleApp(t, secret, moved)
 	for _, c := range []struct {
 		op   string
 		args map[string]any
@@ -221,7 +221,7 @@ func TestPrivMetaMovedInRefused(t *testing.T) {
 	}
 	srv, _ := privWriteServer(t)
 	refusal(t, srv.callTool(t, "shell_priv_set_permissions", map[string]any{"path": moved, "mode": "0644"}), "path_denied", drop)
-	asUser(t, exampleApp, "/usr/bin/mv", moved, secret)
+	mvAsExampleApp(t, moved, secret)
 	if m1, u1, g1, _ := statOwner(t, secret); m1 != m0 || u1 != u0 || g1 != g0 || m1.Perm() != 0o600 {
 		t.Fatalf("the moved-in file changed: %v %d:%d", m1, u1, g1)
 	}

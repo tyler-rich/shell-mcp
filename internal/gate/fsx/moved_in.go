@@ -80,16 +80,16 @@ func (f *FS) rootChain(l *loc) ([]ChainDir, error) {
 			return mapErr(serr)
 		}
 		return withFD(top, func(tfd int) error {
-			fd, err := unix.Openat(tfd, ".", unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
-			if err != nil {
-				return mapErr(&fs.PathError{Op: "openat", Path: l.rootReal, Err: err})
+			fd, oerr := unix.Openat(tfd, ".", unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+			if oerr != nil {
+				return mapErr(&fs.PathError{Op: "openat", Path: l.rootReal, Err: oerr})
 			}
 			defer func() { _ = unix.Close(fd) }()
 			cur := l.rootReal
 			for i := 0; ; i++ {
-				id, err := statxAt(fd, "", unix.AT_EMPTY_PATH)
-				if err != nil {
-					return mapErr(err)
+				id, ierr := statxAt(fd, "", unix.AT_EMPTY_PATH)
+				if ierr != nil {
+					return mapErr(ierr)
 				}
 				if id.mask&statxMeta != statxMeta {
 					return errf(protocol.CodeBadRequest, "the kernel did not report the owner and mode (statx) that the helper checks on a path; nothing was done")
