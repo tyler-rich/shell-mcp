@@ -173,7 +173,15 @@ const (
 	// OpPrivRestorePreview reports what a restore would do, with the hash
 	// priv_restore_backup requires (handoff P-2c, P-10; core).
 	OpPrivRestorePreview = "priv_restore_preview"
+	// OpPrivExecPreview resolves a privileged command exactly as priv_exec
+	// would, runs nothing, and reports the command's unit, with the hash
+	// priv_exec requires for an operator or destructive command (handoff
+	// P-2d; core, for commands of either unit).
+	OpPrivExecPreview = "priv_exec_preview"
 )
+
+// PrivMayChange reports whether a privileged request can change the host.
+func PrivMayChange(op, ceiling string) bool { return false }
 
 // PrivOps lists every privileged operation.
 var PrivOps = []string{

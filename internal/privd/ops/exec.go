@@ -24,6 +24,8 @@ type execArgs struct {
 	// "core" or "broad". The helper decides by the command's declared unit;
 	// a label that disagrees with this instance is refused.
 	Unit string `json:"unit"`
+	// ExpectedPreviewSHA256 is accepted and not yet checked.
+	ExpectedPreviewSHA256 *string `json:"expected_preview_sha256"`
 }
 
 type execData struct {

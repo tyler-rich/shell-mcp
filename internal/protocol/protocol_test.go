@@ -343,3 +343,28 @@ func TestDecodeResponse(t *testing.T) {
 		t.Fatalf("endless: %v after %d bytes", err, e.n)
 	}
 }
+
+func TestPrivMayChange(t *testing.T) {
+	for _, c := range []struct {
+		op, ceiling string
+		want        bool
+	}{
+		{OpPrivStat, TierDestructive, false},
+		{OpPrivReadFile, TierRead, false},
+		{OpPrivExecPreview, TierDestructive, false},
+		{OpPrivDeletePreview, TierDestructive, false},
+		{OpPrivPkgInstallPreview, TierOperator, false},
+		{OpPrivWriteFile, TierOperator, true},
+		{OpPrivDelete, TierDestructive, true},
+		{OpPrivRestoreBackup, TierOperator, true},
+		{OpPrivPower, TierDestructive, true},
+		{OpPrivExec, TierRead, false},
+		{OpPrivExec, TierOperator, true},
+		{OpPrivExec, TierDestructive, true},
+		{"priv_unknown", TierRead, true},
+	} {
+		if got := PrivMayChange(c.op, c.ceiling); got != c.want {
+			t.Errorf("PrivMayChange(%s, %s) = %v, want %v", c.op, c.ceiling, got, c.want)
+		}
+	}
+}

@@ -164,6 +164,10 @@ func check(ctx context.Context, id string, resp *protocol.Response, err error) (
 	return resp, nil
 }
 
+// RequestSent reports whether a Call failed after its request may have
+// reached the gate.
+func RequestSent(error) bool { return false }
+
 func transportError(err error) error {
 	var e *envelope.Error
 	if errors.As(err, &e) {

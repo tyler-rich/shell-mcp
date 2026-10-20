@@ -92,7 +92,7 @@ func present(p string) bool {
 	return err == nil
 }
 
-func allPresent(t *testing.T, paths ...string) {
+func allPresent(t testing.TB, paths ...string) {
 	t.Helper()
 	for _, p := range paths {
 		if !present(p) {

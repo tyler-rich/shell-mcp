@@ -28,7 +28,7 @@ import (
 // a write root, a backup store and a helper binary. Nothing here describes
 // a real host; users and groups are invented and resolved by fake lookups.
 type fixture struct {
-	t                                   *testing.T
+	t                                   testing.TB
 	d, read, write, backups, etc, probe string
 	policyPath                          string
 	uid, gid                            uint32
@@ -135,7 +135,7 @@ func keep(n int) opt {
 	return func(_ *fixture, s *string) { *s = strings.Replace(*s, "keep: 3", fmt.Sprintf("keep: %d", n), 1) }
 }
 
-func newFixture(t *testing.T, opts ...opt) *fixture {
+func newFixture(t testing.TB, opts ...opt) *fixture {
 	t.Helper()
 	if os.Getuid() == 0 {
 		t.Skip("the helper's unit tests run as an unprivileged user (root is exercised by the e2e job)")
@@ -281,7 +281,7 @@ func (f *fixture) loadOptions() *policy.LoadOptions {
 
 // unreadBytes is the number of bytes queued on fd that nobody has read
 // (SIOCINQ, unix(7)).
-func unreadBytes(t *testing.T, fd int) int {
+func unreadBytes(t testing.TB, fd int) int {
 	t.Helper()
 	n, err := unix.IoctlGetInt(fd, unix.SIOCINQ)
 	if err != nil {
@@ -397,7 +397,7 @@ func (f *fixture) lastAudit() string {
 
 func b64(s string) string { return base64.StdEncoding.EncodeToString([]byte(s)) }
 
-func readFile(t *testing.T, p string) string {
+func readFile(t testing.TB, p string) string {
 	t.Helper()
 	b, err := os.ReadFile(p) //nolint:gosec // G304: test fixture
 	if err != nil {
