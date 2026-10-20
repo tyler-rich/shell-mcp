@@ -212,6 +212,12 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 **N-8. New files in an open directory are root's (found in S4c-5).**
 - **What.** A file `priv_write_file` or `priv_copy` creates without an owner is `root:root` (N-3) in any directory. In a directory another account can write, that account can move it elsewhere on the filesystem with its approved content: N-6's gain, without a move-in. (`priv_mkdir` is not affected: a root-owned directory cannot be renamed into another parent without write access to it.)
 - **Decision (maintainer, 2026-10-19):** not in S4c-5; a follow-up. Options recorded with the decision: an explicit owner and group required there (a copy, which has no owner inputs, refused), or a default to the directory's owner and group where it is not group- or world-writable.
+- **Decision (maintainer, 2026-10-20):** decide together with N-9, before release, as one rule for files root creates in directories another account can write.
+
+**N-9. A restore applies the owner test to every restore (found in S4c-5, PR #34).**
+- **What.** `priv_restore_backup` applies N-6's owner-matched test to the owner it sets on every restore: a file whether or not one exists at its path now, and every entry of a tree, whose restored directories extend the chain. So a root-owned file inside an application-owned directory (for example a `root:example-app 0640` `.env` in the application's own directory) cannot be restored, although that is where it was.
+- **Why it is strict.** Restoring it gives the application account a root-owned file it could not have made itself, which it can move elsewhere on the filesystem (N-6's gain); a restore to an absent path is also a create (N-8).
+- **Decision (maintainer, 2026-10-20):** keep the strict behaviour for now; decide N-8 and N-9 together before release, as one rule for files root creates in directories another account can write.
 
 **R-1. A restore's narrowed mode is not reported.**
 - S4c-0 clamps the restored mode but does not report it: the result has no `mode` field, and adding one was a protocol change.
