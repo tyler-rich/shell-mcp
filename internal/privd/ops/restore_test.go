@@ -245,7 +245,7 @@ func TestPrivRestoreFile(t *testing.T) {
 	}
 	// The audit line names the backup restored and the one written, never the hash.
 	l := f.lastAudit()
-	if !strings.Contains(l, id) || !strings.Contains(l, r.BackupIDs[0]) || strings.Contains(l, "expected_preview_sha256") {
+	if !strings.Contains(l, `"backup_id":"`+id+`"`) || !strings.Contains(l, `"backup_ids":["`+r.BackupIDs[0]+`"]`) || strings.Contains(l, "expected_preview_sha256") {
 		t.Fatalf("audit %q", l)
 	}
 	f.restoreBound(r.BackupIDs[0])

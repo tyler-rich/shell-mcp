@@ -2713,3 +2713,5 @@ Every other write in fsx and the helper opens with `O_CREAT|O_EXCL` (temporary f
 - **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+
+**2026-10-20 — PR #34 follow-up: the first CI run.** One failure beyond the expected deps-current Go line: e2e-host `TestPrivRestoreToolsApproval/restore,_then_restore_the_restore's_backup`. A test fault, not the restore (which succeeded through the tool, with the current version backed up): the helper's audit line logs a request's `id` argument as `backup_id` (`sanitizeArgs`), and the test looked for `"id":"<backup id>"`. The e2e check and PRIVILEGED §8 now say `backup_id`, and `TestPrivRestoreFile` asserts the exact `backup_id` and `backup_ids` keys (it only looked for the ids before). The other two subtests and `TestPrivMovedInRules` (both subtests) passed on the runner.

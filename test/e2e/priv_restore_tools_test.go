@@ -96,7 +96,7 @@ func TestPrivRestoreToolsApproval(t *testing.T) {
 		if bm := backupMeta(t, b2); bm["sha256"] != sha("v2\n") || bm["op"] != "priv_restore_backup" {
 			t.Fatalf("the current version's backup %v", bm)
 		}
-		j := findJournal(t, "shell-mcp-privd", since, `"op":"priv_restore_backup"`, `"id":"`+b1+`"`, `"backup_ids":["`+b2+`"]`, `"outcome":"ok"`)
+		j := findJournal(t, "shell-mcp-privd", since, `"op":"priv_restore_backup"`, `"backup_id":"`+b1+`"`, `"backup_ids":["`+b2+`"]`, `"outcome":"ok"`)
 		if strings.Contains(j.Message, "expected_preview_sha256") {
 			t.Fatalf("journal line %s", j.Message)
 		}
