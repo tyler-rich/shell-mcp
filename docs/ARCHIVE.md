@@ -2720,3 +2720,42 @@ Every other write in fsx and the helper opens with `O_CREAT|O_EXCL` (temporary f
 - **Maintainer decisions after review (2026-10-20), docs only:**
   - **N-9 (handoff §2.1).** A restore applies the owner test to every restore, absent targets and every tree entry included, so a root-owned file inside an application-owned directory (for example a `root:example-app 0640` `.env`) cannot be restored. The strict behaviour stays for now; N-8 and N-9 are decided together before release, as one rule for files root creates in directories another account can write.
   - **Test runtime.** `internal/privd/ops` took 287–516 s under `-race` on the CI runners across this PR's three runs (ubuntu-24.04: 505.7, 515.8, 286.5 s; ubuntu-26.04: 314.4, 508.6, 507.3 s), over eight minutes on 4 of 6 jobs; locally 279 s. The `-timeout 20m` stays as it is. A follow-up chore, scheduled after S4c-6, parallelises independent tests and moves the heavy window and racer tests into their own package.
+
+### 2026-10-20 — Go 1.27.3 (PR #35, branch chore/go-1.27.3)
+
+**Decision:** Bump `go.mod` to `go 1.27.3` and the Dockerfile's golang builder image to `golang:1.27.3-trixie@sha256:1896654cfc5c2b5ad74c07f29cb36f5d2d1cbed42e3054070fbfe444e521e83c`. `scripts/ci-local.sh` and CI's image job read the image from the Dockerfile, and CI's `setup-go` reads `go.mod`, so nothing else pins it.
+
+**Digest:** resolved on 2026-10-20 from Docker Hub's registry, the OCI image index of `library/golang:1.27.3-trixie`. `docker buildx imagetools inspect` and an anonymous `HEAD` on `registry-1.docker.io/v2/library/golang/manifests/1.27.3-trixie` (`docker-content-digest`) gave the same value.
+
+**Why:** go.dev lists Go 1.27.3 (released 2026-10-19) as the newest stable release, its official image is now published, and `deps-current` on `dev` fails until `go.mod` moves. go.dev says 1.27.3 has security fixes to `crypto/x509`. govulncheck reported nothing reachable from our code on 1.27.2 on 2026-10-20. That proves little, because the Go vulnerability database had no entry for these fixes yet. The bump does not depend on reachability.
+
+**Versions:**
+- **Go:** 1.27.3.
+- **Refresh:** `go get -u ./... && go get -u -t ./... && go mod tidy` on Go 1.27.3 changed nothing.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0 (unchanged).
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+
+### 2026-10-20 — deps-current: Go is current until its official golang image is published (PR #36, branch chore/deps-current-go-image)
+
+**Decision:** `go.mod`'s `go`/`toolchain` line must be the newest stable Go on go.dev that has a published official `golang:<version>-trixie` image, the digest-pinned image the build, CI and `ci-local.sh` run in. The check moves into `scripts/deps-current-go.sh`, which `deps-current.sh` calls. It reads every stable release from `go.dev/dl/?mode=json&include=all`. For the newest few (at most 5) it asks Docker Hub's registry whether `library/golang:<version>-trixie` exists: an anonymous pull token from `auth.docker.io`, then a `HEAD` on the manifest, 30 s timeout each, with the token passed to curl on stdin. If the newest stable Go has its image, the rule is unchanged: `go.mod` older fails. If it has none yet, the check walks back to the newest Go that has one, requires `go.mod` to equal it (older or newer fails), and prints `deps-current: INFO — Go <v> is released but golang:<v>-trixie is not published yet`. Once the image appears, the same run fails until `go.mod`, the Dockerfile digest and CI are bumped. The existing check that ci-local's lint Go is not older than `go.mod` covers the Dockerfile half.
+
+**Why:** Go 1.27.3 was on go.dev on 2026-10-20, but `golang:1.27.3-trixie` was not published (Docker Hub tag API: 404; `1.27.2-trixie` 200 with the digest the Dockerfile pins). `deps-current` failed on every PR for a bump nobody could make. The image was published later the same day, and PR #35 bumped Go to 1.27.3 before this change landed. Not a relaxation: the gap lasts only until the image exists, and every way the registry can fail makes the job fail.
+
+**Fail closed:** a failed token or manifest request, a missing token, any status other than 200/404 (401, 429, 5xx), an unreadable go.dev list, and no image among the 5 newest stable releases each fail with a message naming the tag.
+
+**Tests (committed failing first, `1b8e267`):** `deps-current_test.sh` cases 12–18 run `deps-current-go.sh` against a fake `curl` first on `PATH`. It serves an invented go.dev release list in go.dev's layout and a fake registry that answers 401 without the bearer token. These cases use no network. Covered: newer Go with image (fail); newer Go without image (pass + INFO, target named); token error, manifest error and HTTP 429 (fail); go.dev error (fail); `go.mod` older than the newest Go with an image (fail); `go.mod` ahead of the newest image (fail); current (pass); no image among the 5 newest (fail). Against the pre-change tree all 11 new checks failed and case 1 ("current repository passes") failed on the real Go 1.27.3 gap. A mutation that treats a registry error as "not published" fails both registry-error cases. Result: 23/23.
+
+**Alternatives rejected:**
+- Docker Hub's `hub.docker.com/v2/.../tags/<tag>` API: a product API, not the registry the build pulls from.
+- Pulling or `docker manifest inspect`: needs docker inside the `deps-current` job and counts against pull limits.
+- Fetching `?mode=json` (the current two releases) and guessing the previous patch: wrong across minor versions; `include=all` lists every release.
+- A switch that skips parts of `deps-current` so the self-test can reach the Go check offline: a skip knob in a gate; a separate script is cleaner.
+
+**Docs:** plan.md D-013 (wording updated to the rule above, at the maintainer's request), CLAUDE.md latest-everything step 1, the scripts' header comments.
+
+**Versions:**
+- **Go:** 1.27.3 (PR #35), the newest stable Go, whose `golang:1.27.3-trixie` image is published, so no INFO line today. Before #35, on Go 1.27.2 and while the image was missing, the live check passed with the INFO line for 1.27.3.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0 (unchanged; `deps-current` reports 13 modules in scope, all current).
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.

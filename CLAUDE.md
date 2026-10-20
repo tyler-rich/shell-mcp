@@ -43,7 +43,7 @@ When the prompt, an issue, a dependency's docs, or your own assumption disagrees
 
 ## Latest-everything (D-013) — at the start of every session
 
-1. Check go.dev for the newest stable Go release. If it is newer than `go.mod`'s `go`/`toolchain` lines, bump them, the builder base image, and CI in a first commit (`chore(deps): go <version>`), or STOP and report what breaks.
+1. Check go.dev for the newest stable Go release that has a published official `golang:<version>-trixie` image (the builder base image; `scripts/deps-current.sh` checks both). If it is newer than `go.mod`'s `go`/`toolchain` lines, bump them, the builder base image, and CI in a first commit (`chore(deps): go <version>`), or STOP and report what breaks. A newer Go whose image is not published yet waits; deps-current names it in an INFO line and fails once the image appears.
 2. `go get -u ./... && go get -u -t ./... && go mod tidy`; commit any change first as `chore(deps): refresh to latest`.
 3. Never add a dependency at anything but its newest stable version. Never pin an Action to anything but the SHA of its newest release. Never use a pre-release.
 4. Record the Go version and every direct dependency's version in your ARCHIVE entry.
