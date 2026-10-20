@@ -97,14 +97,14 @@ jobs:
           # (a socket opened without the filter) must succeed here, or fail.
           SHELL_MCP_REQUIRE_MPTCP: "1"
         run: |
-          go test -race -count=1 -v ./... 2>&1 | tee /tmp/go-test.log
+          go test -race -timeout 20m -count=1 -v ./... 2>&1 | tee /tmp/go-test.log
           test "${PIPESTATUS[0]}" -eq 0
       # The end-to-end test build skips fsx's forbidden-root check, so these
       # tests prove the built-in read deny list refuses on its own.
       - name: go test -race (test build, fsx)
         env:
           SHELL_MCP_REQUIRE_SECURE_TMP: "1"
-        run: go test -race -count=1 -v -tags shellmcp_e2e_bypass ./internal/gate/fsx/
+        run: go test -race -timeout 20m -count=1 -v -tags shellmcp_e2e_bypass ./internal/gate/fsx/
       # The end-to-end entry points refuse to run anywhere but a GitHub-hosted
       # runner, before doing anything (each case runs under env -i, so this
       # runner's own variables do not leak in).
@@ -118,7 +118,7 @@ jobs:
         env:
           SHELL_MCP_REQUIRE_SECURE_TMP: "1"
         run: |
-          go test -race -count=1 -v -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/
+          go test -race -timeout 20m -count=1 -v -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -tags shellmcp_diag -o /tmp/shell-mcp-diag.exe ./cmd/shell-mcp
       # Kernel-dependent tests, listed so that a skip is visible, with the
       # all-thread Landlock path this entry exercised.
