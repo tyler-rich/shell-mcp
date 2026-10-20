@@ -138,5 +138,121 @@ else
 	expect "lint step outside the Go image fails" 1 "golangci-lint in scripts/ci-local.sh does not run with the Go image's go" "$lintimage"
 fi
 
+# --- Go toolchain vs. published golang image (offline) ---------------------------
+# deps-current-go.sh runs with a fake curl first on PATH: go.dev and the
+# registry are canned responses, so these cases never touch the network. The
+# release list mimics go.dev's ?mode=json&include=all layout, including the
+# per-file "version" keys, and the versions are invented.
+gocheck="$repo/scripts/deps-current-go.sh"
+fakebin="$work/fakebin"
+mkdir -p "$fakebin"
+cat >"$fakebin/curl" <<'FAKE'
+#!/usr/bin/env bash
+# Fake curl for deps-current_test.sh. FAKE_GO_RELEASES: file served for
+# go.dev; FAKE_IMAGES: space-separated golang tags that exist; FAKE_FAIL:
+# go|token|manifest makes that request fail like a network error;
+# FAKE_MANIFEST_STATUS forces a manifest HTTP status.
+set -euo pipefail
+url="" write="" headers=""
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	-w) write="$2"; shift ;;
+	-H) if [[ "$2" == "@-" ]]; then headers+="$(cat)"$'\n'; else headers+="$2"$'\n'; fi; shift ;;
+	https://*) url="$1" ;;
+	esac
+	shift
+done
+case "$url" in
+https://go.dev/dl/*)
+	[[ "${FAKE_FAIL:-}" == go ]] && { echo "curl: (6) fake resolve failure" >&2; exit 6; }
+	cat "$FAKE_GO_RELEASES" ;;
+https://auth.docker.io/token\?service=registry.docker.io\&scope=repository:library/golang:pull)
+	[[ "${FAKE_FAIL:-}" == token ]] && { echo "curl: (28) fake timeout" >&2; exit 28; }
+	printf '{"token":"fake-anon-token","access_token":"fake-anon-token","expires_in":300}\n' ;;
+https://registry-1.docker.io/v2/library/golang/manifests/*)
+	[[ "${FAKE_FAIL:-}" == manifest ]] && { echo "curl: (7) fake connect failure" >&2; exit 7; }
+	tag="${url##*/}" code=404
+	if ! grep -q -x -F 'Authorization: Bearer fake-anon-token' <<<"$headers"; then
+		code=401
+	elif [[ -n "${FAKE_MANIFEST_STATUS:-}" ]]; then
+		code="$FAKE_MANIFEST_STATUS"
+	elif [[ " ${FAKE_IMAGES:-} " == *" $tag "* ]]; then
+		code=200
+	fi
+	[[ "$write" == '%{http_code}' ]] && printf '%s' "$code" ;;
+*) echo "fake curl: unexpected URL $url" >&2; exit 2 ;;
+esac
+FAKE
+chmod +x "$fakebin/curl"
+
+# releases <file> <version:stable>...: write a go.dev-shaped release list.
+releases() {
+	local file="$1" sep="" v s
+	shift
+	{
+		echo "["
+		for e in "$@"; do
+			v="${e%%:*}" s="${e##*:}"
+			printf '%s {\n  "version": "go%s",\n  "stable": %s,\n  "files": [\n   {\n    "filename": "go%s.src.tar.gz",\n    "version": "go%s",\n    "sha256": "00"\n   }\n  ]\n }' "$sep" "$v" "$s" "$v" "$v"
+			sep=$',\n'
+		done
+		printf '\n]\n'
+	} >"$file"
+}
+releases "$work/rel-new.json" 1.27.3:true 1.27.2:true 1.27.1:true 1.28rc1:false 1.26.10:true
+releases "$work/rel-gap.json" 1.27.9:true 1.27.8:true 1.27.7:true 1.27.6:true 1.27.5:true 1.27.4:true 1.27.3:true
+
+# gomod <dir> <go version>: a scratch module with only a go line.
+gomod() {
+	mkdir -p "$1"
+	printf 'module example.test/scratch\n\ngo %s\n' "$2" >"$1/go.mod"
+	echo "$1"
+}
+
+expect_go() { # expect_go <name> <want-exit> <want-substring> <dir> [VAR=value...]
+	local name="$1" want="$2" needle="$3" dir="$4" out code=0
+	shift 4
+	out="$(env PATH="$fakebin:$PATH" DEPS_CURRENT_DIR="$dir" FAKE_GO_RELEASES="$work/rel-new.json" "$@" bash "$gocheck" 2>&1)" || code=$?
+	if [[ "$code" == "$want" ]] && grep -q -F -- "$needle" <<<"$out"; then
+		echo "ok   $name"
+		pass=$((pass + 1))
+	else
+		echo "FAIL $name (exit $code, want $want; looking for: $needle)"
+		sed 's/^/     /' <<<"$out"
+		fail=$((fail + 1))
+	fi
+}
+
+# 12. The newest stable Go has its image and go.mod is older: fail as before.
+expect_go "newer Go with image fails" 1 "go.mod 'go 1.27.2' is older than the newest stable Go 1.27.3" \
+	"$(gomod "$work/go-a" 1.27.2)" FAKE_IMAGES="1.27.3-trixie 1.27.2-trixie"
+# 13. The newest stable Go has no image yet and go.mod is on the newest Go
+#     that has one: pass, and name the Go version awaiting its image.
+expect_go "newer Go without image passes" 0 "deps-current: INFO — Go 1.27.3 is released but golang:1.27.3-trixie is not published yet" \
+	"$(gomod "$work/go-b" 1.27.2)" FAKE_IMAGES="1.27.2-trixie 1.27.1-trixie"
+expect_go "newer Go without image reports the target" 0 "matches Go 1.27.2, the newest stable Go with a published golang:1.27.2-trixie image" \
+	"$work/go-b" FAKE_IMAGES="1.27.2-trixie 1.27.1-trixie"
+# 14. The registry cannot be queried: fail closed, whichever request breaks.
+expect_go "registry token error fails" 1 "deps-current: FAIL — cannot query the registry for golang:1.27.3-trixie" \
+	"$(gomod "$work/go-c" 1.27.2)" FAKE_IMAGES="1.27.2-trixie" FAKE_FAIL=token
+expect_go "registry manifest error fails" 1 "deps-current: FAIL — cannot query the registry for golang:1.27.3-trixie" \
+	"$work/go-c" FAKE_IMAGES="1.27.2-trixie" FAKE_FAIL=manifest
+expect_go "unexpected registry status fails" 1 "deps-current: FAIL — cannot query the registry for golang:1.27.3-trixie (HTTP 429)" \
+	"$work/go-c" FAKE_IMAGES="1.27.2-trixie" FAKE_MANIFEST_STATUS=429
+expect_go "go.dev error fails" 1 "could not determine the newest Go release" \
+	"$work/go-c" FAKE_IMAGES="1.27.3-trixie" FAKE_FAIL=go
+# 15. go.mod older than the newest Go that has an image: fail.
+expect_go "go.mod older than newest Go with image fails" 1 "go.mod 'go 1.27.1' is older than Go 1.27.2, the newest stable Go with a published golang:1.27.2-trixie image" \
+	"$(gomod "$work/go-d" 1.27.1)" FAKE_IMAGES="1.27.2-trixie 1.27.1-trixie"
+# 16. go.mod on a Go whose image is not published yet: fail (nothing can build it).
+expect_go "go.mod ahead of the newest image fails" 1 "go.mod go 1.27.3 is newer than Go 1.27.2, the newest stable Go with a published golang:1.27.2-trixie image" \
+	"$(gomod "$work/go-f" 1.27.3)" FAKE_IMAGES="1.27.2-trixie"
+# 17. Current: go.mod on the newest stable Go, whose image exists.
+expect_go "current Go passes" 0 "go.mod go 1.27.3 (toolchain implied by go line) matches newest stable Go 1.27.3" \
+	"$(gomod "$work/go-e" 1.27.3)" FAKE_IMAGES="1.27.3-trixie 1.27.2-trixie"
+# 18. The walk back is bounded: no image among the newest releases fails.
+expect_go "no image among the newest releases fails" 1 "deps-current: FAIL — none of the 5 newest stable Go releases (1.27.9 … 1.27.5) has a published golang:<version>-trixie image" \
+	"$(gomod "$work/go-g" 1.27.3)" FAKE_GO_RELEASES="$work/rel-gap.json" FAKE_IMAGES="1.27.3-trixie"
+
 echo "deps-current tests: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]
