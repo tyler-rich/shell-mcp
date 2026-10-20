@@ -92,7 +92,7 @@ func TestCatalogueSnapshot(t *testing.T) {
 		}
 	}
 	// The privileged tools so far (S4c-1 to S4c-3): the read tools at read,
-	// the write, chown and chmod tools at operator, admin only.
+	// the write, chown, chmod and restore tools at operator, admin only.
 	for file, out := range outs {
 		var rows []struct {
 			Name       string   `json:"name"`
@@ -111,7 +111,7 @@ func TestCatalogueSnapshot(t *testing.T) {
 		}
 		want := []string{"shell_priv_change_owner operator [admin]", "shell_priv_copy_path operator [admin]", "shell_priv_delete_path destructive [admin]",
 			"shell_priv_list_backups read [admin]", "shell_priv_list_directory read [admin]", "shell_priv_make_directory operator [admin]",
-			"shell_priv_move_path operator [admin]", "shell_priv_preview_delete read [admin]", "shell_priv_read_file read [admin]",
+			"shell_priv_move_path operator [admin]", "shell_priv_preview_delete read [admin]", "shell_priv_read_file read [admin]", "shell_priv_restore_backup operator [admin]",
 			"shell_priv_set_permissions operator [admin]", "shell_priv_stat_path read [admin]", "shell_priv_write_file operator [admin]"}
 		if !slices.Equal(got, want) {
 			t.Fatalf("%s: privileged rows %v, want %v", file, got, want)
