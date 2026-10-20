@@ -23,6 +23,13 @@ const privMetaDir = "/etc/example-app/e2e-priv-meta"
 // sends op with the preview's hash.
 func mustGateMeta(t *testing.T, op string, args map[string]any) {
 	t.Helper()
+	mustGateBound(t, op, args, nil)
+}
+
+// mustGateBound previews op through the gate (op + "_preview") and sends op
+// with the preview's hash, decoding its data into into.
+func mustGateBound(t *testing.T, op string, args map[string]any, into any) {
+	t.Helper()
 	var pv struct {
 		PreviewSHA256 string `json:"preview_sha256"`
 	}
@@ -31,7 +38,7 @@ func mustGateMeta(t *testing.T, op string, args map[string]any) {
 	for k, v := range args {
 		a[k] = v
 	}
-	mustGate(t, op, a, nil)
+	mustGate(t, op, a, into)
 }
 
 // asUser runs a fixed command as uid (its own group).

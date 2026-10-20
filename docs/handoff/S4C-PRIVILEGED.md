@@ -204,6 +204,10 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 - **Proposed fix (maintainer, 2026-10-19), to decide in S4c-5 for all three operations.** When the target's path fails N-1's chain rule (a directory on it is not root's, or is group- or world-writable), a write, copy or restore over an existing file does not inherit that file's owner and group: it requires an explicit owner and group from `owners`, or it is refused.
 - **Status: must be decided before S4c-5 ships.**
 
+**N-7. Moved-in files are readable as root (found in S4c-4, PR #33).**
+- **What.** The chain rule (N-1) applies to chmod and chown only. An account that can write a directory under a privileged root and the directory of a root-only file elsewhere on the same filesystem can move that file in, have `priv_read_file` (read tier, never approval-gated) return its content as root, and move it back; the private-key refusal stops PEM keys only. The same move-in puts the file's SHA-256 into a delete's backup metadata, which `priv_list_backups` shows.
+- **Decision (maintainer, 2026-10-19):** decided together with N-6 in S4c-5. No separate session.
+
 **R-1. A restore's narrowed mode is not reported.**
 - S4c-0 clamps the restored mode but does not report it: the result has no `mode` field, and adding one was a protocol change.
 - **Decision:** S4c-5 reports the resulting mode in the preview and in the result, so a narrowing is never silent. Any protocol field for that is pre-approved (P-10, §4).
@@ -299,7 +303,7 @@ Columns: create-only · preview binding · set-aside/stranded · approval and re
 - **The backup's own content: MUST** (Q3). `readData` already compares the data with the recorded SHA-256, but answers a mismatch with `backup_failed`. It becomes `verify_failed`, and nothing is restored. The preview checks it too, so a tampered or damaged backup never reaches an approval.
 - **Owners and modes: MUST** (Q3). The recorded owner and group are kept, even outside `owners`; the recorded mode is clamped to `modes.max` (S4c-0), for files and for every entry of a tree. **Backups: OK** (the current version is backed up first, within the store cap, X-7). Pruning: X-8. **Read-back: OK** for files. For trees, each file is verified by `WriteFile`; add an entry-count check against the metadata.
 
-**`priv_delete`.**
+**`priv_delete`.** (Status: done in S4c-4, PR #33.)
 - **Preview binding and set-aside: MUST.** Port the gate's `PreviewDelete` and `DeleteExact` (`delete_exact.go`) into the helper's op, with:
   - `priv_delete_preview` (P-2) and a required `expected_preview_sha256` (P-3);
   - the walk's refusals: roots, mount points, devices, set-aside names;
@@ -719,6 +723,12 @@ All of them:
 
 ### S4c-4: delete
 
+- **Status: done (PR #33; ARCHIVE §14, S4c-4).** P-2a and P-3 as listed (no other protocol change; `priv_delete`'s result shape is unchanged). The gate's walk and set-aside deletion are shared, not copied: `fsx.PreviewDeleteBound` and `fsx.DeleteExactBound` call the gate's code with the privileged policy's hash in the preview hash (its own domain, so the gate's hash input is unchanged) and, with backups on, the backup written from the plan (D10) before anything is removed: files opened by name from their parent's handle and required to be the walk's objects with their size and change time (checked again after the read), directories re-opened with the walk's identity, the archive sized from the plan first (store cap and 64 MiB bound refused before anything is written) and holding exactly the plan's entries. S1's `Delete`, `DeletePreview`, `deleteOp`, `backupTree` and `removeTree` are removed. `set_aside` and a bounded `removed` list are in the helper's audit line. Both tools are in the catalogue. Decided or found beyond the entry:
+  - **No chain rule for delete** (maintainer, 2026-10-19). Unlinking or renaming an entry needs write access to its directory, so an account that could move an entry in, or swap entries during the delete, could unlink it itself; the set-aside and identity checks make root remove only the approved inodes. PRIVILEGED §6, "Delete".
+  - **No link-count refusal for delete** (maintainer, 2026-10-19), as in the gate: an unlink removes a name, never an inode. The prompt listed one as part of the S4b-2a machinery, which has none.
+  - **The fail-safe backup rule for delete.** A commit is reported at each unlink and when an entry is left set aside. "Provably unchanged" is explicit accounting, not inferred from which paths ran (maintainer review, 2026-10-19): the deleter counts entries set aside, put back, stranded and unlinked, and only zero unlinks, zero stranded and put-backs equal to set-asides discard the backup; a stop after a set-aside with no put-back keeps it (`TestDeleteStopAfterSetAside`, `TestPrivDeleteStopAfterSetAsideKeepsBackup`).
+  - **The preview reports the backup itself** (P-2a's `backup`), counted as the backup counts it: `priv_backup_check` (P-11) answers for an overwrite of a regular file only, so it cannot size a tree.
+  - **An entry replaced or changed while it is backed up is `exists`**, nothing deleted (D10 named only `backup_failed` for symlinks and special files).
 - **Includes.**
   - P-2a and P-3 (delete).
   - The helper's `delete` moves to `PreviewDelete`/`DeleteExact` with the backup from the plan (D10).
@@ -738,7 +748,8 @@ All of them:
 
 ### S4c-5: restore
 
-- **Must decide before S4c-5 ships: N-6 (§2.1)**, for `priv_write_file`, `priv_copy` with `overwrite` and `priv_restore_backup` together. Proposed: over an existing file whose path fails the chain rule, the owner and group are not inherited; an explicit allow-listed owner and group are required, or the operation is refused. Decide with the maintainer (a STOP), then implement it in this session for all three.
+- **Must decide before S4c-5 ships: N-6 and N-7 (§2.1), together** (maintainer, 2026-10-19). For N-7: whether reads and backup listings follow the chain rule.
+- **N-6 (§2.1)**, for `priv_write_file`, `priv_copy` with `overwrite` and `priv_restore_backup` together. Proposed: over an existing file whose path fails the chain rule, the owner and group are not inherited; an explicit allow-listed owner and group are required, or the operation is refused. Decide with the maintainer (a STOP), then implement it in this session for all three.
 - **Includes.**
   - P-2c and P-3 (restore).
   - Restore through `expected_sha256` or `expect_absent`.

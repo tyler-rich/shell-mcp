@@ -2562,3 +2562,83 @@ Every other write in fsx and the helper opens with `O_CREAT|O_EXCL` (temporary f
   - **Proposed fix**, to decide in S4c-5 for all three: when the target's path fails the chain rule, a write, copy or restore over an existing file does not inherit that file's owner and group; it requires an explicit allow-listed owner and group, or is refused.
   - **Must be decided before S4c-5 ships**; the S4c-5 entry carries it as a STOP.
 - Docs only; no code change.
+
+### 2026-10-19 — Privileged delete bound to its preview, backed up from the plan (PR #33, branch feat/priv-delete)
+**Decision:** Build the handoff's S4c-4 entry (`docs/handoff/S4C-PRIVILEGED.md` §5). Root deleting files must meet everything the gate's delete guarantees (only the approved entries are removed; anything that appears or is replaced during the delete survives; stranded set-aside entries are never deleted) plus backups before removal, the store cap and the fail-safe backup rule.
+- **Shared, not copied.** `fsx.PreviewDeleteBound` and `fsx.DeleteExactBound` are the gate's `PreviewDelete` and `DeleteExact` (`internal/gate/fsx/delete_exact.go`) with a binding and, when `Config.Backup` is set, a backup step; the gate's two functions call the same code with no binding.
+  - **The hash.** The bound hash covers its own domain, the binding's length and bytes (the privileged policy's SHA-256), the recursive flag and the gate's entry list (`previewPrefix`). The gate's hash input is unchanged byte for byte, so no gate preview or delete changes.
+  - **The backup from the plan** (`delete_backup.go`, D10). After the recompute and before the first set-aside: each regular file opened by its name from its parent's descriptor (`O_NOFOLLOW`), its `statx` required to show the walk's object with the walk's size and change time, and checked again by name after the backup read it; each directory re-opened from its parent's handle with the walk's identity (`inSubdir`); no directory is read again (not a second walk; the handoff's STOP did not apply). The `BackupSource` gains `List` (the plan's entries without opening anything) and `Count`; the helper sizes the archive from `List` (the same headers, zeros for the data) before writing anything, so the store cap and the 64 MiB bound refuse first, and requires the archive to hold exactly `Count` entries. A symlink, FIFO or socket is `backup_failed`; an entry replaced or changed while being backed up is `exists`.
+  - **Signals for the fail-safe rule.** A commit (`Config.OnCommit`) is reported at each unlink and when an entry is left set aside, no longer "before a delete starts removing entries" (S1); every refusal before the first unlink with nothing left set aside is marked `Unchanged` (the walk, the hash compare, the backup, and a stop whose set-aside entries were all put back).
+  - **`DeletePlan.Removed`** (not on the wire): the entries unlinked, in order, also when the deletion stopped.
+  - **Removed:** S1's `Delete`, `DeletePreview`, `deleteOp`, `backupTree` and `removeTree`, with their fsx tests (`TestDelete`, `TestBackupBeforeDelete`, `TestBackupTreeChangedAfterBackup`, `TestBackupTreeTooLarge`; covered by the delete tests, `TestDeleteBackupTooLarge` replacing the last). `DeleteResult` stays as `priv_delete`'s result type.
+- **Helper.** `priv_delete_preview` (read, core; P-2a): the plan, `truncated`, `backup: {written, kind, bytes}` counted exactly as the backup counts it (`store.check`, through `backupSize` and `room`), `policy_sha256` and `preview_sha256`; it refuses what the delete would refuse, the backup's refusals included, so no approval is requested. `priv_delete` requires `expected_preview_sha256` (P-3); its result shape is unchanged. The backup's metadata records the hash as `preview_sha256` (a new `save` argument recorded but never compared, since it is not a content hash). The audit line carries `removed` (bounded as `changed`: 100 entries or 32 KiB, `removed_total`, `removed_truncated`) and `set_aside`.
+- **Gate.** `priv_delete_preview` is a read-tier op in `privTiers`, routed to the core socket.
+- **Server.** `shell_priv_preview_delete` (read) and `shell_priv_delete_path` (destructive, admin, always gated, `requiresUserInteraction`; `internal/tools/priv_delete.go`). The approval preview is the helper's preview op's result, bound with both policies' hashes (`privPolicy`); the re-call sends the fresh preview's hash, taken before the server's redaction. Catalogue rows added; the snapshot diff is additions only.
+- **e2e.** `setup.sh` mounts a tmpfs inside the privileged write root (`/etc/example-app/e2e-mounted/point`, invented), unmounted first on a rerun; `mustGateBound` sends a preview's hash; `TestHelperOperations` and `TestPrivToolsListed` updated.
+- **Docs.** PRIVILEGED §6 (the two rows, "Delete": walk, binding, backup from the plan, deletion, what remains, hard links, no chain rule, the fail-safe rule; Backups), §8 (`removed`, `set_aside`); POLICY §3 (the "until S4c" sentence); ARCHITECTURE §3 step 2, §4.1, §4.3; TOOLS.md (the rows, "Privileged tier: delete (S4c-4)"); the handoff (S4c-4 status, §2.3).
+- **Not changed:** the error-code set, the envelope, Landlock (the set-aside rename stays in one directory; write roots grant `MAKE_*`, `REMOVE_*`; device nodes are refused in the walk), the generated units, either policy schema, any locked decision, the gate's delete behaviour.
+
+**Maintainer decisions during the session (2026-10-19):**
+- **No chain rule (N-1) for delete** (recommended). Unlinking or renaming an entry needs write and search permission on its directory, and in a sticky directory ownership of the entry or the directory, for rename and unlink alike; so an account that could move an entry into the tree, or swap entries during the delete, could unlink it itself, and root deleting only the approved inodes (set-aside, identity checks) gives it nothing it did not have. Applying the rule would refuse every delete under an application-owned directory. Restoring a moved-in file's backup is N-6's, decided with S4c-5.
+- **No link-count refusal for delete** (recommended), as in the gate: an unlink removes one name, never the inode, so F-2's reason (an inode change reaching a name outside the roots) does not apply; the backup reads what `priv_read_file` could read through the same name.
+
+**Premises checked, and pushback:**
+- **"Link-count refusals" are not part of the S4b-2a machinery.** The gate's delete deletes hard-linked entries; PR #25's follow-up fixed exactly that (`touched`). Decided above.
+- **"The preview reports it via `priv_backup_check`."** `priv_backup_check` (P-11) answers for an overwrite of a regular file (`written: false` for a directory), so it cannot size a tree backup. P-2a's own `backup` field carries it, counted by the same `room` function; no protocol change.
+- **D10 names only `backup_failed`** for what the backup refuses. A file replaced or rewritten between the recompute and its backup read is reported as `exists` (the tree changed since the preview, nothing deleted), consistent with the rest of the delete.
+- **Every other claim checked against the code held:** S1's `fsx.Delete` re-read directories while removing; the gate's walk refuses roots, mounts, devices and set-aside names; `store.save` already took the store lock and the cap; the fail-safe rule's mechanism (`OnCommit`, `Unchanged`, `discard`) needed only the delete's signals. PR #32 is on `dev` (`c5a97a4`), and this branch starts there.
+
+**Findings:**
+- **N-7 (new, not fixed): moved-in files are readable as root.** The chain rule applies to chmod and chown only. An account that can write a directory under a privileged root and the directory of a root-only file elsewhere on the same filesystem can move that file in and have `priv_read_file` (a read tool, never approval-gated) return it as root, then move it back; the private-key refusal stops PEM keys only. Narrower than a leak to that account (the content goes to the MCP client), but it is N-1's move-in for reads. The same move-in puts the file's SHA-256 into a delete's backup metadata, which `priv_list_backups` shows. For the maintainer: whether reads (and backup listing) follow the chain rule, at the cost of refusing reads under application-owned directories.
+- **The commit window for the fail-safe rule moved later.** S1 reported a commit before removing anything; the bound delete reports one only at an unlink or a stranded entry, so a delete that set entries aside and put all of them back discards its backup (the tree is as the walk saw it, change times aside).
+
+**Tests (committed failing first, `b578590`; output in the PR body).** Inert stubs in that commit: `PreviewDeleteBound`/`DeleteExactBound` calling S1's preview and delete, the new `DeleteStep`, `DeletePlan` and `BackupSource` fields unused, `priv_delete_preview` as S1's preview, `Options.InjectDeleteStep` not passed on, the gate without the op, the server tools answering `internal`.
+- **fsx:** `TestPreviewDeleteBoundHash`, `TestDeleteBackupFromPlan`, `TestDeleteBackupRefusals` (symlink, FIFO, a failing hook, an entry replaced or rewritten before its backup read; each unchanged, no commit), `TestDeleteAfterBackupStops`, `TestDeleteCommitSignals`, `TestDeleteBackupTooLarge`; `FuzzPreviewPrefix` (new).
+- **Helper:** `TestPrivDeletePreview`, `TestPrivDeleteBindsThePreview`, `TestPrivDeleteRefusals`, `TestPrivDeleteHardLinks` and `TestPrivDeleteBackupRestorable` (both pass against S1's delete too: regression guards), `TestPrivDeleteStoreCap`, `TestPrivDeleteFailSafeBackups` (nothing removed: discarded; part removed: kept; both with commit reporting disabled), `TestPrivDeleteSetAside`, `TestPrivDeleteAuditBounded`, `TestPrivDeleteWindows`, `TestPrivDeleteConcurrentRacer`; `TestProductionOptionsHaveNoTestHooks`.
+- **Window tests (helper, 200 runs per point, backups on; one run):** every racer file survived in every run, and a backup was kept exactly when entries had been removed.
+  | Point | Outcomes |
+  |---|---|
+  | before the request | 200 refused at the recompute |
+  | after the recompute | 100 stopped part-way, 100 stopped with nothing removed |
+  | before a backup read | 100 stopped part-way (a newcomer beside the file), 100 stopped with nothing removed (the file replaced: `exists` from the backup) |
+  | after the backup | 166 stopped part-way, 34 stopped with nothing removed |
+  | before an entry's check | 166 part-way, 34 nothing removed |
+  | before setting aside | 166 part-way, 34 nothing removed |
+  | after setting aside | 200 part-way |
+  | before the unlink | 200 part-way |
+- **Racer (helper, 400 runs, no hook; one run):** each run previews, then a racer starts after a random delay of up to a whole request's median duration (about 12 ms through `Serve`) and creates and replaces files until the helper answers. 2,088 racer files, every one survived; a backup was kept exactly when entries had been removed.
+  | Outcome | Runs |
+  |---|---|
+  | completed before the racer changed anything | 7 |
+  | refused at the recompute | 56 |
+  | stopped during the backup | 20 |
+  | stopped during deletion, nothing removed | 50 |
+  | stopped during deletion, part removed | 267 |
+- **Gate:** `TestRouting` (`priv_delete_preview` to core), `TestDeletePreviewIsReadTier`.
+- **Server:** `TestPrivDeleteToolsRegistered`, `TestPrivPreviewDeleteTool`, `TestPrivDeletePathUnderNone`, `TestPrivDeletePathApprovalFlow`, `TestPrivDeletePathChangedAfterApproval` (tree, privileged policy, gate policy), `TestPrivDeletePreviewRefusals`, `TestPrivDeletePathIncomplete`, `TestPrivDeleteValidation`, `TestPrivDeletePreconditionIsTheHelpersHash`, `TestPrivDeleteDescriptions`.
+- **e2e-host (core unit):** `TestPrivDeleteToolsPreview` (success, the same hash twice, the journal line at ceiling read; refusals through the tool, the gated tool and the gate: the write root, outside the roots, the mount point and its holder, a device node and its holder, non-empty without `recursive`) and `TestPrivDeleteToolsApproval` (approved, backed up with the preview's hash, deleted once, the journal's `removed` and backup id, a second re-call `approval_invalid`, the tree restored from its backup; a newcomer after approval `approval_invalid` with nothing deleted; a refused preview requests no approval).
+- **Test fixes made with the implementation:** the existing helper tests that called `priv_delete` without a hash preview first (`deleteBound`); a store-failure test previews before breaking the store; the ceiling table and the catalogue's privileged rows.
+
+**Fuzzing (60 s each, golang container, no crashers):** `FuzzPreviewPrefix` (new) about 25.2 M execs; `FuzzPreviewEntryEncoding` and `FuzzMetaEntryEncoding` (the identity struct gained the modification time) about 23.0 M and 22.8 M; `FuzzValidPreviewSHA256` (now also the helper's precondition) about 25.4 M; `FuzzDecodeRequest` (a new op) about 24.2 M.
+
+**Alternatives rejected:**
+- A second, helper-only copy of the delete: the prompt and the handoff ask for shared code, and a copy would drift.
+- Sizing the tree backup by writing it to a temporary file: a second read of every file; the plan's metadata gives the exact archive size.
+- Extending `priv_backup_check` to trees: a protocol change P-2a already covers.
+- The chain rule and a link-count refusal for delete (above).
+
+**Deferred / follow-ups:** N-7 (above); N-4, N-5, N-6 unchanged; S4c-5 onward per the handoff.
+
+**Versions:**
+- **Go:** 1.27.2, the newest stable per go.dev (checked by `scripts/deps-current.sh` on 2026-10-19).
+- **Refresh:** `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing; `deps-current` reports 13 modules in scope, all current.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+
+**2026-10-19 — PR #33 follow-up: the delete's "unchanged" is explicit accounting; N-7 joins N-6.**
+- **First CI run (`1b478bc`): every check green.** e2e-host ran `TestPrivDeleteToolsPreview` (both subtests) and `TestPrivDeleteToolsApproval` (all three), and the updated `TestHelperOperations` and `TestPrivToolsListed`. On both Go runners `internal/privd/ops` took about 280 s under `-race`. The window counts matched the local run; the racer's (ubuntu-24.04 / 26.04): completed first 3/3, refused at the recompute 223/211, stopped during the backup 122/134, stopped during deletion with nothing removed 3/3, part removed 49/49; 2,399 / 2,413 racer files, every one survived.
+- **Maintainer review: the discard rule must be accounting, not inference.** The deleter set `Error.Unchanged` from "no unlink and no stranded entry", so a path that stopped right after setting an entry aside, without putting it back, would have been reported unchanged and its backup discarded, with the entry under its temporary name. Now `deleter.unchanged()` requires zero unlinks, zero stranded entries and put-backs equal to set-asides, counted where each rename happens.
+- **Tests (committed failing first, `066f35f`):** `TestDeleteStopAfterSetAside` (fsx: such a stop is not unchanged and reports no commit) and `TestPrivDeleteStopAfterSetAsideKeepsBackup` (helper: the backup is kept, nothing in `backup_ids_discarded`). Against the inferred rule both failed: "an entry left set aside, neither unlinked nor put back, was reported unchanged" and the helper's audit line listed the backup as discarded. The stop is simulated by a new test-only fsx hook, `Config.InjectStopAfterSetAside` (an error returned right after the set-aside), passed through `ops.Options`; `TestProductionOptionsHaveNoTestHooks` covers it. The gate does not set it.
+- **N-7** is decided together with N-6 in S4c-5 (maintainer); recorded in the handoff (§2.1, S4c-5). No separate scoping session.
+- Docs: PRIVILEGED §6 ("Delete", Backups), the handoff.

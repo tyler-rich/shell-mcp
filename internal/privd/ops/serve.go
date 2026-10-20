@@ -100,6 +100,11 @@ type Options struct {
 	// only.
 	InjectBeforeBackup  func()
 	InjectExchangeFault func() error
+	// InjectDeleteStep is passed to fsx (DeleteExactBound's steps); tests
+	// only.
+	InjectDeleteStep func(fsx.DeleteStep, string)
+	// InjectStopAfterSetAside is passed to fsx; tests only.
+	InjectStopAfterSetAside func(string) error
 	// DisableCommitReport leaves fsx's OnCommit unset, as a mutating site
 	// that never reports would; tests only.
 	DisableCommitReport bool
@@ -158,6 +163,9 @@ type server struct {
 	// precondition is the content hash the request's precondition named
 	// (expected_sha256, expected_destination_sha256), for its backups.
 	precondition string
+	// boundPreview is a delete's expected_preview_sha256, which its backup
+	// records (it is not a content hash, so nothing is compared with it).
+	boundPreview string
 	// committed reports that the request changed the filesystem (fsx's
 	// OnCommit): a failed request that did not keeps no backup.
 	committed bool
@@ -171,6 +179,14 @@ type server struct {
 	changedTotal     int
 	changedBytes     int
 	changedTruncated bool
+	// removed are the entries a delete removed, for the audit line
+	// (bounded: recordRemoved); removedTotal counts every one.
+	removed          []string
+	removedTotal     int
+	removedBytes     int
+	removedTruncated bool
+	// setAside is the entry a delete left set aside (fsx.Error.SetAside).
+	setAside string
 }
 
 // Serve handles one connection and returns the process exit code: 0 when a
@@ -465,6 +481,8 @@ func (s *server) run(nc net.Conn) *protocol.Response {
 		InjectBeforeCommit:          o.InjectBeforeCommit,
 		InjectNoReplaceFault:        o.InjectNoReplaceFault,
 		InjectMetadataReadBackFault: o.InjectMetadataReadBackFault,
+		InjectDeleteStep:            o.InjectDeleteStep,
+		InjectStopAfterSetAside:     o.InjectStopAfterSetAside,
 	}
 	if p.BackupsKeep > 0 {
 		cfg.Backup = s.backup

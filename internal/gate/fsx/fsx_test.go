@@ -457,68 +457,6 @@ func TestMkdirCopyMoveChmod(t *testing.T) {
 	wantCode(t, err, protocol.CodePathDenied)
 }
 
-func TestDelete(t *testing.T) {
-	e := newEnv(t)
-	put(t, filepath.Join(e.write, "f"), "12345")
-	pv, err := e.fs.DeletePreview(filepath.Join(e.write, "f"), false)
-	must(t, err)
-	if pv.Entries != 1 || pv.Bytes != 5 || pv.Deleted {
-		t.Fatalf("preview %+v", pv)
-	}
-	if _, err = os.Stat(filepath.Join(e.write, "f")); err != nil {
-		t.Fatal("preview deleted")
-	}
-	d, err := e.fs.Delete(filepath.Join(e.write, "f"), false)
-	must(t, err)
-	if !d.Deleted {
-		t.Fatal("not deleted")
-	}
-	for i := 0; i < 5; i++ {
-		put(t, filepath.Join(e.write, "tree", "sub", string(rune('a'+i))), "xx")
-	}
-	_, err = e.fs.Delete(filepath.Join(e.write, "tree"), false)
-	wantCode(t, err, protocol.CodeBadRequest)
-	pv, err = e.fs.DeletePreview(filepath.Join(e.write, "tree"), true)
-	must(t, err)
-	if pv.Entries != 7 || pv.Bytes != 10 || len(pv.First) != 7 {
-		t.Fatalf("recursive preview %+v", pv)
-	}
-	_, err = e.fs.Delete(filepath.Join(e.write, "tree"), true)
-	must(t, err)
-	if _, err = os.Stat(filepath.Join(e.write, "tree")); !os.IsNotExist(err) {
-		t.Fatal("tree still exists")
-	}
-	// Bounded.
-	for i := 0; i < 25; i++ {
-		put(t, filepath.Join(e.write, "big", string(rune('a'+i))), "x")
-	}
-	_, err = e.fs.Delete(filepath.Join(e.write, "big"), true)
-	wantCode(t, err, protocol.CodeTooLarge)
-	if n, _ := os.ReadDir(filepath.Join(e.write, "big")); len(n) != 25 {
-		t.Fatal("over-limit delete removed entries")
-	}
-	// Refused: roots, symlinks, trees holding protected entries.
-	_, err = e.fs.Delete(e.write, true)
-	wantCode(t, err, protocol.CodePathDenied)
-	must(t, os.Symlink(e.outside, filepath.Join(e.write, "l")))
-	_, err = e.fs.Delete(filepath.Join(e.write, "l"), false)
-	wantCode(t, err, protocol.CodePathDenied)
-	put(t, filepath.Join(e.write, "home", ".ssh", "authorized_keys"), "k")
-	_, err = e.fs.Delete(filepath.Join(e.write, "home"), true)
-	wantCode(t, err, protocol.CodePathDenied)
-	if _, err = os.Stat(filepath.Join(e.write, "home", ".ssh", "authorized_keys")); err != nil {
-		t.Fatal("protected entry removed")
-	}
-	// Inner symlinks are removed, never followed.
-	put(t, filepath.Join(e.write, "withlink", "x"), "x")
-	must(t, os.Symlink(e.outside, filepath.Join(e.write, "withlink", "out")))
-	_, err = e.fs.Delete(filepath.Join(e.write, "withlink"), true)
-	must(t, err)
-	if _, err := os.Stat(filepath.Join(e.outside, "passwd")); err != nil {
-		t.Fatal("followed an inner symlink")
-	}
-}
-
 func TestResolve(t *testing.T) {
 	e := newEnv(t)
 	p, err := e.fs.ResolveRead(filepath.Join(e.read, "hello.txt"))

@@ -537,6 +537,26 @@
     "requires_user_interaction": true
   },
   {
+    "name": "shell_priv_delete_path",
+    "title": "Delete path as root",
+    "tier": "destructive",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Delete path as root"
+    },
+    "description": "Deletes, as root, a file, an empty directory, or with recursive a directory tree within the host's privileged write roots, exactly as its approved preview listed it, after backing it up; returns the counts and the backup ids.",
+    "input_schema_sha256": "ce7aef40f6dabceba03e3c57da155a401b2628bb5f644ea362fcf7387433d66e",
+    "output_schema_sha256": "905f023fbdd44d5ea36df9f67546747be651331e95d357116d8bb1bd8f6a3aa4",
+    "requires_user_interaction": true
+  },
+  {
     "name": "shell_priv_list_backups",
     "title": "List backups",
     "tier": "read",
@@ -615,6 +635,26 @@
     "input_schema_sha256": "768c0a0fec28cefbc42b397ced2df84eb5be904e427fa3ebc4bad8582c69d28a",
     "output_schema_sha256": "406103841bc6a7f5ea54bca539af7cbdbb81712a1ee9ab81ff3cb1d75035efed",
     "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_preview_delete",
+    "title": "Preview delete as root",
+    "tier": "read",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Preview delete as root"
+    },
+    "description": "Reports, as root, what deleting a path within the host's privileged write roots would remove and back up, without changing anything: type, entry count, total bytes, the first 50 entries, the backup and a hash of the complete list.",
+    "input_schema_sha256": "8ffd7c47902d7b4cef278469ec2df7ee3dce7d6e76a3f6e1afab40f7d0b47612",
+    "output_schema_sha256": "6a967d5ee90259e7c049240a9a322bd6b0c377a1ad82437adf561aa0a02b7ce0",
+    "requires_user_interaction": false
   },
   {
     "name": "shell_priv_read_file",

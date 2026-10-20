@@ -101,9 +101,11 @@ func TestBackupFailureChangesNothing(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)
+			pv := f.previewDelete(p(f), false)
 			breakStore(f)
 			f.fail("priv_write_file", m{"path": p(f), "content_b64": b64("v2\n")}, "backup_failed")
-			f.fail("priv_delete", m{"path": p(f)}, "backup_failed")
+			f.fail("priv_delete_preview", m{"path": p(f)}, "backup_failed")
+			f.fail("priv_delete", m{"path": p(f), "expected_preview_sha256": pv.PreviewSHA256}, "backup_failed")
 			gatetest.WriteFile(t, filepath.Join(f.write, "src"), "s", 0o640)
 			f.fail("priv_move", m{"source": filepath.Join(f.write, "src"), "destination": p(f), "overwrite": true}, "backup_failed")
 			if readFile(t, p(f)) != "key: value\n" {
@@ -195,10 +197,7 @@ func TestRestoreFile(t *testing.T) {
 		t.Fatal("restoring the restore's backup failed")
 	}
 	// A deleted file comes back.
-	var del struct {
-		BackupIDs []string `json:"backup_ids"`
-	}
-	f.ok("priv_delete", m{"path": p}, &del)
+	_, del := f.deleteBound(p, false)
 	f.ok("priv_restore_backup", m{"id": del.BackupIDs[0]}, nil)
 	if readFile(t, p) != "broken\n" {
 		t.Fatal("deleted file not restored")
@@ -212,10 +211,7 @@ func TestRestoreTree(t *testing.T) {
 	gatetest.WriteFile(t, filepath.Join(tree, "sub", "b.txt"), "B", 0o600)
 	gatetest.Mkdir(t, filepath.Join(tree, "sub"), 0o750)
 	gatetest.Mkdir(t, filepath.Join(tree, "empty"), 0o700)
-	var del struct {
-		BackupIDs []string `json:"backup_ids"`
-	}
-	f.ok("priv_delete", m{"path": tree, "recursive": true}, &del)
+	_, del := f.deleteBound(tree, true)
 	if bm := f.meta(del.BackupIDs[0]); bm.Kind != "tree" || bm.Entries != 4 {
 		t.Fatalf("tree meta %+v", bm)
 	}

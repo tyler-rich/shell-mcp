@@ -104,6 +104,11 @@ const (
 	// DeleteStepBeforeUnlink: after that check, before the temporary name
 	// is removed.
 	DeleteStepBeforeUnlink
+	// DeleteStepBeforeBackupEntry: before a regular file of the plan is
+	// opened for the backup (the helper's DeleteExactBound).
+	DeleteStepBeforeBackupEntry
+	// DeleteStepAfterBackup: the backup was written; nothing is removed yet.
+	DeleteStepAfterBackup
 )
 
 // DeletePlan is the gate's delete_preview and delete result.
@@ -115,13 +120,23 @@ type DeletePlan struct {
 	First         []string `json:"first"`
 	PreviewSHA256 string   `json:"preview_sha256"`
 	Deleted       bool     `json:"deleted"`
+	// Removed are the logical paths a delete removed, in the order it
+	// removed them, also when it stopped part-way (the helper's audit).
+	Removed []string `json:"-"`
+	// Backup describes, from the plan, what a delete would back up
+	// (PreviewDeleteBound only; List set, never Walk or File).
+	Backup *BackupSource `json:"-"`
 }
 
 // deleteTempPrefix starts the temporary name an entry is set aside under.
 const deleteTempPrefix = ".shell-mcp-delete-"
 
-// previewDomain separates preview hashes from any other SHA-256 input.
-const previewDomain = "shell-mcp delete preview v1\x00"
+// previewDomain separates preview hashes from any other SHA-256 input;
+// boundPreviewDomain separates the helper's, which bind its policy.
+const (
+	previewDomain      = "shell-mcp delete preview v1\x00"
+	boundPreviewDomain = "shell-mcp privileged delete preview v1\x00"
+)
 
 // ValidPreviewSHA256 reports whether s is a preview hash: 64 lowercase hex
 // digits.
@@ -148,11 +163,12 @@ type ident struct {
 	size          int64
 	ctime, btime  unix.StatxTimestamp
 	hasBtime      bool
+	mtime         unix.StatxTimestamp // the helper's tree backup records it
 }
 
 const (
 	statxWant = unix.STATX_TYPE | unix.STATX_MODE | unix.STATX_INO | unix.STATX_SIZE | unix.STATX_CTIME | unix.STATX_BTIME | unix.STATX_MNT_ID |
-		unix.STATX_UID | unix.STATX_GID | unix.STATX_NLINK
+		unix.STATX_UID | unix.STATX_GID | unix.STATX_NLINK | unix.STATX_MTIME
 	statxNeed = unix.STATX_TYPE | unix.STATX_INO | unix.STATX_SIZE | unix.STATX_CTIME | unix.STATX_MNT_ID
 )
 
@@ -171,7 +187,7 @@ func statxAt(dfd int, name string, flags int) (ident, error) {
 	return ident{
 		dev: unix.Mkdev(st.Dev_major, st.Dev_minor), ino: st.Ino, mnt: st.Mnt_id, typ: uint32(st.Mode) & unix.S_IFMT, perm: uint32(st.Mode) & 0o7777,
 		uid: st.Uid, gid: st.Gid, nlink: st.Nlink, mask: st.Mask,
-		size: int64(st.Size), ctime: st.Ctime, btime: st.Btime, hasBtime: st.Mask&unix.STATX_BTIME != 0, //nolint:gosec // G115: file sizes fit int64
+		size: int64(st.Size), ctime: st.Ctime, btime: st.Btime, hasBtime: st.Mask&unix.STATX_BTIME != 0, mtime: st.Mtime, //nolint:gosec // G115: file sizes fit int64
 	}, nil
 }
 
@@ -241,17 +257,34 @@ func (f *FS) isConfiguredRoot(p string) bool {
 
 // PreviewDelete reports what DeleteExact would remove, removing nothing.
 func (f *FS) PreviewDelete(p string, recursive bool) (DeletePlan, error) {
-	pl, err := f.walkPlan(p, recursive)
+	return f.previewDelete(p, recursive, nil)
+}
+
+// PreviewDeleteBound is the privileged helper's PreviewDelete: binding
+// (the helper's policy SHA-256) is part of the hash, so a policy edit
+// between the preview and the delete changes it; and the result describes,
+// from the plan, what DeleteExactBound would back up (DeletePlan.Backup).
+func (f *FS) PreviewDeleteBound(p string, recursive bool, binding string) (DeletePlan, error) {
+	return f.previewDelete(p, recursive, &binding)
+}
+
+func (f *FS) previewDelete(p string, recursive bool, binding *string) (DeletePlan, error) {
+	pl, err := f.walkPlan(p, recursive, binding)
 	if err != nil {
 		return DeletePlan{Path: p, First: []string{}}, err
 	}
 	defer pl.close()
-	return pl.result(), nil
+	res := pl.result()
+	if binding != nil {
+		res.Backup = pl.source()
+	}
+	return res, nil
 }
 
 // walkPlan locates p under a write root and walks it (see the file
-// comment).
-func (f *FS) walkPlan(p string, recursive bool) (*plan, error) {
+// comment). A binding (the helper's) is hashed after its own domain, so a
+// bound hash never equals the gate's.
+func (f *FS) walkPlan(p string, recursive bool, binding *string) (*plan, error) {
 	l, err := f.locate(p, true)
 	if err != nil {
 		return nil, err
@@ -262,13 +295,7 @@ func (f *FS) walkPlan(p string, recursive bool) (*plan, error) {
 		return nil, err
 	}
 	h := sha256.New()
-	b := []byte(previewDomain)
-	if recursive {
-		b = append(b, 1)
-	} else {
-		b = append(b, 0)
-	}
-	_, _ = h.Write(b)
+	_, _ = h.Write(previewPrefix(recursive, binding))
 	hashTree(h, pl.top, nil)
 	pl.hash = hex.EncodeToString(h.Sum(nil))
 	return pl, nil
@@ -427,6 +454,22 @@ func (f *FS) walkDir(pl *plan, dir *os.Root, dfd int, top *ident, node *planEntr
 	return nil
 }
 
+// previewPrefix is what a preview hash covers before the entries: the
+// domain, the binding (the helper's: its length first, after its own
+// domain) and the recursive flag. The gate's prefix is the domain and the
+// flag, as before the helper shared it.
+func previewPrefix(recursive bool, binding *string) []byte {
+	b := []byte(previewDomain)
+	if binding != nil {
+		b = binary.AppendUvarint([]byte(boundPreviewDomain), uint64(len(*binding)))
+		b = append(b, *binding...)
+	}
+	if recursive {
+		return append(b, 1)
+	}
+	return append(b, 0)
+}
+
 // hashTree writes e and everything under it, in walk order, to h.
 func hashTree(h interface{ Write([]byte) (int, error) }, e *planEntry, buf []byte) []byte {
 	buf = appendPreviewEntry(buf[:0], e.lp, &e.id)
@@ -462,20 +505,48 @@ func appendPreviewEntry(b []byte, path string, id *ident) []byte {
 // recursive flag, if its preview_sha256 is still expected (see the file
 // comment).
 func (f *FS) DeleteExact(p string, recursive bool, expected string) (DeletePlan, error) {
+	return f.deleteExact(p, recursive, nil, expected)
+}
+
+// DeleteExactBound is the privileged helper's DeleteExact: it removes what
+// PreviewDeleteBound reported for the same path, recursive flag and
+// binding and, with Config.Backup set, backs the plan up first
+// (backupPlan): only then is anything removed. The result's Removed lists
+// what was removed, also when the deletion stopped part-way.
+func (f *FS) DeleteExactBound(p string, recursive bool, binding, expected string) (DeletePlan, error) {
+	return f.deleteExact(p, recursive, &binding, expected)
+}
+
+// deleteExact is DeleteExact and DeleteExactBound. A refusal made before
+// the first unlink, with nothing left set aside, is provably unchanged
+// (Error.Unchanged): the walk and the backup change nothing, and every
+// entry set aside was put back. A commit is reported (Config.OnCommit) at
+// each unlink and when an entry is left set aside, never before.
+func (f *FS) deleteExact(p string, recursive bool, binding *string, expected string) (DeletePlan, error) {
 	res := DeletePlan{Path: p, First: []string{}}
 	if !ValidPreviewSHA256(expected) {
-		return res, errf(protocol.CodeBadRequest, "expected_preview_sha256 must be the preview_sha256 (64 lowercase hex digits) that delete_preview returned")
+		op := "delete_preview"
+		if binding != nil {
+			op = "priv_delete_preview"
+		}
+		return res, unchanged(errf(protocol.CodeBadRequest, "expected_preview_sha256 must be the preview_sha256 (64 lowercase hex digits) that %s returned", op))
 	}
-	pl, err := f.walkPlan(p, recursive)
+	pl, err := f.walkPlan(p, recursive, binding)
 	if err != nil {
-		return res, err
+		return res, unchangedErr(err)
 	}
 	defer pl.close()
 	res = pl.result()
 	if pl.hash != expected {
-		return res, errf(protocol.CodeExists, "the path changed since the preview (its preview_sha256 differs); nothing was deleted")
+		return res, unchanged(errf(protocol.CodeExists, "the path changed since the preview (its preview_sha256 differs); nothing was deleted"))
 	}
 	f.step(DeleteStepAfterCompare, p)
+	if f.cfg.Backup != nil {
+		if berr := f.backupPlan(pl); berr != nil {
+			return res, unchangedErr(berr)
+		}
+		f.step(DeleteStepAfterBackup, p)
+	}
 	d := &deleter{f: f, pl: pl}
 	err = withFD(pl.parent, func(pfd int) error {
 		if pl.top.id.isDir() {
@@ -487,6 +558,7 @@ func (f *FS) DeleteExact(p string, recursive bool, expected string) (DeletePlan,
 		}
 		return d.remove(pfd, pl.top)
 	})
+	res.Removed = d.removed
 	if err != nil {
 		return res, d.stopped(err)
 	}
@@ -505,6 +577,12 @@ type deleter struct {
 	f       *FS
 	pl      *plan
 	deleted int
+	// removed are the logical paths unlinked, in order.
+	removed []string
+	// The accounting behind Error.Unchanged: setAsides counts entries
+	// renamed to a temporary name, putBacks those renamed back under their
+	// name, stranded those that could not be (deleted counts the unlinks).
+	setAsides, putBacks, stranded int
 	// setAside names an entry that could not be put back under its name
 	// (taken again meanwhile); it was not deleted.
 	setAside string
@@ -575,11 +653,17 @@ func (d *deleter) remove(dfd int, e *planEntry) error {
 	case err != nil:
 		return mapErr(err)
 	}
+	d.setAsides++
 	if !e.id.isDir() {
 		if d.touched == nil {
 			d.touched = map[[2]uint64]bool{}
 		}
 		d.touched[key2(&e.id)] = true
+	}
+	if f.cfg.InjectStopAfterSetAside != nil {
+		if serr := f.cfg.InjectStopAfterSetAside(e.lp); serr != nil {
+			return serr
+		}
 	}
 	f.step(DeleteStepAfterRename, e.lp)
 	post, err := statxAt(dfd, tmp, 0)
@@ -600,6 +684,8 @@ func (d *deleter) remove(dfd int, e *planEntry) error {
 		return mapErr(err)
 	}
 	d.deleted++
+	d.removed = append(d.removed, e.lp)
+	f.commit()
 	return nil
 }
 
@@ -607,8 +693,12 @@ func (d *deleter) remove(dfd int, e *planEntry) error {
 // replacing anything that took the name meanwhile.
 func (d *deleter) restore(dfd int, tmp string, e *planEntry) {
 	if err := unix.Renameat2(dfd, tmp, dfd, e.name, unix.RENAME_NOREPLACE); err != nil {
+		d.stranded++
 		d.setAside, d.setAsideFrom = join(dirOf(e.lp), tmp), e.lp
+		d.f.commit() // the tree changed: an entry stays under its temporary name
+		return
 	}
+	d.putBacks++
 }
 
 func dirOf(p string) string {
@@ -651,7 +741,17 @@ func (d *deleter) stopped(err error) error {
 	}
 	out := errf(code, "%s", msg)
 	out.SetAside = d.setAside
+	out.Unchanged = d.unchanged()
 	return out
+}
+
+// unchanged is the explicit accounting behind Error.Unchanged: nothing was
+// unlinked, nothing was stranded, and every entry set aside was put back
+// under its name, so the tree is as the walk saw it. An entry set aside and
+// neither unlinked nor put back (a path that stopped between the two)
+// makes it false, whatever else happened.
+func (d *deleter) unchanged() bool {
+	return d.deleted == 0 && d.stranded == 0 && d.setAside == "" && d.putBacks == d.setAsides
 }
 
 // isDevice: a character or block device node. The gate's Landlock

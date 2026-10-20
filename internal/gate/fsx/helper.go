@@ -10,7 +10,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"syscall"
 
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
 )
@@ -62,6 +61,13 @@ type BackupSource struct {
 	// through a verified descriptor. Only regular files and directories
 	// occur; anything else fails the walk.
 	Walk func(visit func(rel string, fi fs.FileInfo, open func() (*os.File, error)) error) error
+	// List visits the same entries as Walk, in the same order, from the
+	// delete's plan without opening anything (BackupTree; sizing the
+	// backup before it is written).
+	List func(visit func(rel string, fi fs.FileInfo) error) error
+	// Count is how many entries Walk visits (BackupTree from a plan): the
+	// backup must hold exactly that many.
+	Count int
 }
 
 // BackupFunc is called before every overwrite, move-over and delete. Its
@@ -75,16 +81,6 @@ func backupErr(err error) error {
 		return fe
 	}
 	return errf(protocol.CodeBackupFailed, "the backup could not be written; nothing was changed")
-}
-
-// fileKey identifies a file by device and inode.
-type fileKey struct{ dev, ino uint64 }
-
-func keyOf(fi fs.FileInfo) fileKey {
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-		return fileKey{st.Dev, st.Ino}
-	}
-	return fileKey{}
 }
 
 // backupFile hands the target to the backup hook through a verified
@@ -158,30 +154,6 @@ func unchangedSince(dir *os.Root, name string, backedUp fs.FileInfo) *Error {
 		return unchanged(errf(protocol.CodeBackupFailed, "the file changed while it was being backed up; nothing was changed"))
 	}
 	return nil
-}
-
-// openEntry opens a regular file found by walkTree and verifies it is the
-// entry that was visited.
-func (f *FS) openEntry(l *loc, e *treeEntry) (*os.File, error) {
-	file, err := e.dir.OpenFile(e.name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
-	if err != nil {
-		return nil, mapErr(err)
-	}
-	rp, err := realPathOfFile(file)
-	if err != nil || rp != e.rp {
-		_ = file.Close()
-		return nil, errf(protocol.CodePathDenied, "path changed while opening, or is a symlink")
-	}
-	fi, err := file.Stat()
-	if err != nil || !os.SameFile(fi, e.info) || !fi.Mode().IsRegular() {
-		_ = file.Close()
-		return nil, errf(protocol.CodePathDenied, "file changed while opening")
-	}
-	if e := f.checkReal(l, rp, true); e != nil {
-		_ = file.Close()
-		return nil, e
-	}
-	return file, nil
 }
 
 // String renders an owner for messages.

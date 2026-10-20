@@ -180,18 +180,14 @@ func TestCopyMoveDelete(t *testing.T) {
 		t.Fatalf("move-over %v", w.BackupIDs)
 	}
 	f.fail("priv_move", m{"source": src, "destination": filepath.Join(f.write, "x")}, "path_denied")
-	var del struct {
-		Deleted   bool     `json:"deleted"`
-		BackupIDs []string `json:"backup_ids"`
-	}
-	f.ok("priv_delete", m{"path": dst}, &del)
+	_, del := f.deleteBound(dst, false)
 	if !del.Deleted || len(del.BackupIDs) != 1 {
 		t.Fatalf("delete %+v", del)
 	}
 	tree := filepath.Join(f.write, "tree")
 	gatetest.WriteFile(t, filepath.Join(tree, "a.txt"), "A", 0o640)
-	f.fail("priv_delete", m{"path": tree}, "bad_request")
-	f.ok("priv_delete", m{"path": tree, "recursive": true}, &del)
+	f.fail("priv_delete_preview", m{"path": tree}, "bad_request")
+	_, del = f.deleteBound(tree, true)
 	if !del.Deleted || len(del.BackupIDs) != 1 {
 		t.Fatalf("tree delete %+v", del)
 	}
@@ -201,7 +197,8 @@ func TestCopyMoveDelete(t *testing.T) {
 		gatetest.WriteFile(t, filepath.Join(big, strings.Repeat("f", i+1)), "x", 0o640)
 	}
 	before := len(f.backupFiles())
-	f.fail("priv_delete", m{"path": big, "recursive": true}, "too_large")
+	f.fail("priv_delete_preview", m{"path": big, "recursive": true}, "too_large")
+	f.fail("priv_delete", m{"path": big, "recursive": true, "expected_preview_sha256": strings.Repeat("0", 64)}, "too_large")
 	if len(f.backupFiles()) != before {
 		t.Fatal("a refused delete wrote a backup")
 	}

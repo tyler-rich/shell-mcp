@@ -89,10 +89,7 @@ func TestRestoreTreeWithinModesMax(t *testing.T) {
 	gatetest.Mkdir(t, filepath.Join(tree, "sub"), 0o755)
 	gatetest.WriteFile(t, filepath.Join(tree, "a.txt"), "A", 0o644)
 	gatetest.WriteFile(t, filepath.Join(tree, "sub", "w.txt"), "W", 0o666)
-	var del struct {
-		BackupIDs []string `json:"backup_ids"`
-	}
-	f.ok("priv_delete", m{"path": tree, "recursive": true}, &del)
+	_, del := f.deleteBound(tree, true)
 	f.ok("priv_restore_backup", m{"id": del.BackupIDs[0]}, nil)
 	for p, want := range map[string]os.FileMode{
 		tree:                                0o700,

@@ -55,6 +55,7 @@ func opTable() map[string]opSpec {
 		protocol.OpPrivBackupCheck:   {policy.TierRead, (*server).backupCheck},
 		protocol.OpPrivChownPreview:  {policy.TierRead, (*server).chownPreview},
 		protocol.OpPrivChmodPreview:  {policy.TierRead, (*server).chmodPreview},
+		protocol.OpPrivDeletePreview: {policy.TierRead, (*server).deletePreview},
 		protocol.OpPrivWriteFile:     {policy.TierOperator, (*server).writeFile},
 		protocol.OpPrivMkdir:         {policy.TierOperator, (*server).mkdir},
 		protocol.OpPrivChown:         {policy.TierOperator, (*server).chown},
