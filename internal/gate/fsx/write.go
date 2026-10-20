@@ -106,6 +106,9 @@ type atomicOpts struct {
 	// destination: expected is a copy's expected_destination_sha256 (P-9):
 	// a destination that is not a regular file is then exists.
 	destination bool
+	// copy: the content is a copy's, which cannot name an owner (the
+	// moved-in rule refuses it over a file whose owner it may not keep).
+	copy bool
 }
 
 func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, error) {
@@ -164,6 +167,12 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 		newMode = os.FileMode(um)
 		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
 			oldUID, oldGID = st.Uid, st.Gid
+		}
+		// Another account could have moved the file in: its owner and group
+		// are kept only when no account but root and its owner could have
+		// (PRIVILEGED §6, handoff N-6).
+		if err := f.movedInOverwrite(l, replaced, o); err != nil {
+			return res, err
 		}
 	} else {
 		if !create {
@@ -528,6 +537,10 @@ func (f *FS) CopyExpecting(src, dst string, overwrite bool, expected string) (Wr
 	if fi.Size() > int64(limit) {
 		return WriteResult{}, errf(protocol.CodeTooLarge, "source exceeds max_read_bytes (%d)", limit)
 	}
+	// The source is read under the moved-in rule (handoff N-7).
+	if err := f.movedInRead(ls, fi); err != nil {
+		return WriteResult{}, err
+	}
 	data, err := io.ReadAll(io.LimitReader(file, int64(limit)+1))
 	if err != nil {
 		return WriteResult{}, mapErr(err)
@@ -547,7 +560,7 @@ func (f *FS) CopyExpecting(src, dst string, overwrite bool, expected string) (Wr
 		return WriteResult{}, errf(protocol.CodeIsADirectory, "destination is a directory")
 	}
 	srcMode := os.FileMode(unixMode(fi)) &^ 0o7002
-	return f.writeAtomic(ld, data, &atomicOpts{newMode: srcMode, create: true, overwrite: overwrite, expected: expected, destination: expected != ""})
+	return f.writeAtomic(ld, data, &atomicOpts{newMode: srcMode, create: true, overwrite: overwrite, expected: expected, destination: expected != "", copy: true})
 }
 
 // Copy copies src to dst (CopyExpecting without a destination hash).
