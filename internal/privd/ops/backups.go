@@ -1177,7 +1177,7 @@ func (s *server) restoreBackup(raw jsontext.Value) (data any, warns []string, fa
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
 	}
-	if !validPreviewHash(a.ExpectedPreviewSHA256) {
+	if !fsx.ValidPreviewSHA256(a.ExpectedPreviewSHA256) {
 		return nil, nil, errf(protocol.CodeBadRequest, "expected_preview_sha256 is required: the preview_sha256 priv_restore_preview returned, 64 lowercase hex characters")
 	}
 	pl, err := s.restorePlan(a.ID)
@@ -1217,19 +1217,6 @@ func (s *server) restoreBackup(raw jsontext.Value) (data any, warns []string, fa
 	}
 	res.Entries, res.Verified, res.BackupIDs = n, true, s.ids()
 	return res, nil, nil
-}
-
-// validPreviewHash: 64 lowercase hex characters.
-func validPreviewHash(h string) bool {
-	if len(h) != 64 {
-		return false
-	}
-	for i := range len(h) {
-		if c := h[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
 }
 
 // readData reads a backup's data and requires the size and SHA-256 its
