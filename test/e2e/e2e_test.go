@@ -429,7 +429,7 @@ func TestHelperWriteBackupRestore(t *testing.T) {
 	var r struct {
 		BackupIDs []string `json:"backup_ids"`
 	}
-	mustGate(t, "priv_restore_backup", map[string]any{"id": w.BackupIDs[0]}, &r)
+	mustGateRestore(t, w.BackupIDs[0], &r)
 	if readFile(t, p) != before || len(r.BackupIDs) != 1 {
 		t.Fatalf("restore: content %q, backups %v", readFile(t, p), r.BackupIDs)
 	}
@@ -465,7 +465,7 @@ func TestHelperOperations(t *testing.T) {
 	if len(del.BackupIDs) != 1 {
 		t.Fatalf("tree delete backups %v", del.BackupIDs)
 	}
-	mustGate(t, "priv_restore_backup", map[string]any{"id": del.BackupIDs[0]}, nil)
+	mustGateRestore(t, del.BackupIDs[0], nil)
 	if readFile(t, f) != "x\n" {
 		t.Fatal("tree not restored")
 	}

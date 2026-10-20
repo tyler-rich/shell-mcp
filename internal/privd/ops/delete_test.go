@@ -361,7 +361,7 @@ func TestPrivDeleteBackupRestorable(t *testing.T) {
 	if len(out.BackupIDs) != 1 || present(dir) {
 		t.Fatalf("delete %+v", out)
 	}
-	f.ok("priv_restore_backup", m{"id": out.BackupIDs[0]}, nil)
+	f.restoreBound(out.BackupIDs[0])
 	for p, want := range map[string]string{"a.txt": "aaa", "b/c.txt": "cc", "b/d/e.txt": "e"} {
 		if got := readFile(t, filepath.Join(dir, p)); got != want {
 			t.Fatalf("%s restored as %q", p, got)
@@ -380,7 +380,7 @@ func TestPrivDeleteBackupRestorable(t *testing.T) {
 	if md := f.meta(out.BackupIDs[0]); md.Kind != "file" || md.SHA256 != sum("key: value\n") {
 		t.Fatalf("file backup %+v", md)
 	}
-	f.ok("priv_restore_backup", m{"id": out.BackupIDs[0]}, nil)
+	f.restoreBound(out.BackupIDs[0])
 	if readFile(t, p) != "key: value\n" {
 		t.Fatal("file not restored")
 	}

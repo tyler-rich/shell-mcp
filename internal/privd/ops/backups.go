@@ -747,7 +747,13 @@ func (s *server) listBackups(raw jsontext.Value) (data any, warns []string, fail
 }
 
 type restoreArgs struct {
-	ID string `json:"id"`
+	ID                    string `json:"id"`
+	ExpectedPreviewSHA256 string `json:"expected_preview_sha256"`
+}
+
+// restorePreview is not implemented yet (stub).
+func (s *server) restorePreview(jsontext.Value) (data any, warns []string, failure error) {
+	return nil, nil, errf(protocol.CodeInternal, "not implemented")
 }
 
 type restoreData struct {

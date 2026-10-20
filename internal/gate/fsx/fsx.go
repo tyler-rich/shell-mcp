@@ -114,6 +114,9 @@ type Config struct {
 	// (PRIVILEGED §6, handoff N-1). nil trusts uid 0 only. The helper sets
 	// it from its trust (root); the gate does not use those functions.
 	TrustedDirOwner func(uid uint32) bool
+	// GuardMovedIn applies the moved-in rule (PRIVILEGED §6, "Files another
+	// account could have moved in"; handoff N-6, N-7): stub, not applied yet.
+	GuardMovedIn bool
 	// InjectMetaStep, when non-nil, is called at each point of ApplyMeta's
 	// pass with the logical path of the entry concerned (the target's for
 	// MetaStepAfterCompare). Tests only; production code never sets it.
