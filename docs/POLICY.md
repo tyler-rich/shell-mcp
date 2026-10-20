@@ -150,7 +150,7 @@ commands:
 
 **Universal placeholder rules:** a placeholder value may never start with `-`, contain NUL, newline, or exceed 1024 bytes. (Option injection is the most common way a "safe" binary becomes unsafe.)
 
-**Privilege:** there is none. Policy commands run as the service user inside the gate's `no_new_privs` + Landlock domain; setuid binaries therefore cannot gain privilege, and there is no `sudo` option. A command that only works as root does not belong in v1.
+**Privilege:** there is none. Policy commands run as the service user inside the gate's `no_new_privs` + Landlock domain; setuid binaries therefore cannot gain privilege, and there is no `sudo` option. A command that only works as root belongs in the privileged policy instead, where it runs through the privileged helper, previewed and, from tier operator, approved (`docs/PRIVILEGED.md` §6, "Commands", with a worked example of a fixed root command for an application-owned tree).
 
 **Execution environment:** `PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, `LANG=C.UTF-8`, `LC_ALL=C.UTF-8`, `HOME=<service user home>`, `PAGER=cat`, `SYSTEMD_PAGER=`, `SYSTEMD_COLORS=0`, `GIT_TERMINAL_PROMPT=0`, `NO_COLOR=1`, `TERM=dumb`. Nothing from the request or sshd is inherited. `cwd` (optional) must be inside a read root; default is `/`. `stdin` (optional) ≤ `limits.max_stdin_bytes`; otherwise stdin is `/dev/null`.
 
