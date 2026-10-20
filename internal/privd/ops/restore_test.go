@@ -460,10 +460,10 @@ func TestPrivRestoreKeepsTheRestoredBackup(t *testing.T) {
 			t.Fatalf("the restored backup %s was pruned", b1)
 		}
 	}
-	f.overwrite(p, "v5\n")
+	// Restored again at once: still there, and still kept.
 	f.restoreBound(b1)
-	if readFile(t, p) != "key: value\n" {
-		t.Fatal("the restored backup does not restore again")
+	if readFile(t, p) != "key: value\n" || !present(filepath.Join(f.backups, b1+".data")) {
+		t.Fatal("the restored backup does not restore again, or was pruned")
 	}
 
 	// The cap: a 1 MiB oldest version would be freed by retention, but not

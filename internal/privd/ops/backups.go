@@ -8,6 +8,7 @@ import (
 	"cmp"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -15,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path"
 	"regexp"
@@ -90,6 +92,10 @@ type store struct {
 	keep  int
 	max   int64 // backups.max_store_bytes
 	now   func() time.Time
+	// protect is the backup a restore is restoring: never pruned by the
+	// retention of the backup the restore writes, and never counted as freed
+	// by it (handoff Q12).
+	protect string
 }
 
 func storeErr(format string, a ...any) *fsx.Error {
@@ -572,7 +578,7 @@ func (st *store) room(root *os.Root, p string, size, metaLen int64) (*backupRoom
 			continue
 		}
 		n++
-		if n >= st.keep {
+		if n >= st.keep && m.ID != st.protect {
 			for _, name := range []string{m.ID + metaSuffix, m.dataName()} {
 				if fi, err := root.Lstat(name); err == nil {
 					freed += fi.Size()
@@ -667,7 +673,7 @@ func (st *store) pruneAfter(own []string) {
 			continue
 		}
 		kept[m.Path]++
-		if kept[m.Path] > st.keep {
+		if kept[m.Path] > st.keep && m.ID != st.protect {
 			_ = root.Remove(m.ID + metaSuffix)
 			_ = root.Remove(m.dataName())
 		}
@@ -746,72 +752,466 @@ func (s *server) listBackups(raw jsontext.Value) (data any, warns []string, fail
 	return out, nil, nil
 }
 
+// The restore (PRIVILEGED §6, "Restore"; handoff S4c-5: P-2c, P-3, P-10,
+// D3, Q3, Q12, R-1, N-6). priv_restore_preview and priv_restore_backup
+// share restorePlan: the backup's metadata and data, read and verified
+// against the recorded size and SHA-256 (verify_failed on a mismatch); the
+// path re-checked against the current roots; the owner it would set checked
+// by the moved-in rule; the current file (a file restore) hashed under the
+// read rule, with the backup of it counted against the store's cap; a tree's
+// archive parsed and every entry checked; and preview_sha256 over all of it.
+// The restore recomputes the plan and refuses with exists unless the hash is
+// the one previewed, then writes the very bytes it verified: a file through
+// the verified replace bound to the current content (or create-only when
+// there was none), a tree with exclusive mkdirs and create-only files.
+
 type restoreArgs struct {
-	ID                    string `json:"id"`
+	ID string `json:"id"`
+	// ExpectedPreviewSHA256 is priv_restore_preview's preview_sha256 (P-3).
 	ExpectedPreviewSHA256 string `json:"expected_preview_sha256"`
 }
 
-// restorePreview is not implemented yet (stub).
-func (s *server) restorePreview(jsontext.Value) (data any, warns []string, failure error) {
-	return nil, nil, errf(protocol.CodeInternal, "not implemented")
+type restorePreviewArgs struct {
+	ID string `json:"id"`
 }
 
+// restoreBackupInfo is the backup's record in a restore preview.
+type restoreBackupInfo struct {
+	Size    int64  `json:"size"`
+	SHA256  string `json:"sha256"`
+	Entries int    `json:"entries"`
+	UID     uint32 `json:"uid"`
+	GID     uint32 `json:"gid"`
+	Owner   string `json:"owner,omitempty"`
+	Group   string `json:"group,omitempty"`
+	Mode    string `json:"mode"`
+	Created string `json:"created"`
+	Op      string `json:"op"`
+}
+
+// restoreCurrent is what is at the path now: absent, or a regular file.
+type restoreCurrent struct {
+	State  string  `json:"state"`
+	Size   *int64  `json:"size,omitempty"`
+	Mode   string  `json:"mode,omitempty"`
+	UID    *uint32 `json:"uid,omitempty"`
+	GID    *uint32 `json:"gid,omitempty"`
+	Owner  string  `json:"owner,omitempty"`
+	Group  string  `json:"group,omitempty"`
+	SHA256 string  `json:"sha256,omitempty"`
+}
+
+// restoreEntry is one tree entry's recorded and resulting mode (P-10).
+type restoreEntry struct {
+	Path         string `json:"path"`
+	Type         string `json:"type"`
+	RecordedMode string `json:"recorded_mode"`
+	Mode         string `json:"mode"`
+}
+
+// restoreSet is what a restore sets: the owner and group, and the mode
+// beside the recorded one, for a file or a tree's root; for a tree, the
+// first entries' modes; narrowed counts every entry whose mode the mask
+// narrowed (P-10).
+type restoreSet struct {
+	UID          uint32         `json:"uid"`
+	GID          uint32         `json:"gid"`
+	Mode         string         `json:"mode"`
+	RecordedMode string         `json:"recorded_mode"`
+	Narrowed     int            `json:"narrowed"`
+	First        []restoreEntry `json:"first"`
+	Truncated    bool           `json:"truncated"`
+}
+
+// restorePreviewData is priv_restore_preview's data (handoff P-2c, P-10).
+type restorePreviewData struct {
+	ID            string            `json:"id"`
+	Kind          string            `json:"kind"`
+	Path          string            `json:"path"`
+	Backup        restoreBackupInfo `json:"backup"`
+	Current       restoreCurrent    `json:"current"`
+	Restore       restoreSet        `json:"restore"`
+	CurrentBackup deleteBackup      `json:"current_backup"`
+	PolicySHA256  string            `json:"policy_sha256"`
+	PreviewSHA256 string            `json:"preview_sha256"`
+}
+
+// restoreData is priv_restore_backup's data.
 type restoreData struct {
-	ID        string   `json:"id"`
-	Path      string   `json:"path"`
-	Kind      string   `json:"kind"`
-	SHA256    string   `json:"sha256,omitempty"`
-	Entries   int      `json:"entries,omitempty"`
-	Verified  bool     `json:"verified"`
-	BackupIDs []string `json:"backup_ids"`
+	ID           string         `json:"id"`
+	Path         string         `json:"path"`
+	Kind         string         `json:"kind"`
+	SHA256       string         `json:"sha256,omitempty"`
+	Entries      int            `json:"entries,omitempty"`
+	Verified     bool           `json:"verified"`
+	BackupIDs    []string       `json:"backup_ids"`
+	Mode         string         `json:"mode"`
+	RecordedMode string         `json:"recorded_mode"`
+	Narrowed     int            `json:"narrowed"`
+	First        []restoreEntry `json:"first"`
+	Truncated    bool           `json:"truncated"`
 }
 
+// archiveEntry is one entry of a tree backup, as parseTreeArchive read it.
+type archiveEntry struct {
+	name     string // relative to the tree's root, clean
+	dir      bool
+	mode     uint32 // the recorded mode bits
+	uid, gid uint32
+	data     []byte // a file's bytes
+}
+
+// parseTreeArchive reads a tree backup's archive: directories and regular
+// files only, safe relative names, parents before their entries, sizes as
+// recorded, at most maxEntries entries. The archive's SHA-256 was checked
+// against its record first, so a failure here is a damaged backup.
+func parseTreeArchive(data []byte, maxEntries int) ([]archiveEntry, error) {
+	damaged := func(what string) error {
+		return &fsx.Error{Code: protocol.CodeVerifyFailed, Msg: "the tree backup " + what + "; nothing was restored"}
+	}
+	tr := tar.NewReader(bytes.NewReader(data))
+	dirs := map[string]bool{"": true}
+	var out []archiveEntry
+	for {
+		hdr, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return out, nil
+		}
+		if err != nil {
+			return nil, damaged("is unreadable")
+		}
+		if len(out) == maxEntries {
+			return nil, errf(protocol.CodeTooLarge, "the tree backup has more than max_delete_entries (%d) entries; nothing was restored", maxEntries)
+		}
+		name := strings.TrimSuffix(hdr.Name, "/")
+		if name == "" || strings.HasPrefix(name, "/") || path.Clean(name) != name || name == "." || name == ".." || strings.HasPrefix(name, "../") ||
+			strings.ContainsRune(name, 0) {
+			return nil, damaged("holds an unsafe name")
+		}
+		parent := path.Dir(name)
+		if parent == "." {
+			parent = ""
+		}
+		if !dirs[parent] || dirs[name] {
+			return nil, damaged("lists an entry before its directory, or twice")
+		}
+		if hdr.Uid < 0 || hdr.Gid < 0 || int64(hdr.Uid) > math.MaxUint32 || int64(hdr.Gid) > math.MaxUint32 || hdr.Mode < 0 || hdr.Mode > 0o7777 {
+			return nil, damaged("holds an entry with an invalid owner or mode")
+		}
+		e := archiveEntry{name: name, mode: uint32(hdr.Mode), uid: uint32(hdr.Uid), gid: uint32(hdr.Gid)} //nolint:gosec // G115: bounded above
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			e.dir = true
+			dirs[name] = true
+		case tar.TypeReg:
+			if hdr.Size < 0 || hdr.Size > int64(len(data)) {
+				return nil, damaged("holds an entry with an invalid size")
+			}
+			b, err := io.ReadAll(io.LimitReader(tr, hdr.Size+1))
+			if err != nil || int64(len(b)) != hdr.Size {
+				return nil, damaged("is unreadable")
+			}
+			e.data = b
+		default:
+			return nil, damaged("holds an unexpected entry type")
+		}
+		out = append(out, e)
+	}
+}
+
+// restorePlan is what a restore of one backup would do, as of now.
+type restorePlan struct {
+	m        *meta
+	data     []byte
+	recorded uint32      // the recorded mode bits of the file or the tree's root
+	mode     os.FileMode // what it gets
+	// cur is the file a file restore replaces (nil: none), curSHA its hash.
+	cur       fs.FileInfo
+	curSHA    string
+	curBackup deleteBackup
+	entries   []archiveEntry
+	modes     []os.FileMode // each entry's mode, within modes.max
+	narrowed  int
+	hash      string
+}
+
+func modeString(m uint32) string { return fmt.Sprintf("%04o", m) }
+
+// restorePlan reads, verifies and checks the backup id as a restore of it
+// would now go. The store's retention and cap never count it as freed
+// (Q12).
+func (s *server) restorePlan(id string) (*restorePlan, error) {
+	if !backupIDRE.MatchString(id) {
+		return nil, errf(protocol.CodeBadRequest, "id is not a backup id")
+	}
+	if s.p.BackupsKeep == 0 {
+		return nil, errf(protocol.CodeNotFound, "backups are disabled (backups.keep is 0)")
+	}
+	s.store.protect = id
+	root, err := s.store.open()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	m, err := readMeta(root, id)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, errf(protocol.CodeNotFound, "no such backup")
+	case err != nil:
+		return nil, storeErr("the backup's metadata is unreadable; nothing was restored")
+	}
+	data, err := readData(root, m)
+	if err != nil {
+		return nil, err
+	}
+	recorded, err := strconv.ParseUint(m.Mode, 8, 32)
+	if err != nil || recorded > 0o7777 {
+		return nil, storeErr("the backup's mode is unreadable; nothing was restored")
+	}
+	pl := &restorePlan{m: m, data: data, recorded: uint32(recorded), mode: s.newInodeMode(uint32(recorded))}
+	if uint32(pl.mode) != pl.recorded {
+		pl.narrowed++
+	}
+	switch m.Kind {
+	case fsx.BackupFile:
+		err = s.planFileRestore(root, pl)
+	default:
+		err = s.planTreeRestore(pl)
+	}
+	if err != nil {
+		return nil, err
+	}
+	pl.hash = restoreHash(s.p.SHA256, pl)
+	return pl, nil
+}
+
+// refuseOwner is the moved-in rule's refusal of the owner a restore would
+// set (handoff N-6).
+func (s *server) refuseOwner(p string, d *fsx.ChainDir, uid uint32) error {
+	return errf(protocol.CodePathDenied, "%q is not restored as root with its recorded owner (uid %d): the directory %s is %s, so another account "+
+		"could take a file it could not have made itself; nothing was restored", p, uid, d.Path, s.fs.MovedInWhy(d, uid))
+}
+
+// planFileRestore: the recorded owner must be owner-matched on the path's
+// chain; the current file (if any) is hashed under the read rule, and its
+// backup must fit.
+func (s *server) planFileRestore(root *os.Root, pl *restorePlan) error {
+	m := pl.m
+	chain, err := s.fs.WriteChain(m.Path)
+	if err != nil {
+		return err
+	}
+	if d := s.fs.MovedInBy(chain, m.UID); d != nil {
+		return s.refuseOwner(m.Path, d, m.UID)
+	}
+	cur, sha, err := s.fs.CurrentFile(m.Path)
+	if err != nil || cur == nil {
+		return err
+	}
+	pl.cur, pl.curSHA = cur, sha
+	now := s.o.Now()
+	r, err := s.store.room(root, m.Path, cur.Size(), metaBound(&meta{Path: m.Path, Op: protocol.OpPrivRestoreBackup, Kind: fsx.BackupFile,
+		ID: newID(now), Created: now.UTC().Format(time.RFC3339Nano), RequestID: s.req.ID, PreviewSHA256: strings.Repeat("0", 64)}))
+	switch {
+	case err != nil:
+		return err
+	case !r.fits:
+		return r.refusal()
+	}
+	pl.curBackup = deleteBackup{Written: true, Kind: fsx.BackupFile, Bytes: cur.Size()}
+	return nil
+}
+
+// planTreeRestore: nothing may be at the path; the archive holds exactly
+// the recorded entries; every entry's path may be written; and the owner of
+// every entry is owner-matched on its chain, which the tree's own restored
+// directories extend.
+func (s *server) planTreeRestore(pl *restorePlan) error {
+	m := pl.m
+	fi, err := s.fs.WriteTarget(m.Path)
+	switch {
+	case err != nil:
+		return err
+	case fi != nil:
+		return errf(protocol.CodeExists, "a tree is restored only where nothing exists; nothing was restored")
+	}
+	chain, err := s.fs.WriteChain(m.Path)
+	if err != nil {
+		return err
+	}
+	if d := s.fs.MovedInBy(chain, m.UID); d != nil {
+		return s.refuseOwner(m.Path, d, m.UID)
+	}
+	entries, err := parseTreeArchive(pl.data, s.p.Limits.MaxDeleteEntries)
+	if err != nil {
+		return err
+	}
+	if len(entries) != m.Entries {
+		return &fsx.Error{Code: protocol.CodeVerifyFailed, Msg: fmt.Sprintf("the tree backup holds %d entries, but its record says %d; nothing was restored", len(entries), m.Entries)}
+	}
+	dirs := map[string]fsx.ChainDir{"": {Path: m.Path, UID: m.UID, Mode: uint32(pl.mode)}}
+	for i := range entries {
+		e := &entries[i]
+		target := m.Path + "/" + e.name
+		if err := s.fs.CheckWritable(target); err != nil {
+			return err
+		}
+		ec := append([]fsx.ChainDir(nil), chain...)
+		var anc []string
+		for d := path.Dir(e.name); d != "."; d = path.Dir(d) {
+			anc = append(anc, d)
+		}
+		ec = append(ec, dirs[""])
+		for j := len(anc) - 1; j >= 0; j-- {
+			ec = append(ec, dirs[anc[j]])
+		}
+		if d := s.fs.MovedInBy(ec, e.uid); d != nil {
+			return s.refuseOwner(target, d, e.uid)
+		}
+		mode := s.newInodeMode(e.mode)
+		if e.dir {
+			dirs[e.name] = fsx.ChainDir{Path: target, UID: e.uid, Mode: uint32(mode)}
+		}
+		if uint32(mode) != e.mode {
+			pl.narrowed++
+		}
+		pl.modes = append(pl.modes, mode)
+	}
+	pl.entries = entries
+	return nil
+}
+
+// restoreDomain separates restore preview hashes from any other SHA-256
+// input.
+const restoreDomain = "shell-mcp restore preview v1\x00"
+
+// restoreHash is preview_sha256: the policy's hash, the backup's record,
+// what will be set, the current state at the path and whether it will be
+// backed up, each length-prefixed.
+func restoreHash(policySHA string, pl *restorePlan) string {
+	h := sha256.New()
+	_, _ = io.WriteString(h, restoreDomain)
+	field := func(v string) {
+		var n [8]byte
+		binary.BigEndian.PutUint64(n[:], uint64(len(v)))
+		_, _ = h.Write(n[:])
+		_, _ = io.WriteString(h, v)
+	}
+	u := func(v uint64) string { return strconv.FormatUint(v, 10) }
+	m := pl.m
+	for _, v := range []string{policySHA, m.ID, m.Kind, m.Path, strconv.FormatInt(m.Size, 10), m.SHA256, strconv.Itoa(m.Entries),
+		u(uint64(m.UID)), u(uint64(m.GID)), modeString(pl.recorded), modeString(uint32(pl.mode))} {
+		field(v)
+	}
+	if pl.cur == nil {
+		field("absent")
+	} else {
+		mo := metaOf(pl.cur)
+		for _, v := range []string{"file", strconv.FormatInt(pl.cur.Size(), 10), modeString(mo.mode), u(uint64(mo.uid)), u(uint64(mo.gid)), pl.curSHA} {
+			field(v)
+		}
+	}
+	field(strconv.FormatBool(pl.curBackup.Written))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// fileMeta is an inode's mode bits, owner and group.
+type fileMeta struct{ mode, uid, gid uint32 }
+
+func metaOf(fi fs.FileInfo) fileMeta {
+	uid, gid := ownerIDs(fi)
+	return fileMeta{mode: unixMode(fi), uid: uid, gid: gid}
+}
+
+// set is what the plan sets, with the first entries' modes for a tree.
+func (pl *restorePlan) set() restoreSet {
+	out := restoreSet{UID: pl.m.UID, GID: pl.m.GID, Mode: modeString(uint32(pl.mode)), RecordedMode: modeString(pl.recorded), Narrowed: pl.narrowed,
+		First: []restoreEntry{}}
+	for i, e := range pl.entries {
+		if len(out.First) == previewFirst {
+			out.Truncated = true
+			break
+		}
+		typ := "file"
+		if e.dir {
+			typ = "dir"
+		}
+		out.First = append(out.First, restoreEntry{Path: pl.m.Path + "/" + e.name, Type: typ, RecordedMode: modeString(e.mode), Mode: modeString(uint32(pl.modes[i]))})
+	}
+	return out
+}
+
+// previewFirst bounds the entries listed in a restore's preview and result.
+const previewFirst = 50
+
+// restorePreview is priv_restore_preview (P-2c): the plan, changing
+// nothing.
+func (s *server) restorePreview(raw jsontext.Value) (data any, warns []string, failure error) {
+	var a restorePreviewArgs
+	if err := decode(raw, &a); err != nil {
+		return nil, nil, err
+	}
+	pl, err := s.restorePlan(a.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	m := pl.m
+	names := s.ownerOf(m.UID, m.GID)
+	out := restorePreviewData{ID: m.ID, Kind: m.Kind, Path: m.Path,
+		Backup: restoreBackupInfo{Size: m.Size, SHA256: m.SHA256, Entries: m.Entries, UID: m.UID, GID: m.GID, Owner: names.Owner, Group: names.Group,
+			Mode: m.Mode, Created: m.Created, Op: m.Op},
+		Current: restoreCurrent{State: "absent"}, Restore: pl.set(), CurrentBackup: pl.curBackup, PolicySHA256: s.p.SHA256, PreviewSHA256: pl.hash}
+	if pl.cur != nil {
+		mo := metaOf(pl.cur)
+		size, uid, gid := pl.cur.Size(), mo.uid, mo.gid
+		cn := s.ownerOf(mo.uid, mo.gid)
+		out.Current = restoreCurrent{State: "file", Size: &size, Mode: modeString(mo.mode), UID: &uid, GID: &gid, Owner: cn.Owner, Group: cn.Group, SHA256: pl.curSHA}
+	}
+	return out, nil, nil
+}
+
+// restoreBackup is priv_restore_backup: the plan recomputed and bound to the
+// preview (P-3), then the restore.
 func (s *server) restoreBackup(raw jsontext.Value) (data any, warns []string, failure error) {
 	var a restoreArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
 	}
-	if !backupIDRE.MatchString(a.ID) {
-		return nil, nil, errf(protocol.CodeBadRequest, "id is not a backup id")
+	if !validPreviewHash(a.ExpectedPreviewSHA256) {
+		return nil, nil, errf(protocol.CodeBadRequest, "expected_preview_sha256 is required: the preview_sha256 priv_restore_preview returned, 64 lowercase hex characters")
 	}
-	if s.p.BackupsKeep == 0 {
-		return nil, nil, errf(protocol.CodeNotFound, "backups are disabled (backups.keep is 0)")
-	}
-	root, err := s.store.open()
+	pl, err := s.restorePlan(a.ID)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer func() { _ = root.Close() }()
-	m, err := readMeta(root, a.ID)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return nil, nil, errf(protocol.CodeNotFound, "no such backup")
-	case err != nil:
-		return nil, nil, storeErr("the backup's metadata is unreadable; nothing was restored")
+	if pl.hash != a.ExpectedPreviewSHA256 {
+		return nil, nil, errf(protocol.CodeExists, "the backup, what is at its path, or the privileged policy changed since the preview; nothing was restored; preview again")
 	}
-	content, err := readData(root, m)
-	if err != nil {
-		return nil, nil, err
-	}
-	mode, err := strconv.ParseUint(m.Mode, 8, 32)
-	if err != nil {
-		return nil, nil, storeErr("the backup's mode is unreadable; nothing was restored")
-	}
-	// The recorded mode within modes.max; the recorded owner and group as
-	// they were, even outside owners (handoff F-3, Q3).
-	fm := s.newInodeMode(uint32(mode))
+	// The current version's backup records the preview it belongs to.
+	s.boundPreview = a.ExpectedPreviewSHA256
+	m := pl.m
+	set := pl.set()
+	res := restoreData{ID: m.ID, Path: m.Path, Kind: m.Kind, Mode: set.Mode, RecordedMode: set.RecordedMode, Narrowed: set.Narrowed,
+		First: set.First, Truncated: set.Truncated}
 	uid, gid := m.UID, m.GID
 	owner := &fsx.Owner{UID: &uid, GID: &gid}
-	res := restoreData{ID: m.ID, Path: m.Path, Kind: m.Kind}
 	if m.Kind == fsx.BackupFile {
-		r, werr := s.restoreFS.WriteFile(m.Path, content, fsx.WriteOptions{Mode: &fm, Create: true, Owner: owner})
-		if werr != nil {
-			return nil, nil, werr
+		mode := pl.mode
+		o := fsx.WriteOptions{Mode: &mode, Create: true, Owner: owner}
+		if pl.cur != nil {
+			o.ExpectedSHA256 = pl.curSHA
+			s.precondition = pl.curSHA
+		} else {
+			o.ExpectAbsent = true
 		}
-		res.SHA256, res.Verified, res.BackupIDs = r.SHA256, r.Verified, s.ids()
+		r, err := s.restoreFS.WriteFile(m.Path, pl.data, o)
+		if err != nil {
+			return nil, nil, err
+		}
+		res.SHA256, res.Verified, res.BackupIDs, res.Mode = r.SHA256, r.Verified, s.ids(), r.Mode
 		return res, nil, nil
 	}
-	n, err := s.restoreTree(m, content, fm, owner)
+	n, err := s.restoreTree(pl, owner)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -819,7 +1219,22 @@ func (s *server) restoreBackup(raw jsontext.Value) (data any, warns []string, fa
 	return res, nil, nil
 }
 
-// readData reads a backup's data and requires its recorded SHA-256.
+// validPreviewHash: 64 lowercase hex characters.
+func validPreviewHash(h string) bool {
+	if len(h) != 64 {
+		return false
+	}
+	for i := range len(h) {
+		if c := h[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// readData reads a backup's data and requires the size and SHA-256 its
+// metadata records (Q3): anything else is verify_failed, and nothing is
+// restored.
 func readData(root *os.Root, m *meta) ([]byte, error) {
 	f, err := root.OpenFile(m.dataName(), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
@@ -827,71 +1242,62 @@ func readData(root *os.Root, m *meta) ([]byte, error) {
 	}
 	defer func() { _ = f.Close() }()
 	b, err := io.ReadAll(io.LimitReader(f, maxBackupBytes+1))
-	if err != nil || len(b) > maxBackupBytes {
+	if err != nil {
 		return nil, storeErr("the backup's data is unreadable; nothing was restored")
 	}
 	sum := sha256.Sum256(b)
-	if hex.EncodeToString(sum[:]) != m.SHA256 {
-		return nil, storeErr("the backup's data does not match its recorded SHA-256; nothing was restored")
+	if int64(len(b)) != m.Size || hex.EncodeToString(sum[:]) != m.SHA256 {
+		return nil, &fsx.Error{Code: protocol.CodeVerifyFailed,
+			Msg: "the backup's data does not match its record (its size or SHA-256 differs: it was changed or damaged); nothing was restored"}
 	}
 	return b, nil
 }
 
-// restoreTree recreates a deleted tree where nothing exists now: the root
-// directory, then every entry in archive order (parents first), each with
-// its recorded owner and its recorded mode within modes.max, through the
-// confined, verified operations.
-func (s *server) restoreTree(m *meta, data []byte, rootMode os.FileMode, owner *fsx.Owner) (int, error) {
-	_, err := s.fs.Stat(m.Path)
-	var fe *fsx.Error
-	switch {
-	case err == nil:
-		return 0, errf(protocol.CodeExists, "a tree is restored only where nothing exists")
-	case !errors.As(err, &fe) || fe.Code != protocol.CodeNotFound:
-		return 0, err
-	}
+// restoreTree recreates a tree where nothing exists: its root and every
+// directory with an exclusive mkdir, every file create-only, in archive
+// order, each with its recorded owner and its mode within modes.max. A stop
+// part-way says how many entries were restored.
+func (s *server) restoreTree(pl *restorePlan, owner *fsx.Owner) (int, error) {
+	m := pl.m
+	rootMode := pl.mode
 	if _, err := s.restoreFS.MkdirAs(m.Path, &rootMode, false, owner); err != nil {
+		var fe *fsx.Error
+		if errors.As(err, &fe) && fe.Code == protocol.CodeExists {
+			return 0, errf(protocol.CodeExists, "a tree is restored only where nothing exists; nothing was restored")
+		}
 		return 0, err
 	}
-	tr := tar.NewReader(bytes.NewReader(data))
-	n := 0
-	for {
-		hdr, err := tr.Next()
-		if errors.Is(err, io.EOF) {
-			return n, nil
+	done := 0
+	for i, e := range pl.entries {
+		target := m.Path + "/" + e.name
+		uid, gid := e.uid, e.gid
+		o := &fsx.Owner{UID: &uid, GID: &gid}
+		mode := pl.modes[i]
+		var err error
+		if e.dir {
+			_, err = s.restoreFS.MkdirAs(target, &mode, false, o)
+		} else {
+			_, err = s.restoreFS.WriteFile(target, e.data, fsx.WriteOptions{Mode: &mode, Create: true, ExpectAbsent: true, Owner: o})
 		}
 		if err != nil {
-			return n, storeErr("the tree backup is unreadable; the restore stopped")
-		}
-		n++
-		if n > s.p.Limits.MaxDeleteEntries {
-			return n, errf(protocol.CodeTooLarge, "the tree backup has more than max_delete_entries entries; the restore stopped")
-		}
-		name := strings.TrimSuffix(hdr.Name, "/")
-		if name == "" || strings.HasPrefix(name, "/") || path.Clean(name) != name || name == ".." || strings.HasPrefix(name, "../") {
-			return n, storeErr("the tree backup holds an unsafe name; the restore stopped")
-		}
-		target := m.Path + "/" + name
-		mode := s.newInodeMode(uint32(hdr.Mode) & 0o7777) //nolint:gosec // G115: a tar mode written by this helper
-		uid, gid := uint32(hdr.Uid), uint32(hdr.Gid)      //nolint:gosec // G115: ids written by this helper
-		o := &fsx.Owner{UID: &uid, GID: &gid}
-		switch hdr.Typeflag {
-		case tar.TypeDir:
-			if _, err := s.restoreFS.MkdirAs(target, &mode, false, o); err != nil {
-				return n, err
+			code, msg := protocol.CodeInternal, "the restore failed"
+			var fe *fsx.Error
+			var oe *opError
+			switch {
+			case errors.As(err, &fe):
+				code, msg = fe.Code, fe.Msg
+			case errors.As(err, &oe):
+				code, msg = oe.code, oe.msg
 			}
-		case tar.TypeReg:
-			b, err := io.ReadAll(io.LimitReader(tr, hdr.Size+1))
-			if err != nil || int64(len(b)) != hdr.Size {
-				return n, storeErr("the tree backup is unreadable; the restore stopped")
-			}
-			if _, err := s.restoreFS.WriteFile(target, b, fsx.WriteOptions{Mode: &mode, Create: true, Owner: o}); err != nil {
-				return n, err
-			}
-		default:
-			return n, storeErr("the tree backup holds an unexpected entry type; the restore stopped")
+			return done, &fsx.Error{Code: code, Msg: fmt.Sprintf("%s: %s; %d of %d entries were restored and %d were not (its directory %s was created); "+
+				"preview again, or delete the partial tree, and restore again", target, msg, done, len(pl.entries), len(pl.entries)-done, m.Path)}
 		}
+		done++
 	}
+	if done != m.Entries {
+		return done, &fsx.Error{Code: protocol.CodeVerifyFailed, Msg: fmt.Sprintf("%d entries were restored, but the backup's record says %d", done, m.Entries)}
+	}
+	return done, nil
 }
 
 // backupCheckData is priv_backup_check's answer (handoff P-11): whether an
