@@ -216,6 +216,7 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 **R-1. A restore's narrowed mode is not reported.**
 - S4c-0 clamps the restored mode but does not report it: the result has no `mode` field, and adding one was a protocol change.
 - **Decision:** S4c-5 reports the resulting mode in the preview and in the result, so a narrowing is never silent. Any protocol field for that is pre-approved (P-10, §4).
+- **Status: done (S4c-5, PR #TBD).** The preview's `restore` carries `mode` beside `recorded_mode` (and `backup.mode`), `narrowed` (entries whose mode the mask changed), and for a tree `first` (≤ 50 entries with `recorded_mode` and `mode`) and `truncated`; the result carries the same.
 
 ### 2.2 Cross-cutting gaps
 
@@ -231,6 +232,8 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 | X-8 | **Pruning runs before the operation commits.** `store.save` prunes as soon as the new backup exists. An operation that then fails (verify, a lost race) has still pruned an older version. A restore can also prune the very backup it is restoring, if that backup is the oldest kept (its data is already in memory, so the restore itself succeeds). | **MUST** (Q12) | Prune after the operation succeeded, and never the backup being restored (S4c-2 and S4c-5). |
 | X-9 | **Backups are not tied to approvals.** A backup's metadata records `op` and `request_id`, but not the preview it belongs to. | **MUST** (cheap) | The metadata records `preview_sha256` when the op carried one (a local file format, not the wire; D3). |
 | X-10 | **Read-back of metadata.** Chown and chmod do not re-read what they set. Writes verify their content. | **MUST** (cheap) | fstat the same descriptor after fchown or fchmod; a mismatch is `verify_failed` (S4c-0 for the non-recursive ops, S4c-3 for recursive). |
+
+**Status after S4c-5:** X-8 fixed for restore too: the backup being restored is never pruned by the restore's own retention, nor counted as freed by the store's cap (`store.protect`).
 
 **Status after S4c-3:** X-10 fixed for recursive ops too (every entry read back on the descriptor it was changed on).
 
@@ -295,7 +298,7 @@ Columns: create-only · preview binding · set-aside/stranded · approval and re
 - **DOC: a directory move's contents are not previewed.** The move checks deny and protected rules at every new path (`walkTree`) and moves the inode, so the mode and owner are the inode's own.
 - **Backups: OK.** A replaced destination file is backed up. **Owners and modes: n/a**, since the inode is unchanged.
 
-**`priv_restore_backup`.**
+**`priv_restore_backup`.** (Status: done in S4c-5, PR #TBD; every MUST below, with the moved-in rule of N-6.)
 - **Preview: MUST.** There is none.
   - A dedicated `priv_restore_preview` (P-2) returns the backup's metadata (id, kind, path, size, SHA-256, owner, group, mode, created, op) and the current state at the path.
   - For a file, the current state is absent, or the file with its size, mode, owner and SHA-256; a tree needs nothing there now.
@@ -753,6 +756,7 @@ All of them:
 
 ### S4c-5: restore
 
+- **Status: done (PR #TBD; ARCHIVE §14, S4c-5).** P-2c, P-3 and P-10 as listed (no other protocol change). `restorePlan` is shared by `priv_restore_preview` and `priv_restore_backup`: the data verified against its recorded size and SHA-256 at both (`verify_failed`), the path re-checked, the recorded owner checked by the moved-in rule, a file's current version hashed under the read rule and its backup counted against the cap, a tree's archive parsed (`parseTreeArchive`, fuzzed) with its entry count equal to the metadata's; a file is restored by a verified replace bound to the previewed content or create-only, a tree with exclusive mkdirs and create-only files; `store.protect` keeps the backup being restored (Q12). `shell_priv_restore_backup` (operator, admin, always gated); no read-tier preview tool (Q7 does not name one). N-6 and N-7 decided with the maintainer and done (§2.1); N-8 found. Beyond the entry: `check-policy` reports read roots' chains too; `-timeout 20m` on the CI and ci-local race runs (prompt). Go stays at 1.27.2 in this PR (no 1.27.3 image yet; ARCHIVE's temporary note).
 - **Must decide before S4c-5 ships: N-6 and N-7 (§2.1), together** (maintainer, 2026-10-19). For N-7: whether reads and backup listings follow the chain rule.
 - **N-6 (§2.1)**, for `priv_write_file`, `priv_copy` with `overwrite` and `priv_restore_backup` together. Proposed: over an existing file whose path fails the chain rule, the owner and group are not inherited; an explicit allow-listed owner and group are required, or the operation is refused. Decide with the maintainer (a STOP), then implement it in this session for all three.
 - **Includes.**
