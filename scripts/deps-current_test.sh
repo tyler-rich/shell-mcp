@@ -3,7 +3,9 @@
 # module it must fail when a real go.mod requirement is behind its newest
 # release, when the go line is behind the newest stable Go, when a CI tool pin
 # is behind or drifts, and when ci-local's golangci-lint runs on a Go older than
-# go.mod's go line. Needs go, curl and network access to the module proxy.
+# go.mod's go line; and that the Go check follows the published golang image
+# (deps-current-go.sh, against a fake go.dev and registry, offline). Needs go,
+# curl and network access to the module proxy for the other cases.
 set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"

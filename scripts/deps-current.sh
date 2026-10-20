@@ -7,7 +7,9 @@
 #   - the golangci-lint or govulncheck version pinned in ci.yml and
 #     scripts/ci-local.sh differs between the two or is older than its newest
 #     stable release;
-#   - go.mod's go/toolchain line is older than the newest stable Go on go.dev;
+#   - go.mod's go/toolchain line is not the newest stable Go on go.dev that
+#     has a published official golang:<version>-trixie image (the newest
+#     stable Go, unless its image is not published yet; deps-current-go.sh);
 #   - scripts/ci-local.sh lints with a Go older than go.mod's go/toolchain
 #     line, or with anything but golangci-lint built in the Go image.
 # Needs go, git and curl. Run from any directory; checks the module containing
@@ -20,7 +22,8 @@
 # removes any requirement we add for them, so they cannot be pinned from here.
 set -euo pipefail
 
-cd "${DEPS_CURRENT_DIR:-$(dirname "$0")/..}"
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+cd "${DEPS_CURRENT_DIR:-$script_dir/..}"
 
 fail=0
 stable_re='^v[0-9]+\.[0-9]+\.[0-9]+$'
@@ -139,30 +142,17 @@ vuln_newest="$(go list -m -f '{{.Version}}' golang.org/x/vuln@latest 2>/dev/null
 check_tool govulncheck "$vuln_ci" "$vuln_local" "$vuln_newest"
 
 # --- Go toolchain ------------------------------------------------------------
-# ?mode=json lists stable releases only, newest first.
-latest="$(curl -fsS --max-time 30 'https://go.dev/dl/?mode=json' |
-	grep -o '"version": *"go[0-9][0-9.]*"' | head -n1 | grep -o 'go[0-9][0-9.]*' || true)"
-if [[ -z "$latest" ]]; then
-	echo "deps-current: could not determine the newest Go release" >&2
-	exit 1
+# go.mod must be on the newest stable Go that has a published official
+# golang:<version>-trixie image; see deps-current-go.sh.
+if ! DEPS_CURRENT_DIR="$PWD" bash "$script_dir/deps-current-go.sh"; then
+	fail=1
 fi
-latest="${latest#go}"
 
 go_line="$(awk '$1 == "go" { print $2 }' go.mod)"
 toolchain_line="$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)"
 # The go command drops a toolchain line equal to the go line, so the
 # effective toolchain is the newer of the two.
 effective="$(printf '%s\n%s\n' "$go_line" "${toolchain_line:-$go_line}" | sort -V | tail -n1)"
-
-if older "$go_line" "$latest"; then
-	echo "deps-current: FAIL — go.mod 'go $go_line' is older than the newest stable Go $latest"
-	fail=1
-elif older "$effective" "$latest"; then
-	echo "deps-current: FAIL — go.mod toolchain $effective is older than the newest stable Go $latest"
-	fail=1
-else
-	echo "deps-current: go.mod go $go_line (toolchain ${toolchain_line:-implied by go line}) matches newest stable Go $latest"
-fi
 
 # --- golangci-lint toolchain (ci-local) ----------------------------------------
 # ci-local.sh runs with GOTOOLCHAIN=local, so the Go that builds golangci-lint
