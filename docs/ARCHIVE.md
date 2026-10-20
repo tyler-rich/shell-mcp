@@ -2642,3 +2642,18 @@ Every other write in fsx and the helper opens with `O_CREAT|O_EXCL` (temporary f
 - **Tests (committed failing first, `066f35f`):** `TestDeleteStopAfterSetAside` (fsx: such a stop is not unchanged and reports no commit) and `TestPrivDeleteStopAfterSetAsideKeepsBackup` (helper: the backup is kept, nothing in `backup_ids_discarded`). Against the inferred rule both failed: "an entry left set aside, neither unlinked nor put back, was reported unchanged" and the helper's audit line listed the backup as discarded. The stop is simulated by a new test-only fsx hook, `Config.InjectStopAfterSetAside` (an error returned right after the set-aside), passed through `ops.Options`; `TestProductionOptionsHaveNoTestHooks` covers it. The gate does not set it.
 - **N-7** is decided together with N-6 in S4c-5 (maintainer); recorded in the handoff (§2.1, S4c-5). No separate scoping session.
 - Docs: PRIVILEGED §6 ("Delete", Backups), the handoff.
+
+### 2026-10-20 — Go 1.27.3 (PR #35, branch chore/go-1.27.3)
+
+**Decision:** Bump `go.mod` to `go 1.27.3` and the Dockerfile's golang builder image to `golang:1.27.3-trixie@sha256:1896654cfc5c2b5ad74c07f29cb36f5d2d1cbed42e3054070fbfe444e521e83c`. `scripts/ci-local.sh` and CI's image job read the image from the Dockerfile, and CI's `setup-go` reads `go.mod`, so nothing else pins it.
+
+**Digest:** resolved on 2026-10-20 from Docker Hub's registry, the OCI image index of `library/golang:1.27.3-trixie`. `docker buildx imagetools inspect` and an anonymous `HEAD` on `registry-1.docker.io/v2/library/golang/manifests/1.27.3-trixie` (`docker-content-digest`) gave the same value.
+
+**Why:** go.dev lists Go 1.27.3 (released 2026-10-19) as the newest stable release, its official image is now published, and `deps-current` on `dev` fails until `go.mod` moves. go.dev says 1.27.3 has security fixes to `crypto/x509`. govulncheck reported nothing reachable from our code on 1.27.2 on 2026-10-20. That proves little, because the Go vulnerability database had no entry for these fixes yet. The bump does not depend on reachability.
+
+**Versions:**
+- **Go:** 1.27.3.
+- **Refresh:** `go get -u ./... && go get -u -t ./... && go mod tidy` on Go 1.27.3 changed nothing.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0 (unchanged).
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
