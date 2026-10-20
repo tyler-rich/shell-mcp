@@ -898,7 +898,7 @@ func parseTreeArchive(data []byte, maxEntries int) ([]archiveEntry, error) {
 		if hdr.Uid < 0 || hdr.Gid < 0 || int64(hdr.Uid) > math.MaxUint32 || int64(hdr.Gid) > math.MaxUint32 || hdr.Mode < 0 || hdr.Mode > 0o7777 {
 			return nil, damaged("holds an entry with an invalid owner or mode")
 		}
-		e := archiveEntry{name: name, mode: uint32(hdr.Mode), uid: uint32(hdr.Uid), gid: uint32(hdr.Gid)} //nolint:gosec // G115: bounded above
+		e := archiveEntry{name: name, mode: uint32(hdr.Mode), uid: uint32(hdr.Uid), gid: uint32(hdr.Gid)}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			e.dir = true
@@ -1204,9 +1204,9 @@ func (s *server) restoreBackup(raw jsontext.Value) (data any, warns []string, fa
 		} else {
 			o.ExpectAbsent = true
 		}
-		r, err := s.restoreFS.WriteFile(m.Path, pl.data, o)
-		if err != nil {
-			return nil, nil, err
+		r, werr := s.restoreFS.WriteFile(m.Path, pl.data, o)
+		if werr != nil {
+			return nil, nil, werr
 		}
 		res.SHA256, res.Verified, res.BackupIDs, res.Mode = r.SHA256, r.Verified, s.ids(), r.Mode
 		return res, nil, nil

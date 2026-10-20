@@ -171,8 +171,8 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 		// Another account could have moved the file in: its owner and group
 		// are kept only when no account but root and its owner could have
 		// (PRIVILEGED §6, handoff N-6).
-		if err := f.movedInOverwrite(l, replaced, o); err != nil {
-			return res, err
+		if merr := f.movedInOverwrite(l, replaced, o); merr != nil {
+			return res, merr
 		}
 	} else {
 		if !create {
@@ -538,8 +538,8 @@ func (f *FS) CopyExpecting(src, dst string, overwrite bool, expected string) (Wr
 		return WriteResult{}, errf(protocol.CodeTooLarge, "source exceeds max_read_bytes (%d)", limit)
 	}
 	// The source is read under the moved-in rule (handoff N-7).
-	if err := f.movedInRead(ls, fi); err != nil {
-		return WriteResult{}, err
+	if merr := f.movedInRead(ls, fi); merr != nil {
+		return WriteResult{}, merr
 	}
 	data, err := io.ReadAll(io.LimitReader(file, int64(limit)+1))
 	if err != nil {

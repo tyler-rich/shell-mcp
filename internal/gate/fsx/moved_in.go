@@ -75,9 +75,9 @@ func (f *FS) rootChain(l *loc) ([]ChainDir, error) {
 	}
 	var chain []ChainDir
 	err = withFD(pf, func(pfd int) error {
-		want, err := statxAt(pfd, "", unix.AT_EMPTY_PATH)
-		if err != nil {
-			return mapErr(err)
+		want, serr := statxAt(pfd, "", unix.AT_EMPTY_PATH)
+		if serr != nil {
+			return mapErr(serr)
 		}
 		return withFD(top, func(tfd int) error {
 			fd, err := unix.Openat(tfd, ".", unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)

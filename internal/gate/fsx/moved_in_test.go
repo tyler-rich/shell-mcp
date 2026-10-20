@@ -282,7 +282,7 @@ func TestMovedInBy(t *testing.T) {
 func TestWriteChain(t *testing.T) {
 	e := newMovedEnv(t, true)
 	mkdirMode(t, filepath.Join(e.root, "a", "b"), 0o750)
-	must(t, os.Chmod(filepath.Join(e.root, "a"), 0o770))
+	must(t, os.Chmod(filepath.Join(e.root, "a"), 0o770)) //nolint:gosec // G302: a group-writable directory on the chain
 	chain, err := e.fs.WriteChain(filepath.Join(e.root, "a", "b", "f"))
 	must(t, err)
 	uid := uint32(os.Getuid()) //nolint:gosec // G115: test ids fit
@@ -295,8 +295,8 @@ func TestWriteChain(t *testing.T) {
 			t.Fatalf("chain[%d] = %+v, want %+v", i, chain[i], want[i])
 		}
 	}
-	if chain, err := e.fs.WriteChain(filepath.Join(e.root, "f")); err != nil || len(chain) != 1 || chain[0].Path != e.root {
-		t.Fatalf("a file in the root: %+v %v", chain, err)
+	if one, oerr := e.fs.WriteChain(filepath.Join(e.root, "f")); oerr != nil || len(one) != 1 || one[0].Path != e.root {
+		t.Fatalf("a file in the root: %+v %v", one, oerr)
 	}
 	_, err = e.fs.WriteChain(filepath.Join(e.root, "missing", "f"))
 	wantCode(t, err, protocol.CodeNotFound)
