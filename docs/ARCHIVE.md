@@ -2720,6 +2720,7 @@ Every other write in fsx and the helper opens with `O_CREAT|O_EXCL` (temporary f
 - **Maintainer decisions after review (2026-10-20), docs only:**
   - **N-9 (handoff §2.1).** A restore applies the owner test to every restore, absent targets and every tree entry included, so a root-owned file inside an application-owned directory (for example a `root:example-app 0640` `.env`) cannot be restored. The strict behaviour stays for now; N-8 and N-9 are decided together before release, as one rule for files root creates in directories another account can write.
   - **Test runtime.** `internal/privd/ops` took 287–516 s under `-race` on the CI runners across this PR's three runs (ubuntu-24.04: 505.7, 515.8, 286.5 s; ubuntu-26.04: 314.4, 508.6, 507.3 s), over eight minutes on 4 of 6 jobs; locally 279 s. The `-timeout 20m` stays as it is. A follow-up chore, scheduled after S4c-6, parallelises independent tests and moves the heavy window and racer tests into their own package.
+- **The temporary Go note is resolved (2026-10-20).** `golang:1.27.3-trixie` was published; PR #35 bumped go.mod, the Dockerfile digest and CI, and PR #36 fixed deps-current. This branch merged `origin/dev` (a merge commit, no rebase); the only conflict was this file, where both sides had appended entries, and both are kept. The `-timeout 20m` of the race runs and the new Go pin merged without conflict.
 
 ### 2026-10-20 — Go 1.27.3 (PR #35, branch chore/go-1.27.3)
 
