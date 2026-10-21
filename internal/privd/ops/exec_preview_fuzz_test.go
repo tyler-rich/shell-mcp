@@ -23,26 +23,27 @@ import (
 // exactly the previewed argv (the probe echoes it), and the same without a
 // hash, since the command is read tier. The command has a template for
 // every placeholder type the privileged policy allows: literal, regex,
-// int, enum, path:read and path:write. One directory on the chain of the
-// extra write root (its ancestor, the root, an intermediate directory or a
-// parent) may be open for the iteration (handoff N-10): then no path
-// placeholder and no cwd whose chain from / to its parent holds it ever
-// resolves.
+// int, enum, path:read and path:write. One directory of the extra write
+// root's tree (its ancestor, the root, an intermediate directory, a parent,
+// or a directory given as a placeholder or the cwd) may be open for the
+// iteration (handoff N-10): then no path placeholder and no cwd whose chain
+// from / to its parent holds it ever resolves, and no directory target is
+// it.
 func FuzzPrivExecPreviewMatchesExec(f *testing.F) {
 	fx := newFixture(f, execCommands(), chainCommands())
 	anc, root := chainRoot(fx)
 	b := filepath.Join(root, "a", "b")
 	gatetest.Mkdir(f, filepath.Join(b, "c"), 0o755)
 	gatetest.WriteFile(f, filepath.Join(b, "t"), "t\n", 0o644)
-	opens := []string{"", anc, root, filepath.Join(root, "a"), b}
+	opens := []string{"", anc, root, filepath.Join(root, "a"), b, filepath.Join(b, "c")}
 	for _, s := range []string{
 		"echo\x00abc\x0042", "echo\x00abc\x00100", "echo\x00alpha\x00READ/hello.txt", "echo\x00beta\x00READ/secrets/token",
 		"echo\x00fixed\x00WRITE/new.txt", "echo\x00fixed\x00WRITE/../x", "echo\x00fixed\x00WRITE", "echo\x00UPPER\x001",
 		"echo\x00beta\x00/etc/passwd", "echo\x00gamma\x00READ/hello.txt", "echo\x00fixed\x00-WRITE", "echo", "",
 		"echo\x00alpha\x00CHAIN/a/b/t", "echo\x00fixed\x00CHAIN/a/b/new", "echo\x00fixed\x00CHAIN/a/b/t", "echo\x00fixed\x00CHAIN",
-		"echo\x00alpha\x00CHAIN/a",
+		"echo\x00alpha\x00CHAIN/a", "echo\x00alpha\x00CHAIN/a/b/c", "echo\x00fixed\x00CHAIN/a/b/c", "echo\x00beta\x00CHAIN",
 	} {
-		for _, o := range []uint8{0, 1, 2, 3, 4} {
+		for _, o := range []uint8{0, 1, 2, 3, 4, 5} {
 			f.Add(s, uint8(0), o)
 			f.Add(s, uint8(3), o)
 			f.Add(s, uint8(6), o)
@@ -82,6 +83,9 @@ func FuzzPrivExecPreviewMatchesExec(f *testing.F) {
 			for _, x := range append(slices.Clone(p.Argv[1:]), p.Cwd) {
 				if strings.HasPrefix(x, "/") && pathx.Within(open, path.Dir(x)) {
 					t.Fatalf("%q resolved with the directory %s on its chain open", x, open)
+				}
+				if fi, err := os.Stat(x); x == open && err == nil && fi.IsDir() {
+					t.Fatalf("the open directory %s resolved as a directory target", x)
 				}
 			}
 		}

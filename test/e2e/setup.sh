@@ -318,10 +318,27 @@ commands:
     path: /usr/local/bin/example-probe
     tier: read
     templates: [["echo", "{regex:^[a-z-]+\$}"]]
+  # The chain-rule tests' own commands (priv_exec_chain_test.go), one per
+  # unit and tier, so that their requests never meet another test's journal
+  # count.
   - id: probe-cat
     path: /usr/local/bin/example-probe
     tier: read
-    templates: [["cat", "{path:read}"], ["pwd"]]
+    templates: [["cat", "{path:read}"], ["pwd"], ["echo", "{path:read}"], ["cat", "t"]]
+  - id: probe-chain-op
+    path: /usr/local/bin/example-probe
+    tier: operator
+    templates: [["write", "{path:write}"], ["echo", "{path:write}"]]
+  - id: probe-broad-cat
+    path: /usr/local/bin/example-probe
+    tier: read
+    unit: broad
+    templates: [["cat", "{path:read}"], ["pwd"], ["echo", "{path:read}"], ["cat", "t"]]
+  - id: probe-broad-chain-op
+    path: /usr/local/bin/example-probe
+    tier: operator
+    unit: broad
+    templates: [["write", "{path:write}"], ["echo", "{path:write}"]]
   - id: probe-root-op
     path: /usr/local/bin/example-probe
     tier: operator
@@ -370,8 +387,6 @@ $2    templates:
       - ["procattrs"]
       - ["ignore-term", "60s"]
       - ["drop-ignore-term", "4200004", "60s"]
-      - ["cat", "{path:read}"]
-      - ["pwd"]
   - id: probe-broad-op
     path: /usr/local/bin/example-probe
     tier: operator

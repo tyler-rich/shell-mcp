@@ -67,9 +67,8 @@ func (e *execChainEnv) resolveAll(p string, dir bool) map[string]error {
 // own ancestors included, refuses when it is open; a closed chain resolves.
 func TestResolveExecChain(t *testing.T) {
 	for _, lvl := range []string{"ancestor", "root", "intermediate", "parent"} {
-		// Sticky directories count as writable: another account can still
-		// add names there.
-		for _, mode := range []os.FileMode{0o775, 0o777, os.ModeSticky | 0o777, os.ModeSticky | 0o775} {
+		// A sticky directory counts as open, writable or not.
+		for _, mode := range []os.FileMode{0o775, 0o777, os.ModeSticky | 0o777, os.ModeSticky | 0o775, os.ModeSticky | 0o755} {
 			t.Run(fmt.Sprintf("%s %v", lvl, mode), func(t *testing.T) {
 				e := newExecChainEnv(t, true)
 				a := filepath.Join(e.root, "a")
@@ -104,7 +103,7 @@ func TestResolveExecChain(t *testing.T) {
 							continue // not found either way
 						}
 						wantCode(t, err, protocol.CodePathDenied)
-						if !strings.Contains(err.Error(), open) || !strings.Contains(err.Error(), "writable") {
+						if !strings.Contains(err.Error(), open) || !strings.Contains(err.Error(), "(mode ") {
 							t.Fatalf("%s %s: the refusal does not name %s and why: %v", k, c.p, open, err)
 						}
 					}
@@ -133,7 +132,8 @@ func newExecChainEnvAt(t *testing.T, e *execChainEnv, guard bool) *FS {
 }
 
 // TestResolveExecChainRootItself: the root as a placeholder or a cwd has a
-// chain of its own ancestors, and refuses when one is open.
+// chain of its own ancestors, and refuses when one is open; it is a
+// directory target, so it refuses when it is open itself.
 func TestResolveExecChainRootItself(t *testing.T) {
 	e := newExecChainEnv(t, true)
 	for k, err := range e.resolveAll(e.root, true) {
@@ -148,14 +148,51 @@ func TestResolveExecChainRootItself(t *testing.T) {
 			t.Fatalf("%s: the refusal does not name %s: %v", k, e.anc, err)
 		}
 	}
-	// The root's own mode does not matter for the root itself: only what
-	// could replace it.
-	must(t, os.Chmod(e.anc, 0o755))  //nolint:gosec // G302: a directory, closed again
-	must(t, os.Chmod(e.root, 0o777)) //nolint:gosec // G302: another account's write access, simulated
-	for k, err := range e.resolveAll(e.root, true) {
-		if err != nil {
-			t.Fatalf("an open root itself, %s: %v", k, err)
+	must(t, os.Chmod(e.anc, 0o755)) //nolint:gosec // G302: a directory, closed again
+	for _, mode := range []os.FileMode{0o777, os.ModeSticky | 0o755} {
+		must(t, os.Chmod(e.root, mode))
+		for k, err := range e.resolveAll(e.root, true) {
+			wantCode(t, err, protocol.CodePathDenied)
+			if !strings.Contains(err.Error(), e.root) {
+				t.Fatalf("%s, root %v: the refusal does not name %s: %v", k, mode, e.root, err)
+			}
 		}
+	}
+}
+
+// TestResolveExecDirTarget: a directory given to a command (a placeholder
+// or the cwd) must be closed itself, besides its chain: the command works
+// inside it. A file keeps the chain alone: its own mode does not matter.
+func TestResolveExecDirTarget(t *testing.T) {
+	for _, mode := range []os.FileMode{0o775, 0o777, os.ModeSticky | 0o777, os.ModeSticky | 0o755} {
+		t.Run(mode.String(), func(t *testing.T) {
+			e := newExecChainEnv(t, true)
+			dir := filepath.Join(e.root, "d")
+			mkdirMode(t, dir, 0o755)
+			file := filepath.Join(e.root, "f")
+			putMode(t, file, "f\n", 0o666)
+			for k, err := range e.resolveAll(dir, true) {
+				if err != nil {
+					t.Fatalf("a closed directory, %s: %v", k, err)
+				}
+			}
+			must(t, os.Chmod(dir, mode))
+			for k, err := range e.resolveAll(dir, true) {
+				wantCode(t, err, protocol.CodePathDenied)
+				if !strings.Contains(err.Error(), dir) || !strings.Contains(err.Error(), "(mode ") {
+					t.Fatalf("%s: the refusal does not name %s and why: %v", k, dir, err)
+				}
+			}
+			for k, err := range e.resolveAll(file, false) {
+				if err != nil {
+					t.Fatalf("a file whose own mode is open, %s: %v", k, err)
+				}
+			}
+			// The gate (no GuardExecPaths) resolves as before.
+			if _, err := newExecChainEnvAt(t, e, false).ResolveDir(dir); err != nil {
+				t.Fatalf("the gate's resolution changed: %v", err)
+			}
+		})
 	}
 }
 

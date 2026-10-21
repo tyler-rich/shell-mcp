@@ -34,8 +34,8 @@ func chainRoot(f *fixture) (anc, root string) {
 }
 
 // chainCommands adds the write root <d>/x/w (under <d>/x, both 0755) and
-// root commands that read and write through path placeholders and print
-// their cwd, in each unit.
+// root commands that read and write through path placeholders, echo them,
+// print their cwd and read a file relative to it, in each unit.
 func chainCommands() opt {
 	return func(f *fixture, s *string) {
 		anc, root := chainRoot(f)
@@ -52,21 +52,21 @@ func chainCommands() opt {
   - id: chain-read
     path: %[1]s
     tier: read
-    templates: [["cat", "{path:read}"], ["pwd"]]
+    templates: [["cat", "{path:read}"], ["pwd"], ["echo", "{path:read}"], ["cat", "t"]]
   - id: chain-write
     path: %[1]s
     tier: operator
-    templates: [["write", "{path:write}"]]
+    templates: [["write", "{path:write}"], ["echo", "{path:write}"]]
   - id: chain-broad-read
     path: %[1]s
     tier: read
     unit: broad
-    templates: [["cat", "{path:read}"], ["pwd"]]
+    templates: [["cat", "{path:read}"], ["pwd"], ["echo", "{path:read}"], ["cat", "t"]]
   - id: chain-broad-write
     path: %[1]s
     tier: operator
     unit: broad
-    templates: [["write", "{path:write}"]]
+    templates: [["write", "{path:write}"], ["echo", "{path:write}"]]
 `, f.probe), 1)
 	}
 }

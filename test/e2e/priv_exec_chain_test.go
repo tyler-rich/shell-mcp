@@ -23,10 +23,12 @@ import (
 // docs/handoff/S4C-PRIVILEGED.md N-10), end to end: the real gate and the
 // real helper in both units, as root, with a real other account
 // (example-app). setup.sh declares the write root /srv/e2e-priv-exec/root
-// under its own ancestor, and the commands probe-cat (core, read: cat a
-// {path:read}, pwd), probe-broad (broad, read: the same templates),
-// probe-root-op and probe-broad-op (operator: write a {path:write}). Every
-// path and name is an invented fixture.
+// under its own ancestor, and these tests' own commands: probe-cat and
+// probe-broad-cat (read: cat a {path:read}, echo it, pwd, cat t relative to
+// the cwd) and probe-chain-op and probe-broad-chain-op (operator: write a
+// {path:write}, echo it), in the core and the broad unit. No other test uses
+// them, so their refused requests never meet another test's journal count.
+// Every path and name is an invented fixture.
 
 const (
 	chainAnc  = "/srv/e2e-priv-exec"
@@ -35,7 +37,7 @@ const (
 
 type chainUnit struct{ unit, read, write string }
 
-var chainUnits = []chainUnit{{"core", "probe-cat", "probe-root-op"}, {"broad", "probe-broad", "probe-broad-op"}}
+var chainUnits = []chainUnit{{"core", "probe-cat", "probe-chain-op"}, {"broad", "probe-broad-cat", "probe-broad-chain-op"}}
 
 // chainExec previews command through the gate (the core socket) and runs
 // it in unit with the preview's hash, or with an invalid one when the
@@ -102,7 +104,10 @@ func chainFixture(t *testing.T) (a, b string) {
 // units; with any one of them (an ancestor above the privileged root, the
 // root, an intermediate directory, the parent) owned by example-app, or
 // group-writable, world-writable or sticky, the preview and priv_exec in
-// either unit refuse with path_denied naming it, and nothing runs.
+// either unit refuse with path_denied naming it, and nothing runs. A
+// directory given as the cwd, {path:read} or {path:write} is refused the same
+// way when it is open itself (sticky counting as open), and runs when it is
+// closed.
 func TestPrivExecPathChain(t *testing.T) {
 	a, b := chainFixture(t)
 	file := filepath.Join(b, "t")
@@ -126,6 +131,13 @@ func TestPrivExecPathChain(t *testing.T) {
 			}
 			fileIs(t, newFile, "probe")
 			_ = os.Remove(newFile)
+			// A closed directory as {path:read} and {path:write}.
+			for _, command := range []string{u.read, u.write} {
+				_, r = chainExec(t, u.unit, command, []string{"echo", sub}, "")
+				if out := stdoutOf(t, &r); out != sub+"\n" {
+					t.Fatalf("%s %s: %q", u.unit, command, out)
+				}
+			}
 		}
 	})
 
@@ -179,6 +191,52 @@ func TestPrivExecPathChain(t *testing.T) {
 			})
 		}
 	}
+
+	// The target itself, when it is a directory: the cwd, {path:read} and
+	// {path:write}.
+	for _, o := range []struct {
+		name string
+		uid  int
+		mode os.FileMode
+	}{
+		{"owned by example-app", exampleApp, 0o755},
+		{"group-writable", 0, 0o775},
+		{"world-writable", 0, 0o777},
+		{"sticky", 0, os.ModeSticky | 0o777},
+		{"sticky, not writable", 0, os.ModeSticky | 0o755},
+	} {
+		t.Run("directory target "+o.name, func(t *testing.T) {
+			if err := os.Chown(sub, o.uid, o.uid); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(sub, o.mode); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				_ = os.Chown(sub, 0, 0)
+				_ = os.Chmod(sub, 0o755) //nolint:gosec // G302: a directory, closed again
+			}()
+			for _, u := range chainUnits {
+				for _, c := range []struct {
+					command string
+					args    []string
+					cwd     string
+				}{
+					{u.read, []string{"pwd"}, sub},
+					{u.read, []string{"echo", sub}, ""},
+					{u.write, []string{"echo", sub}, ""},
+				} {
+					pr, er := chainExec(t, u.unit, c.command, c.args, c.cwd)
+					if pr.code() != "path_denied" || !strings.Contains(pr.Error.Message, sub) {
+						t.Fatalf("%s %v cwd %q: preview %s %+v, want path_denied naming %s", c.command, c.args, c.cwd, pr.code(), pr.Error, sub)
+					}
+					if er.code() != "path_denied" || er.Error.Message != pr.Error.Message {
+						t.Fatalf("%s %v in %s: %s %+v, want the preview's refusal", c.command, c.args, u.unit, er.code(), er.Error)
+					}
+				}
+			}
+		})
+	}
 }
 
 // swapClient is the racer: run as another account, it makes the symlink
@@ -212,8 +270,9 @@ func swapClient() int {
 
 // TestPrivExecPathChainRace: example-app, which owns a directory under the
 // privileged root, swaps the target (in that directory) or a directory
-// above it for a symlink to a root-only file in the same root (which both
-// units' commands could reach), again and again, while root commands of
+// above it, or the name a command reads relative to a cwd it owns, for a
+// symlink to a root-only file in the same root (which both units' commands
+// could reach), again and again, while root commands of
 // each unit are previewed and run with each fresh preview's hash. Every
 // request is refused at the resolution, and the commands never read or
 // write the file.
@@ -234,9 +293,12 @@ func TestPrivExecPathChainRace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []struct{ name, target, swap, to string }{
-		{"the target in its parent", "t", "t", victim},
-		{"a directory above the target", "sub/t", "sub", vault},
+	// cwd is the request's working directory, and target then a name
+	// relative to it.
+	for _, c := range []struct{ name, target, swap, to, cwd string }{
+		{"the target in its parent", "t", "t", victim, ""},
+		{"a directory above the target", "sub/t", "sub", vault, ""},
+		{"a symlink planted in the cwd", "t", "t", victim, race},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			// race/t and race/sub/t are example-app's decoys, in its directories.
@@ -271,11 +333,16 @@ func TestPrivExecPathChainRace(t *testing.T) {
 			requests := 0
 			for i := 0; i < 15; i++ {
 				for _, u := range chainUnits {
-					for _, rc := range []struct {
+					type req struct {
 						command string
 						args    []string
-					}{{u.read, []string{"cat", target}}, {u.write, []string{"write", target}}} {
-						pr, er := chainExec(t, u.unit, rc.command, rc.args, "")
+					}
+					reqs := []req{{u.read, []string{"cat", target}}, {u.write, []string{"write", target}}}
+					if c.cwd != "" {
+						reqs = []req{{u.read, []string{"cat", c.target}}}
+					}
+					for _, rc := range reqs {
+						pr, er := chainExec(t, u.unit, rc.command, rc.args, c.cwd)
 						for _, r := range []response{pr, er} {
 							if strings.Contains(string(r.Data), "VICTIM") {
 								t.Fatalf("run %d: %s read the root-only file: %s", i, rc.command, r.Data)
