@@ -29,7 +29,7 @@ The maintainer's workstation is Windows, but the gate and the privileged helper 
 bash scripts/ci-local.sh
 ```
 
-`scripts/ci-local.sh` runs the same gate as CI (gofmt, `go vet`, golangci-lint, `go test -race`, govulncheck, linux/amd64 and linux/arm64 builds of all three binaries, and the `deps-current` freshness check with its self-test) inside digest-pinned Linux containers, as a non-root user, with Go caches in a named Docker volume. It needs only Docker, and works from Git Bash on Windows and from bash on Linux. It also reports whether Landlock is available inside the test container (the gate sandbox tests rely on it) and whether an unprivileged systemd container can boot (information only). The end-to-end tests run only on CI's GitHub-hosted runner (`e2e-host`): `test/e2e/setup.sh` and the e2e test binary refuse to run anywhere else.
+`scripts/ci-local.sh` runs the same gate as CI (gofmt, `go vet`, golangci-lint, `go test -race`, govulncheck, linux/amd64 and linux/arm64 builds of all three binaries checked as release builds, the gate's tests again as the Landlock forced-psx test build, and the `deps-current` freshness check with its self-test) inside digest-pinned Linux containers, as a non-root user, with Go caches in a named Docker volume. It needs only Docker, and works from Git Bash on Windows and from bash on Linux. It also reports whether Landlock is available inside the test container (the gate sandbox tests rely on it) and whether an unprivileged systemd container can boot (information only). The end-to-end tests run only on CI's GitHub-hosted runner (`e2e-host`): `test/e2e/setup.sh` and the e2e test binary refuse to run anywhere else.
 
 ## License
 

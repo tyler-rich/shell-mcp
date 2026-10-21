@@ -37,9 +37,9 @@ func needABI(t *testing.T, n int) {
 	if req, _ := strconv.Atoi(os.Getenv(requireABIEnv)); req >= n {
 		t.Fatalf("%s=%d but the kernel's Landlock ABI is %d; this test needs ABI %d", requireABIEnv, req, k, n)
 	}
-	where := "runs in CI (ABI 7)"
-	if n > 7 {
-		where = "no current runner has it (CI has ABI 7)"
+	where := "runs in CI (ABI 8, and ABI 7 in the forced-psx entry)"
+	if n > 8 {
+		where = "no current runner has it (CI has ABI 8, and ABI 7 in the forced-psx entry)"
 	}
 	t.Skipf("needs Landlock ABI %d (kernel has %d); %s", n, k, where)
 }
@@ -412,7 +412,7 @@ func TestIntegrationExecLimits(t *testing.T) {
 	}
 }
 
-// Sandbox, filesystem: runs locally (ABI 3) and in CI (ABI 7).
+// Sandbox, filesystem: runs locally (ABI 3) and in CI (both all-thread paths).
 func TestIntegrationSandboxFilesystem(t *testing.T) {
 	needABI(t, 1)
 	g := newGate(t)
