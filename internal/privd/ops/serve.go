@@ -496,7 +496,11 @@ func (s *server) run(nc net.Conn) *protocol.Response {
 		// A file another account could have moved in is read, and
 		// overwritten keeping its owner, only when that account could have
 		// read or written it itself (handoff N-6, N-7, PRIVILEGED §6).
-		GuardMovedIn:                true,
+		GuardMovedIn: true,
+		// A root command is given a path (a placeholder, its cwd) only when
+		// no account but root can change what it names before the command
+		// looks it up itself (handoff N-10, PRIVILEGED §6).
+		GuardExecPaths:              true,
 		InjectBeforeBackup:          o.InjectBeforeBackup,
 		InjectExchangeFault:         o.InjectExchangeFault,
 		InjectReadBackFault:         o.InjectReadBackFault,

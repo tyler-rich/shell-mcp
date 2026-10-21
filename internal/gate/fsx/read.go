@@ -359,7 +359,8 @@ func (w *finder) match(name string, fi fs.FileInfo) bool {
 }
 
 // ResolveRead returns the real path of an existing object under a read or
-// write root (for {path:read}).
+// write root (for {path:read}), under the chain rule with GuardExecPaths
+// (exec_chain.go).
 func (f *FS) ResolveRead(p string) (string, error) {
 	l, err := f.locate(p, false)
 	if err != nil {
@@ -370,12 +371,16 @@ func (f *FS) ResolveRead(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	_ = file.Close()
+	defer func() { _ = file.Close() }()
+	if err := f.execChain(l, file); err != nil {
+		return "", err
+	}
 	return l.targetReal(), nil
 }
 
 // ResolveDir returns the real path of a directory under a read or write
-// root (for an exec cwd).
+// root (for an exec cwd), under the chain rule with GuardExecPaths
+// (exec_chain.go).
 func (f *FS) ResolveDir(p string) (string, error) {
 	l, err := f.locate(p, false)
 	if err != nil {
@@ -387,7 +392,15 @@ func (f *FS) ResolveDir(p string) (string, error) {
 		return "", err
 	}
 	if owned {
-		_ = dir.Close()
+		defer func() { _ = dir.Close() }()
+	}
+	df, err := dir.Open(".")
+	if err != nil {
+		return "", mapErr(err)
+	}
+	defer func() { _ = df.Close() }()
+	if err := f.execChain(l, df); err != nil {
+		return "", err
 	}
 	return rp, nil
 }

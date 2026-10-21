@@ -346,7 +346,9 @@ func TestCheckPolicyChecksReadRootChains(t *testing.T) {
 	for _, want := range []string{
 		"ok   privileged read root " + filepath.Join(d, "srv", "app") + ": every directory from / to it is root's",
 		"WARN privileged read root " + filepath.Join(drop, "logs") + ": " + drop + " is group- or world-writable (mode 0777); another account could replace the root itself",
+		"which the per-request moved-in check does not see; root commands are given no path (placeholder or cwd) at or under it",
 		"WARN privileged read root " + shared + ": " + shared + " is group- or world-writable (mode 0775); files under it are read as root only",
+		"could have written them; root commands are given no path (placeholder or cwd) at or under it",
 		"WARN privileged write root " + filepath.Join(d, "etc", "example-app") + ": ",
 	} {
 		if strings.HasPrefix(want, "WARN privileged write root") {
@@ -376,6 +378,7 @@ func TestCheckPolicyChecksTheChain(t *testing.T) {
 	for _, want := range []string{
 		"ok   privileged write root " + filepath.Join(d, "etc", "example-app") + ": every directory from / to it is root's",
 		"WARN privileged write root " + filepath.Join(drop, "app") + ": " + drop + " is group- or world-writable (mode 0777); chmod and chown are refused under it",
+		"does not see; root commands are given no path (placeholder or cwd) at or under it",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("report lacks %q:\n%s", want, out)

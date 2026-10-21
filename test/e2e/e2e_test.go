@@ -84,7 +84,12 @@ func TestMain(m *testing.M) {
 // E2E_HANGUP_MS later as a gate would: "drop" closes the connection (a
 // gate that exited or was killed), "half" shuts down its sending side (a
 // gate that stopped waiting) and then prints what the helper writes.
+// "swap" connects nowhere: it is the racer of priv_exec_chain_test.go
+// (swapClient).
 func client() int {
+	if os.Getenv("E2E_CLIENT") == "swap" {
+		return swapClient()
+	}
 	sock := os.Getenv("E2E_SOCKET")
 	if sock == "" {
 		sock = socketPath

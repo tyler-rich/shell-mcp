@@ -838,29 +838,37 @@ func (f *FS) Chmod(p string, mode os.FileMode) (ChmodResult, error) {
 }
 
 // ResolveWrite returns the real path of p under a write root; p need not
-// exist, but its parent must (for {path:write}).
+// exist, but its parent must (for {path:write}). With GuardExecPaths it
+// applies the chain rule (exec_chain.go).
 func (f *FS) ResolveWrite(p string) (string, error) {
 	l, err := f.locate(p, true)
 	if err != nil {
 		return "", err
 	}
 	defer l.close()
-	if l.parent == nil {
-		return l.rootReal, nil
+	var file *os.File // the target as opened; nil when it does not exist yet
+	exists := true
+	if l.parent != nil {
+		fi, lerr := l.parent.Lstat(l.base)
+		switch {
+		case errors.Is(lerr, fs.ErrNotExist):
+			exists = false
+		case lerr != nil:
+			return "", mapErr(lerr)
+		case fi.Mode()&fs.ModeSymlink != 0:
+			return "", errf(protocol.CodePathDenied, "final path component is a symlink")
+		}
 	}
-	fi, err := l.parent.Lstat(l.base)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return l.targetReal(), nil
-	case err != nil:
-		return "", mapErr(err)
-	case fi.Mode()&fs.ModeSymlink != 0:
-		return "", errf(protocol.CodePathDenied, "final path component is a symlink")
+	// The root itself is opened only for the chain rule (the gate never
+	// opened it here).
+	if exists && (l.parent != nil || f.cfg.GuardExecPaths) {
+		if file, err = f.openTarget(l); err != nil {
+			return "", err
+		}
+		defer func() { _ = file.Close() }()
 	}
-	file, err := f.openTarget(l)
-	if err != nil {
+	if err := f.execChain(l, file); err != nil {
 		return "", err
 	}
-	_ = file.Close()
 	return l.targetReal(), nil
 }

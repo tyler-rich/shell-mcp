@@ -72,6 +72,9 @@ chmod 0755 "$bin"
 # --- Application directories and the backup store ---------------------------
 umount /etc/example-app/e2e-mounted/point 2>/dev/null || true # a rerun: the tmpfs below
 install -o root -g root -m 0755 -d /etc/example-app /etc/example-other /var/log/example-app
+# A privileged write root under an ancestor of its own, whose directories the
+# chain-rule test (priv_exec_chain_test.go) opens one at a time.
+install -o root -g root -m 0755 -d /srv/e2e-priv-exec /srv/e2e-priv-exec/root
 # A tmpfs mounted inside the privileged write root (priv_delete_tools_test.go):
 # the helper's delete never deletes a mount point nor descends into one.
 install -o root -g root -m 0755 -d /etc/example-app/e2e-mounted /etc/example-app/e2e-mounted/point
@@ -301,7 +304,7 @@ limits:
   max_delete_entries: 100
 paths:
   read: [/etc/example-app, /var/log/example-app]
-  write: [/etc/example-app]
+  write: [/etc/example-app, /srv/e2e-priv-exec/root]
   deny: ["/etc/example-app/secrets/**"]
 owners:
   users: [root, example-app]
@@ -315,6 +318,27 @@ commands:
     path: /usr/local/bin/example-probe
     tier: read
     templates: [["echo", "{regex:^[a-z-]+\$}"]]
+  # The chain-rule tests' own commands (priv_exec_chain_test.go), one per
+  # unit and tier, so that their requests never meet another test's journal
+  # count.
+  - id: probe-cat
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["cat", "{path:read}"], ["pwd"], ["echo", "{path:read}"], ["cat", "t"]]
+  - id: probe-chain-op
+    path: /usr/local/bin/example-probe
+    tier: operator
+    templates: [["write", "{path:write}"], ["echo", "{path:write}"]]
+  - id: probe-broad-cat
+    path: /usr/local/bin/example-probe
+    tier: read
+    unit: broad
+    templates: [["cat", "{path:read}"], ["pwd"], ["echo", "{path:read}"], ["cat", "t"]]
+  - id: probe-broad-chain-op
+    path: /usr/local/bin/example-probe
+    tier: operator
+    unit: broad
+    templates: [["write", "{path:write}"], ["echo", "{path:write}"]]
   - id: probe-root-op
     path: /usr/local/bin/example-probe
     tier: operator

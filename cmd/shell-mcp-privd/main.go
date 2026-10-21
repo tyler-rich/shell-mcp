@@ -341,15 +341,19 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 		}
 		return "another account could replace the root itself, which the per-request moved-in check does not see"
 	}
+	// Root commands' path placeholders and cwd (handoff N-10) are checked from
+	// /, and a directory given to one must be closed itself, so an open
+	// directory at or above a root refuses the root and everything under it.
+	const execNote = "root commands are given no path (placeholder or cwd) at or under it"
 	for _, root := range p.Paths.WriteRoots() {
 		var ce *fsx.ChainError
 		switch err := checkRootChain(root, env.trust.Owns); {
 		case err == nil:
 			pr("ok   privileged write root %s: every directory from / to it is root's and not group- or world-writable", root)
 		case errors.As(err, &ce):
-			pr("WARN privileged write root %s: %v; chmod and chown are refused under it (another account could move files in and out again); %s", root, ce, movedIn(root, ce))
+			pr("WARN privileged write root %s: %v; chmod and chown are refused under it (another account could move files in and out again); %s; %s", root, ce, movedIn(root, ce), execNote)
 		default:
-			pr("WARN privileged write root %s: could not check the directories on its path (%v); chmod and chown are refused under it unless they pass", root, err)
+			pr("WARN privileged write root %s: could not check the directories on its path (%v); chmod and chown, and root commands' paths, are refused under it unless they pass", root, err)
 		}
 	}
 	for _, root := range p.Paths.Read {
@@ -358,9 +362,9 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 		case err == nil:
 			pr("ok   privileged read root %s: every directory from / to it is root's and not group- or world-writable", root)
 		case errors.As(err, &ce):
-			pr("WARN privileged read root %s: %v; %s", root, ce, movedIn(root, ce))
+			pr("WARN privileged read root %s: %v; %s; %s", root, ce, movedIn(root, ce), execNote)
 		default:
-			pr("WARN privileged read root %s: could not check the directories on its path (%v)", root, err)
+			pr("WARN privileged read root %s: could not check the directories on its path (%v); root commands' paths are refused under it unless they pass", root, err)
 		}
 	}
 	var owners []string

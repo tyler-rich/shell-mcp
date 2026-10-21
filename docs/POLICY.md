@@ -142,7 +142,7 @@ commands:
 
 | Placeholder | Accepts |
 |---|---|
-| `{path:read}` / `{path:write}` | Absolute clean path that the gate resolves under a read/write root and that passes the deny list. The resolved path is what is passed. |
+| `{path:read}` / `{path:write}` | Absolute clean path that the gate resolves under a read/write root and that passes the deny list. The resolved path is what is passed. In the privileged policy, a root command looks that path up again itself, so the helper also requires every directory from `/` to its parent (and to the `cwd`'s) to be root's, neither group- nor world-writable and not sticky, and a directory given as a placeholder, or as the `cwd`, to be so itself, or refuses with `path_denied` (PRIVILEGED §6, "Commands"). |
 | `{unit}` | A unit name matching `services.status`. |
 | `{int:MIN-MAX}` | Decimal integer in range. |
 | `{enum:a\|b\|c}` | One of the listed literals. |
