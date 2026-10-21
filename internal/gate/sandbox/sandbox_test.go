@@ -349,6 +349,90 @@ func TestApplyFilesystemAllThreads(t *testing.T) {
 	}
 }
 
+// policyFile writes a best-effort policy with these read roots into d.
+func policyFile(t *testing.T, d string, read ...string) string {
+	t.Helper()
+	pf := filepath.Join(d, "policy.yaml")
+	gatetest.WriteFile(t, pf, "version: 1\nmax_tier: read\nsandbox:\n  landlock: best-effort\npaths:\n  read: ["+strings.Join(read, ", ")+"]\n", 0o644)
+	return pf
+}
+
+// TestApplyNonDirectoryRights: a non-directory gets only the file rights of
+// its grant. A read root that is a regular file can be read and not
+// written; /dev/null can be written; /dev/urandom can be read and not
+// written. Every file's mode allows the write, so a denial is the kernel's.
+func TestApplyNonDirectoryRights(t *testing.T) {
+	needABI(t, 1)
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	single := filepath.Join(d, "single.txt")
+	gatetest.WriteFile(t, single, "x", 0o666)
+	out := runApplier(t, "-policy", policyFile(t, d, single),
+		"-probe-read", single, "-probe-write", single,
+		"-probe-write", "/dev/null", "-probe-read", "/dev/urandom", "-probe-write", "/dev/urandom")
+	if out.Error != "" || !out.Report.Applied {
+		t.Fatalf("apply: %+v", out)
+	}
+	for probe, want := range map[string]string{
+		"read:" + single: "READ", "write:" + single: "EACCES",
+		"write:/dev/null": "WROTE", "read:/dev/urandom": "READ", "write:/dev/urandom": "EACCES",
+	} {
+		if got := out.Probes[probe]; got != want {
+			t.Errorf("%s: %s, want %s (path %s)", probe, got, want, out.ThreadPath)
+		}
+	}
+}
+
+// TestApplyMissingRootSkipped: a configured root that does not exist is
+// skipped. The sandbox still applies, the other root stays readable, and
+// nothing near the missing root is granted in its place.
+func TestApplyMissingRootSkipped(t *testing.T) {
+	needABI(t, 1)
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := filepath.Join(d, "allowed", "ok.txt")
+	sibling := filepath.Join(d, "sibling.txt")
+	gatetest.WriteFile(t, allowed, "ok", 0o644)
+	gatetest.WriteFile(t, sibling, "secret", 0o644)
+	out := runApplier(t, "-policy", policyFile(t, d, filepath.Dir(allowed), filepath.Join(d, "gone")),
+		"-probe-read", allowed, "-probe-read", sibling)
+	if out.Error != "" || !out.Report.Applied || !out.Report.NoNewPrivs {
+		t.Fatalf("apply with a missing root: %+v", out)
+	}
+	if out.Probes["read:"+allowed] != "READ" || out.Probes["read:"+sibling] != "EACCES" {
+		t.Fatalf("probes %v (path %s)", out.Probes, out.ThreadPath)
+	}
+}
+
+// TestApplyUnscopedBelowABI8: when the sandbox plans below ABI 8 (a kernel
+// below 8, or the landlock_forcepsx build on any kernel) it requests no
+// scoping, so a signal to a process outside the domain is delivered. With
+// one domain per thread, scoping would stop the gate signalling its own
+// children (the S1c entry). From ABI 8, TestApplySignalScope covers scoping.
+func TestApplyUnscopedBelowABI8(t *testing.T) {
+	needABI(t, 1)
+	if k := sandbox.KernelABI(); k >= sandbox.ABIScope {
+		t.Skipf("the sandbox scopes signals at ABI %d (TestApplySignalScope)", k)
+	}
+	victim := exec.CommandContext(t.Context(), gatetest.BuildProbe(t, t.TempDir(), "probe", "/nonexistent"), "sleep", "30s") //nolint:gosec // G204: test child
+	if err := victim.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = victim.Process.Kill(); _ = victim.Wait() }()
+	pf, _, _ := layout(t, "best-effort", "")
+	out := runApplier(t, "-policy", pf, "-signal", strconv.Itoa(victim.Process.Pid))
+	if out.Error != "" || !out.Report.Applied || out.Report.Enforced.Scope {
+		t.Fatalf("apply: %+v", out)
+	}
+	if out.Probes["signal"] != "SIGNALLED" {
+		t.Fatalf("signal outside the domain below ABI 8: %q (kernel ABI %d, planned as %d)", out.Probes["signal"], out.Report.KernelABI, out.Report.EffectiveABI)
+	}
+}
+
 // TestRequiredRefusedBelowMinABI runs only on kernels below ABI 4 (the local
 // ABI 3 containers): `required` must refuse, changing nothing.
 func TestRequiredRefusedBelowMinABI(t *testing.T) {

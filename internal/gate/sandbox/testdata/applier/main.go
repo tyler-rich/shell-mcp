@@ -61,6 +61,15 @@ func main() {
 	bind := flag.Bool("bind", false, "try a TCP bind")
 	signalPID := flag.Int("signal", 0, "pid to send SIGTERM")
 	mptcp := flag.Bool("mptcp", false, "try a raw socket(AF_INET, SOCK_STREAM, IPPROTO_MPTCP)")
+	var probeRead, probeWrite []string
+	flag.Func("probe-read", "file to open for reading after Apply (repeatable; probe read:<path>)", func(v string) error {
+		probeRead = append(probeRead, v)
+		return nil
+	})
+	flag.Func("probe-write", "file to open for writing after Apply (repeatable; probe write:<path>)", func(v string) error {
+		probeWrite = append(probeWrite, v)
+		return nil
+	})
 	flag.Parse()
 
 	out := output{Probes: map[string]string{}, CGO: "unknown", ThreadPath: sandbox.ThreadPath()}
@@ -125,6 +134,12 @@ func main() {
 			_ = unix.Close(fd)
 		}
 		out.Probes["mptcp"] = result(err, "OPENED")
+	}
+	for _, f := range probeRead {
+		out.Probes["read:"+f] = openResult(f, os.O_RDONLY, "READ")
+	}
+	for _, f := range probeWrite {
+		out.Probes["write:"+f] = openResult(f, os.O_WRONLY, "WROTE")
 	}
 	if *signalPID != 0 {
 		out.Probes["signal"] = result(syscall.Kill(*signalPID, syscall.SIGTERM), "SIGNALLED")
@@ -194,6 +209,15 @@ func fail(o *output, err error) {
 func emit(o output) {
 	b, _ := json.Marshal(o)
 	fmt.Println(string(b))
+}
+
+// openResult opens f with flag and closes it at once.
+func openResult(f string, flag int, ok string) string {
+	h, err := os.OpenFile(f, flag, 0) //nolint:gosec // G304: a path the test chose
+	if err == nil {
+		_ = h.Close()
+	}
+	return result(err, ok)
 }
 
 func result(err error, ok string) string {
