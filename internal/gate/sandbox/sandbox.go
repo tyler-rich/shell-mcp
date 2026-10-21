@@ -53,6 +53,10 @@ const (
 	RequiredMinABI = ABINet
 )
 
+// abiTSync is where go-landlock v0.10.1 moves from psx to
+// LANDLOCK_RESTRICT_SELF_TSYNC (restrict.go: useTsync := abi.version >= 8).
+const abiTSync = 8
+
 // ErrUnavailable means `landlock: required` cannot be satisfied.
 var ErrUnavailable = errors.New("landlock cannot enforce every rule this policy needs")
 
@@ -175,7 +179,25 @@ func KernelABI() int {
 			v = 5
 		}
 	}
-	return min(v, ABIHighest)
+	return min(capABI(v), ABIHighest)
+}
+
+// ThreadPath names the all-thread path Apply takes on this kernel: "tsync"
+// (one landlock_restrict_self with LANDLOCK_RESTRICT_SELF_TSYNC), "psx"
+// (no_new_privs and landlock_restrict_self on each thread through
+// libcap/psx, one domain per thread) or "none" (no Landlock).
+func ThreadPath() string {
+	return threadPath(KernelABI())
+}
+
+func threadPath(abi int) string {
+	switch {
+	case abi < 1:
+		return "none"
+	case abi >= abiTSync:
+		return "tsync"
+	}
+	return "psx"
 }
 
 // Plan decides what the sandbox enforces for the policy at the given ABI.

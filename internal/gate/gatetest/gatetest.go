@@ -60,11 +60,13 @@ func RequireSecure(t testing.TB, dir string) {
 }
 
 // BuildTest compiles the test binary of a package of this module (go test
-// -c) with CGO_ENABLED=0 unless env overrides it.
+// -c) with CGO_ENABLED=0 unless env overrides it, and this build's sandbox
+// test tag (tagArgs).
 func BuildTest(t testing.TB, pkg, dir, name string, env []string) string {
 	t.Helper()
 	out := filepath.Join(dir, name)
-	cmd := exec.CommandContext(t.Context(), "go", "test", "-c", "-trimpath", "-o", out, "./"+pkg) //nolint:gosec // G204: test helper, module-relative package
+	args := append([]string{"test", "-c", "-trimpath", "-o", out}, tagArgs()...)
+	cmd := exec.CommandContext(t.Context(), "go", append(args, "./"+pkg)...) //nolint:gosec // G204: test helper, module-relative package
 	cmd.Dir = moduleRoot(t)
 	cmd.Env = append(append(os.Environ(), "CGO_ENABLED=0"), env...)
 	if b, err := cmd.CombinedOutput(); err != nil {
@@ -110,11 +112,13 @@ func moduleRoot(t testing.TB) string {
 }
 
 // Build compiles a package of this module (relative to the module root)
-// with CGO_ENABLED=0 into dir/name, mode 0755, and returns the path.
+// with CGO_ENABLED=0 and this build's sandbox test tag (tagArgs) into
+// dir/name, mode 0755, and returns the path.
 func Build(t testing.TB, pkg, dir, name string, env []string, extraArgs ...string) string {
 	t.Helper()
 	out := filepath.Join(dir, name)
-	args := append([]string{"build", "-trimpath", "-o", out}, extraArgs...)
+	args := append([]string{"build", "-trimpath", "-o", out}, tagArgs()...)
+	args = append(args, extraArgs...)
 	args = append(args, "./"+pkg)
 	cmd := exec.CommandContext(t.Context(), "go", args...) //nolint:gosec // G204: test helper, module-relative package
 	cmd.Dir = moduleRoot(t)

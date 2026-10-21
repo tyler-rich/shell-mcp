@@ -37,36 +37,43 @@ func needABI(t *testing.T, n int) {
 	if req, _ := strconv.Atoi(os.Getenv(RequireABIEnv)); req >= n {
 		t.Fatalf("%s=%d but the kernel's Landlock ABI is %d; this test needs ABI %d", RequireABIEnv, req, k, n)
 	}
-	where := "runs in CI (ABI 7 and ABI 8 entries)"
+	where := "runs in CI (ABI 8, and ABI 7 in the forced-psx entry)"
 	if n > 8 {
-		where = "no current runner has it (CI has ABI 7 and 8)"
+		where = "no current runner has it (CI has ABI 8, and ABI 7 in the forced-psx entry)"
 	}
 	t.Skipf("needs Landlock ABI %d (kernel has %d); %s", n, k, where)
 }
 
 // ExpectPathEnv names the variable each CI matrix entry sets to the thread
-// path it must exercise: "psx" (ABI < 8: no_new_privs and
-// landlock_restrict_self on every thread through libcap/psx, one domain per
-// thread) or "tsync" (ABI >= 8: one landlock_restrict_self with
-// LANDLOCK_RESTRICT_SELF_TSYNC). go-landlock v0.10.1 chooses by the
-// kernel's ABI after the signal-scoping errata check that
-// sandbox.KernelABI mirrors (restrict.go: useTsync := abi.version >= 8), so a
-// runner kernel that changes ABI cannot silently move an entry to the
-// other path.
+// path it must exercise: "psx" (no_new_privs and landlock_restrict_self on
+// every thread through libcap/psx, one domain per thread) or "tsync" (one
+// landlock_restrict_self with LANDLOCK_RESTRICT_SELF_TSYNC). go-landlock
+// v0.10.1 chooses by the kernel's ABI after the signal-scoping errata check
+// that sandbox.KernelABI mirrors (restrict.go: useTsync := abi.version >= 8).
+// The runners' kernels all report ABI 8 now, so the psx entry runs the
+// landlock_forcepsx test build, which plans as at ABI 7 and applies through
+// psx. Either way a kernel or a build that moves an entry to the other path
+// fails here.
 const ExpectPathEnv = "SHELL_MCP_EXPECT_LANDLOCK_PATH"
 
-// TestLandlockThreadPath reports which all-thread path this kernel makes
-// the sandbox take, for the CI summary, and fails when it is not the path
-// the environment expects.
+// TestLandlockThreadPath reports which all-thread path the sandbox takes in
+// a binary built like the gate (the applier, with this test build's tags),
+// for the CI summary, and fails when it is not the path the environment
+// expects. It never skips: a kernel without Landlock takes the path "none".
 func TestLandlockThreadPath(t *testing.T) {
-	k := sandbox.KernelABI()
-	path := "psx"
-	if k >= 8 {
-		path = "tsync"
+	pf, _, _ := layout(t, "best-effort", "")
+	out := runApplier(t, "-policy", pf)
+	if out.Error != "" {
+		t.Fatalf("apply: %s", out.Error)
 	}
-	t.Logf("LANDLOCK_PATH=%s kernel_abi=%d", path, k)
+	path := out.ThreadPath
+	t.Logf("LANDLOCK_PATH=%s kernel_abi=%d effective_abi=%d", path, out.Report.KernelABI, out.Report.EffectiveABI)
 	if want := os.Getenv(ExpectPathEnv); want != "" && want != path {
-		t.Fatalf("%s=%s but this kernel (ABI %d) makes the sandbox take the %s path", ExpectPathEnv, want, k, path)
+		t.Fatalf("%s=%s but the sandbox takes the %s path (kernel ABI %d, planned as %d)", ExpectPathEnv, want, path, out.Report.KernelABI, out.Report.EffectiveABI)
+	}
+	// The test binary and the binaries it builds carry the same tags.
+	if own := sandbox.ThreadPath(); own != path {
+		t.Fatalf("this test binary takes the %s path, the applier it built the %s path", own, path)
 	}
 }
 
@@ -240,9 +247,12 @@ type threadResult struct {
 type applierOut struct {
 	FiltersBefore string            `json:"seccomp_filters_before"`
 	CGO           string            `json:"cgo"`
+	ThreadPath    string            `json:"thread_path"`
 	Report        sandbox.Report    `json:"report"`
 	Error         string            `json:"error"`
 	Threads       []threadResult    `json:"threads"`
+	TIDsBefore    []int             `json:"tids_before"`
+	ThreadsAfter  []threadResult    `json:"threads_after"`
 	Probes        map[string]string `json:"probes"`
 }
 
@@ -276,24 +286,39 @@ func runApplier(t *testing.T, args ...string) applierOut {
 }
 
 // TestApplyFilesystemAllThreads: every thread, including goroutines locked
-// to their own OS threads before Apply, reports NoNewPrivs 1 and is denied a
-// path outside the policy by the kernel. Runs wherever Landlock exists
-// (locally ABI 3, CI ABI 7).
+// to their own OS threads before Apply and goroutines locked to OS threads
+// started after it, reports NoNewPrivs 1 and the seccomp filter and is
+// denied a path outside the policy by the kernel. Runs wherever Landlock
+// exists (locally ABI 3; CI on both all-thread paths).
 func TestApplyFilesystemAllThreads(t *testing.T) {
 	needABI(t, 1)
 	pf, allowed, outside := layout(t, "best-effort", "")
-	out := runApplier(t, "-policy", pf, "-threads", "6", "-read", outside, "-allowed", allowed, "-bind")
+	out := runApplier(t, "-policy", pf, "-threads", "6", "-threads-after", "6", "-read", outside, "-allowed", allowed, "-bind")
 	if out.Error != "" {
 		t.Fatalf("apply: %s", out.Error)
 	}
 	if !out.Report.Applied || !out.Report.NoNewPrivs {
 		t.Fatalf("report %+v", out.Report)
 	}
-	if len(out.Threads) != 6 {
-		t.Fatalf("threads %+v", out.Threads)
+	if len(out.Threads) != 6 || len(out.ThreadsAfter) != 6 {
+		t.Fatalf("threads %+v, after %+v", out.Threads, out.ThreadsAfter)
 	}
+	existed := map[int]bool{}
+	for _, tid := range out.TIDsBefore {
+		existed[tid] = true
+	}
+	started := 0
+	for _, th := range out.ThreadsAfter {
+		if !existed[th.TID] {
+			started++
+		}
+	}
+	if started == 0 {
+		t.Fatalf("no thread was started after Apply: after %+v, before %v", out.ThreadsAfter, out.TIDsBefore)
+	}
+	t.Logf("path %s: %d of %d threads pinned after Apply were started after it", out.ThreadPath, started, len(out.ThreadsAfter))
 	tids := map[int]bool{}
-	for _, th := range out.Threads {
+	for _, th := range append(out.Threads, out.ThreadsAfter...) {
 		tids[th.TID] = true
 		before, _ := strconv.Atoi(out.FiltersBefore)
 		if after, err := strconv.Atoi(th.Filters); err != nil || after != before+1 {
@@ -303,7 +328,7 @@ func TestApplyFilesystemAllThreads(t *testing.T) {
 			t.Fatalf("thread %+v", th)
 		}
 	}
-	if len(tids) != 6 {
+	if len(tids) != 12 {
 		t.Fatalf("goroutines were not on distinct threads: %v", tids)
 	}
 	if out.Probes["read"] != "EACCES" || out.Probes["allowed"] != "READ" {
