@@ -124,7 +124,9 @@ func privRunCommand(d *Deps) Tool {
 		describePreview: func(in privRunCommandIn, target string, p *preview) string {
 			return "As root, run command " + in.CommandID + " with " + plural(len(in.Args), "argument", "arguments") + " in the " + p.unit + " unit on " + target
 		},
-		preview: d.privRunCommandPreview,
+		preview: func(ctx context.Context, in privRunCommandIn, target string) (*preview, *envelope.Error) {
+			return d.privRunCommandPreview(ctx, &in, target)
+		},
 		precondition: func(in *privRunCommandIn, p *preview) {
 			in.expectedPreview, in.unit = p.contentSHA256, p.unit
 		},
@@ -148,7 +150,7 @@ func privRunCommand(d *Deps) Tool {
 // the resolved argv and cwd, and preview_sha256, bound with both policies'
 // hashes. The hash and the unit the call then sends are taken from the
 // helper's answer before the server's redaction.
-func (d *Deps) privRunCommandPreview(ctx context.Context, in privRunCommandIn, target string) (*preview, *envelope.Error) {
+func (d *Deps) privRunCommandPreview(ctx context.Context, in *privRunCommandIn, target string) (*preview, *envelope.Error) {
 	args := in.Args
 	if args == nil {
 		args = []string{}

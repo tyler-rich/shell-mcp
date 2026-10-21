@@ -39,7 +39,7 @@ func execPreviewHash(t *testing.T, command string, args []string) (hash, unit st
 
 // helperUnitOf returns the unit (core or broad) whose instance wrote a
 // journal entry.
-func helperUnitOf(j journalEntry) string {
+func helperUnitOf(j *journalEntry) string {
 	switch {
 	case strings.HasPrefix(j.Unit, "shell-mcp-privd-broad@"):
 		return "broad"
@@ -66,16 +66,17 @@ func TestPrivRunCommandToolApproval(t *testing.T) {
 				t.Fatal("ran before approval")
 			}
 			pv := findJournal(t, "shell-mcp-privd", since, `"op":"priv_exec_preview"`, `"command_id":"`+c.command+`"`, `"outcome":"ok"`)
-			if helperUnitOf(pv) != "core" {
+			if helperUnitOf(&pv) != "core" {
 				t.Fatalf("previewed by %q", pv.Unit)
 			}
 			srv.decide(t, h, id, "approve")
 			d := okDataAs(t, srv.callTool(t, "shell_priv_run_command", withApproval(args, id)), "e2e-ssh")
-			if fileIs(t, out, "probe"); d["command_id"] != c.command {
+			fileIs(t, out, "probe")
+			if d["command_id"] != c.command {
 				t.Fatalf("data %v", d)
 			}
 			j := findJournal(t, "shell-mcp-privd", since, `"op":"priv_exec"`, `"command_id":"`+c.command+`"`, `"unit":"`+c.unit+`"`, `"outcome":"ok"`)
-			if helperUnitOf(j) != c.unit || strings.Contains(j.Message, "expected_preview_sha256") || strings.Contains(j.Message, out) {
+			if helperUnitOf(&j) != c.unit || strings.Contains(j.Message, "expected_preview_sha256") || strings.Contains(j.Message, out) {
 				t.Fatalf("exec journal line from %q: %s", j.Unit, j.Message)
 			}
 			if c.unit == "broad" && j.Priority != "4" {
