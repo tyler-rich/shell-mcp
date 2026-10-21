@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -45,24 +44,11 @@ func dirtyDiscard(t *testing.T) {
 	}
 }
 
-// opLines counts the gate's audit lines of op (exactly) for the operator
-// principal since start that contain every string in want.
-func opLines(t *testing.T, since time.Time, op string, want ...string) int {
+// opLines counts the audit lines of op (exactly) of c's server, for the
+// operator principal, that contain every string in want.
+func opLines(t *testing.T, c *serverConn, op string, want ...string) int {
 	t.Helper()
-	n := 0
-	for _, j := range journal(t, "shell-mcp-gate", since) {
-		if !strings.Contains(j.Message, `"principal":"`+opsWho+`"`) || !strings.Contains(j.Message, `"op":"`+op+`"`) {
-			continue
-		}
-		ok := true
-		for _, w := range want {
-			ok = ok && strings.Contains(j.Message, w)
-		}
-		if ok {
-			n++
-		}
-	}
-	return n
+	return len(c.gate(t, append([]string{`"principal":"` + opsWho + `"`, `"op":"` + op + `"`}, want...)...))
 }
 
 func TestGitDiscardPreviewTool(t *testing.T) {
@@ -118,11 +104,8 @@ func TestDestructiveToolsApproval(t *testing.T) {
 			t.Fatalf("connect: %v; server log: %s", err, log.String())
 		}
 		t.Cleanup(func() { _ = cs.Close() })
+		conn := connOf(t, cs)
 		dirtyDiscard(t)
-		// journal() reads from one second before since (whole seconds): let
-		// the previous test's gate lines fall outside that window.
-		time.Sleep(2100 * time.Millisecond)
-		since := time.Now()
 		refusal(t, callOn(t, cs, log, "shell_discard_git_changes", map[string]any{"repo": opsDiscard}), "approval_unavailable", "")
 		refusal(t, callOn(t, cs, log, "shell_run_command", map[string]any{"command_id": "probe-destructive", "args": []string{"echo", "destructive"}}),
 			"approval_unavailable", "")
@@ -136,16 +119,17 @@ func TestDestructiveToolsApproval(t *testing.T) {
 			t.Fatalf("operator command %v", env)
 		}
 		time.Sleep(time.Second)
-		findJournal(t, "shell-mcp-gate", since, `"principal":"`+opsWho+`"`, `"op":"exec_preview"`, `"command_id":"probe-destructive"`, `"ceiling":"destructive"`)
+		conn.waitGate(t, `"principal":"`+opsWho+`"`, `"op":"exec_preview"`, `"command_id":"probe-destructive"`, `"ceiling":"destructive"`)
 		for _, id := range []string{"probe-echo", "probe-exit"} {
-			findJournal(t, "shell-mcp-gate", since, `"principal":"`+opsWho+`"`, `"op":"exec"`, `"command_id":"`+id+`"`, `"ceiling":"operator"`, `"outcome":"ok"`)
+			conn.waitGate(t, `"principal":"`+opsWho+`"`, `"op":"exec"`, `"command_id":"`+id+`"`, `"ceiling":"operator"`, `"outcome":"ok"`)
 		}
-		if n := opLines(t, since, "exec", `"command_id":"probe-destructive"`); n != 0 {
+		if n := opLines(t, conn, "exec", `"command_id":"probe-destructive"`); n != 0 {
 			t.Fatalf("%d exec lines for the destructive command", n)
 		}
-		if n := opLines(t, since, "git_discard_preview") + opLines(t, since, "git_discard"); n != 0 {
+		if n := opLines(t, conn, "git_discard_preview") + opLines(t, conn, "git_discard"); n != 0 {
 			t.Fatalf("%d discard lines without an approval method", n)
 		}
+		conn.same(t)
 	})
 
 	h := &human{seed: make([]byte, 20)}
@@ -158,19 +142,22 @@ func TestDestructiveToolsApproval(t *testing.T) {
 	}
 	srv := startApprovalServer(t, h, file, freeLoopbackPort(t), "SHELL_MCP_PROFILE=admin")
 	t.Cleanup(func() { _ = srv.cs.Close() })
+	// The subtests below share this server and run one after another, each
+	// waiting for every line it expects; one that counts an op an earlier
+	// subtest also sent counts it at its start too (every earlier line of
+	// this server for that op is in the journal by then).
+	conn := connOf(t, srv.cs)
 
 	t.Run("discard: approve, discard once, second re-call invalid", func(t *testing.T) {
 		dirtyDiscard(t)
 		marker := opsWork + "/discard-hook-ran"
 		_ = os.Remove(marker)
 		opsFile(t, opsDiscard+"/.git/hooks/post-index-change", "#!/bin/sh\necho ran >> "+marker+"\n", 0o755)
-		time.Sleep(1100 * time.Millisecond)
-		start := time.Now()
 		args := map[string]any{"repo": opsDiscard, "include_untracked": true}
 		id := pendingID(t, srv.callTool(t, "shell_discard_git_changes", args))
 		fileIs(t, opsDiscard+"/app.conf", "version: edited\n")
-		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"git_discard_preview"`, `"ceiling":"destructive"`)
-		if n := opLines(t, start, "git_discard"); n != 0 {
+		conn.waitGate(t, `"principal":"`+opsWho+`"`, `"op":"git_discard_preview"`, `"ceiling":"destructive"`)
+		if n := opLines(t, conn, "git_discard"); n != 0 {
 			t.Fatalf("%d git_discard lines before approval", n)
 		}
 
@@ -195,51 +182,48 @@ func TestDestructiveToolsApproval(t *testing.T) {
 		if st := repoGit(t, opsDiscard, "--no-optional-locks", "status", "--porcelain", "--untracked-files=no"); st != "" {
 			t.Fatalf("status after the discard: %q", st)
 		}
-		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"git_discard"`, `"ceiling":"destructive"`, `"outcome":"ok"`)
-		if n := opLines(t, start, "git_discard"); n != 1 {
+		conn.waitGate(t, `"principal":"`+opsWho+`"`, `"op":"git_discard"`, `"ceiling":"destructive"`, `"outcome":"ok"`)
+		if n := opLines(t, conn, "git_discard"); n != 1 {
 			t.Fatalf("%d git_discard lines after the approved re-call, want 1", n)
 		}
 		refusal(t, srv.callTool(t, "shell_discard_git_changes", withApproval(args, id)), "approval_invalid", "")
 		time.Sleep(time.Second)
-		if n := opLines(t, start, "git_discard"); n != 1 {
+		if n := opLines(t, conn, "git_discard"); n != 1 {
 			t.Fatalf("%d git_discard lines after the second re-call, want 1", n)
 		}
-		for _, j := range journal(t, "shell-mcp-gate", start) {
-			if strings.Contains(j.Message, "expected_preview_sha256") {
-				t.Fatalf("the gate logged the precondition: %s", j.Message)
-			}
+		// Of any request, in this whole run.
+		for _, j := range runLines(t, "shell-mcp-gate", "expected_preview_sha256") {
+			t.Fatalf("the gate logged the precondition: %s", j.Message)
 		}
 		_ = os.Remove(opsDiscard + "/.git/hooks/post-index-change")
 	})
 
 	t.Run("discard: a change after approval invalidates it and survives", func(t *testing.T) {
 		dirtyDiscard(t)
+		before := opLines(t, conn, "git_discard")
 		args := map[string]any{"repo": opsDiscard}
 		id := pendingID(t, srv.callTool(t, "shell_discard_git_changes", args))
 		srv.decide(t, h, id, "approve")
 		opsFile(t, opsDiscard+"/app.conf", "version: changed after approval\n", 0o644)
-		since := time.Now()
 		refusal(t, srv.callTool(t, "shell_discard_git_changes", withApproval(args, id)), "approval_invalid", "changed since approval")
 		fileIs(t, opsDiscard+"/app.conf", "version: changed after approval\n")
 		fileIs(t, opsDiscard+"/staged.txt", "staged\n")
 		time.Sleep(time.Second)
-		if n := opLines(t, since, "git_discard"); n != 0 {
+		if n := opLines(t, conn, "git_discard") - before; n != 0 {
 			t.Fatalf("%d git_discard lines after the change", n)
 		}
 	})
 
 	t.Run("run command per tier with operator listed: read runs, operator is approved and runs at operator", func(t *testing.T) {
 		// startApprovalServer sets SHELL_MCP_APPROVAL_TIERS=operator,destructive.
-		time.Sleep(1100 * time.Millisecond)
-		start := time.Now()
 		env := srv.callTool(t, "shell_run_command", map[string]any{"command_id": "probe-echo", "args": []string{"echo", "listed-read"}})
 		if okDataAs(t, env, opsWho) == nil || env["approval"] != nil {
 			t.Fatalf("read command %v", env)
 		}
-		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"exec"`, `"command_id":"probe-echo"`, `"ceiling":"read"`, `"outcome":"ok"`)
+		conn.waitGate(t, `"principal":"`+opsWho+`"`, `"op":"exec"`, `"command_id":"probe-echo"`, `"ceiling":"read"`, `"outcome":"ok"`)
 		op := map[string]any{"command_id": "probe-exit", "args": []string{"exit", "1"}}
 		id := pendingID(t, srv.callTool(t, "shell_run_command", op))
-		if n := opLines(t, start, "exec", `"command_id":"probe-exit"`); n != 0 {
+		if n := opLines(t, conn, "exec", `"command_id":"probe-exit"`); n != 0 {
 			t.Fatalf("%d exec lines before approval", n)
 		}
 		srv.decide(t, h, id, "approve")
@@ -247,19 +231,17 @@ func TestDestructiveToolsApproval(t *testing.T) {
 		if okDataAs(t, env, opsWho) == nil || env["exec"].(map[string]any)["exit_code"] != 1.0 {
 			t.Fatalf("approved operator command %v", env)
 		}
-		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"exec"`, `"command_id":"probe-exit"`, `"ceiling":"operator"`, `"outcome":"ok"`)
-		if n := opLines(t, start, "exec", `"command_id":"probe-exit"`); n != 1 {
+		conn.waitGate(t, `"principal":"`+opsWho+`"`, `"op":"exec"`, `"command_id":"probe-exit"`, `"ceiling":"operator"`, `"outcome":"ok"`)
+		if n := opLines(t, conn, "exec", `"command_id":"probe-exit"`); n != 1 {
 			t.Fatalf("%d exec lines after the approved re-call, want 1", n)
 		}
 	})
 
 	destructive := map[string]any{"command_id": "probe-destructive", "args": []string{"echo", "destructive"}}
 	t.Run("run command: approve, run once, second re-call invalid", func(t *testing.T) {
-		time.Sleep(1100 * time.Millisecond)
-		start := time.Now()
 		id := pendingID(t, srv.callTool(t, "shell_run_command", destructive))
-		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"exec_preview"`, `"ceiling":"destructive"`, `"command_id":"probe-destructive"`, `"outcome":"ok"`)
-		if n := opLines(t, start, "exec", `"command_id":"probe-destructive"`); n != 0 {
+		conn.waitGate(t, `"principal":"`+opsWho+`"`, `"op":"exec_preview"`, `"ceiling":"destructive"`, `"command_id":"probe-destructive"`, `"outcome":"ok"`)
+		if n := opLines(t, conn, "exec", `"command_id":"probe-destructive"`); n != 0 {
 			t.Fatalf("%d exec lines before approval", n)
 		}
 		srv.decide(t, h, id, "approve")
@@ -267,13 +249,13 @@ func TestDestructiveToolsApproval(t *testing.T) {
 		if d := okDataAs(t, env, opsWho); d["stdout"] != "destructive\n" {
 			t.Fatalf("run %v", env)
 		}
-		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"exec"`, `"ceiling":"destructive"`, `"command_id":"probe-destructive"`, `"outcome":"ok"`)
-		if n := opLines(t, start, "exec", `"command_id":"probe-destructive"`); n != 1 {
+		conn.waitGate(t, `"principal":"`+opsWho+`"`, `"op":"exec"`, `"ceiling":"destructive"`, `"command_id":"probe-destructive"`, `"outcome":"ok"`)
+		if n := opLines(t, conn, "exec", `"command_id":"probe-destructive"`); n != 1 {
 			t.Fatalf("%d exec lines after the approved re-call, want 1", n)
 		}
 		refusal(t, srv.callTool(t, "shell_run_command", withApproval(destructive, id)), "approval_invalid", "")
 		time.Sleep(time.Second)
-		if n := opLines(t, start, "exec", `"command_id":"probe-destructive"`); n != 1 {
+		if n := opLines(t, conn, "exec", `"command_id":"probe-destructive"`); n != 1 {
 			t.Fatalf("%d exec lines after the second re-call, want 1", n)
 		}
 	})
@@ -284,6 +266,7 @@ func TestDestructiveToolsApproval(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		before := opLines(t, conn, "exec", `"command_id":"probe-destructive"`)
 		id := pendingID(t, srv.callTool(t, "shell_run_command", destructive))
 		srv.decide(t, h, id, "approve")
 		if err := os.WriteFile(policyFile, append(append([]byte{}, orig...), "# changed after approval\n"...), 0o644); err != nil { //nolint:gosec // G306: the gate policy is root-owned 0644
@@ -294,11 +277,11 @@ func TestDestructiveToolsApproval(t *testing.T) {
 				t.Error(err)
 			}
 		})
-		since := time.Now()
 		refusal(t, srv.callTool(t, "shell_run_command", withApproval(destructive, id)), "approval_invalid", "changed since approval")
 		time.Sleep(time.Second)
-		if n := opLines(t, since, "exec", `"command_id":"probe-destructive"`); n != 0 {
+		if n := opLines(t, conn, "exec", `"command_id":"probe-destructive"`) - before; n != 0 {
 			t.Fatalf("%d exec lines after the policy changed", n)
 		}
 	})
+	conn.same(t)
 }

@@ -903,15 +903,12 @@ func TestAuditJournal(t *testing.T) {
 	if !strings.Contains(g.Message, `"principal":"e2e"`) || !strings.Contains(g.Message, `"outcome":"ok"`) {
 		t.Errorf("gate line %q", g.Message)
 	}
-	for _, e := range journal(t, "shell-mcp-privd", start) {
-		if strings.Contains(e.Message, canary) || strings.Contains(e.Message, content) {
-			t.Fatalf("helper journal leaks content: %q", e.Message)
-		}
+	// In any line of this run.
+	for _, e := range append(runLines(t, "shell-mcp-privd", canary), runLines(t, "shell-mcp-privd", content)...) {
+		t.Fatalf("helper journal leaks content: %q", e.Message)
 	}
-	for _, e := range journal(t, "shell-mcp-gate", start) {
-		if strings.Contains(e.Message, canary) || strings.Contains(e.Message, content) {
-			t.Fatalf("gate journal leaks content: %q", e.Message)
-		}
+	for _, e := range append(runLines(t, "shell-mcp-gate", canary), runLines(t, "shell-mcp-gate", content)...) {
+		t.Fatalf("gate journal leaks content: %q", e.Message)
 	}
 	// Two requests, two instances: different units and pids in the journal.
 	_, id2 := mustGate(t, "priv_stat", map[string]any{"path": "/etc/example-app"}, nil)

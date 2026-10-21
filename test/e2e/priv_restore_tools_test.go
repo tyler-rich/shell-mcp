@@ -74,6 +74,7 @@ func gateBackupOf(t *testing.T, p, content string, extra map[string]any) string 
 // backup tampered with after approval are refused, nothing restored.
 func TestPrivRestoreToolsApproval(t *testing.T) {
 	srv, h := privWriteServer(t)
+	conn := connOf(t, srv.cs)
 	freshDir(t, privRestoreDir, 0, 0o755)
 	p := privRestoreDir + "/app.conf"
 	rootFile(t, p, "v1\n", 0o644)
@@ -81,9 +82,8 @@ func TestPrivRestoreToolsApproval(t *testing.T) {
 	t.Run("restore, then restore the restore's backup", func(t *testing.T) {
 		b1 := gateBackupOf(t, p, "v2\n", nil)
 		args := map[string]any{"backup_id": b1}
-		since := time.Now()
 		id := pendingID(t, srv.callTool(t, "shell_priv_restore_backup", args))
-		if readFile(t, p) != "v2\n" || helperLines(t, since, "priv_restore_backup", b1) != 0 {
+		if readFile(t, p) != "v2\n" || helperLines(t, conn, "priv_restore_backup", b1) != 0 {
 			t.Fatal("restored before approval")
 		}
 		srv.decide(t, h, id, "approve")
@@ -96,13 +96,13 @@ func TestPrivRestoreToolsApproval(t *testing.T) {
 		if bm := backupMeta(t, b2); bm["sha256"] != sha("v2\n") || bm["op"] != "priv_restore_backup" {
 			t.Fatalf("the current version's backup %v", bm)
 		}
-		j := findJournal(t, "shell-mcp-privd", since, `"op":"priv_restore_backup"`, `"backup_id":"`+b1+`"`, `"backup_ids":["`+b2+`"]`, `"outcome":"ok"`)
+		j := conn.waitHelper(t, `"op":"priv_restore_backup"`, `"backup_id":"`+b1+`"`, `"backup_ids":["`+b2+`"]`, `"outcome":"ok"`)
 		if strings.Contains(j.Message, "expected_preview_sha256") {
 			t.Fatalf("journal line %s", j.Message)
 		}
 		refusal(t, srv.callTool(t, "shell_priv_restore_backup", withApproval(args, id)), "approval_invalid", "")
 		time.Sleep(time.Second)
-		if n := helperLines(t, since, "priv_restore_backup", b1); n != 1 {
+		if n := helperLines(t, conn, "priv_restore_backup", b1); n != 1 {
 			t.Fatalf("%d helper restore lines, want 1", n)
 		}
 		// Restore again: the restore's own backup brings v2 back.
@@ -137,6 +137,7 @@ func TestPrivRestoreToolsApproval(t *testing.T) {
 			t.Fatal("a tampered backup was restored")
 		}
 	})
+	conn.same(t)
 }
 
 // TestPrivMovedInRules (N-6, N-7): example-app owns a directory under the

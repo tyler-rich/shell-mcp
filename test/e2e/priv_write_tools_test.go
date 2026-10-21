@@ -49,16 +49,11 @@ func privWriteServer(t *testing.T) (*approvalServer, *human) {
 	return srv, h
 }
 
-// helperLines counts the helper's journal lines for op naming p since t.
-func helperLines(t *testing.T, since time.Time, op, p string) int {
+// helperLines counts the helper's journal lines of op naming p for
+// requests of c's server.
+func helperLines(t *testing.T, c *serverConn, op, p string) int {
 	t.Helper()
-	n := 0
-	for _, j := range journal(t, "shell-mcp-privd", since) {
-		if strings.Contains(j.Message, `"op":"`+op+`"`) && strings.Contains(j.Message, `"`+p+`"`) {
-			n++
-		}
-	}
-	return n
+	return len(c.helper(t, `"op":"`+op+`"`, `"`+p+`"`))
 }
 
 func rootFile(t *testing.T, p, content string, mode os.FileMode) {
@@ -83,6 +78,7 @@ func backupMeta(t *testing.T, id string) map[string]any {
 
 func TestPrivWriteToolsApproval(t *testing.T) {
 	srv, h := privWriteServer(t)
+	conn := connOf(t, srv.cs)
 	approveRun := func(t *testing.T, tool string, args map[string]any) map[string]any {
 		t.Helper()
 		id := pendingID(t, srv.callTool(t, tool, args))
@@ -95,10 +91,9 @@ func TestPrivWriteToolsApproval(t *testing.T) {
 	t.Run("write: approved, run once, backed up as previewed", func(t *testing.T) {
 		p := privWriteDir + "/app.conf"
 		rootFile(t, p, "old: value\n", 0o640)
-		since := time.Now()
 		args := map[string]any{"path": p, "content": "new: value\n"}
 		id := pendingID(t, srv.callTool(t, "shell_priv_write_file", args))
-		if n := helperLines(t, since, "priv_write_file", p); n != 0 {
+		if n := helperLines(t, conn, "priv_write_file", p); n != 0 {
 			t.Fatalf("%d helper write lines before approval", n)
 		}
 		srv.decide(t, h, id, "approve")
@@ -111,10 +106,10 @@ func TestPrivWriteToolsApproval(t *testing.T) {
 		if m := backupMeta(t, bid); m["sha256"] != sha("old: value\n") || m["preview_sha256"] != sha("old: value\n") || m["path"] != p {
 			t.Fatalf("backup metadata %v", m)
 		}
-		findJournal(t, "shell-mcp-privd", since, `"op":"priv_write_file"`, `"ceiling":"operator"`, bid)
+		conn.waitHelper(t, `"op":"priv_write_file"`, `"ceiling":"operator"`, bid)
 		refusal(t, srv.callTool(t, "shell_priv_write_file", withApproval(args, id)), "approval_invalid", "")
 		time.Sleep(time.Second)
-		if n := helperLines(t, since, "priv_write_file", p); n != 1 {
+		if n := helperLines(t, conn, "priv_write_file", p); n != 1 {
 			t.Fatalf("%d helper write lines, want 1", n)
 		}
 	})
@@ -232,6 +227,7 @@ func TestPrivWriteToolsApproval(t *testing.T) {
 			t.Fatal("changed")
 		}
 	})
+	conn.same(t)
 }
 
 // TestPrivWriteStoreCap: under the smallest cap, with the store nearly

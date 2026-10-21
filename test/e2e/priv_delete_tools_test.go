@@ -35,11 +35,11 @@ func privDeleteFixture(t *testing.T) {
 
 func TestPrivDeleteToolsPreview(t *testing.T) {
 	srv, _ := privWriteServer(t)
+	conn := connOf(t, srv.cs)
 	privDeleteFixture(t)
 	t.Run("success", func(t *testing.T) {
 		tree := privDeleteDir + "/tree"
 		paths := metaTreeAt(t, tree)
-		since := time.Now()
 		args := map[string]any{"path": tree, "recursive": true}
 		d := okDataAs(t, srv.callTool(t, "shell_priv_preview_delete", args), "e2e-ssh")
 		b, _ := d["backup"].(map[string]any)
@@ -51,7 +51,7 @@ func TestPrivDeleteToolsPreview(t *testing.T) {
 			t.Fatal("an unchanged tree previewed with another hash")
 		}
 		stillThere(t, paths...)
-		findJournal(t, "shell-mcp-privd", since, `"op":"priv_delete_preview"`, `"ceiling":"read"`, `"outcome":"ok"`, `"path":"`+tree+`"`)
+		conn.waitHelper(t, `"op":"priv_delete_preview"`, `"ceiling":"read"`, `"outcome":"ok"`, `"path":"`+tree+`"`)
 	})
 	t.Run("refusals", func(t *testing.T) {
 		devDir := privDeleteDir + "/dev"
@@ -84,20 +84,21 @@ func TestPrivDeleteToolsPreview(t *testing.T) {
 		stillThere(t, paths...)
 		stillThere(t, devDir+"/null", "/etc/example-app/e2e-mounted/point/inside.txt", "/etc/example-other/secret.txt")
 	})
+	conn.same(t)
 }
 
 func TestPrivDeleteToolsApproval(t *testing.T) {
 	srv, h := privWriteServer(t)
+	conn := connOf(t, srv.cs)
 	privDeleteFixture(t)
 	t.Run("approved, backed up, deleted once, restorable", func(t *testing.T) {
 		tree := privDeleteDir + "/approved"
 		paths := metaTreeAt(t, tree)
 		args := map[string]any{"path": tree, "recursive": true}
 		sha, _ := okDataAs(t, srv.callTool(t, "shell_priv_preview_delete", args), "e2e-ssh")["preview_sha256"].(string)
-		since := time.Now()
 		id := pendingID(t, srv.callTool(t, "shell_priv_delete_path", args))
 		stillThere(t, paths...)
-		if n := helperLines(t, since, "priv_delete", tree); n != 0 {
+		if n := helperLines(t, conn, "priv_delete", tree); n != 0 {
 			t.Fatalf("%d helper delete lines before approval", n)
 		}
 		srv.decide(t, h, id, "approve")
@@ -115,13 +116,13 @@ func TestPrivDeleteToolsApproval(t *testing.T) {
 		if bm := backupMeta(t, bid); bm["kind"] != "tree" || bm["entries"] != 3.0 || bm["preview_sha256"] != sha || bm["op"] != "priv_delete" {
 			t.Fatalf("backup metadata %v", bm)
 		}
-		j := findJournal(t, "shell-mcp-privd", since, `"op":"priv_delete"`, `"removed_total":4`, `"backup_ids":["`+bid+`"]`)
+		j := conn.waitHelper(t, `"op":"priv_delete"`, `"removed_total":4`, `"backup_ids":["`+bid+`"]`)
 		if !strings.Contains(j.Message, `"`+tree+`/sub/b.conf"`) || strings.Contains(j.Message, sha) {
 			t.Fatalf("journal line %s", j.Message)
 		}
 		refusal(t, srv.callTool(t, "shell_priv_delete_path", withApproval(args, id)), "approval_invalid", "")
 		time.Sleep(time.Second)
-		if n := helperLines(t, since, "priv_delete", tree); n != 1 {
+		if n := helperLines(t, conn, "priv_delete", tree); n != 1 {
 			t.Fatalf("%d helper delete lines, want 1", n)
 		}
 		// The backup restores the tree as it was.
@@ -138,14 +139,13 @@ func TestPrivDeleteToolsApproval(t *testing.T) {
 		tree := privDeleteDir + "/newcomer"
 		paths := metaTreeAt(t, tree)
 		args := map[string]any{"path": tree, "recursive": true}
-		since := time.Now()
 		id := pendingID(t, srv.callTool(t, "shell_priv_delete_path", args))
 		srv.decide(t, h, id, "approve")
 		rootFile(t, tree+"/sub/new.conf", "new\n", 0o644)
 		refusal(t, srv.callTool(t, "shell_priv_delete_path", withApproval(args, id)), "approval_invalid", "changed since approval")
 		stillThere(t, append(paths, tree+"/sub/new.conf")...)
 		time.Sleep(time.Second)
-		if n := helperLines(t, since, "priv_delete", tree); n != 0 {
+		if n := helperLines(t, conn, "priv_delete", tree); n != 0 {
 			t.Fatalf("%d helper delete lines after a refused re-call", n)
 		}
 	})
@@ -157,4 +157,5 @@ func TestPrivDeleteToolsApproval(t *testing.T) {
 			t.Fatalf("an approval was requested: %v", env)
 		}
 	})
+	conn.same(t)
 }

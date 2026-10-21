@@ -55,17 +55,17 @@ func helperUnitOf(j *journalEntry) string {
 // command runs without approval.
 func TestPrivRunCommandToolApproval(t *testing.T) {
 	srv, h := privWriteServer(t)
+	conn := connOf(t, srv.cs)
 	for _, c := range []struct{ command, unit string }{{"probe-root-op", "core"}, {"probe-broad-op", "broad"}} {
 		t.Run(c.unit, func(t *testing.T) {
 			out := filepath.Join(privWriteDir, "exec-"+c.unit)
 			_ = os.Remove(out)
 			args := map[string]any{"command_id": c.command, "args": []string{"write", out}}
-			since := time.Now()
 			id := pendingID(t, srv.callTool(t, "shell_priv_run_command", args))
 			if _, err := os.Lstat(out); err == nil {
 				t.Fatal("ran before approval")
 			}
-			pv := findJournal(t, "shell-mcp-privd", since, `"op":"priv_exec_preview"`, `"command_id":"`+c.command+`"`, `"outcome":"ok"`)
+			pv := conn.waitHelper(t, `"op":"priv_exec_preview"`, `"command_id":"`+c.command+`"`, `"outcome":"ok"`)
 			if helperUnitOf(&pv) != "core" {
 				t.Fatalf("previewed by %q", pv.Unit)
 			}
@@ -75,7 +75,7 @@ func TestPrivRunCommandToolApproval(t *testing.T) {
 			if d["command_id"] != c.command {
 				t.Fatalf("data %v", d)
 			}
-			j := findJournal(t, "shell-mcp-privd", since, `"op":"priv_exec"`, `"command_id":"`+c.command+`"`, `"unit":"`+c.unit+`"`, `"outcome":"ok"`)
+			j := conn.waitHelper(t, `"op":"priv_exec"`, `"command_id":"`+c.command+`"`, `"unit":"`+c.unit+`"`, `"outcome":"ok"`)
 			if helperUnitOf(&j) != c.unit || strings.Contains(j.Message, "expected_preview_sha256") || strings.Contains(j.Message, out) {
 				t.Fatalf("exec journal line from %q: %s", j.Unit, j.Message)
 			}
@@ -84,17 +84,12 @@ func TestPrivRunCommandToolApproval(t *testing.T) {
 			}
 			refusal(t, srv.callTool(t, "shell_priv_run_command", withApproval(args, id)), "approval_invalid", "")
 			time.Sleep(time.Second)
-			n := 0
-			for _, e := range journal(t, "shell-mcp-privd", since) {
-				if strings.Contains(e.Message, `"op":"priv_exec"`) && strings.Contains(e.Message, `"command_id":"`+c.command+`"`) {
-					n++
-				}
-			}
-			if n != 1 {
+			if n := len(conn.helper(t, `"op":"priv_exec"`, `"command_id":"`+c.command+`"`)); n != 1 {
 				t.Fatalf("%d priv_exec lines, want 1", n)
 			}
 		})
 	}
+	conn.same(t)
 	t.Run("read command, unapproved", func(t *testing.T) {
 		d := okDataAs(t, srv.callTool(t, "shell_priv_run_command", map[string]any{"command_id": "probe-echo", "args": []string{"echo", "as-root"}}), "e2e-ssh")
 		if d["stdout"] != "as-root\n" {
@@ -174,8 +169,8 @@ func TestPrivExecKilledOnHangup(t *testing.T) {
 						a["unit"] = "broad"
 					}
 					b, _ := json.Marshal(a)
-					since := time.Now()
-					line := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"operator","op":"priv_exec","args":%s,"timeout_ms":60000}`+"\n", newID(), b)
+					reqID := newID()
+					line := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"operator","op":"priv_exec","args":%s,"timeout_ms":60000}`+"\n", reqID, b)
 					cl, out := hangupClient(t, mode, c.socket, line, 3*time.Second)
 					p := gatetest.FindChild(t, 0, args...)
 					t.Cleanup(p.Kill)
@@ -212,7 +207,7 @@ func TestPrivExecKilledOnHangup(t *testing.T) {
 							t.Fatalf("the command outlived the gate's connection by %v", time.Since(hungUp))
 						}
 					}
-					findJournal(t, "shell-mcp-privd", since, `"op":"priv_exec"`, `"command_id":"`+c.command+`"`, `"hung_up":true`, `"outcome":"outcome_unknown"`)
+					waitLine(t, "shell-mcp-privd", `"id":"`+reqID+`"`, `"op":"priv_exec"`, `"command_id":"`+c.command+`"`, `"hung_up":true`, `"outcome":"outcome_unknown"`)
 				})
 			}
 		}

@@ -185,16 +185,10 @@ func fileIs(t *testing.T, p, want string) {
 	}
 }
 
-// writeLines counts the gate's write_file audit lines for p since start.
-func writeLines(t *testing.T, since time.Time, p string) int {
+// writeLines counts the write_file audit lines of c's server for p.
+func writeLines(t *testing.T, c *serverConn, p string) int {
 	t.Helper()
-	n := 0
-	for _, j := range journal(t, "shell-mcp-gate", since) {
-		if strings.Contains(j.Message, `"principal":"`+opsWho+`"`) && strings.Contains(j.Message, `"op":"write_file"`) && strings.Contains(j.Message, p) {
-			n++
-		}
-	}
-	return n
+	return len(c.gate(t, `"principal":"`+opsWho+`"`, `"op":"write_file"`, `"`+p+`"`))
 }
 
 func freeLoopbackPort(t *testing.T) int {
@@ -221,37 +215,35 @@ func TestApprovalWebFlow(t *testing.T) {
 	port := freeLoopbackPort(t)
 	srv := startApprovalServer(t, h, file, port)
 	t.Cleanup(func() { _ = srv.cs.Close() })
+	// The approval server's own lines; the setup and the out-of-band writes
+	// go through the operator server.
+	conn := connOf(t, srv.cs)
 
 	p := opsWork + "/approved.txt"
 	opOK(t, "shell_write_file", map[string]any{"path": p, "content": "v1\n"})
 	args := map[string]any{"path": p, "content": "v2\n"}
 
-	// The journal reads whole seconds: keep the setup write out of the
-	// window.
-	time.Sleep(2100 * time.Millisecond)
-	start := time.Now()
-
 	t.Run("pending leaves the file unchanged", func(t *testing.T) {
 		id := pendingID(t, srv.call(t, args))
 		fileIs(t, p, "v1\n")
 		// Only the preview's reads reached the gate.
-		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"read_file"`)
-		if n := writeLines(t, start, p); n != 0 {
+		conn.waitGate(t, `"principal":"`+opsWho+`"`, `"op":"read_file"`, `"`+p+`"`)
+		if n := writeLines(t, conn, p); n != 0 {
 			t.Fatalf("%d write_file lines before approval", n)
 		}
 
 		srv.decide(t, h, id, "approve")
 		okDataAs(t, srv.call(t, withApproval(args, id)), opsWho)
 		fileIs(t, p, "v2\n")
-		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"write_file"`, `"ceiling":"operator"`)
-		if n := writeLines(t, start, p); n != 1 {
+		conn.waitGate(t, `"principal":"`+opsWho+`"`, `"op":"write_file"`, `"ceiling":"operator"`, `"`+p+`"`)
+		if n := writeLines(t, conn, p); n != 1 {
 			t.Fatalf("%d write_file lines after the approved re-call, want 1", n)
 		}
 
 		// A second re-call is invalid and writes nothing.
 		refusal(t, srv.call(t, withApproval(args, id)), "approval_invalid", "")
 		time.Sleep(time.Second)
-		if n := writeLines(t, start, p); n != 1 {
+		if n := writeLines(t, conn, p); n != 1 {
 			t.Fatalf("%d write_file lines after the second re-call, want 1", n)
 		}
 	})
@@ -289,16 +281,13 @@ func TestApprovalWebFlow(t *testing.T) {
 		a := map[string]any{"path": q, "content": "approved\n"}
 		id := pendingID(t, srv.call(t, a))
 		srv.decide(t, h, id, "approve")
-		since := time.Now()
+		// Out of band: through the operator server, not one of conn's lines.
 		opOK(t, "shell_write_file", map[string]any{"path": q, "content": "out of band\n"})
 		refusal(t, srv.call(t, withApproval(a, id)), "approval_invalid", "changed since approval")
 		fileIs(t, q, "out of band\n")
 		time.Sleep(time.Second)
-		for _, j := range journal(t, "shell-mcp-gate", since) {
-			if strings.Contains(j.Message, `"principal":"`+opsWho+`"`) && strings.Contains(j.Message, `"op":"write_file"`) &&
-				strings.Contains(j.Message, `"expect_absent":true`) {
-				t.Fatalf("a write was sent after the preview changed: %s", j.Message)
-			}
+		for _, j := range conn.gate(t, `"principal":"`+opsWho+`"`, `"op":"write_file"`, `"`+q+`"`) {
+			t.Fatalf("a write was sent after the preview changed: %s", j.Message)
 		}
 	})
 
@@ -307,12 +296,11 @@ func TestApprovalWebFlow(t *testing.T) {
 		a := map[string]any{"path": q, "content": "approved\n"}
 		id := pendingID(t, srv.call(t, a))
 		srv.decide(t, h, id, "approve")
-		since := time.Now()
 		okDataAs(t, srv.call(t, withApproval(a, id)), opsWho)
 		fileIs(t, q, "approved\n")
 		// The real gate, under its Landlock sandbox, committed it as a
 		// create-only write.
-		findJournal(t, "shell-mcp-gate", since, `"principal":"`+opsWho+`"`, `"op":"write_file"`, `"expect_absent":true`, q, `"outcome":"ok"`)
+		conn.waitGate(t, `"principal":"`+opsWho+`"`, `"op":"write_file"`, `"expect_absent":true`, `"`+q+`"`, `"outcome":"ok"`)
 	})
 
 	// What an approval binds of the destination (expected_sha256 for a
@@ -344,20 +332,15 @@ func TestApprovalWebFlow(t *testing.T) {
 				a := c.args(src, dst)
 				id := pendingID(t, srv.callTool(t, c.tool, a))
 				srv.decide(t, h, id, "approve")
+				// Out of band, and itself a write_file: through the operator
+				// server, not one of conn's lines.
 				opOK(t, "shell_write_file", map[string]any{"path": dst, "content": "changed out of band\n"})
-				// The journal reads whole seconds (and journal() starts a
-				// second early): keep the out-of-band write, itself a
-				// write_file, out of the window.
-				time.Sleep(2100 * time.Millisecond)
-				since := time.Now()
 				refusal(t, srv.callTool(t, c.tool, withApproval(a, id)), "approval_invalid", "changed since approval")
 				fileIs(t, dst, "changed out of band\n")
 				fileIs(t, src, "new\n")
 				time.Sleep(time.Second)
-				for _, j := range journal(t, "shell-mcp-gate", since) {
-					if strings.Contains(j.Message, `"principal":"`+opsWho+`"`) && strings.Contains(j.Message, `"op":"`+c.op+`"`) {
-						t.Fatalf("a %s was sent after the destination changed: %s", c.op, j.Message)
-					}
+				for _, j := range conn.gate(t, `"principal":"`+opsWho+`"`, `"op":"`+c.op+`"`, `"`+dst+`"`) {
+					t.Fatalf("a %s was sent after the destination changed: %s", c.op, j.Message)
 				}
 			})
 		}
@@ -375,13 +358,14 @@ func TestApprovalWebFlow(t *testing.T) {
 				a := c.args(src, dst)
 				id := pendingID(t, srv.callTool(t, c.tool, a))
 				srv.decide(t, h, id, "approve")
-				since := time.Now()
 				okDataAs(t, srv.callTool(t, c.tool, withApproval(a, id)), opsWho)
 				fileIs(t, dst, "new\n")
-				findJournal(t, "shell-mcp-gate", since, `"principal":"`+opsWho+`"`, `"op":"`+c.op+`"`, `"overwrite":true`, dst, `"outcome":"ok"`)
+				conn.waitGate(t, `"principal":"`+opsWho+`"`, `"op":"`+c.op+`"`, `"overwrite":true`, `"`+dst+`"`, `"outcome":"ok"`)
 			})
 		}
 	})
+	// Before the restart below closes the server conn names.
+	conn.same(t)
 
 	t.Run("a restart between approval and re-call invalidates it", func(t *testing.T) {
 		a := map[string]any{"path": p, "content": "v5\n"}
