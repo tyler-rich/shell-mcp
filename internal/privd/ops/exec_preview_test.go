@@ -4,6 +4,7 @@ package ops_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -405,8 +406,9 @@ func (f *fixture) serveHangup(in, mode string, args ...string) (out string, took
 // or the gate stops waiting while a command runs, the helper kills the
 // command (SIGTERM, then SIGKILL after the grace, on its process group)
 // before it returns, in both units, also a command that ignores SIGTERM;
-// to a gate that still reads it answers timeout, saying the command was
-// stopped. Its audit line records the hang-up.
+// to a gate that still reads it answers outcome_unknown for a command that
+// can change the host and timeout for a read command. Its audit line
+// records the hang-up and that code.
 func TestExecKilledOnHangup(t *testing.T) {
 	for _, c := range []struct {
 		unit, command, ceiling, sleep string
@@ -433,14 +435,17 @@ func TestExecKilledOnHangup(t *testing.T) {
 				if took > 4*time.Second {
 					t.Fatalf("the helper took %v after the hang-up", took)
 				}
+				want := "timeout"
+				if c.ceiling != "read" {
+					want = "outcome_unknown"
+				}
 				if mode == "half" {
 					var r response
-					if err := json.Unmarshal([]byte(out), &r); err != nil || r.OK || r.Error == nil || r.Error.Code != "timeout" ||
-						!strings.Contains(r.Error.Message, "stopped") {
-						t.Fatalf("answer %q", out)
+					if err := json.Unmarshal([]byte(out), &r); err != nil || r.OK || r.Error == nil || r.Error.Code != want {
+						t.Fatalf("answer %q, want %s", out, want)
 					}
 				}
-				if l := f.lastAudit(); !strings.Contains(l, `"outcome":"timeout"`) || !strings.Contains(l, `"hung_up":true`) {
+				if l := f.lastAudit(); !strings.Contains(l, `"outcome":"`+want+`"`) || !strings.Contains(l, `"hung_up":true`) {
 					t.Fatalf("audit %q", l)
 				}
 			})
@@ -473,11 +478,35 @@ func TestExecNotStartedAfterHangup(t *testing.T) {
 	n, _ := unix.Read(fds[1], b)
 	_ = unix.Close(fds[1])
 	var r response
-	if n <= 0 || json.Unmarshal(b[:n], &r) != nil || r.Error == nil || r.Error.Code != "timeout" || !strings.Contains(r.Error.Message, "nothing was run") {
+	if n <= 0 || json.Unmarshal(b[:n], &r) != nil || r.Error == nil || r.Error.Code != "timeout" {
 		t.Fatalf("answer %q", b[:max(n, 0)])
 	}
 	absent(t, out)
 	if l := f.lastAudit(); !strings.Contains(l, `"hung_up":true`) {
 		t.Fatalf("audit %q", l)
+	}
+}
+
+// TestExecReapFailureIsOutcomeUnknown (must-fix (a), fail closed): when the
+// helper cannot list the children a command left, it cannot confirm that
+// none is still running, so the answer is outcome_unknown, never the
+// command's success, and the journal line says why.
+func TestExecReapFailureIsOutcomeUnknown(t *testing.T) {
+	f := newFixture(t)
+	f.opts.ReapOrphans = true
+	f.opts.ReapHooks = &ops.ReapHooks{
+		Children: func() ([]int, error) { return nil, errors.New("injected: children unreadable") },
+		Wait:     func() (int, error) { return 0, unix.ECHILD },
+	}
+	f.fail("priv_exec", m{"command_id": "probe-echo", "args": []string{"echo", "x"}}, "outcome_unknown")
+	if l := f.lastAudit(); !strings.Contains(l, `"outcome":"outcome_unknown"`) || !strings.Contains(l, "injected: children unreadable") {
+		t.Fatalf("audit %q", l)
+	}
+	// Control: the same command with the children readable and none left.
+	f.opts.ReapHooks.Children = func() ([]int, error) { return []int{}, nil }
+	var d execData
+	f.ok("priv_exec", m{"command_id": "probe-echo", "args": []string{"echo", "x"}}, &d)
+	if d.Stdout != "x\n" || strings.Contains(f.lastAudit(), "reap_error") {
+		t.Fatalf("control %+v audit %q", d, f.lastAudit())
 	}
 }

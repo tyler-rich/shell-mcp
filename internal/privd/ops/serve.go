@@ -115,6 +115,8 @@ type Options struct {
 	// has ended (production: true). Tests leave it off: in a test binary,
 	// other tests' processes would be its children too.
 	ReapOrphans bool
+	// ReapHooks is a stub (failing-first commit): accepted and ignored.
+	ReapHooks *ReapHooks
 }
 
 // ProductionOptions describes the running process: the unit's client uid

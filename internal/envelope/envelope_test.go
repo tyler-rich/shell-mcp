@@ -15,7 +15,7 @@ func TestServerCodesAreTheClosedSet(t *testing.T) {
 	want := []string{
 		"validation_error", "unknown_target", "target_unreachable", "host_key_mismatch", "auth_failed_ssh",
 		"gate_unavailable", "protocol_mismatch", "approval_pending", "approval_declined", "approval_invalid", "approval_unavailable",
-		"timeout", "profile_denied",
+		"timeout", "outcome_unknown", "profile_denied",
 	}
 	if !slices.Equal(ServerCodes, want) {
 		t.Fatalf("ServerCodes = %v, want %v", ServerCodes, want)

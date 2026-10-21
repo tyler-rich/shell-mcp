@@ -27,6 +27,11 @@ const (
 	CodeApprovalInvalid     = "approval_invalid"
 	CodeApprovalUnavailable = "approval_unavailable"
 	CodeTimeout             = "timeout"
+	// CodeOutcomeUnknown is a privileged request that can change the host
+	// whose answer was lost after it was sent: it may have run (handoff
+	// must-fix (b)). The gate and the helper answer it too
+	// (protocol.CodeOutcomeUnknown).
+	CodeOutcomeUnknown = protocol.CodeOutcomeUnknown
 	// CodeProfileDenied exists for defence in depth only: tools outside the
 	// profile are not registered.
 	CodeProfileDenied = "profile_denied"
@@ -36,7 +41,7 @@ const (
 var ServerCodes = []string{
 	CodeValidationError, CodeUnknownTarget, CodeTargetUnreachable, CodeHostKeyMismatch, CodeAuthFailedSSH,
 	CodeGateUnavailable, CodeProtocolMismatch, CodeApprovalPending, CodeApprovalDeclined, CodeApprovalInvalid, CodeApprovalUnavailable,
-	CodeTimeout, CodeProfileDenied,
+	CodeTimeout, CodeOutcomeUnknown, CodeProfileDenied,
 }
 
 // MaxMessageBytes bounds an error message; messages are one line.

@@ -281,23 +281,28 @@ func TestPrivRunCommandPreviewRefusals(t *testing.T) {
 	}
 }
 
-// TestPrivRunCommandOutcomeUnknown (must-fix (b)): a timeout, or an answer
-// lost after the request was sent, on an approved command (and on every
-// other privileged operation that can change the host) is a timeout whose
-// message says the outcome is unknown and the approval was used; on a read
-// command or a read operation it stays what it was.
+// TestPrivRunCommandOutcomeUnknown (must-fix (b)): on an approved command,
+// the gate's or the helper's outcome_unknown, and an answer lost after the
+// request was sent, are outcome_unknown, with the approval used; the
+// helper's timeout for a command it never started ("nothing was run") stays
+// timeout, as does a read command's.
 func TestPrivRunCommandOutcomeUnknown(t *testing.T) {
-	timeout := gateReply{code: "timeout", msg: "the privileged helper did not answer in time"}
-	for name, reply := range map[string]gateReply{"timeout": timeout, "lost": {silent: true}} {
+	for name, c := range map[string]struct {
+		reply gateReply
+		code  string
+	}{
+		"outcome_unknown": {gateReply{code: "outcome_unknown", msg: "the privileged helper did not answer in time, nor confirm that the operation ended"}, "outcome_unknown"},
+		"lost":            {gateReply{silent: true}, "outcome_unknown"},
+		"not started":     {gateReply{code: "timeout", msg: "the gate stopped waiting before the command started; nothing was run"}, "timeout"},
+	} {
 		t.Run(name, func(t *testing.T) {
 			a := newPrivExecHarness(t, approval.MethodWeb, "operator", "core")
 			id := a.pending("shell_priv_run_command", privRunArgs)
 			a.approve(id)
-			a.g.set("priv_exec", reply)
+			a.g.set("priv_exec", c.reply)
 			env, _ := a.call("shell_priv_run_command", withID(privRunArgs, id))
-			msg := jsonOf(t, env["error"])
-			if errCode(env) != "timeout" || !strings.Contains(msg, "Outcome unknown") || !strings.Contains(msg, "approval was used") {
-				t.Fatalf("env %v", env)
+			if errCode(env) != c.code || env["ok"] != false || env["data"] != nil {
+				t.Fatalf("env %v, want %s", env, c.code)
 			}
 			if ap, _ := env["approval"].(map[string]any); ap["status"] != "used" {
 				t.Fatalf("approval %v", env["approval"])
@@ -312,27 +317,60 @@ func TestPrivRunCommandOutcomeUnknown(t *testing.T) {
 		id := a.pending("shell_priv_delete_path", privDelArgs)
 		a.approve(id)
 		a.g.set("priv_delete", gateReply{silent: true})
-		env, _ := a.call("shell_priv_delete_path", withID(privDelArgs, id))
-		if errCode(env) != "timeout" || !strings.Contains(jsonOf(t, env["error"]), "Outcome unknown") {
+		if env, _ := a.call("shell_priv_delete_path", withID(privDelArgs, id)); errCode(env) != "outcome_unknown" {
 			t.Fatalf("env %v", env)
 		}
 	})
 	t.Run("read command", func(t *testing.T) {
 		a := newPrivExecHarness(t, approval.MethodWeb, "read", "core")
-		a.g.set("priv_exec", timeout)
-		env, _ := a.call("shell_priv_run_command", privRunArgs)
-		if errCode(env) != "timeout" || strings.Contains(jsonOf(t, env["error"]), "Outcome unknown") {
+		a.g.set("priv_exec", gateReply{code: "timeout", msg: "the privileged helper did not answer in time"})
+		if env, _ := a.call("shell_priv_run_command", privRunArgs); errCode(env) != "timeout" {
 			t.Fatalf("env %v", env)
 		}
 	})
-	t.Run("read operation", func(t *testing.T) {
-		a := newPrivExecHarness(t, approval.MethodWeb, "read", "core")
-		a.g.set("priv_read_file", gateReply{silent: true})
-		env, _ := a.call("shell_priv_read_file", map[string]any{"path": "/etc/example-app/app.conf"})
-		if errCode(env) != "gate_unavailable" {
-			t.Fatalf("env %v", env)
-		}
-	})
+}
+
+// TestCallOutcomeUnknown (must-fix (b)): through Deps.call, every privileged
+// operation that can change the host — the eight write-class operations,
+// and priv_exec above ceiling read — answers outcome_unknown when its
+// answer is lost after the request was sent, and passes the gate's
+// outcome_unknown through; read operations and a read command keep their
+// codes.
+func TestCallOutcomeUnknown(t *testing.T) {
+	for _, c := range []struct {
+		op      string
+		ceiling Tier
+		want    string
+	}{
+		{"priv_write_file", TierOperator, "outcome_unknown"},
+		{"priv_mkdir", TierOperator, "outcome_unknown"},
+		{"priv_copy", TierOperator, "outcome_unknown"},
+		{"priv_move", TierOperator, "outcome_unknown"},
+		{"priv_chown", TierOperator, "outcome_unknown"},
+		{"priv_chmod", TierOperator, "outcome_unknown"},
+		{"priv_restore_backup", TierOperator, "outcome_unknown"},
+		{"priv_delete", TierDestructive, "outcome_unknown"},
+		{"priv_exec", TierOperator, "outcome_unknown"},
+		{"priv_exec", TierDestructive, "outcome_unknown"},
+		{"priv_exec", TierRead, "gate_unavailable"},
+		{"priv_read_file", TierRead, "gate_unavailable"},
+		{"priv_exec_preview", TierDestructive, "gate_unavailable"},
+		{"priv_delete_preview", TierDestructive, "gate_unavailable"},
+	} {
+		t.Run(c.op+"/"+c.ceiling.String(), func(t *testing.T) {
+			g := newRecordingGate(map[string]gateReply{c.op: {silent: true}})
+			h := readHarness(t, g)
+			_, e := h.deps.call(withCeiling(t.Context(), c.ceiling), "app-host", c.op, map[string]any{}, h.deps.budget())
+			if e == nil || e.Code != c.want {
+				t.Fatalf("lost answer: %+v, want %s", e, c.want)
+			}
+			g.set(c.op, gateReply{code: "outcome_unknown", msg: "the privileged helper did not answer in time, nor confirm that the operation ended"})
+			resp, e := h.deps.call(withCeiling(t.Context(), c.ceiling), "app-host", c.op, map[string]any{}, h.deps.budget())
+			if e != nil || resp.OK || resp.Error == nil || resp.Error.Code != "outcome_unknown" {
+				t.Fatalf("the gate's outcome_unknown: %+v %+v", resp, e)
+			}
+		})
+	}
 }
 
 // TestPrivRunCommandTimedOutWarns: an approved command stopped at its

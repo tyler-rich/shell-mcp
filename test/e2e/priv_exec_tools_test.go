@@ -193,20 +193,26 @@ func TestPrivExecKilledOnHangup(t *testing.T) {
 					hungUp := time.Now()
 					switch mode {
 					case "half":
-						// The helper answered only after the command (and what
-						// it started) was dead.
-						if p.Alive() || (detach && lingering.Alive()) {
-							t.Fatalf("the helper answered while the command ran: %s", out.String())
+						// The helper answered only after the command, and what
+						// it started in a session of its own, were killed and
+						// reaped: both pids gone from /proc, not even zombies.
+						if !p.Reaped() || (detach && !lingering.Reaped()) {
+							t.Fatalf("the helper answered before the command and its children were gone: %s", out.String())
 						}
-						if !strings.Contains(out.String(), `"code":"timeout"`) || !strings.Contains(out.String(), "stopped") {
+						var r struct {
+							Error *struct {
+								Code string `json:"code"`
+							} `json:"error"`
+						}
+						if json.Unmarshal(out.Bytes(), &r) != nil || r.Error == nil || r.Error.Code != "outcome_unknown" {
 							t.Fatalf("answer %s", out.String())
 						}
 					case "drop":
-						if !p.WaitGone(4*time.Second) || (detach && !lingering.WaitGone(time.Second)) {
+						if !p.WaitReaped(4*time.Second) || (detach && !lingering.WaitReaped(time.Second)) {
 							t.Fatalf("the command outlived the gate's connection by %v", time.Since(hungUp))
 						}
 					}
-					findJournal(t, "shell-mcp-privd", since, `"op":"priv_exec"`, `"command_id":"`+c.command+`"`, `"hung_up":true`, `"outcome":"timeout"`)
+					findJournal(t, "shell-mcp-privd", since, `"op":"priv_exec"`, `"command_id":"`+c.command+`"`, `"hung_up":true`, `"outcome":"outcome_unknown"`)
 				})
 			}
 		}

@@ -88,6 +88,11 @@ const (
 	// CodeHelperWrongUnit: the operation belongs to the other unit's helper
 	// instance (core or broad); it was not executed.
 	CodeHelperWrongUnit = "helper_wrong_unit"
+	// CodeOutcomeUnknown: a privileged request that can change the host
+	// (PrivMayChange) may or may not have run, in whole or in part: its
+	// answer was lost after it was sent, or its command was stopped
+	// mid-run (handoff must-fix (b)). Never a refusal.
+	CodeOutcomeUnknown = "outcome_unknown"
 )
 
 // Codes lists every gate error code.
@@ -99,7 +104,7 @@ var Codes = []string{
 	CodeVerifyFailed, CodeInstallInsecure, CodeInternal,
 	CodeHelperInstallInsecure, CodeHelperPolicyInvalid, CodeHelperPolicyMismatch,
 	CodeHelperClientUIDMismatch, CodeHelperCapabilitiesBroad, CodeHelperSandboxUnavailable,
-	CodeHelperWrongUnit,
+	CodeHelperWrongUnit, CodeOutcomeUnknown,
 }
 
 // Gate operations (ARCHITECTURE §4.3).

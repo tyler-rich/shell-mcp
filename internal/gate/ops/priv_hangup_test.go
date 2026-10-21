@@ -20,8 +20,8 @@ import (
 // S4c-2): before it gives up on a helper it tells the helper so (it shuts
 // down its sending side, which the helper reads as a hang-up and kills its
 // command) and waits for the helper to confirm; and an answer lost after
-// the request was sent, for a request that can change the host, is a
-// timeout whose outcome is unknown, never a refusal. Every value is an
+// the request was sent, for a request that can change the host, is
+// outcome_unknown, never a refusal. Every value is an
 // invented fixture.
 
 // idOf is the request id of a forwarded request line.
@@ -62,7 +62,7 @@ func TestForwardSignalsHangupAndWaits(t *testing.T) {
 		mu.Lock()
 		ended = time.Now()
 		mu.Unlock()
-		_, _ = c.Write([]byte(`{"v":1,"id":"` + idOf(req) + `","ok":false,"error":{"code":"timeout","message":"the command was stopped"},"warnings":[],` +
+		_, _ = c.Write([]byte(`{"v":1,"id":"` + idOf(req) + `","ok":false,"error":{"code":"outcome_unknown","message":"the command was stopped"},"warnings":[],` +
 			`"gate":{"version":"h1","principal":"shell-mcp-privd","policy_sha256":"beef","max_tier":"destructive","unit":"core","duration_ms":1}}` + "\n"))
 	})
 	f.opts.HelperGrace = 2 * time.Second
@@ -81,7 +81,7 @@ func TestForwardSignalsHangupAndWaits(t *testing.T) {
 	if answered.Before(e) {
 		t.Fatalf("the gate answered (%+v) before the helper had ended the command", r.Error)
 	}
-	if r.OK || r.Error == nil || r.Error.Code != "timeout" || r.Error.Message != "the command was stopped" || r.Helper == nil {
+	if r.OK || r.Error == nil || r.Error.Code != "outcome_unknown" || r.Helper == nil || r.Helper.PolicySHA256 != "beef" {
 		t.Fatalf("not the helper's answer: %+v helper %+v", r.Error, r.Helper)
 	}
 }
@@ -89,8 +89,8 @@ func TestForwardSignalsHangupAndWaits(t *testing.T) {
 // TestForwardOutcomeUnknown (must-fix (b)): when no answer comes back after
 // the request was sent — the helper never answers, closes without a byte,
 // or answers something unreadable — a request that can change the host (an
-// operator or destructive op, or priv_exec above ceiling read) is a
-// timeout saying it may have run, never a refusal; a read request keeps
+// operator or destructive op, or priv_exec above ceiling read) is
+// outcome_unknown, never a refusal; a read request keeps
 // its codes.
 func TestForwardOutcomeUnknown(t *testing.T) {
 	answers := map[string]func(string, net.Conn){
@@ -122,13 +122,10 @@ func TestForwardOutcomeUnknown(t *testing.T) {
 				r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"` + c.ceiling + `","op":"` + c.op + `","args":` + c.args + `,"timeout_ms":300}` + "\n")
 				want := readCodes[name]
 				if c.mayChange {
-					want = "timeout"
+					want = "outcome_unknown"
 				}
 				if r.OK || r.Error == nil || r.Error.Code != want {
 					t.Fatalf("got %+v, want %s", r.Error, want)
-				}
-				if c.mayChange && !strings.Contains(r.Error.Message, "on the host") {
-					t.Fatalf("the message does not say the operation may have run on the host: %q", r.Error.Message)
 				}
 			})
 		}

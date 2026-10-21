@@ -237,7 +237,10 @@ func TestCodesClosedSet(t *testing.T) {
 		"helper_sandbox_unavailable",
 		// An operation that reached the other unit's helper instance (the
 		// helper is authoritative for routing).
-		"helper_wrong_unit"}
+		"helper_wrong_unit",
+		// A privileged request that can change the host whose outcome is
+		// unknown (handoff must-fix (b), S4c-6).
+		"outcome_unknown"}
 	if !slices.Equal(Codes, want) {
 		t.Fatalf("Codes = %v", Codes)
 	}

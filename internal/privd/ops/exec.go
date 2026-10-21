@@ -320,7 +320,7 @@ func (s *server) runCommand(spec *execx.Spec) (execx.Result, error) {
 	}
 	if s.o.ReapOrphans {
 		_ = unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0)
-		defer reapOrphans(reapBound)
+		defer func() { _ = reapOrphans(reapBound, func() ([]int, error) { return children(), nil }, func(pid int) { _ = unix.Kill(pid, unix.SIGKILL) }, waitAnyChild) }()
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -392,27 +392,39 @@ func watchHangup(c net.Conn) <-chan struct{} {
 // ended. Children are listed in /proc/self/task/*/children (the helper's
 // own /proc/<pid>, which its Landlock ruleset and ProcSubset=pid leave
 // readable); it returns once wait4 says no child is left.
-func reapOrphans(bound time.Duration) {
+func reapOrphans(bound time.Duration, list func() ([]int, error), kill func(int), wait func() (int, error)) error {
+	// Stub (failing-first commit): the old, fail-open behaviour.
 	deadline := time.Now().Add(bound)
 	for {
-		for _, pid := range children() {
-			_ = unix.Kill(pid, unix.SIGKILL)
+		pids, _ := list()
+		for _, pid := range pids {
+			kill(pid)
 		}
 		for {
-			var ws unix.WaitStatus
-			pid, err := unix.Wait4(-1, &ws, unix.WNOHANG, nil)
+			pid, err := wait()
 			if errors.Is(err, unix.ECHILD) {
-				return
+				return nil
 			}
 			if err != nil || pid <= 0 {
 				break
 			}
 		}
 		if time.Now().After(deadline) {
-			return
+			return nil
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func waitAnyChild() (int, error) {
+	var ws unix.WaitStatus
+	return unix.Wait4(-1, &ws, unix.WNOHANG, nil)
+}
+
+// ReapHooks is a stub (failing-first commit): accepted and ignored.
+type ReapHooks struct {
+	Children func() ([]int, error)
+	Wait     func() (int, error)
 }
 
 // maxChildren bounds the children read from /proc.
