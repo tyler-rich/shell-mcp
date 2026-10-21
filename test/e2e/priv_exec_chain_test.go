@@ -83,14 +83,14 @@ func chainFixture(t *testing.T) (a, b string) {
 	a = filepath.Join(chainRoot, "a")
 	b = filepath.Join(a, "b")
 	_ = os.RemoveAll(a)
-	if err := os.MkdirAll(filepath.Join(b, "c"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(b, "c"), 0o755); err != nil { //nolint:gosec // G301: root's closed fixture directories
 		t.Fatal(err)
 	}
 	rootFile(t, filepath.Join(b, "t"), "original\n", 0o644)
 	t.Cleanup(func() {
 		for _, d := range []string{chainAnc, chainRoot} {
 			_ = os.Chown(d, 0, 0)
-			_ = os.Chmod(d, 0o755)
+			_ = os.Chmod(d, 0o755) //nolint:gosec // G302: the fixture's directories, closed again
 		}
 		_ = os.RemoveAll(a)
 	})
@@ -149,7 +149,7 @@ func TestPrivExecPathChain(t *testing.T) {
 				}
 				defer func() {
 					_ = os.Chown(lvl.dir, 0, 0)
-					_ = os.Chmod(lvl.dir, 0o755)
+					_ = os.Chmod(lvl.dir, 0o755) //nolint:gosec // G302: a directory, closed again
 				}()
 				for _, u := range chainUnits {
 					newFile := filepath.Join(b, "new-"+u.unit)
@@ -241,7 +241,7 @@ func TestPrivExecPathChainRace(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			// race/t and race/sub/t are example-app's decoys, in its directories.
 			_ = os.RemoveAll(race)
-			if err := os.MkdirAll(filepath.Join(race, "sub"), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Join(race, "sub"), 0o755); err != nil { //nolint:gosec // G301: example-app's directories, given to it below
 				t.Fatal(err)
 			}
 			for _, p := range []string{filepath.Join(race, "t"), filepath.Join(race, "sub", "t")} {
@@ -254,7 +254,7 @@ func TestPrivExecPathChainRace(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			cmd := exec.CommandContext(t.Context(), self) //nolint:gosec // G204: this test binary itself, in client mode
+			cmd := exec.CommandContext(t.Context(), self)
 			cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, exampleApp)}
 			cmd.Env = append(runner.Env(), "E2E_CLIENT=swap", "E2E_SWAP_NAME="+filepath.Join(race, c.swap),
 				"E2E_SWAP_ALT="+filepath.Join(race, c.swap+".alt"), "E2E_SWAP_TO="+c.to)

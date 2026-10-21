@@ -75,7 +75,7 @@ func TestResolveExecChain(t *testing.T) {
 				a := filepath.Join(e.root, "a")
 				b := filepath.Join(a, "b")
 				mkdirMode(t, b, 0o755)
-				must(t, os.Chmod(a, 0o755))
+				must(t, os.Chmod(a, 0o755)) //nolint:gosec // G302: a directory, closed
 				file := filepath.Join(b, "t")
 				putMode(t, file, "t\n", 0o644)
 				sub := filepath.Join(b, "c")
@@ -93,7 +93,7 @@ func TestResolveExecChain(t *testing.T) {
 				}
 				open := map[string]string{"ancestor": e.anc, "root": e.root, "intermediate": a, "parent": b}[lvl]
 				must(t, os.Chmod(open, mode))
-				defer func() { _ = os.Chmod(open, 0o755) }()
+				defer func() { _ = os.Chmod(open, 0o755) }() //nolint:gosec // G302: a directory, closed again
 				paths := []struct {
 					p   string
 					dir bool
@@ -150,7 +150,7 @@ func TestResolveExecChainRootItself(t *testing.T) {
 	}
 	// The root's own mode does not matter for the root itself: only what
 	// could replace it.
-	must(t, os.Chmod(e.anc, 0o755))
+	must(t, os.Chmod(e.anc, 0o755))  //nolint:gosec // G302: a directory, closed again
 	must(t, os.Chmod(e.root, 0o777)) //nolint:gosec // G302: another account's write access, simulated
 	for k, err := range e.resolveAll(e.root, true) {
 		if err != nil {

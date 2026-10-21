@@ -40,7 +40,7 @@ func chainCommands() opt {
 	return func(f *fixture, s *string) {
 		anc, root := chainRoot(f)
 		gatetest.Mkdir(f.t, root, 0o755)
-		if err := os.Chmod(anc, 0o755); err != nil {
+		if err := os.Chmod(anc, 0o755); err != nil { //nolint:gosec // G302: a directory, closed
 			f.t.Fatal(err)
 		}
 		from := "  write: [" + f.write + "]\n"
@@ -89,7 +89,7 @@ func chainCases(file, newFile, sub string) []chainCase {
 	}
 }
 
-func (c *chainCase) req(command string, hash string) m {
+func (c *chainCase) req(command, hash string) m {
 	r := m{"command_id": command, "args": c.args}
 	if c.cwd != "" {
 		r["cwd"] = c.cwd
@@ -122,7 +122,7 @@ func TestPrivExecChainRefused(t *testing.T) {
 				if err := os.Chmod(lvl.dir, mode); err != nil {
 					t.Fatal(err)
 				}
-				defer func() { _ = os.Chmod(lvl.dir, 0o755) }()
+				defer func() { _ = os.Chmod(lvl.dir, 0o755) }() //nolint:gosec // G302: a directory, closed again
 				for _, c := range cases {
 					f.as("core")
 					pr := f.serve("priv_exec_preview", c.req(c.core, ""))

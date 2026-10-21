@@ -60,7 +60,7 @@ func FuzzPrivExecPreviewMatchesExec(f *testing.F) {
 			if err := os.Chmod(open, 0o777); err != nil { //nolint:gosec // G302: another account's write access, simulated
 				t.Fatal(err)
 			}
-			defer func() { _ = os.Chmod(open, 0o755) }()
+			defer func() { _ = os.Chmod(open, 0o755) }() //nolint:gosec // G302: a directory, closed again
 		}
 		req := m{"command_id": "probe-all", "args": args}
 		if c := cwds[int(cwdSel)%len(cwds)]; c != "" {
