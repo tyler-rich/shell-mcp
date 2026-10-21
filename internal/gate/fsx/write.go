@@ -846,23 +846,28 @@ func (f *FS) ResolveWrite(p string) (string, error) {
 		return "", err
 	}
 	defer l.close()
+	var file *os.File // the target as opened; nil when it does not exist yet
+	exists := true
 	if l.parent != nil {
 		fi, err := l.parent.Lstat(l.base)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
+			exists = false
 		case err != nil:
 			return "", mapErr(err)
 		case fi.Mode()&fs.ModeSymlink != 0:
 			return "", errf(protocol.CodePathDenied, "final path component is a symlink")
-		default:
-			file, err := f.openTarget(l)
-			if err != nil {
-				return "", err
-			}
-			_ = file.Close()
 		}
 	}
-	if err := f.execChain(l); err != nil {
+	// The root itself is opened only for the chain rule (the gate never
+	// opened it here).
+	if exists && (l.parent != nil || f.cfg.GuardExecPaths) {
+		if file, err = f.openTarget(l); err != nil {
+			return "", err
+		}
+		defer func() { _ = file.Close() }()
+	}
+	if err := f.execChain(l, file); err != nil {
 		return "", err
 	}
 	return l.targetReal(), nil

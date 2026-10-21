@@ -348,7 +348,7 @@ func TestCheckPolicyChecksReadRootChains(t *testing.T) {
 		"WARN privileged read root " + filepath.Join(drop, "logs") + ": " + drop + " is group- or world-writable (mode 0777); another account could replace the root itself",
 		"which the per-request moved-in check does not see; root commands are given no path (placeholder or cwd) at or under it",
 		"WARN privileged read root " + shared + ": " + shared + " is group- or world-writable (mode 0775); files under it are read as root only",
-		"could have written them; root commands are given no path (placeholder or cwd) under it",
+		"could have written them; root commands are given no path (placeholder or cwd) at or under it",
 		"WARN privileged write root " + filepath.Join(d, "etc", "example-app") + ": ",
 	} {
 		if strings.HasPrefix(want, "WARN privileged write root") {

@@ -371,8 +371,8 @@ func (f *FS) ResolveRead(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	_ = file.Close()
-	if err := f.execChain(l); err != nil {
+	defer func() { _ = file.Close() }()
+	if err := f.execChain(l, file); err != nil {
 		return "", err
 	}
 	return l.targetReal(), nil
@@ -392,9 +392,14 @@ func (f *FS) ResolveDir(p string) (string, error) {
 		return "", err
 	}
 	if owned {
-		_ = dir.Close()
+		defer func() { _ = dir.Close() }()
 	}
-	if err := f.execChain(l); err != nil {
+	df, err := dir.Open(".")
+	if err != nil {
+		return "", mapErr(err)
+	}
+	defer func() { _ = df.Close() }()
+	if err := f.execChain(l, df); err != nil {
 		return "", err
 	}
 	return rp, nil
