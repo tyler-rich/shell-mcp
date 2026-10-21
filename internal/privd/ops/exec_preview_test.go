@@ -135,14 +135,14 @@ func TestPrivExecPreview(t *testing.T) {
 	if other := f.execPreview(m{"command_id": "probe-all", "args": []string{"echo", "beta", filepath.Join(f.read, "hello.txt")}}); other.PreviewSHA256 == q.PreviewSHA256 {
 		t.Fatal("another argument hashed the same")
 	}
+	// The audit line has the command id and the argument count, never the
+	// arguments.
+	if l := f.lastAudit(); !strings.Contains(l, `"op":"priv_exec_preview"`) || !strings.Contains(l, `"arg_count":3`) || strings.Contains(l, "beta") {
+		t.Fatalf("audit %q", l)
+	}
 	// A broad command is previewed by the core instance, which names its unit.
 	if b := f.execPreview(m{"command_id": "probe-broad-sleep", "args": []string{"ignore-term", "34s"}}); b.Unit != "broad" {
 		t.Fatalf("broad command previewed as %+v", b)
-	}
-	// The audit line has the command id and the argument count, never the
-	// arguments.
-	if l := f.lastAudit(); !strings.Contains(l, `"op":"priv_exec_preview"`) || !strings.Contains(l, `"arg_count":3`) || strings.Contains(l, "alpha") {
-		t.Fatalf("audit %q", l)
 	}
 
 	// Refused as priv_exec would refuse it.
@@ -278,14 +278,17 @@ func TestPrivExecPathRetargeted(t *testing.T) {
 	f.fail("priv_exec", m{"command_id": "probe-op", "args": []string{"write", filepath.Join(link, "x")}, "expected_preview_sha256": p.PreviewSHA256}, "exists")
 	absent(t, filepath.Join(f.write, "a", "x"))
 	absent(t, filepath.Join(f.write, "b", "x"))
-	// The cwd.
+	// The cwd (a final symlink is refused, so through a link above it).
+	gatetest.Mkdir(t, filepath.Join(f.write, "a", "sub"), 0o755)
+	gatetest.Mkdir(t, filepath.Join(f.write, "b", "sub"), 0o755)
 	retarget("a")
-	cp := f.execPreview(m{"command_id": "probe-op", "args": []string{"echo", "operator"}, "cwd": link})
-	if cp.Cwd != realPath(t, f.write)+"/a" {
+	cwd := filepath.Join(link, "sub")
+	cp := f.execPreview(m{"command_id": "probe-op", "args": []string{"echo", "operator"}, "cwd": cwd})
+	if cp.Cwd != realPath(t, f.write)+"/a/sub" {
 		t.Fatalf("cwd %q", cp.Cwd)
 	}
 	retarget("b")
-	f.fail("priv_exec", m{"command_id": "probe-op", "args": []string{"echo", "operator"}, "cwd": link, "expected_preview_sha256": cp.PreviewSHA256}, "exists")
+	f.fail("priv_exec", m{"command_id": "probe-op", "args": []string{"echo", "operator"}, "cwd": cwd, "expected_preview_sha256": cp.PreviewSHA256}, "exists")
 }
 
 // TestPrivExecBroadRecomputes (D6): a broad command previewed by the core

@@ -180,8 +180,27 @@ const (
 	OpPrivExecPreview = "priv_exec_preview"
 )
 
-// PrivMayChange reports whether a privileged request can change the host.
-func PrivMayChange(op, ceiling string) bool { return false }
+// privReadOps are the read-tier privileged operations, which change nothing
+// on the host. Every other privileged operation can, including one added
+// later until it is listed here.
+var privReadOps = []string{
+	OpPrivReadFile, OpPrivListDir, OpPrivStat, OpPrivListBackups, OpPrivBackupCheck,
+	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview, OpPrivExecPreview,
+	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview,
+}
+
+// PrivMayChange reports whether a privileged request can change the host:
+// every privileged operation but the read-tier ones, and priv_exec above
+// ceiling read (a read command is sent at ceiling read, an operator or
+// destructive one only once approved, at its own tier). An answer lost
+// after such a request was sent leaves its outcome unknown (handoff
+// docs/handoff/S4C-PRIVILEGED.md, must-fix (b)).
+func PrivMayChange(op, ceiling string) bool {
+	if op == OpPrivExec {
+		return ceiling != TierRead
+	}
+	return !slices.Contains(privReadOps, op)
+}
 
 // PrivOps lists every privileged operation.
 var PrivOps = []string{
@@ -189,7 +208,7 @@ var PrivOps = []string{
 	OpPrivChmod, OpPrivCopy, OpPrivMove, OpPrivListBackups, OpPrivRestoreBackup, OpPrivDelete,
 	OpPrivExec, OpPrivPkgUpdateIndex, OpPrivPkgInstall, OpPrivPkgUpgrade, OpPrivPkgRemove,
 	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPower, OpPrivBackupCheck,
-	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview,
+	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview, OpPrivExecPreview,
 }
 
 // Tier names on the wire: a request's ceiling, and max_tier in the gate

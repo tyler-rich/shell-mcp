@@ -175,7 +175,10 @@ type auditLine struct {
 	RemovedTotal     int      `json:"removed_total,omitempty"`
 	RemovedTruncated bool     `json:"removed_truncated,omitempty"`
 	// SetAside is an entry a delete left set aside and did not remove.
-	SetAside   string `json:"set_aside,omitempty"`
+	SetAside string `json:"set_aside,omitempty"`
+	// HungUp is set when the gate hung up while priv_exec ran its command
+	// (stopped before the line was written) or before it started it.
+	HungUp     bool   `json:"hung_up,omitempty"`
 	Outcome    string `json:"outcome"`
 	Check      string `json:"check,omitempty"`
 	Detail     string `json:"detail,omitempty"`
@@ -226,7 +229,7 @@ func (s *server) auditRequest(resp *protocol.Response) {
 	uid, pid := s.cred.UID, s.cred.PID
 	l := &auditLine{PeerUID: &uid, PeerPID: &pid, Outcome: "ok", BackupIDs: s.ids(), BackupIDsDiscarded: s.discarded, Changed: s.changed,
 		ChangedTotal: s.changedTotal, ChangedTruncated: s.changedTruncated, Removed: s.removed, RemovedTotal: s.removedTotal,
-		RemovedTruncated: s.removedTruncated, SetAside: s.setAside}
+		RemovedTruncated: s.removedTruncated, SetAside: s.setAside, HungUp: s.hungUp}
 	if s.req != nil {
 		l.ID, l.Ceiling, l.Op, l.Args = s.req.ID, s.req.Ceiling, auditText(s.req.Op), sanitizeArgs(s.req.Args)
 	}

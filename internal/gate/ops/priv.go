@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"slices"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -88,17 +89,26 @@ func execBroad(args []byte) (bool, error) {
 // gate's, and the gate does not answer timeout while the helper's command
 // or apt transaction is still within its own (handoff P-7). One bounded,
 // strictly decoded response comes back.
-// Failures map to closed-set codes: no connection is helper_unavailable; a
-// connection closed without a byte — only a peer that failed the helper's
-// SO_PEERCRED check gets that (PRIVILEGED §7) — is helper_refused, also
-// when it arrives as a reset because the helper never read the request; no
-// answer by the request's timeout plus the grace is timeout; anything
-// malformed is helper_unavailable. A helper error passes through with its
-// own code, including the helper_* self-check codes, which the helper
-// answers before reading the request (without an id, and possibly before
-// the request is even sent). The response's gate block stays the gate's;
-// the helper's own block (its policy hash and unit) is passed on as the
-// response's helper block, as received (handoff P-1).
+// Before it gives up, at the deadline less the stop wait, the gate shuts
+// down its sending side: the helper reads that as a hang-up, stops a
+// running command and answers, and the gate reads on until the deadline,
+// so its answer is the helper's unless the helper fails to stop the
+// command in that time (handoff must-fix (a)).
+// Failures map to closed-set codes: no connection is helper_unavailable. For
+// a request that can change the host (protocol.PrivMayChange), every
+// failure to get an answer after the request was written — none by the
+// deadline, a close without a byte, a malformed or mismatched answer — is
+// timeout, saying the operation may have run on the host (must-fix (b)).
+// For any other request: a connection closed without a byte — only a peer
+// that failed the helper's SO_PEERCRED check gets that (PRIVILEGED §7) — is
+// helper_refused, also when it arrives as a reset because the helper never
+// read the request; no answer by the request's timeout plus the grace is
+// timeout; anything malformed is helper_unavailable. A helper error passes
+// through with its own code, including the helper_* self-check codes, which
+// the helper answers before reading the request (without an id, and
+// possibly before the request is even sent). The response's gate block
+// stays the gate's; the helper's own block (its policy hash and unit) is
+// passed on as the response's helper block, as received (handoff P-1).
 func (s *server) forward(socket string) *protocol.Response {
 	dial := s.o.DialHelper
 	if dial == nil {
@@ -116,7 +126,8 @@ func (s *server) forward(socket string) *protocol.Response {
 		grace = DefaultHelperGrace
 	}
 	timeout := s.timeout()
-	_ = conn.SetDeadline(time.Now().Add(timeout + grace))
+	deadline := time.Now().Add(timeout + grace)
+	_ = conn.SetDeadline(deadline)
 
 	fwd := *s.req
 	fwd.TimeoutMS = timeout.Milliseconds()
@@ -124,29 +135,62 @@ func (s *server) forward(socket string) *protocol.Response {
 	if err != nil {
 		return s.errResp(errf(protocol.CodeInternal, "request could not be encoded"))
 	}
-	if _, err = conn.Write(append(line, '\n')); err != nil &&
-		!errors.Is(err, syscall.EPIPE) && !errors.Is(err, syscall.ECONNRESET) {
-		return s.forwardErr(err)
+	_, err = conn.Write(append(line, '\n'))
+	if err != nil && !errors.Is(err, syscall.EPIPE) && !errors.Is(err, syscall.ECONNRESET) {
+		return s.forwardErr(err, false, false)
 	}
 	// On EPIPE or a reset the helper closed before taking the request: it
 	// either refused the peer (nothing to read) or answered a self-check
 	// failure first (its answer is queued on this end). Read either way.
+	wrote := err == nil
+	var hungUp atomic.Bool
+	if cw, ok := conn.(interface{ CloseWrite() error }); ok && wrote {
+		stop := min(DefaultHelperStopWait, grace/2)
+		t := time.AfterFunc(time.Until(deadline.Add(-stop)), func() {
+			hungUp.Store(true)
+			_ = cw.CloseWrite()
+		})
+		defer t.Stop()
+	}
 	resp, err := protocol.DecodeResponse(conn)
 	if err != nil {
-		return s.forwardErr(err)
+		return s.forwardErr(err, wrote, hungUp.Load())
 	}
 	if resp.ID != s.req.ID && (resp.OK || resp.ID != "") {
+		if wrote && protocol.PrivMayChange(s.req.Op, s.req.Ceiling) {
+			return s.errResp(errf(protocol.CodeTimeout, "the privileged helper answered a different request after this one was sent; the operation may have run on the host"))
+		}
 		return s.errResp(errf(protocol.CodeHelperUnavailable, "the privileged helper answered a different request"))
 	}
 	return &protocol.Response{OK: resp.OK, Data: resp.Data, Error: resp.Error, Warnings: resp.Warnings, Helper: resp.Gate}
 }
 
-func (s *server) forwardErr(err error) *protocol.Response {
+// forwardErr maps a failure to get the helper's answer. wrote says the
+// request was written; hungUp that the gate had already told the helper it
+// stopped waiting.
+func (s *server) forwardErr(err error, wrote, hungUp bool) *protocol.Response {
 	var ne net.Error
+	noAnswer := errors.Is(err, protocol.ErrNoResponse)
+	late := errors.Is(err, os.ErrDeadlineExceeded) || errors.As(err, &ne) && ne.Timeout()
+	if wrote && protocol.PrivMayChange(s.req.Op, s.req.Ceiling) {
+		// The request may have run: an unknown outcome, never a refusal.
+		switch {
+		case late:
+			return s.errResp(errf(protocol.CodeTimeout, "the privileged helper did not answer in time, nor confirm that the operation ended; it may still be running, or complete, on the host"))
+		case noAnswer && hungUp:
+			return s.errResp(errf(protocol.CodeTimeout, "the privileged helper did not answer in time and closed the connection when the gate stopped waiting; the operation may have run on the host before it ended"))
+		case noAnswer:
+			return s.errResp(errf(protocol.CodeTimeout, "the privileged helper closed the connection without an answer after the request was sent: "+
+				"it refused the connection (see its journal on the host) or ended while running the operation, which may have changed the host"))
+		}
+		return s.errResp(errf(protocol.CodeTimeout, "the privileged helper's answer could not be read after the request was sent; the operation may have run on the host"))
+	}
 	switch {
-	case errors.Is(err, protocol.ErrNoResponse):
+	case noAnswer && hungUp:
+		return s.errResp(errf(protocol.CodeTimeout, "the privileged helper did not answer in time"))
+	case noAnswer:
 		return s.errResp(errf(protocol.CodeHelperRefused, "the privileged helper refused the connection (see its journal on the host)"))
-	case errors.Is(err, os.ErrDeadlineExceeded), errors.As(err, &ne) && ne.Timeout():
+	case late:
 		return s.errResp(errf(protocol.CodeTimeout, "the privileged helper did not answer in time"))
 	}
 	return s.errResp(errf(protocol.CodeHelperUnavailable, "the privileged helper's response could not be read"))

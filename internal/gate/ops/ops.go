@@ -299,3 +299,10 @@ func (s *server) timeout() time.Duration {
 // DefaultHelperGrace is how long past the request's timeout the gate waits
 // for the privileged helper's answer (instance start-up, backups).
 const DefaultHelperGrace = 15 * time.Second
+
+// DefaultHelperStopWait is how long before its deadline the gate tells the
+// helper it stopped waiting (it shuts down its sending side, which the
+// helper reads as a hang-up: it stops a running command and answers), and
+// so how long the helper has to stop the command and confirm before the
+// gate answers timeout itself. At most half the grace.
+const DefaultHelperStopWait = 7 * time.Second

@@ -243,9 +243,10 @@ func TestCodesClosedSet(t *testing.T) {
 	}
 	// PRIVILEGED §6: the core operations, priv_exec, the four package
 	// operations, their three read-tier previews, priv_power,
-	// priv_backup_check (handoff P-11), and the chown and chmod previews
-	// (P-2b).
-	if len(PrivOps) != 26 {
+	// priv_backup_check (handoff P-11), the chown and chmod previews
+	// (P-2b), the delete and restore previews (P-2a, P-2c) and the exec
+	// preview (P-2d).
+	if len(PrivOps) != 27 {
 		t.Fatalf("PrivOps has %d entries", len(PrivOps))
 	}
 }
