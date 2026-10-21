@@ -239,6 +239,8 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 | X-9 | **Backups are not tied to approvals.** A backup's metadata records `op` and `request_id`, but not the preview it belongs to. | **MUST** (cheap) | The metadata records `preview_sha256` when the op carried one (a local file format, not the wire; D3). |
 | X-10 | **Read-back of metadata.** Chown and chmod do not re-read what they set. Writes verify their content. | **MUST** (cheap) | fstat the same descriptor after fchown or fchmod; a mismatch is `verify_failed` (S4c-0 for the non-recursive ops, S4c-3 for recursive). |
 
+**Status after S4c-6:** X-4 fixed for exec: the helper stops a command whose gate hung up, the gate tells it before giving up and waits for its answer, and a timeout or lost answer on a privileged operation that can change the host is reported as an outcome unknown (must-fixes (a) and (b), §5). The package operations' share is S4c-7's.
+
 **Status after S4c-5:** X-8 fixed for restore too: the backup being restored is never pruned by the restore's own retention, nor counted as freed by the store's cap (`store.protect`).
 
 **Status after S4c-3:** X-10 fixed for recursive ops too (every entry read back on the descriptor it was changed on).
@@ -790,9 +792,15 @@ S4c-1 left one exception to "the gate never answers `timeout` while the helper's
 - **(a) The helper kills its running command when the gate's connection drops.** It watches the connection while a command or apt-get runs, and on a hang-up or reset kills the process group (`SIGTERM`, then `SIGKILL` after the grace) before it exits, so the gate can never answer `timeout` while a root command keeps running. Tested in e2e-host in both units with a command that ignores `SIGTERM` and a gate killed mid-run.
 - **(b) A timeout on any state-changing privileged op is reported as "outcome unknown".** The `timeout` message for a privileged operator or destructive op says the operation may have completed on the host and must be checked there (preview again, or read the journal and the backups) before retrying; the approval stays consumed, and a re-call needs a new approval. This is X-4's message, made a requirement.
 - Both belong to S4c-6's and S4c-7's scope; neither changes the protocol (a hang-up is already a closed connection, and the message is text).
+- **Status: (a) done for `priv_exec`, (b) done for every privileged operation (S4c-6, PR #37; ARCHIVE §14, S4c-6).** (a): the helper watches its connection while a command runs and stops the command on a hang-up, kills and reaps what it started (child subreaper) before answering, and the gate shuts down its sending side 7 s before its deadline and waits for that answer. (b): for a request that can change the host (`protocol.PrivMayChange`), the gate reports an answer lost after the request was sent as `timeout`, and the server reports every such `timeout` and lost answer as "Outcome unknown: …", with the approval used; no code or field was added. **S4c-7 still owes (a) for apt-get:** the package operations must run through the same hang-up watch and reaping as `priv_exec` (`runCommand` in `internal/privd/ops/exec.go`).
 
 ### S4c-6: exec
 
+- **Status: done (PR #37; ARCHIVE §14, S4c-6).** P-2d and P-3 as listed (no other protocol change). `resolveExec` is shared by `priv_exec_preview` (read, core, for commands of either unit; the broad instance refuses it) and `priv_exec`; the hash covers its domain, the policy's SHA-256, the command id, tier, unit, description, `root_equivalent`, capabilities, the matched template, the resolved argv and cwd. `priv_exec` requires `expected_preview_sha256` for operator and destructive commands and recomputes it in its own unit. `shell_priv_run_command` (admin, destructive, privileged; no stdin, Q11) previews first, runs a read command unapproved at ceiling `read` and an operator or destructive one only once approved, at its tier, sends `priv_exec` with the fresh preview's unit and hash, and never retries a `helper_wrong_unit`. The unit is on the approval page and in the description. Must-fixes (a) and (b), above. Beyond the entry, decided or found:
+  - **The gate waits for the helper's confirmation.** The helper's kill alone would still let the gate answer `timeout` during the 2 s kill grace, so the gate shuts down its sending side before its deadline (not a protocol change: a half-closed connection is a hang-up) and reads on.
+  - **Processes that leave the command's process group** (`setsid`) were outside the kill; the helper is now a child subreaper while it runs a command, and kills and reaps every child left before answering, within the units as they are (no unit or Landlock change).
+  - **Lost answers, not only timeouts.** A helper that dies mid-run (OOM, `RuntimeMaxSec`) closes without a byte, which the gate reported as `helper_refused`, a refusal; for a request that can change the host it is now `timeout`, outcome unknown.
+  - **No STOP for the namespaces.** Both units see the roots under the same host paths; whatever resolves differently changes the argv and so the hash (tested with a link changed between the core preview and the broad run).
 - **Includes.**
   - P-2d and P-3 (exec).
   - `resolveExec` in the helper, shared by `priv_exec` and `priv_exec_preview`.
@@ -822,7 +830,8 @@ S4c-1 left one exception to "the gate never answers `timeout` while the helper's
   - `verify_failed` on a mismatch.
   - The four package tools, and the read tool `shell_priv_preview_packages` (Q7).
   - The update-index preview shows the action and the policy hash only, no apt sources (Q9).
-  - X-4's message for package timeouts.
+  - X-4's message for package timeouts (done generically by S4c-6: a timeout or lost answer of a package operation is already "Outcome unknown").
+  - Must-fix (a) for apt-get: run it through the hang-up watch and child reaping S4c-6 built for `priv_exec` (`runCommand`), with the same tests in the broad unit.
 - **Tests (failing first).**
   - The hash covers each list and version.
   - An incomplete simulation requests no approval.
