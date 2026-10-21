@@ -53,6 +53,10 @@ const (
 	RequiredMinABI = ABINet
 )
 
+// abiTSync is where go-landlock v0.10.1 moves from psx to
+// LANDLOCK_RESTRICT_SELF_TSYNC (restrict.go: useTsync := abi.version >= 8).
+const abiTSync = 8
+
 // ErrUnavailable means `landlock: required` cannot be satisfied.
 var ErrUnavailable = errors.New("landlock cannot enforce every rule this policy needs")
 
@@ -175,7 +179,25 @@ func KernelABI() int {
 			v = 5
 		}
 	}
-	return min(v, ABIHighest)
+	return min(capABI(v), ABIHighest)
+}
+
+// ThreadPath names the all-thread path Apply takes on this kernel: "tsync"
+// (one landlock_restrict_self with LANDLOCK_RESTRICT_SELF_TSYNC), "psx"
+// (no_new_privs and landlock_restrict_self on each thread through
+// libcap/psx, one domain per thread) or "none" (no Landlock).
+func ThreadPath() string {
+	return threadPath(KernelABI())
+}
+
+func threadPath(abi int) string {
+	switch {
+	case abi < 1:
+		return "none"
+	case abi >= abiTSync:
+		return "tsync"
+	}
+	return "psx"
 }
 
 // Plan decides what the sandbox enforces for the policy at the given ABI.
@@ -260,6 +282,47 @@ func handledFS(abi int) landlock.AccessFSSet {
 	return 0
 }
 
+// pathGrant is one path-beneath rule: access rights on a path.
+type pathGrant struct {
+	access landlock.AccessFSSet
+	path   string
+}
+
+// grants returns the path rules and the TCP connect ports for exactly this
+// ABI, in the order they enter the ruleset. A missing path grants nothing.
+func grants(r *Rules, abi int) (paths []pathGrant, ports []uint16) {
+	fs := handledFS(abi)
+	add := func(access landlock.AccessFSSet, ps ...string) {
+		for _, pth := range ps {
+			a := access & fs
+			fi, err := os.Stat(pth)
+			if err != nil {
+				continue // missing: nothing to grant
+			}
+			if !fi.IsDir() {
+				a &= rightsFile
+			}
+			if a == 0 {
+				continue
+			}
+			paths = append(paths, pathGrant{access: a, path: pth})
+		}
+	}
+	add(rightsReadExec, r.ReadExec...)
+	add(rightsRead, r.ReadOnly...)
+	add(rightsReadWrite, r.ReadWrite...)
+	add(rightsDevNull, r.DevNull)
+	add(rightsURandom, r.DevURandom)
+	add(rightsUnixSock, r.UnixSocketDirs...)
+	if d, ok := SocketDir(r.SyslogSocket); r.SyslogSocket != "" && ok {
+		add(rightsUnixSock, d) // the audit line (ABI >= 9 governs it)
+	}
+	if abi >= ABINet {
+		ports = append(ports, r.TCPConnect...)
+	}
+	return paths, ports
+}
+
 // build returns the config and rules for exactly this ABI. UDP (ABI 10) is
 // deliberately not handled: POLICY §4a defines TCP rules only, and handling
 // UDP would deny DNS to every command.
@@ -281,35 +344,12 @@ func build(r *Rules, abi int) (landlock.Config, []landlock.Rule, error) {
 		return landlock.Config{}, nil, err
 	}
 	var rules []landlock.Rule
-	add := func(access landlock.AccessFSSet, paths ...string) {
-		for _, pth := range paths {
-			a := access & fs
-			fi, err := os.Stat(pth)
-			if err != nil {
-				continue // missing: nothing to grant
-			}
-			if !fi.IsDir() {
-				a &= rightsFile
-			}
-			if a == 0 {
-				continue
-			}
-			rules = append(rules, landlock.PathAccess(a, pth).IgnoreIfMissing())
-		}
+	paths, ports := grants(r, abi)
+	for _, g := range paths {
+		rules = append(rules, landlock.PathAccess(g.access, g.path).IgnoreIfMissing())
 	}
-	add(rightsReadExec, r.ReadExec...)
-	add(rightsRead, r.ReadOnly...)
-	add(rightsReadWrite, r.ReadWrite...)
-	add(rightsDevNull, r.DevNull)
-	add(rightsURandom, r.DevURandom)
-	add(rightsUnixSock, r.UnixSocketDirs...)
-	if d, ok := SocketDir(r.SyslogSocket); r.SyslogSocket != "" && ok {
-		add(rightsUnixSock, d) // the audit line (ABI >= 9 governs it)
-	}
-	if abi >= ABINet {
-		for _, port := range r.TCPConnect {
-			rules = append(rules, landlock.ConnectTCP(port))
-		}
+	for _, port := range ports {
+		rules = append(rules, landlock.ConnectTCP(port))
 	}
 	return *cfg, rules, nil
 }
@@ -321,7 +361,7 @@ func build(r *Rules, abi int) (landlock.Config, []landlock.Rule, error) {
 // AllThreadsPrctl, which with CGO_ENABLED=0 is syscall.AllThreadsSyscall
 // through libcap/psx. The ruleset is applied by go-landlock to every
 // thread: on ABI < 8 with psx (landlock_restrict_self on each thread), on
-// ABI >= 8 with LANDLOCK_RESTRICT_SELF_TSYNC.
+// ABI >= 8 with LANDLOCK_RESTRICT_SELF_TSYNC (restrict, threadpath.go).
 func Apply(p *policy.Policy) (Report, error) {
 	rules := Compute(p)
 	return ApplyRules(p.Sandbox.Landlock, &rules)
@@ -346,7 +386,7 @@ func ApplyRules(mode policy.LandlockMode, rules *Rules) (Report, error) {
 		if err != nil {
 			return r, fmt.Errorf("%w: %w", ErrUnavailable, err)
 		}
-		if err := cfg.Restrict(ll...); err != nil {
+		if err := restrict(cfg, ll, rules, abi); err != nil {
 			return r, fmt.Errorf("%w: %w", ErrUnavailable, err)
 		}
 		r.Applied = true

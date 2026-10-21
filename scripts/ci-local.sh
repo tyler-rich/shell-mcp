@@ -135,22 +135,23 @@ gofmt_check() {
 cross_build() { # cross_build <goarch>
 	in_go sh -c "set -e; for c in shell-mcp shell-mcp-gate shell-mcp-privd; do
 		CGO_ENABLED=0 GOOS=linux GOARCH=$1 go build -trimpath -ldflags '-s -w' -o /tmp/\$c ./cmd/\$c
-		# The gate relies on CGO_ENABLED=0 (psx then uses syscall.AllThreadsSyscall).
-		go version -m /tmp/\$c | grep -q 'CGO_ENABLED=0' || { echo \"\$c was built with cgo\" >&2; exit 1; }
-		# The helper's e2e bypass build must never be what ships.
-		if go version -m /tmp/\$c | grep -q shellmcp_e2e_bypass; then echo \"\$c was built with the e2e bypass tag\" >&2; exit 1; fi
-		# Nor the server's elicitation diagnostic build.
-		if go version -m /tmp/\$c | grep -q shellmcp_diag; then echo \"\$c was built with the diagnostic tag\" >&2; exit 1; fi
+		# CGO_ENABLED=0 (psx then uses syscall.AllThreadsSyscall), and none of
+		# the test-only builds (e2e bypass, diagnostic, Landlock forced-psx).
+		bash scripts/release-binary-check.sh /tmp/\$c
 		echo \"built \$c linux/$1 (CGO_ENABLED=0)\"
 	done"
 }
 
 step "gofmt" "" gofmt_check
 step "go vet" "" in_go go vet ./...
-step "go vet (e2e, bypass, diagnostic tags)" "" in_go sh -c "go vet -tags e2e ./test/e2e/ && go vet -tags shellmcp_e2e_bypass ./internal/privd/... ./cmd/shell-mcp-privd/ && go vet -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/"
+step "go vet (test-only build tags)" "" in_go sh -c "go vet -tags e2e ./test/e2e/ && go vet -tags shellmcp_e2e_bypass ./internal/privd/... ./cmd/shell-mcp-privd/ && go vet -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/ && go vet -tags landlock_forcepsx ./..."
 step "golangci-lint" "" in_lint run ./...
-step "golangci-lint (e2e, bypass, diagnostic tags)" "" in_lint run --build-tags=e2e,shellmcp_e2e_bypass,shellmcp_diag ./...
+step "golangci-lint (test-only build tags)" "" in_lint run --build-tags=e2e,shellmcp_e2e_bypass,shellmcp_diag,landlock_forcepsx ./...
 step "go test -race" "" in_go go test -race -timeout 20m -count=1 ./...
+# The Landlock forced-psx test build, which CI's psx entry runs, for the
+# packages that apply the sandbox (the helper's unit tests stub it). This
+# kernel is below ABI 8 anyway; it proves the forced code enforces here.
+step "go test -race (forcepsx: gate)" "" in_go env SHELL_MCP_EXPECT_LANDLOCK_PATH=psx go test -race -timeout 20m -count=1 -tags landlock_forcepsx ./internal/gate/... ./cmd/shell-mcp-gate/
 step "go test -race (test build, fsx)" "" in_go go test -race -timeout 20m -count=1 -tags shellmcp_e2e_bypass ./internal/gate/fsx/
 step "e2e runner-only guards" "" in_go sh -c "CGO_ENABLED=0 go test -c -trimpath -tags e2e -o /tmp/e2e.test ./test/e2e && E2E_TEST_BIN=/tmp/e2e.test bash test/e2e/guard_test.sh"
 step "go test -race (diagnostic build, server)" "" in_go sh -c "go test -race -timeout 20m -count=1 -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/ && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -tags shellmcp_diag -o /tmp/shell-mcp-diag.exe ./cmd/shell-mcp"
@@ -159,6 +160,7 @@ step "build linux/amd64" "" cross_build amd64
 step "build linux/arm64" "" cross_build arm64
 step "deps-current" "run go get -u ./... && go mod tidy, or bump go.mod's go line" in_go bash scripts/deps-current.sh
 step "deps-current self-test" "" in_go bash scripts/deps-current_test.sh
+step "release-binary-check self-test" "" in_go bash scripts/release-binary-check_test.sh
 # The ci-local test runs this script against a fake docker; not from itself.
 if [[ -z "${CI_LOCAL_UNDER_TEST:-}" ]]; then
 	step "ci-local self-test" "" in_go bash scripts/ci-local_test.sh
