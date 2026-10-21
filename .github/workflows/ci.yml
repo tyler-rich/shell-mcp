@@ -28,13 +28,14 @@ jobs:
     # Two pinned runner images, one per all-thread Landlock path: below ABI 8
     # go-landlock applies no_new_privs and landlock_restrict_self on every
     # thread through libcap/psx (the production path on Debian 13, ABI 6);
-    # from ABI 8 it uses LANDLOCK_RESTRICT_SELF_TSYNC. Both images' kernels
-    # now report ABI 8, so the psx entry runs its tests as the
+    # from ABI 8 it uses LANDLOCK_RESTRICT_SELF_TSYNC. ubuntu-24.04 runners
+    # now report ABI 7 or ABI 8, so the psx entry runs its tests as the
     # landlock_forcepsx test build: the sandbox plans as at ABI 7 and applies
-    # through psx (internal/gate/sandbox/threadpath_forcepsx.go; never
-    # released, scripts/release-binary-check.sh). Each entry requires its
-    # ABI, so the kernel-dependent tests fail rather than skip, and asserts
-    # which path it took.
+    # through psx on either kernel (internal/gate/sandbox/threadpath_forcepsx.go;
+    # never released, scripts/release-binary-check.sh). The tsync entry also
+    # runs the sandbox and gate tests under that tag, on its ABI 8 kernel.
+    # Each entry requires its ABI, so the kernel-dependent tests fail rather
+    # than skip, and asserts which path it took.
     name: go (fmt, vet, lint, test, vuln, build) — ${{ matrix.image }}, Landlock ABI ${{ matrix.abi }} (${{ matrix.path }}${{ matrix.tags && ', forced' || '' }})
     runs-on: ${{ matrix.image }}
     timeout-minutes: 20
@@ -109,6 +110,22 @@ jobs:
         run: |
           go test -race -timeout 20m -count=1 -v -tags "$TEST_TAGS" ./... 2>&1 | tee /tmp/go-test.log
           test "${PIPESTATUS[0]}" -eq 0
+      # The forced-psx build on an ABI 8 kernel, every run: the psx entry's
+      # runner may have ABI 7 or 8. Only an ABI 8 kernel shows that the forced
+      # build requests nothing above ABI 7 (it would accept scoping silently)
+      # and still enforces, so the step fails unless the kernel reported 8+.
+      - name: go test -race (landlock_forcepsx on this ABI 8 kernel)
+        if: matrix.tags == ''
+        env:
+          SHELL_MCP_REQUIRE_SECURE_TMP: "1"
+          SHELL_MCP_REQUIRE_LANDLOCK_ABI: "7"
+          SHELL_MCP_EXPECT_LANDLOCK_PATH: psx
+          SHELL_MCP_REQUIRE_MPTCP: "1"
+        run: |
+          go test -race -timeout 20m -count=1 -v -tags landlock_forcepsx ./internal/gate/sandbox/ ./cmd/shell-mcp-gate/ 2>&1 | tee /tmp/go-test-forcepsx.log
+          test "${PIPESTATUS[0]}" -eq 0
+          grep -E 'LANDLOCK_PATH=psx kernel_abi=([89]|[1-9][0-9]) effective_abi=7' /tmp/go-test-forcepsx.log ||
+            { echo "the forced-psx build did not run on a kernel at Landlock ABI 8 or above" >&2; exit 1; }
       # The end-to-end test build skips fsx's forbidden-root check, so these
       # tests prove the built-in read deny list refuses on its own.
       - name: go test -race (test build, fsx)
@@ -140,8 +157,14 @@ jobs:
             echo "- build tags: ${{ matrix.tags || 'none (release build)' }}"
             echo "- Landlock path exercised: $(grep -o 'LANDLOCK_PATH=[a-z]* kernel_abi=[0-9]* effective_abi=[0-9]*' /tmp/go-test.log | head -n1) (expected ${{ matrix.path }}, ABI ${{ matrix.abi }})"
             echo '```'
-            grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|LandlockThreadPath|ThreadPathDecision|Integration(Sandbox|Swap|ExecLimits|GitPull|ServiceOps|SystemOps)|RequiredRefused|BestEffort)' /tmp/go-test.log || true
+            grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|AddPath|LandlockThreadPath|ThreadPathDecision|Integration(Sandbox|Swap|ExecLimits|GitPull|ServiceOps|SystemOps)|RequiredRefused|BestEffort)' /tmp/go-test.log || true
             echo '```'
+            if [ -f /tmp/go-test-forcepsx.log ]; then
+              echo "- landlock_forcepsx on this kernel: $(grep -o 'LANDLOCK_PATH=[a-z]* kernel_abi=[0-9]* effective_abi=[0-9]*' /tmp/go-test-forcepsx.log | head -n1) (expected psx, kernel ABI 8+, planned 7)"
+              echo '```'
+              grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|AddPath|LandlockThreadPath|ThreadPathDecision|IntegrationSandbox)' /tmp/go-test-forcepsx.log || true
+              echo '```'
+            fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: govulncheck
         run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
