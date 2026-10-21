@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -176,10 +177,32 @@ func (d *Deps) call(ctx context.Context, target, op string, args any, budget tim
 		return nil, envelope.Errorf(envelope.CodeTargetUnreachable, "no SSH client for the target")
 	}
 	resp, err := d.Gate.Call(ctx, o, op, ceiling.String(), args, budget)
+	// A privileged request that can change the host runs only once approved
+	// (D-006). A timeout of it, or an answer lost after it was sent, leaves
+	// its outcome unknown, and says so (handoff must-fix (b)).
+	mayChange := strings.HasPrefix(op, "priv_") && protocol.PrivMayChange(op, ceiling.String())
 	if err != nil {
-		return nil, envelope.AsError(err)
+		e := envelope.AsError(err)
+		if mayChange && gateclient.RequestSent(err) {
+			return nil, outcomeUnknown(e.Message)
+		}
+		return nil, e
+	}
+	if mayChange && !resp.OK && resp.Error != nil && resp.Error.Code == protocol.CodeTimeout {
+		r, e := *resp, *resp.Error
+		e.Message = outcomeUnknown(e.Message).Message
+		r.Error = &e
+		return &r, nil
 	}
 	return resp, nil
+}
+
+// outcomeUnknown is the timeout of a privileged request that can change the
+// host, with what the server knows of its cause last (a message is cut at
+// envelope.MaxMessageBytes).
+func outcomeUnknown(cause string) *envelope.Error {
+	return envelope.Errorf(envelope.CodeTimeout, "Outcome unknown: the operation may have completed on the host, so check there "+
+		"(preview again, or read the helper's journal and the backups) before retrying; the approval was used, so a retry needs a new approval. Cause: %s", cause)
 }
 
 func (d *Deps) budget() time.Duration {

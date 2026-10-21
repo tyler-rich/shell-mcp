@@ -697,6 +697,26 @@
     "requires_user_interaction": true
   },
   {
+    "name": "shell_priv_run_command",
+    "title": "Run command as root",
+    "tier": "destructive",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Run command as root"
+    },
+    "description": "Runs, as root, a command declared in the host's privileged policy with arguments matching one of its templates, exactly as its preview resolved it and in the unit it named, and returns its exit status and redacted, size-capped output.",
+    "input_schema_sha256": "4b33128aabec2db14e21ab2e50b11dba9569d4a22b4c36f9f3235ce273a942c0",
+    "output_schema_sha256": "902ef605c4c66f3dafc616c51ea84be4dc924f3a23a42fbee5d93d6921f631e6",
+    "requires_user_interaction": true
+  },
+  {
     "name": "shell_priv_set_permissions",
     "title": "Set permissions as root",
     "tier": "operator",

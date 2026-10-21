@@ -717,7 +717,7 @@ func runCommand(d *Deps, tier Tier) Tool {
 			if in.MaxOutputBytes != nil {
 				w.MaxOutputBytes = *in.MaxOutputBytes
 			}
-			return d.runExec(ctx, in.Target, &w, in.timeoutArg, in.outputArg)
+			return d.runExec(ctx, protocol.OpExec, in.Target, &w, in.timeoutArg, in.outputArg)
 		},
 		approvalArgs: func(in runCommandIn) any {
 			args := in.Args

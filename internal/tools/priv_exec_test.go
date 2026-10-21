@@ -215,9 +215,15 @@ func TestPrivRunCommandNoRetryOnWrongUnit(t *testing.T) {
 // approval_invalid, and nothing runs.
 func TestPrivRunCommandChangedAfterApproval(t *testing.T) {
 	for name, change := range map[string]func(a *approvalHarness){
-		"hash":   func(a *approvalHarness) { a.g.set("priv_exec_preview", gateReply{data: fakePrivExecPreview(shaPX2, "operator", "core")}) },
-		"unit":   func(a *approvalHarness) { a.g.set("priv_exec_preview", gateReply{data: fakePrivExecPreview(shaPX, "operator", "broad")}) },
-		"tier":   func(a *approvalHarness) { a.g.set("priv_exec_preview", gateReply{data: fakePrivExecPreview(shaPX, "destructive", "core")}) },
+		"hash": func(a *approvalHarness) {
+			a.g.set("priv_exec_preview", gateReply{data: fakePrivExecPreview(shaPX2, "operator", "core")})
+		},
+		"unit": func(a *approvalHarness) {
+			a.g.set("priv_exec_preview", gateReply{data: fakePrivExecPreview(shaPX, "operator", "broad")})
+		},
+		"tier": func(a *approvalHarness) {
+			a.g.set("priv_exec_preview", gateReply{data: fakePrivExecPreview(shaPX, "destructive", "core")})
+		},
 		"helper": func(a *approvalHarness) { a.g.setHelperSHA("f00d") },
 		"gate":   func(a *approvalHarness) { a.g.setSHA("f00d") },
 	} {
