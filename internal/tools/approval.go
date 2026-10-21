@@ -139,6 +139,9 @@ type preview struct {
 	// tier is the tier of the operation the preview resolved, when the
 	// tool's gating follows it (spec.tierFromPreview); 0 otherwise.
 	tier Tier
+	// unit is the helper unit a privileged command's preview reported
+	// (priv_exec_preview), where priv_exec is sent; "" otherwise.
+	unit string
 }
 
 // policyAcc collects the policy hashes of a preview's requests.
@@ -259,9 +262,13 @@ func approveCall[In, Out any](ctx context.Context, d *Deps, s spec[In, Out], req
 		if err := errors.Join(err1, err2, err3); err != nil {
 			return envelope.Failure[Out](tg.Name, envelope.Errorf("internal", "the preview could not be encoded")), "", ""
 		}
+		desc := s.describe(in, tg.Name)
+		if s.describePreview != nil {
+			desc = s.describePreview(in, tg.Name, p)
+		}
 		rec, created, err := d.Approvals.RequestNew(&approval.Request{
 			Binding: b, PreviewSHA256: ph, PolicySHA256: p.policy, ToolTitle: s.title, TargetHost: tg.Host,
-			Description: s.describe(in, tg.Name), Args: argFields, Preview: prevFields,
+			Description: desc, Args: argFields, Preview: prevFields,
 		})
 		switch {
 		case errors.Is(err, approval.ErrTooManyPending):

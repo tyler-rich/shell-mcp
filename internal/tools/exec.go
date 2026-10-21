@@ -123,7 +123,7 @@ func runReadCommand(d *Deps) Tool {
 			if in.MaxOutputBytes != nil {
 				w.MaxOutputBytes = *in.MaxOutputBytes
 			}
-			return d.runExec(ctx, in.Target, &w, in.timeoutArg, in.outputArg)
+			return d.runExec(ctx, protocol.OpExec, in.Target, &w, in.timeoutArg, in.outputArg)
 		},
 	})
 }
@@ -137,10 +137,11 @@ func (w *execArgsWire) normalize() {
 	}
 }
 
-// runExec sends one exec request at the ceiling the context carries and
-// shapes the result: output redacted and capped to the tool's limit, the
-// exit status in the envelope's exec block. A non-zero exit is a success.
-func (d *Deps) runExec(ctx context.Context, target string, w execRequest, ta timeoutArg, oa outputArg) envelope.Envelope[CommandOutput] {
+// runExec sends one exec or priv_exec request (op) at the ceiling the
+// context carries and shapes the result: output redacted and capped to the
+// tool's limit, the exit status in the envelope's exec block. A non-zero
+// exit is a success.
+func (d *Deps) runExec(ctx context.Context, op, target string, w execRequest, ta timeoutArg, oa outputArg) envelope.Envelope[CommandOutput] {
 	budget, e := d.timeoutFor(ta)
 	if e != nil {
 		return envelope.Failure[CommandOutput](target, e)
@@ -150,7 +151,7 @@ func (d *Deps) runExec(ctx context.Context, target string, w execRequest, ta tim
 		return envelope.Failure[CommandOutput](target, e)
 	}
 	w.normalize()
-	ex := fetch[execWire](ctx, d, target, protocol.OpExec, w, budget)
+	ex := fetch[execWire](ctx, d, target, op, w, budget)
 	if !ex.OK {
 		return envelope.Failure[CommandOutput](ex.Target, ex.Error)
 	}

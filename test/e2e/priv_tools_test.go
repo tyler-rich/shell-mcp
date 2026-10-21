@@ -120,15 +120,16 @@ func fileSHA256(t *testing.T, p string) string {
 	return hex.EncodeToString(s[:])
 }
 
-// TestPrivToolsListed: the read tools (read-only) and the write-class tools
-// of S4c-2 to S4c-5 (destructiveHint, always approval-gated) are in the
-// admin catalogue, and no other privileged tool yet.
+// TestPrivToolsListed: the read tools (read-only) and the write-class
+// tools of S4c-2 to S4c-6 (destructiveHint; approval-gated always, or per
+// command for shell_priv_run_command) are in the admin catalogue, and no
+// other privileged tool yet.
 func TestPrivToolsListed(t *testing.T) {
 	res, err := privServer(t).ListTools(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	writes := "shell_priv_change_owner shell_priv_copy_path shell_priv_delete_path shell_priv_make_directory shell_priv_move_path shell_priv_restore_backup shell_priv_set_permissions shell_priv_write_file"
+	writes := "shell_priv_change_owner shell_priv_copy_path shell_priv_delete_path shell_priv_make_directory shell_priv_move_path shell_priv_restore_backup shell_priv_run_command shell_priv_set_permissions shell_priv_write_file"
 	var got []string
 	for _, tool := range res.Tools {
 		if strings.HasPrefix(tool.Name, "shell_priv_") {
@@ -144,7 +145,7 @@ func TestPrivToolsListed(t *testing.T) {
 			}
 		}
 	}
-	if want := "shell_priv_change_owner shell_priv_copy_path shell_priv_delete_path shell_priv_list_backups shell_priv_list_directory shell_priv_make_directory shell_priv_move_path shell_priv_preview_delete shell_priv_read_file shell_priv_restore_backup shell_priv_set_permissions shell_priv_stat_path shell_priv_write_file"; strings.Join(got, " ") != want {
+	if want := "shell_priv_change_owner shell_priv_copy_path shell_priv_delete_path shell_priv_list_backups shell_priv_list_directory shell_priv_make_directory shell_priv_move_path shell_priv_preview_delete shell_priv_read_file shell_priv_restore_backup shell_priv_run_command shell_priv_set_permissions shell_priv_stat_path shell_priv_write_file"; strings.Join(got, " ") != want {
 		t.Fatalf("privileged tools %v, want %s", got, want)
 	}
 }

@@ -44,6 +44,9 @@ type gateReply struct {
 	noID     bool
 	// noHelper answers a priv_* op without the helper block (an older gate).
 	noHelper bool
+	// silent reads the request and closes the session without an answer
+	// (the connection lost after the request was sent).
+	silent bool
 }
 
 // recordingGate answers each op from replies and records every request.
@@ -79,6 +82,9 @@ func (g *recordingGate) exec(_ context.Context, s *sshtest.Session) uint32 {
 	g.mu.Unlock()
 	if !ok {
 		r = gateReply{code: "unknown_op", msg: "no reply for " + req.Op}
+	}
+	if r.silent {
+		return 0
 	}
 	id := req.ID
 	if r.noID {

@@ -97,6 +97,7 @@ func TestRouting(t *testing.T) {
 		"priv_delete":              {`{"path":"/etc/example-app/x"}`, "core"},
 		"priv_delete_preview":      {`{"path":"/etc/example-app/x","recursive":true}`, "core"},
 		"priv_restore_preview":     {`{"id":"20261019T120000Z-0123456789abcdef"}`, "core"},
+		"priv_exec_preview":        {`{"command_id":"renew","args":[]}`, "core"},
 		"priv_exec":                {`{"command_id":"probe","args":[]}`, "core"},
 		"priv_exec/core":           {`{"command_id":"probe","args":[],"unit":"core"}`, "core"},
 		"priv_exec/broad":          {`{"command_id":"renew","args":[],"unit":"broad"}`, "broad"},
@@ -113,7 +114,7 @@ func TestRouting(t *testing.T) {
 			f := newFixture(t, "destructive")
 			startTwoHelpers(t, f, bothSockets)
 			name := op
-			if i := len("priv_exec"); len(op) > i && op[:i] == "priv_exec" {
+			if i := len("priv_exec/"); len(op) > i && op[:i] == "priv_exec/" {
 				name = "priv_exec"
 			}
 			r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"` + name + `","args":` + c.args + `,"timeout_ms":2000}` + "\n")

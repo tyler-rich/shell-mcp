@@ -93,6 +93,23 @@ func main() {
 		pid := spawn("sleep", args[0])
 		fmt.Println(pid)
 		sleep(args[0])
+	case "detach":
+		// A grandchild in a session of its own (setsid: outside this
+		// process's group), with no stdio, that ignores SIGTERM ("linger");
+		// then this process ignores SIGTERM and sleeps too.
+		self, _ := os.Executable()
+		cmd := exec.Command(self, "linger", args[0])
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		if err := cmd.Start(); err != nil {
+			fmt.Println("spawn failed:", err)
+			os.Exit(1)
+		}
+		fmt.Println(cmd.Process.Pid)
+		signal.Ignore(syscall.SIGTERM)
+		sleep(args[0])
+	case "linger":
+		signal.Ignore(syscall.SIGTERM)
+		sleep(args[0])
 	case "orphan":
 		// A grandchild that inherits stdout and outlives this process.
 		pid := spawn("sleep", args[0])

@@ -88,6 +88,11 @@ const (
 	// CodeHelperWrongUnit: the operation belongs to the other unit's helper
 	// instance (core or broad); it was not executed.
 	CodeHelperWrongUnit = "helper_wrong_unit"
+	// CodeOutcomeUnknown: a privileged request that can change the host
+	// (PrivMayChange) may or may not have run, in whole or in part: its
+	// answer was lost after it was sent, or its command was stopped
+	// mid-run (handoff must-fix (b)). Never a refusal.
+	CodeOutcomeUnknown = "outcome_unknown"
 )
 
 // Codes lists every gate error code.
@@ -99,7 +104,7 @@ var Codes = []string{
 	CodeVerifyFailed, CodeInstallInsecure, CodeInternal,
 	CodeHelperInstallInsecure, CodeHelperPolicyInvalid, CodeHelperPolicyMismatch,
 	CodeHelperClientUIDMismatch, CodeHelperCapabilitiesBroad, CodeHelperSandboxUnavailable,
-	CodeHelperWrongUnit,
+	CodeHelperWrongUnit, CodeOutcomeUnknown,
 }
 
 // Gate operations (ARCHITECTURE §4.3).
@@ -173,7 +178,34 @@ const (
 	// OpPrivRestorePreview reports what a restore would do, with the hash
 	// priv_restore_backup requires (handoff P-2c, P-10; core).
 	OpPrivRestorePreview = "priv_restore_preview"
+	// OpPrivExecPreview resolves a privileged command exactly as priv_exec
+	// would, runs nothing, and reports the command's unit, with the hash
+	// priv_exec requires for an operator or destructive command (handoff
+	// P-2d; core, for commands of either unit).
+	OpPrivExecPreview = "priv_exec_preview"
 )
+
+// privReadOps are the read-tier privileged operations, which change nothing
+// on the host. Every other privileged operation can, including one added
+// later until it is listed here.
+var privReadOps = []string{
+	OpPrivReadFile, OpPrivListDir, OpPrivStat, OpPrivListBackups, OpPrivBackupCheck,
+	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview, OpPrivExecPreview,
+	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview,
+}
+
+// PrivMayChange reports whether a privileged request can change the host:
+// every privileged operation but the read-tier ones, and priv_exec above
+// ceiling read (a read command is sent at ceiling read, an operator or
+// destructive one only once approved, at its own tier). An answer lost
+// after such a request was sent leaves its outcome unknown (handoff
+// docs/handoff/S4C-PRIVILEGED.md, must-fix (b)).
+func PrivMayChange(op, ceiling string) bool {
+	if op == OpPrivExec {
+		return ceiling != TierRead
+	}
+	return !slices.Contains(privReadOps, op)
+}
 
 // PrivOps lists every privileged operation.
 var PrivOps = []string{
@@ -181,7 +213,7 @@ var PrivOps = []string{
 	OpPrivChmod, OpPrivCopy, OpPrivMove, OpPrivListBackups, OpPrivRestoreBackup, OpPrivDelete,
 	OpPrivExec, OpPrivPkgUpdateIndex, OpPrivPkgInstall, OpPrivPkgUpgrade, OpPrivPkgRemove,
 	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPower, OpPrivBackupCheck,
-	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview,
+	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview, OpPrivExecPreview,
 }
 
 // Tier names on the wire: a request's ceiling, and max_tier in the gate

@@ -52,7 +52,8 @@ func New(o Options) *Client {
 // operator or destructive: the calling tool's tier) and returns the gate's
 // response, failure or not. budget is sent as timeout_ms; the call gives
 // up budget + Grace after it starts. The error, for transport and protocol
-// failures only, is an *envelope.Error:
+// failures only, holds an *envelope.Error (envelope.AsError), and is marked
+// as sent (RequestSent) when it came after the session started:
 //   - no valid ceiling, or the request over 2 MiB: validation_error, before
 //     anything is sent;
 //   - SSH failures: the sshx codes (target_unreachable, host_key_mismatch,
@@ -109,13 +110,26 @@ func (c *Client) Call(ctx context.Context, o Opener, op, ceiling string, args an
 		_ = stdin.Close()
 	}()
 
+	// From here on the request may have reached the gate: a failure is
+	// marked as sent (RequestSent).
 	select {
 	case <-ctx.Done():
-		return nil, envelope.Errorf(envelope.CodeTimeout, "the gate did not answer within the time budget")
+		return nil, sentError{envelope.Errorf(envelope.CodeTimeout, "the gate did not answer within the time budget")}
 	case r := <-done:
-		return check(ctx, id, r.resp, r.err)
+		resp, err := check(ctx, id, r.resp, r.err)
+		if err != nil {
+			return nil, sentError{envelope.AsError(err)}
+		}
+		return resp, nil
 	}
 }
+
+// sentError is a Call failure after the request may have reached the gate,
+// which may then have run it.
+type sentError struct{ err *envelope.Error }
+
+func (e sentError) Error() string { return e.err.Error() }
+func (e sentError) Unwrap() error { return e.err }
 
 func encode(op, ceiling string, args any, budget time.Duration) (id string, line []byte, err error) {
 	if !slices.Contains(protocol.Ceilings, ceiling) {
@@ -162,6 +176,16 @@ func check(ctx context.Context, id string, resp *protocol.Response, err error) (
 	// An empty id is only accepted on a failure (protocol.DecodeResponse):
 	// a refusal answered before the request was read.
 	return resp, nil
+}
+
+// RequestSent reports whether a Call failed after its request may have
+// reached the gate (no answer, an unreadable one, or the time budget after
+// the session started), so that the gate may have run it: for a request
+// that changes the host, its outcome is unknown. A failure before the
+// session started is not.
+func RequestSent(err error) bool {
+	var s sentError
+	return errors.As(err, &s)
 }
 
 func transportError(err error) error {

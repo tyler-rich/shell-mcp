@@ -80,7 +80,10 @@ func TestMain(m *testing.M) {
 // client is this binary run as another user: it connects to the helper's
 // socket (E2E_SOCKET, default the core unit's) and either sends stdin and
 // prints everything the helper writes ("send"), or holds the connection
-// open without sending ("hold").
+// open without sending ("hold"). "drop" and "half" send stdin and hang up
+// E2E_HANGUP_MS later as a gate would: "drop" closes the connection (a
+// gate that exited or was killed), "half" shuts down its sending side (a
+// gate that stopped waiting) and then prints what the helper writes.
 func client() int {
 	sock := os.Getenv("E2E_SOCKET")
 	if sock == "" {
@@ -100,6 +103,16 @@ func client() int {
 	if _, err := c.Write(in); err != nil {
 		fmt.Println("WRITE:", err)
 		return 3
+	}
+	if mode := os.Getenv("E2E_CLIENT"); mode == "drop" || mode == "half" {
+		ms, _ := strconv.Atoi(os.Getenv("E2E_HANGUP_MS"))
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+		if mode == "drop" {
+			return 0
+		}
+		if uc, ok := c.(*net.UnixConn); ok {
+			_ = uc.CloseWrite()
+		}
 	}
 	_ = c.SetReadDeadline(time.Now().Add(30 * time.Second))
 	out, _ := io.ReadAll(c)
@@ -751,7 +764,9 @@ func TestHelperCapabilityBoundingSet(t *testing.T) {
 		var ex struct {
 			Stdout string `json:"stdout"`
 		}
-		mustGate(t, "priv_exec", map[string]any{"command_id": "probe-signal", "args": []string{"signal", strconv.Itoa(pid)}}, &ex)
+		args := []string{"signal", strconv.Itoa(pid)}
+		hash, _ := execPreviewHash(t, "probe-signal", args)
+		mustGate(t, "priv_exec", map[string]any{"command_id": "probe-signal", "args": args, "expected_preview_sha256": hash}, &ex)
 		return strings.TrimSpace(ex.Stdout)
 	}
 	target := sleeper()
@@ -805,7 +820,9 @@ func TestGateCeilingPrivileged(t *testing.T) {
 		t.Fatalf("a write refused at the gate landed: %v", err)
 	}
 
-	// Control: the same command at ceiling operator runs.
+	// Control: the same command at ceiling operator runs, bound to its
+	// preview as every operator command is (Q14).
+	args["expected_preview_sha256"], _ = execPreviewHash(t, "probe-signal", args["args"].([]string))
 	r, _ = gateAt(t, svcShell, "operator", "priv_exec", args)
 	var ex struct {
 		Stdout string `json:"stdout"`

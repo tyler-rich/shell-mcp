@@ -315,6 +315,10 @@ commands:
     path: /usr/local/bin/example-probe
     tier: read
     templates: [["echo", "{regex:^[a-z-]+\$}"]]
+  - id: probe-root-op
+    path: /usr/local/bin/example-probe
+    tier: operator
+    templates: [["write", "{path:write}"], ["ignore-term", "61s"], ["detach", "62s"]]
   - id: probe-attrs
     path: /usr/local/bin/example-probe
     tier: read
@@ -359,6 +363,11 @@ $2    templates:
       - ["procattrs"]
       - ["ignore-term", "60s"]
       - ["drop-ignore-term", "4200004", "60s"]
+  - id: probe-broad-op
+    path: /usr/local/bin/example-probe
+    tier: operator
+    unit: broad
+    templates: [["write", "{path:write}"], ["ignore-term", "63s"], ["detach", "64s"]]
 power:
   allowed: [reboot]
   acknowledge: "e2e: priv_power is called only with reboot.target and poweroff.target runtime-masked"

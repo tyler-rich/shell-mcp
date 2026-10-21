@@ -78,6 +78,24 @@ func (p Proc) Alive() bool {
 	return ok && start == p.start && state != "Z" && state != "X"
 }
 
+// Reaped reports whether p is gone from /proc altogether: not even a
+// zombie waiting to be reaped (its pid absent, or reused by a process with
+// another start time).
+func (p Proc) Reaped() bool {
+	_, _, start, ok := procStat(p.Pid)
+	return !ok || start != p.start
+}
+
+// WaitReaped reports whether p is gone from /proc (Reaped) within d.
+func (p Proc) WaitReaped(d time.Duration) bool {
+	for deadline := time.Now().Add(d); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if p.Reaped() {
+			return true
+		}
+	}
+	return p.Reaped()
+}
+
 // Parent returns p's parent pid, or 0 once it is gone.
 func (p Proc) Parent() int {
 	_, ppid, start, ok := procStat(p.Pid)

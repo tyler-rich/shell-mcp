@@ -50,8 +50,11 @@ type spec[In, Out any] struct {
 	// to the operation (expected_sha256).
 	approvalArgs func(In) any
 	describe     func(in In, target string) string
-	preview      func(ctx context.Context, in In, target string) (*preview, *envelope.Error)
-	precondition func(in *In, p *preview)
+	// describePreview, when set, writes the description from the preview as
+	// well (shell_priv_run_command: the unit its preview reported).
+	describePreview func(in In, target string, p *preview) string
+	preview         func(ctx context.Context, in In, target string) (*preview, *envelope.Error)
+	precondition    func(in *In, p *preview)
 	// tierFromPreview: whether a call needs approval follows the tier of
 	// the operation its preview resolved (shell_run_command: the command's
 	// tier), not the tool's; the operation then runs at that tier's

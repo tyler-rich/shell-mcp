@@ -110,6 +110,14 @@ type Options struct {
 	DisableCommitReport bool
 	// Now is the clock (backup ids and times).
 	Now func() time.Time
+	// ReapOrphans makes the helper a child subreaper while it runs a
+	// command, and kill and reap every child it still has once the command
+	// has ended (production: true). Tests leave it off: in a test binary,
+	// other tests' processes would be its children too.
+	ReapOrphans bool
+	// ReapHooks replace the child listing and the wait of ReapOrphans, and
+	// skip PR_SET_CHILD_SUBREAPER; tests only.
+	ReapHooks *ReapHooks
 }
 
 // ProductionOptions describes the running process: the unit's client uid
@@ -140,6 +148,7 @@ func ProductionOptions(version, policyPath string) Options {
 		ApplySandbox:   ApplyLandlock,
 		Audit:          os.Stderr,
 		Now:            time.Now,
+		ReapOrphans:    true,
 	}
 }
 
@@ -187,6 +196,15 @@ type server struct {
 	removedTruncated bool
 	// setAside is the entry a delete left set aside (fsx.Error.SetAside).
 	setAside string
+	// conn is the connection the request was read from; priv_exec watches it
+	// for the gate's hang-up while the command runs.
+	conn net.Conn
+	// hungUp reports that the gate hung up while priv_exec ran its command,
+	// or before it started (the audit line records it).
+	hungUp bool
+	// reapErr is why the helper could not confirm that every process a
+	// command started has ended (the audit line records it).
+	reapErr string
 }
 
 // Serve handles one connection and returns the process exit code: 0 when a
@@ -508,7 +526,7 @@ func (s *server) run(nc net.Conn) *protocol.Response {
 		}
 		return failure(protocol.CodeBadRequest, "request could not be decoded")
 	}
-	s.req = req
+	s.req, s.conn = req, nc
 	return s.dispatch()
 }
 

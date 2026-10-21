@@ -237,15 +237,19 @@ func TestCodesClosedSet(t *testing.T) {
 		"helper_sandbox_unavailable",
 		// An operation that reached the other unit's helper instance (the
 		// helper is authoritative for routing).
-		"helper_wrong_unit"}
+		"helper_wrong_unit",
+		// A privileged request that can change the host whose outcome is
+		// unknown (handoff must-fix (b), S4c-6).
+		"outcome_unknown"}
 	if !slices.Equal(Codes, want) {
 		t.Fatalf("Codes = %v", Codes)
 	}
 	// PRIVILEGED §6: the core operations, priv_exec, the four package
 	// operations, their three read-tier previews, priv_power,
-	// priv_backup_check (handoff P-11), and the chown and chmod previews
-	// (P-2b).
-	if len(PrivOps) != 26 {
+	// priv_backup_check (handoff P-11), the chown and chmod previews
+	// (P-2b), the delete and restore previews (P-2a, P-2c) and the exec
+	// preview (P-2d).
+	if len(PrivOps) != 27 {
 		t.Fatalf("PrivOps has %d entries", len(PrivOps))
 	}
 }
@@ -341,5 +345,30 @@ func TestDecodeResponse(t *testing.T) {
 	e := &endless{}
 	if _, err := DecodeResponse(e); err == nil || e.n > MaxResponseBytes+64<<10 {
 		t.Fatalf("endless: %v after %d bytes", err, e.n)
+	}
+}
+
+func TestPrivMayChange(t *testing.T) {
+	for _, c := range []struct {
+		op, ceiling string
+		want        bool
+	}{
+		{OpPrivStat, TierDestructive, false},
+		{OpPrivReadFile, TierRead, false},
+		{OpPrivExecPreview, TierDestructive, false},
+		{OpPrivDeletePreview, TierDestructive, false},
+		{OpPrivPkgInstallPreview, TierOperator, false},
+		{OpPrivWriteFile, TierOperator, true},
+		{OpPrivDelete, TierDestructive, true},
+		{OpPrivRestoreBackup, TierOperator, true},
+		{OpPrivPower, TierDestructive, true},
+		{OpPrivExec, TierRead, false},
+		{OpPrivExec, TierOperator, true},
+		{OpPrivExec, TierDestructive, true},
+		{"priv_unknown", TierRead, true},
+	} {
+		if got := PrivMayChange(c.op, c.ceiling); got != c.want {
+			t.Errorf("PrivMayChange(%s, %s) = %v, want %v", c.op, c.ceiling, got, c.want)
+		}
 	}
 }

@@ -321,3 +321,56 @@ func wantError(t *testing.T, err error, code string) *envelope.Error {
 	errors.As(err, &e)
 	return e
 }
+
+// TestRequestSent: a failure after the request may have reached the gate
+// (no answer, an unreadable one, the time budget) is marked as sent, so a
+// caller can report a lost answer to a request that changes the host as an
+// unknown outcome; a failure before anything was sent is not.
+func TestRequestSent(t *testing.T) {
+	silent, _ := target(t, func(_ context.Context, s *sshtest.Session) uint32 {
+		_, _ = protocol.DecodeRequest(s.Stdin)
+		return 0
+	}, 1)
+	_, err := newClient().Call(t.Context(), silent, protocol.OpPrivExec, "operator", nil, time.Second)
+	wantCode(t, err, envelope.CodeGateUnavailable)
+	if !RequestSent(err) {
+		t.Fatal("no answer after the request: not marked as sent")
+	}
+	garbled, _ := target(t, gate(func(*protocol.Request) string { return "nope\n" }), 1)
+	if _, err = newClient().Call(t.Context(), garbled, protocol.OpPrivExec, "operator", nil, time.Second); !RequestSent(err) {
+		t.Fatalf("an unreadable answer: not marked as sent (%v)", err)
+	}
+	slow, _ := target(t, func(ctx context.Context, s *sshtest.Session) uint32 {
+		_, _ = io.Copy(io.Discard, s.Stdin)
+		<-ctx.Done()
+		return 0
+	}, 1)
+	cl := New(Options{Logger: slog.New(slog.DiscardHandler), Grace: 100 * time.Millisecond})
+	_, err = cl.Call(t.Context(), slow, protocol.OpPrivExec, "operator", nil, 100*time.Millisecond)
+	wantCode(t, err, envelope.CodeTimeout)
+	if !RequestSent(err) {
+		t.Fatal("the time budget after the request: not marked as sent")
+	}
+	// Nothing was sent: an oversized request, an unreachable target.
+	ok, _ := target(t, gate(okFor), 1)
+	_, err = newClient().Call(t.Context(), ok, protocol.OpWriteFile, "operator", map[string]string{"content_b64": strings.Repeat("A", protocol.MaxRequestBytes)}, time.Second)
+	if RequestSent(err) {
+		t.Fatal("an oversized request was marked as sent")
+	}
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().(*net.TCPAddr)
+	_ = ln.Close()
+	hk := sshtest.Ed25519(t)
+	p, _ := config.ParseHostKeyPin(sshtest.Pin(hk))
+	dead, err := sshx.New(&config.Target{Name: "app-host", Host: "127.0.0.1", Port: addr.Port, User: "svc-shell",
+		HostKeys: []config.HostKey{p}, Key: config.PrivateKeyFromSigner(sshtest.Ed25519(t))}, sshx.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = newClient().Call(t.Context(), dead, protocol.OpPrivExec, "operator", nil, time.Second); RequestSent(err) {
+		t.Fatal("an unreachable target was marked as sent")
+	}
+}
