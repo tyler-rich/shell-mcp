@@ -63,7 +63,10 @@ type execData struct {
 }
 
 // resolver resolves {path:read} and {path:write} against the privileged
-// roots; the privileged policy declares no units.
+// roots, under the chain rule (fsx.Config.GuardExecPaths, handoff N-10):
+// the command looks the resolved path up again itself, as root, so only a
+// path whose directories from / to its parent no account but root can
+// change is given to it. The privileged policy declares no units.
 type resolver struct{ s *server }
 
 func (r resolver) ResolvePath(v string, write bool) (string, error) {
@@ -99,7 +102,10 @@ type resolvedExec struct {
 // either unit); the command's tier against max_tier and the request's
 // ceiling, before anything else about the request; the template its
 // arguments match, with {path:read} and {path:write} resolved under the
-// privileged roots; and the working directory.
+// privileged roots; and the working directory. Placeholders and the working
+// directory are refused (path_denied) unless every directory from / to
+// their parent is closed (N-10), so the preview requests no approval for a
+// path priv_exec would refuse.
 func (s *server) resolveExec(id string, args []string, cwd string, unitOK func(*policy.Command) error) (*resolvedExec, error) {
 	c, ok := s.p.Command(id)
 	if !ok {

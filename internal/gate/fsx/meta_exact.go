@@ -228,6 +228,8 @@ func (l *loc) chainDirName(rp string) string {
 		return "the directory " + join(l.root, pathx.Rel(l.rootReal, rp))
 	case l.rootReal == l.root:
 		return "the directory " + rp
+	case !l.write:
+		return "a directory above the root"
 	}
 	return "a directory above the write root"
 }
@@ -250,7 +252,7 @@ func chainCheck(rp string, check func(dir string, id *ident) error) (ident, erro
 	for i := 0; ; i++ {
 		id, err := statxAt(fd, "", unix.AT_EMPTY_PATH)
 		if err == nil && id.mask&statxMeta != statxMeta {
-			err = errf(protocol.CodeBadRequest, "the kernel did not report the owner and mode (statx) that chmod and chown need; nothing was changed")
+			err = errf(protocol.CodeBadRequest, "the kernel did not report the owner and mode (statx) that the helper checks on a path; nothing was done")
 		}
 		if err == nil {
 			err = check(cur, &id)

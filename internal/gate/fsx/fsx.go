@@ -122,9 +122,12 @@ type Config struct {
 	// owner and group only when owner-matched. The helper sets it; the gate
 	// does not.
 	GuardMovedIn bool
-	// GuardExecPaths: ResolveRead, ResolveWrite and ResolveDir return a path
-	// only when every directory from / to its parent is closed (handoff
-	// N-10). Not yet applied.
+	// GuardExecPaths applies the chain rule to the paths a root command is
+	// given (handoff N-10; exec_chain.go): ResolveRead, ResolveWrite and
+	// ResolveDir return a path only when every directory from / to its
+	// parent, by descriptor, is owned by a uid TrustedDirOwner accepts and is
+	// neither group- nor world-writable, since the command looks the string
+	// up again itself. The helper sets it; the gate does not.
 	GuardExecPaths bool
 	// InjectMetaStep, when non-nil, is called at each point of ApplyMeta's
 	// pass with the logical path of the entry concerned (the target's for
