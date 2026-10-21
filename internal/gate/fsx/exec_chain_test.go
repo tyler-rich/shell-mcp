@@ -31,7 +31,7 @@ type execChainEnv struct {
 
 // newExecChainEnv makes <d>/x/w, a read and write root under its own
 // ancestor <d>/x (both 0755), with the helper's settings.
-func newExecChainEnv(t *testing.T, guard bool) *execChainEnv {
+func newExecChainEnv(t *testing.T) *execChainEnv {
 	t.Helper()
 	d := gatetest.SecureDir(t)
 	e := &execChainEnv{d: d, anc: filepath.Join(d, "x"), root: filepath.Join(d, "x", "w")}
@@ -46,7 +46,7 @@ func newExecChainEnv(t *testing.T, guard bool) *execChainEnv {
 		Protected:       empty,
 		Limits:          Limits{MaxReadBytes: 1 << 20, MaxWriteBytes: 1 << 20, MaxFindResults: 100, MaxFindDepth: 8, MaxDeleteEntries: 20},
 		TrustedDirOwner: trust.Owns,
-		GuardExecPaths:  guard,
+		GuardExecPaths:  true,
 	})
 	return e
 }
@@ -70,7 +70,7 @@ func TestResolveExecChain(t *testing.T) {
 		// A sticky directory counts as open, writable or not.
 		for _, mode := range []os.FileMode{0o775, 0o777, os.ModeSticky | 0o777, os.ModeSticky | 0o775, os.ModeSticky | 0o755} {
 			t.Run(fmt.Sprintf("%s %v", lvl, mode), func(t *testing.T) {
-				e := newExecChainEnv(t, true)
+				e := newExecChainEnv(t)
 				a := filepath.Join(e.root, "a")
 				b := filepath.Join(a, "b")
 				mkdirMode(t, b, 0o755)
@@ -109,7 +109,7 @@ func TestResolveExecChain(t *testing.T) {
 					}
 				}
 				// The gate (no GuardExecPaths) resolves as before.
-				gate := newExecChainEnvAt(t, e, false)
+				gate := gateFS(t, e)
 				if _, err := gate.ResolveRead(file); err != nil {
 					t.Fatalf("the gate's resolution changed: %v", err)
 				}
@@ -118,8 +118,8 @@ func TestResolveExecChain(t *testing.T) {
 	}
 }
 
-// newExecChainEnvAt is e's layout with another FS.
-func newExecChainEnvAt(t *testing.T, e *execChainEnv, guard bool) *FS {
+// gateFS is e's layout with the gate's configuration (no GuardExecPaths).
+func gateFS(t *testing.T, e *execChainEnv) *FS {
 	t.Helper()
 	empty, err := pathx.NewMatcher(nil)
 	must(t, err)
@@ -127,7 +127,7 @@ func newExecChainEnvAt(t *testing.T, e *execChainEnv, guard bool) *FS {
 	return New(&Config{
 		WriteRoots: []string{e.root}, Deny: empty, Protected: empty,
 		Limits:          Limits{MaxReadBytes: 1 << 20, MaxWriteBytes: 1 << 20, MaxFindResults: 100, MaxFindDepth: 8, MaxDeleteEntries: 20},
-		TrustedDirOwner: trust.Owns, GuardExecPaths: guard,
+		TrustedDirOwner: trust.Owns,
 	})
 }
 
@@ -135,7 +135,7 @@ func newExecChainEnvAt(t *testing.T, e *execChainEnv, guard bool) *FS {
 // chain of its own ancestors, and refuses when one is open; it is a
 // directory target, so it refuses when it is open itself.
 func TestResolveExecChainRootItself(t *testing.T) {
-	e := newExecChainEnv(t, true)
+	e := newExecChainEnv(t)
 	for k, err := range e.resolveAll(e.root, true) {
 		if err != nil {
 			t.Fatalf("closed chain, %s: %v", k, err)
@@ -166,7 +166,7 @@ func TestResolveExecChainRootItself(t *testing.T) {
 func TestResolveExecDirTarget(t *testing.T) {
 	for _, mode := range []os.FileMode{0o775, 0o777, os.ModeSticky | 0o777, os.ModeSticky | 0o755} {
 		t.Run(mode.String(), func(t *testing.T) {
-			e := newExecChainEnv(t, true)
+			e := newExecChainEnv(t)
 			dir := filepath.Join(e.root, "d")
 			mkdirMode(t, dir, 0o755)
 			file := filepath.Join(e.root, "f")
@@ -189,7 +189,7 @@ func TestResolveExecDirTarget(t *testing.T) {
 				}
 			}
 			// The gate (no GuardExecPaths) resolves as before.
-			if _, err := newExecChainEnvAt(t, e, false).ResolveDir(dir); err != nil {
+			if _, err := gateFS(t, e).ResolveDir(dir); err != nil {
 				t.Fatalf("the gate's resolution changed: %v", err)
 			}
 		})
@@ -203,7 +203,7 @@ func TestResolveExecChainOwner(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("needs an unprivileged uid")
 	}
-	e := newExecChainEnv(t, true)
+	e := newExecChainEnv(t)
 	file := filepath.Join(e.root, "t")
 	putMode(t, file, "t\n", 0o644)
 	e.fs.cfg.TrustedDirOwner = func(uid uint32) bool { return uid == 0 }

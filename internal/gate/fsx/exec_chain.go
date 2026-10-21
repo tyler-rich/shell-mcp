@@ -70,11 +70,11 @@ func (f *FS) execChain(l *loc, target *os.File) error {
 	}
 	defer func() { _ = hf.Close() }()
 	err = withFD(hf, func(hfd int) error {
-		want, err := statxAt(hfd, "", unix.AT_EMPTY_PATH)
-		if err != nil {
-			return mapErr(err)
+		want, serr := statxAt(hfd, "", unix.AT_EMPTY_PATH)
+		if serr != nil {
+			return mapErr(serr)
 		}
-		last, err := chainCheck(dir, func(cur string, id *ident) error {
+		last, cerr := chainCheck(dir, func(cur string, id *ident) error {
 			if l.parent == nil && cur == dir {
 				return nil // the root itself: checked below as the target
 			}
@@ -85,8 +85,8 @@ func (f *FS) execChain(l *loc, target *os.File) error {
 			}
 			return nil
 		})
-		if err != nil {
-			return err
+		if cerr != nil {
+			return cerr
 		}
 		if !last.sameObject(&want) {
 			return errf(protocol.CodePathDenied, "the path changed while it was checked; nothing was run")

@@ -849,12 +849,12 @@ func (f *FS) ResolveWrite(p string) (string, error) {
 	var file *os.File // the target as opened; nil when it does not exist yet
 	exists := true
 	if l.parent != nil {
-		fi, err := l.parent.Lstat(l.base)
+		fi, lerr := l.parent.Lstat(l.base)
 		switch {
-		case errors.Is(err, fs.ErrNotExist):
+		case errors.Is(lerr, fs.ErrNotExist):
 			exists = false
-		case err != nil:
-			return "", mapErr(err)
+		case lerr != nil:
+			return "", mapErr(lerr)
 		case fi.Mode()&fs.ModeSymlink != 0:
 			return "", errf(protocol.CodePathDenied, "final path component is a symlink")
 		}
