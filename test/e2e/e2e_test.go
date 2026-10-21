@@ -764,7 +764,9 @@ func TestHelperCapabilityBoundingSet(t *testing.T) {
 		var ex struct {
 			Stdout string `json:"stdout"`
 		}
-		mustGate(t, "priv_exec", map[string]any{"command_id": "probe-signal", "args": []string{"signal", strconv.Itoa(pid)}}, &ex)
+		args := []string{"signal", strconv.Itoa(pid)}
+		hash, _ := execPreviewHash(t, "probe-signal", args)
+		mustGate(t, "priv_exec", map[string]any{"command_id": "probe-signal", "args": args, "expected_preview_sha256": hash}, &ex)
 		return strings.TrimSpace(ex.Stdout)
 	}
 	target := sleeper()
@@ -818,7 +820,9 @@ func TestGateCeilingPrivileged(t *testing.T) {
 		t.Fatalf("a write refused at the gate landed: %v", err)
 	}
 
-	// Control: the same command at ceiling operator runs.
+	// Control: the same command at ceiling operator runs, bound to its
+	// preview as every operator command is (Q14).
+	args["expected_preview_sha256"], _ = execPreviewHash(t, "probe-signal", args["args"].([]string))
 	r, _ = gateAt(t, svcShell, "operator", "priv_exec", args)
 	var ex struct {
 		Stdout string `json:"stdout"`

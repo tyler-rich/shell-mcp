@@ -111,7 +111,9 @@ func TestCeilingBoundsExec(t *testing.T) {
 	if r := f.serveAt("read", "priv_exec", m{"command_id": "probe-echo", "args": []string{"echo", "hello"}}); !r.OK {
 		t.Fatalf("read command at ceiling read: %+v", r.Error)
 	}
-	// Control: under ceiling operator the same command runs and writes.
+	// Control: under ceiling operator the same command runs and writes, bound
+	// to its preview as every operator command is (Q14).
+	args["expected_preview_sha256"] = f.execPreview(m{"command_id": "probe-op", "args": []string{"write", marker}}).PreviewSHA256
 	if r := f.serveAt("operator", "priv_exec", args); !r.OK {
 		t.Fatalf("operator command at ceiling operator: %+v", r.Error)
 	}
