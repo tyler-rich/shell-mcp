@@ -34,6 +34,7 @@ func dirCases(dir string) []chainCase {
 // {path:write} is refused by the preview and by priv_exec in either
 // instance, with the same message naming it, and nothing runs.
 func TestPrivExecDirTargetRefused(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, chainCommands())
 	_, root := chainRoot(f)
 	dir := filepath.Join(root, "a", "d")
@@ -70,6 +71,7 @@ func TestPrivExecDirTargetRefused(t *testing.T) {
 // and {path:write} is previewed in the core unit and runs with the hash in
 // either unit.
 func TestPrivExecDirTargetClosed(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, chainCommands())
 	_, root := chainRoot(f)
 	dir := filepath.Join(root, "a", "d")
@@ -98,6 +100,7 @@ func TestPrivExecDirTargetClosed(t *testing.T) {
 // previewed and run in each unit with the fresh hash. Every request is
 // refused at the resolution, and the command never reads the file.
 func TestPrivExecDirTargetRace(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, chainCommands())
 	_, root := chainRoot(f)
 	outside := filepath.Join(f.d, "outside")

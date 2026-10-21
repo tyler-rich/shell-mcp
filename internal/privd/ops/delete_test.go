@@ -123,6 +123,7 @@ func (f *fixture) lastAuditDelete() (a auditDelete, line string) {
 }
 
 func TestPrivDeletePreview(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	dir := filepath.Join(f.write, "tree")
 	paths := delTree(t, dir)
@@ -162,6 +163,7 @@ func TestPrivDeletePreview(t *testing.T) {
 // and deletes nothing unless the tree and the privileged policy are what
 // the preview saw.
 func TestPrivDeleteBindsThePreview(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	dir := filepath.Join(f.write, "tree")
 	paths := delTree(t, dir)
@@ -278,6 +280,7 @@ func (f *fixture) refusedPreview(p string, recursive bool, code, msg string, kee
 // operation, changing nothing; plus what cannot be backed up while backups
 // are on.
 func TestPrivDeleteRefusals(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, denyPrivate())
 	conf := filepath.Join(f.write, "app.conf")
 	f.refusedBoth(f.write, true, "path_denied", "root", conf)
@@ -339,6 +342,7 @@ func TestPrivDeleteRefusals(t *testing.T) {
 // keeps the inode and its content (maintainer decision, S4c-4: an unlink
 // changes no inode, so F-2's refusal does not apply, as in the gate).
 func TestPrivDeleteHardLinks(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	outside := filepath.Join(f.d, "outside-link.txt")
 	gatetest.WriteFile(t, outside, "outside\n", 0o600)
@@ -354,6 +358,7 @@ func TestPrivDeleteHardLinks(t *testing.T) {
 // TestPrivDeleteBackupRestorable: every removed entry is in the backup, and
 // the backup restores the tree (and a file) as it was.
 func TestPrivDeleteBackupRestorable(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	dir := filepath.Join(f.write, "tree")
 	delTree(t, dir)
@@ -390,6 +395,7 @@ func TestPrivDeleteBackupRestorable(t *testing.T) {
 // cap, or would exceed 64 MiB, is refused at the preview (no approval is
 // requested) and at the operation, and changes nothing.
 func TestPrivDeleteStoreCap(t *testing.T) {
+	t.Parallel()
 	const capacity = minStore + 1<<20
 	f := newFixture(t, storeCap(capacity))
 	dir := filepath.Join(f.write, "tree")
@@ -444,6 +450,7 @@ func replaceWith(t *testing.T, staging, p, content string) {
 // anything discards its backup (provably unchanged); one that removed
 // entries keeps it, also when the removal was never reported as a commit.
 func TestPrivDeleteFailSafeBackups(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name     string
 		victim   string // replaced before it is checked under its name
@@ -489,6 +496,7 @@ func TestPrivDeleteFailSafeBackups(t *testing.T) {
 // named in the refusal and in the audit line's set_aside, and is never
 // deleted; the backup is kept (the tree changed).
 func TestPrivDeleteSetAside(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	dir := filepath.Join(f.write, "tree")
 	delTree(t, dir)
@@ -525,6 +533,7 @@ func TestPrivDeleteSetAside(t *testing.T) {
 // TestPrivDeleteAuditBounded: the audit line lists at most 100 removed
 // entries, or 32 KiB of them, with the total and removed_truncated.
 func TestPrivDeleteAuditBounded(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, keep(0), replace("max_delete_entries: 20", "max_delete_entries: 200"))
 	many := filepath.Join(f.write, "many")
 	for i := range 150 {
@@ -556,8 +565,12 @@ const delWindowRuns = 200
 // the request (the recompute differs), after the recompute matched, before
 // a file is read for the backup, after the backup was written, and at each
 // step of each entry's removal. Whatever the racer put there survives, in
-// every run, and the backup is kept exactly when entries were removed.
+// every run, and the backup is kept exactly when entries were removed. Each
+// run starts with an empty backup store, as in TestPrivRestoreWindows: the
+// 1600 runs would otherwise leave about 1100 backups behind, which every
+// later request and every count of the store reads again.
 func TestPrivDeleteWindows(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, replace("max_delete_entries: 20", "max_delete_entries: 200"))
 	staging := filepath.Join(f.write, "staging")
 	gatetest.Mkdir(t, staging, 0o755)
@@ -582,6 +595,7 @@ func TestPrivDeleteWindows(t *testing.T) {
 		outcomes[pt.name] = map[string]int{}
 		for i := range delWindowRuns {
 			n++
+			f.clearStore()
 			dir := filepath.Join(f.write, fmt.Sprintf("w%d", n))
 			paths := delTree(t, dir)
 			pv := f.previewDelete(dir, true)
@@ -651,8 +665,11 @@ func TestPrivDeleteWindows(t *testing.T) {
 // delay of up to a whole request's measured duration and then, until the
 // helper answers, keeps creating files in random directories of the tree
 // and replacing random files of the tree by other inodes. Every file it
-// managed to create survives, in every run; the outcomes are counted.
+// managed to create survives, in every run; the outcomes are counted. Each
+// run starts with an empty backup store, so that a request takes as long as
+// the calibration measured.
 func TestPrivDeleteConcurrentRacer(t *testing.T) {
+	t.Parallel()
 	const runs = 400
 	f := newFixture(t, replace("max_delete_entries: 20", "max_delete_entries: 200"))
 	staging := filepath.Join(f.write, "staging")
@@ -682,6 +699,7 @@ func TestPrivDeleteConcurrentRacer(t *testing.T) {
 	counts := map[string]int{}
 	planted := 0
 	for i := range runs {
+		f.clearStore()
 		dir := filepath.Join(f.write, fmt.Sprintf("r%d", i))
 		files := mk(dir)
 		pv := f.previewDelete(dir, true)
@@ -760,6 +778,7 @@ func TestPrivDeleteConcurrentRacer(t *testing.T) {
 // so no commit is reported. The tree is not as the preview saw it (the
 // entry is under its temporary name), so the backup is kept.
 func TestPrivDeleteStopAfterSetAsideKeepsBackup(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	dir := filepath.Join(f.write, "tree")
 	delTree(t, dir)

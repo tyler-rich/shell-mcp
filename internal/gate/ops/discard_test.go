@@ -623,6 +623,7 @@ const discardWindowReps = 6
 // edited in place, an untracked file created, or a file replaced — at every
 // point of a discard, must survive in every run.
 func TestGitDiscardWindow(t *testing.T) {
+	t.Parallel()
 	g := discardRepo(t)
 	type point struct {
 		name    string
@@ -731,6 +732,7 @@ func TestGitDiscardWindow(t *testing.T) {
 // file and creates untracked files until the discard returns, starting
 // after a random delay. Every replacement and every created file survives.
 func TestGitDiscardConcurrentRacer(t *testing.T) {
+	t.Parallel()
 	g := discardRepo(t)
 	victim := filepath.Join(g.repo, "app.conf")
 	const runs = 200

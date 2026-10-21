@@ -106,6 +106,7 @@ func (c *chainCase) req(command, hash string) m {
 // preview and in priv_exec of either unit, with the same message naming the
 // directory, and nothing runs.
 func TestPrivExecChainRefused(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, chainCommands())
 	anc, root := chainRoot(f)
 	a := filepath.Join(root, "a")
@@ -156,6 +157,7 @@ func TestPrivExecChainRefused(t *testing.T) {
 // (the test's uid stands for root), {path:read}, {path:write} and the cwd
 // resolve and run, previewed in the core unit and run in either.
 func TestPrivExecChainClosed(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, chainCommands())
 	_, root := chainRoot(f)
 	b := filepath.Join(root, "a", "b")
@@ -217,6 +219,7 @@ func swapper(t *testing.T, name, alt string, stop <-chan struct{}, wg *sync.Wait
 // fresh preview's hash. Every request is refused at the resolution, and the
 // command never reads or writes the symlink's target.
 func TestPrivExecChainRace(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, chainCommands())
 	_, root := chainRoot(f)
 	outside := filepath.Join(f.d, "outside")

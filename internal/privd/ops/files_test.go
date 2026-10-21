@@ -22,6 +22,7 @@ func modeOf(t *testing.T, p string) os.FileMode {
 }
 
 func TestReads(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	var rr struct {
 		Content string `json:"content"`
@@ -58,6 +59,7 @@ func TestReads(t *testing.T) {
 }
 
 func TestWriteFile(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	p := filepath.Join(f.write, "new.conf")
 	var w struct {
@@ -111,6 +113,7 @@ func TestWriteFile(t *testing.T) {
 }
 
 func TestWriteReadBackFailure(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	f.opts.InjectReadBackFault = func(b []byte) []byte { return append(b, '!') }
 	f.fail("priv_write_file", m{"path": filepath.Join(f.write, "v.conf"), "content_b64": b64("v\n")}, "verify_failed")
@@ -126,6 +129,7 @@ func mustStat(t *testing.T, p string) *syscall.Stat_t {
 }
 
 func TestMkdirChownChmod(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	d := filepath.Join(f.write, "a", "b")
 	f.ok("priv_mkdir", m{"path": d, "parents": true, "mode": "0750", "owner": "tester"}, nil)
@@ -156,6 +160,7 @@ func TestMkdirChownChmod(t *testing.T) {
 }
 
 func TestCopyMoveDelete(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	src := filepath.Join(f.read, "hello.txt")
 	dst := filepath.Join(f.write, "copy.txt")
@@ -212,6 +217,7 @@ func TestCopyMoveDelete(t *testing.T) {
 // the existing file (S4c-0, F-4: an existing 0640 file becomes 0600 under
 // 0700, where it used to stay 0640).
 func TestDefaultModesWithinMask(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, func(_ *fixture, s *string) { *s = strings.Replace(*s, `max: "0755"`, `max: "0700"`, 1) })
 	p := filepath.Join(f.write, "new.conf")
 	f.ok("priv_write_file", m{"path": p, "content_b64": b64("x")}, nil)

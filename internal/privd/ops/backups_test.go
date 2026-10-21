@@ -55,6 +55,7 @@ func sum(s string) string {
 // file per backup, written before the change and recording the original
 // path, owner, mode and SHA-256.
 func TestBackupFormat(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	p := filepath.Join(f.write, "app.conf")
 	var w struct {
@@ -90,6 +91,7 @@ func TestBackupFormat(t *testing.T) {
 // A backup that cannot be written aborts the operation with backup_failed
 // and changes nothing.
 func TestBackupFailureChangesNothing(t *testing.T) {
+	t.Parallel()
 	p := func(f *fixture) string { return filepath.Join(f.write, "app.conf") }
 	for name, breakStore := range map[string]func(f *fixture){
 		"missing store":        func(f *fixture) { _ = os.Remove(f.backups) },
@@ -118,6 +120,7 @@ func TestBackupFailureChangesNothing(t *testing.T) {
 }
 
 func TestBackupsDisabled(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, keep(0))
 	var w struct {
 		BackupIDs []string `json:"backup_ids"`
@@ -130,6 +133,7 @@ func TestBackupsDisabled(t *testing.T) {
 
 // backups.keep versions are kept per path; older ones are removed.
 func TestBackupRetention(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t) // keep: 3
 	p := filepath.Join(f.write, "app.conf")
 	other := filepath.Join(f.write, "other.conf")

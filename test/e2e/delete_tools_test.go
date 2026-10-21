@@ -3,17 +3,13 @@
 package e2e
 
 import (
-	"crypto/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/unix"
-
-	"github.com/tyler-rich/shell-mcp/internal/approval/approvers"
 )
 
 // The delete tools end to end: shell_preview_delete through the operator
@@ -53,24 +49,17 @@ func stillThere(t *testing.T, paths ...string) {
 	}
 }
 
-// deleteLines counts the gate's delete audit lines (not delete_preview)
-// for p since start.
-func deleteLines(t *testing.T, since time.Time, p string) int {
+// deleteLines counts the delete audit lines (not delete_preview) of c's
+// server for p.
+func deleteLines(t *testing.T, c *serverConn, p string) int {
 	t.Helper()
-	n := 0
-	for _, j := range journal(t, "shell-mcp-gate", since) {
-		if strings.Contains(j.Message, `"principal":"`+opsWho+`"`) && strings.Contains(j.Message, `"op":"delete"`) && strings.Contains(j.Message, `"`+p+`"`) {
-			n++
-		}
-	}
-	return n
+	return len(c.gate(t, `"principal":"`+opsWho+`"`, `"op":"delete"`, `"`+p+`"`))
 }
 
 func TestDeleteToolsPreview(t *testing.T) {
 	opsServer(t)
 	dir := opsWork + "/del-preview"
 	files := delTree(t, dir)
-	start := time.Now()
 	t.Run("success", func(t *testing.T) {
 		d := opOK(t, "shell_preview_delete", map[string]any{"path": dir, "recursive": true})
 		sha, _ := d["preview_sha256"].(string)
@@ -83,7 +72,7 @@ func TestDeleteToolsPreview(t *testing.T) {
 		if again["preview_sha256"] != sha {
 			t.Fatal("an unchanged tree previewed with another hash")
 		}
-		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"delete_preview"`, `"ceiling":"read"`, `"outcome":"ok"`)
+		waitLine(t, "shell-mcp-gate", `"principal":"`+opsWho+`"`, `"op":"delete_preview"`, `"ceiling":"read"`, `"outcome":"ok"`, `"`+dir+`"`)
 	})
 	t.Run("refusals", func(t *testing.T) {
 		// A device node (the test runs as root on the runner VM): the gate's sandbox
@@ -128,42 +117,33 @@ func TestDeleteToolsApproval(t *testing.T) {
 			t.Fatalf("connect: %v; server log: %s", err, log.String())
 		}
 		t.Cleanup(func() { _ = cs.Close() })
+		conn := connOf(t, cs)
 		dir := opsWork + "/del-none"
 		files := delTree(t, dir)
-		time.Sleep(1100 * time.Millisecond)
-		since := time.Now()
 		refusal(t, callOn(t, cs, log, "shell_delete_path", map[string]any{"path": dir, "recursive": true}), "approval_unavailable", "")
 		stillThere(t, files...)
 		time.Sleep(time.Second)
-		for _, j := range journal(t, "shell-mcp-gate", since) {
-			if strings.Contains(j.Message, `"principal":"`+opsWho+`"`) && strings.Contains(j.Message, dir) {
-				t.Fatalf("a request reached the gate: %s", j.Message)
-			}
+		for _, j := range conn.gate(t, `"principal":"`+opsWho+`"`, dir) {
+			t.Fatalf("a request reached the gate: %s", j.Message)
 		}
+		conn.same(t)
 	})
 
-	h := &human{seed: make([]byte, 20)}
-	if _, err := rand.Read(h.seed); err != nil {
-		t.Fatal(err)
-	}
-	file := filepath.Join(t.TempDir(), "approvers")
-	if err := os.WriteFile(file, []byte("alice "+approvers.EncodeSeed(h.seed)+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	h := newHuman(t, manyApprovers)
+	file := h.file(t)
 	srv := startApprovalServer(t, h, file, freeLoopbackPort(t), "SHELL_MCP_PROFILE=admin")
 	t.Cleanup(func() { _ = srv.cs.Close() })
+	conn := connOf(t, srv.cs)
 
 	t.Run("approve, delete once, second re-call invalid", func(t *testing.T) {
 		dir := opsWork + "/del-approved"
 		files := delTree(t, dir)
-		time.Sleep(1100 * time.Millisecond)
-		start := time.Now()
 		args := map[string]any{"path": dir, "recursive": true}
 		id := pendingID(t, srv.callTool(t, "shell_delete_path", args))
 		// Before approval: only the preview reached the gate.
 		stillThere(t, files...)
-		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"delete_preview"`, `"ceiling":"destructive"`, dir)
-		if n := deleteLines(t, start, dir); n != 0 {
+		conn.waitGate(t, `"principal":"`+opsWho+`"`, `"op":"delete_preview"`, `"ceiling":"destructive"`, `"`+dir+`"`)
+		if n := deleteLines(t, conn, dir); n != 0 {
 			t.Fatalf("%d delete lines before approval", n)
 		}
 
@@ -175,21 +155,19 @@ func TestDeleteToolsApproval(t *testing.T) {
 		if _, err := os.Lstat(dir); !os.IsNotExist(err) {
 			t.Fatalf("tree still there: %v", err)
 		}
-		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"delete"`, `"ceiling":"destructive"`, `"outcome":"ok"`, dir)
-		if n := deleteLines(t, start, dir); n != 1 {
+		conn.waitGate(t, `"principal":"`+opsWho+`"`, `"op":"delete"`, `"ceiling":"destructive"`, `"outcome":"ok"`, `"`+dir+`"`)
+		if n := deleteLines(t, conn, dir); n != 1 {
 			t.Fatalf("%d delete lines after the approved re-call, want 1", n)
 		}
 
 		refusal(t, srv.callTool(t, "shell_delete_path", withApproval(args, id)), "approval_invalid", "")
 		time.Sleep(time.Second)
-		if n := deleteLines(t, start, dir); n != 1 {
+		if n := deleteLines(t, conn, dir); n != 1 {
 			t.Fatalf("%d delete lines after the second re-call, want 1", n)
 		}
-		// The hash is never logged by the gate.
-		for _, j := range journal(t, "shell-mcp-gate", start) {
-			if strings.Contains(j.Message, "expected_preview_sha256") {
-				t.Fatalf("the gate logged the precondition: %s", j.Message)
-			}
+		// The hash is never logged by the gate, for any request of this run.
+		for _, j := range runLines(t, "shell-mcp-gate", "expected_preview_sha256") {
+			t.Fatalf("the gate logged the precondition: %s", j.Message)
 		}
 	})
 
@@ -203,11 +181,10 @@ func TestDeleteToolsApproval(t *testing.T) {
 		if err := os.WriteFile(newcomer, []byte("new"), 0o644); err != nil { //nolint:gosec // G306: test fixture
 			t.Fatal(err)
 		}
-		since := time.Now()
 		refusal(t, srv.callTool(t, "shell_delete_path", withApproval(args, id)), "approval_invalid", "changed since approval")
 		stillThere(t, append(files, newcomer)...)
 		time.Sleep(time.Second)
-		if n := deleteLines(t, since, dir); n != 0 {
+		if n := deleteLines(t, conn, dir); n != 0 {
 			t.Fatalf("%d delete lines after the tree changed", n)
 		}
 	})
@@ -220,4 +197,5 @@ func TestDeleteToolsApproval(t *testing.T) {
 		}
 		stillThere(t, opsWork+"/mounted/point/inside.txt")
 	})
+	conn.same(t)
 }

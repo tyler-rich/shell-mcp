@@ -290,7 +290,6 @@ func TestOperatorToolWriteFile(t *testing.T) {
 	t.Run("success_read_back", func(t *testing.T) {
 		p := opsWork + "/notes.txt"
 		_ = os.Remove(p)
-		start := time.Now()
 		v1 := "line one\nline two\n"
 		env := opCall(t, "shell_write_file", map[string]any{"path": p, "content": v1, "mode": "0640"})
 		d := okDataAs(t, env, opsWho)
@@ -311,12 +310,11 @@ func TestOperatorToolWriteFile(t *testing.T) {
 		if got := readFile(t, p); got != v2 {
 			t.Fatalf("on disk: %q", got)
 		}
-		// The gate's audit line records the operator ceiling, and never the content.
-		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"write_file"`, `"ceiling":"operator"`, `"outcome":"ok"`)
-		for _, j := range journal(t, "shell-mcp-gate", start) {
-			if strings.Contains(j.Message, "line one") {
-				t.Fatalf("the gate's audit carries content: %q", j.Message)
-			}
+		// The gate's audit line records the operator ceiling, and never the
+		// content (in any line of this run).
+		waitLine(t, "shell-mcp-gate", `"principal":"`+opsWho+`"`, `"op":"write_file"`, `"ceiling":"operator"`, `"outcome":"ok"`, `"`+p+`"`)
+		for _, j := range runLines(t, "shell-mcp-gate", "line one") {
+			t.Fatalf("the gate's audit carries content: %q", j.Message)
 		}
 	})
 	t.Run("refusal_stale_expected_sha256", func(t *testing.T) {
@@ -567,20 +565,27 @@ func TestOperatorToolRunCommand(t *testing.T) {
 		if !resp.OK {
 			t.Fatalf("control: the gate refused the destructive command: %+v", resp.Error)
 		}
-		start := time.Now()
+		ops := connOf(t, opsServer(t))
+		before := len(ops.gate(t, `"op":"exec_preview"`, `"command_id":"probe-destructive"`, `"outcome":"tier_denied"`))
 		refusal(t, opCall(t, "shell_run_command", map[string]any{"command_id": "probe-destructive", "args": []string{"echo", "destructive"}}),
 			"tier_denied", "ceiling operator")
-		findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"exec_preview"`, `"command_id":"probe-destructive"`,
-			`"ceiling":"operator"`, `"outcome":"tier_denied"`)
-		time.Sleep(time.Second)
-		for _, j := range journal(t, "shell-mcp-gate", start) {
-			// Any exec for the command except the control's own, at ceiling
-			// destructive above, fails: the tool must send none, at any ceiling.
-			if strings.Contains(j.Message, `"op":"exec"`) && strings.Contains(j.Message, `"command_id":"probe-destructive"`) &&
-				strings.Contains(j.Message, `"principal":"`+opsWho+`"`) && !strings.Contains(j.Message, `"ceiling":"destructive"`) {
-				t.Fatalf("an exec was sent for the refused command: %s", j.Message)
+		for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(250 * time.Millisecond) {
+			if len(ops.gate(t, `"principal":"`+opsWho+`"`, `"op":"exec_preview"`, `"command_id":"probe-destructive"`,
+				`"ceiling":"operator"`, `"outcome":"tier_denied"`)) > before {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("no new exec_preview line for the refused command")
 			}
 		}
+		time.Sleep(time.Second)
+		// The control above went over its own connection, at ceiling
+		// destructive: the operator server must have sent no exec for the
+		// command at all, in this whole run.
+		for _, j := range ops.gate(t, `"op":"exec"`, `"command_id":"probe-destructive"`) {
+			t.Fatalf("an exec was sent for the refused command: %s", j.Message)
+		}
+		ops.same(t)
 	})
 }
 
@@ -595,12 +600,9 @@ func TestOperatorToolsApprovalGuard(t *testing.T) {
 		t.Fatalf("connect: %v; server log: %s", err, log.String())
 	}
 	t.Cleanup(func() { _ = cs.Close() })
+	conn := connOf(t, cs)
 	p := opsWork + "/guarded.txt"
 	_ = os.Remove(p)
-	// journal() reads from one second before start (whole seconds), so
-	// let the earlier tests' gate lines fall outside that window.
-	time.Sleep(2100 * time.Millisecond)
-	start := time.Now()
 	for _, name := range operatorToolNames {
 		if name == "shell_run_command" {
 			continue // gated by the command's tier, below
@@ -623,16 +625,18 @@ func TestOperatorToolsApprovalGuard(t *testing.T) {
 	okDataAs(t, callOn(t, cs, &log, "shell_stat_path", map[string]any{"path": opsWork}), opsWho)
 	// The stat, the previews and the read command reached the gate; no
 	// guarded operation did.
-	findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"stat"`)
-	findJournal(t, "shell-mcp-gate", start, `"principal":"`+opsWho+`"`, `"op":"exec"`, `"command_id":"probe-echo"`, `"ceiling":"read"`, `"outcome":"ok"`)
-	for _, j := range journal(t, "shell-mcp-gate", start) {
+	conn.waitGate(t, `"principal":"`+opsWho+`"`, `"op":"stat"`, `"path":"`+opsWork+`"`)
+	conn.waitGate(t, `"principal":"`+opsWho+`"`, `"op":"exec"`, `"command_id":"probe-echo"`, `"ceiling":"read"`, `"outcome":"ok"`)
+	// Every line of this server (its marker stats included).
+	for _, j := range conn.gate(t) {
 		m := j.Message
-		if !strings.Contains(m, `"principal":"`+opsWho+`"`) || strings.Contains(m, `"op":"stat"`) || strings.Contains(m, `"op":"exec_preview"`) ||
+		if strings.Contains(m, `"op":"stat"`) || strings.Contains(m, `"op":"exec_preview"`) ||
 			strings.Contains(m, `"op":"exec"`) && strings.Contains(m, `"command_id":"probe-echo"`) {
 			continue
 		}
 		t.Fatalf("a guarded call reached the gate: %q", m)
 	}
+	conn.same(t)
 }
 
 // gateExecAt sends one exec request straight to the gate with key, at the

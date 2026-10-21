@@ -144,6 +144,7 @@ func (f *fixture) failMsg(op string, args any, code, msg string) {
 // its path, what will be set and whether the current version is backed up,
 // with both hashes; at ceiling read; changing nothing.
 func TestPrivRestorePreview(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	p := filepath.Join(f.write, "app.conf")
 	id := f.overwrite(p, "broken\n")
@@ -189,6 +190,7 @@ func TestPrivRestorePreview(t *testing.T) {
 // hash; another one, or a change to the file or the policy after the
 // preview, is exists and nothing is restored or backed up.
 func TestPrivRestoreBindsThePreview(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	p := filepath.Join(f.write, "app.conf")
 	id := f.overwrite(p, "broken\n")
@@ -225,6 +227,7 @@ func TestPrivRestoreBindsThePreview(t *testing.T) {
 // owner and mode, the current version backed up first (and bound to it);
 // that backup restores in turn; a deleted file comes back create-only.
 func TestPrivRestoreFile(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	p := filepath.Join(f.write, "app.conf")
 	var w writeOut
@@ -263,6 +266,7 @@ func TestPrivRestoreFile(t *testing.T) {
 // recorded modes, the entry count checked; a second restore is refused at
 // the preview.
 func TestPrivRestoreTree(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	tree := filepath.Join(f.write, "tree")
 	gatetest.WriteFile(t, filepath.Join(tree, "a.txt"), "A", 0o640)
@@ -289,6 +293,7 @@ func TestPrivRestoreTree(t *testing.T) {
 // modes.max is narrowed, and the preview and the result say so, for a file
 // and for every entry of a tree.
 func TestPrivRestoreModeNarrowed(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, mask0700())
 	p := filepath.Join(f.write, "wide.conf")
 	gatetest.WriteFile(t, p, "wide\n", 0o644)
@@ -330,6 +335,7 @@ func TestPrivRestoreModeNarrowed(t *testing.T) {
 // TestPrivRestoreRefusals: each refusal at the preview, and at the restore
 // where it can arise after the preview, changing nothing.
 func TestPrivRestoreRefusals(t *testing.T) {
+	t.Parallel()
 	t.Run("ids", func(t *testing.T) {
 		f := newFixture(t)
 		for _, op := range []string{"priv_restore_preview", "priv_restore_backup"} {
@@ -446,6 +452,7 @@ func TestPrivRestoreRefusals(t *testing.T) {
 // a restore writes never removes the backup being restored, and the store's
 // cap does not count it as freed.
 func TestPrivRestoreKeepsTheRestoredBackup(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t) // keep: 3
 	p := filepath.Join(f.write, "app.conf")
 	b1 := f.overwrite(p, "v2\n")
@@ -481,6 +488,7 @@ func TestPrivRestoreKeepsTheRestoredBackup(t *testing.T) {
 // TestPrivRestoreWindows: the target changes at each point of the restore;
 // a racing file is never replaced. 100 runs per point, each counted.
 func TestPrivRestoreWindows(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	replaceWithRacer := func(p, racer string) {
 		writeTestFile(t, p+".racer", racer)
@@ -583,6 +591,7 @@ func TestPrivRestoreWindows(t *testing.T) {
 // Whatever the order, its file is never lost; a restore that succeeds
 // replaced the previewed version only (its backup holds it).
 func TestPrivRestoreConcurrentRacer(t *testing.T) {
+	t.Parallel()
 	const runs = 400
 	f := newFixture(t)
 	prep := func(name string) (string, string, restorePreviewOut) {
@@ -663,6 +672,7 @@ func TestPrivRestoreConcurrentRacer(t *testing.T) {
 // access is a group- or world-writable directory (an unprivileged test
 // cannot make another uid's directory; e2e-host covers those).
 func TestPrivMovedIn(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	drop := filepath.Join(f.write, "drop")
 	gatetest.Mkdir(t, drop, 0o755)

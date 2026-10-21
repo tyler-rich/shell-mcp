@@ -115,6 +115,7 @@ func absent(t testing.TB, p string) {
 // and runs nothing; it reports the command's unit, also for a broad
 // command, from the core instance.
 func TestPrivExecPreview(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, execCommands())
 	out := filepath.Join(f.write, "preview-out")
 	p := f.execPreview(m{"command_id": "probe-echo", "args": []string{"write", out, "x"}, "cwd": f.read})
@@ -165,6 +166,7 @@ func TestPrivExecPreview(t *testing.T) {
 // only with the hash of its preview; a read command runs without one, and
 // with one only while it matches.
 func TestPrivExecBindsPreview(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	out := filepath.Join(f.write, "op-out")
 	args := m{"command_id": "probe-op", "args": []string{"write", out}}
@@ -202,6 +204,7 @@ func TestPrivExecBindsPreview(t *testing.T) {
 // preview and priv_exec (binary, template, tier, unit, description) is
 // refused, and nothing runs.
 func TestPrivExecPolicyEditAfterPreview(t *testing.T) {
+	t.Parallel()
 	const opEntry = "  - id: probe-op\n    path: %s\n    tier: operator\n    templates: [[\"echo\", \"operator\"], [\"write\", \"{path:write}\"]]\n"
 	for name, c := range map[string]struct {
 		edit func(f *fixture) string
@@ -254,6 +257,7 @@ func TestPrivExecPolicyEditAfterPreview(t *testing.T) {
 // elsewhere after the preview (a directory link retargeted) is refused,
 // and nothing runs.
 func TestPrivExecPathRetargeted(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	for _, d := range []string{"a", "b"} {
 		gatetest.Mkdir(t, filepath.Join(f.write, d), 0o755)
@@ -297,6 +301,7 @@ func TestPrivExecPathRetargeted(t *testing.T) {
 // broad instance recomputes; a resolution that differs there is refused,
 // and nothing runs. Each instance runs only its own unit's commands.
 func TestPrivExecBroadRecomputes(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, broadUsers())
 	out := filepath.Join(f.write, "broad-out")
 	args := m{"command_id": "probe-broad", "args": []string{"write", out, "x"}}
@@ -408,7 +413,9 @@ func (f *fixture) serveHangup(in, mode string, args ...string) (out string, took
 // before it returns, in both units, also a command that ignores SIGTERM;
 // to a gate that still reads it answers outcome_unknown for a command that
 // can change the host and timeout for a read command. Its audit line
-// records the hang-up and that code.
+// records the hang-up and that code. Not parallel: it finds its command by
+// its arguments among every child of this test process, and it bounds how
+// long the kill takes.
 func TestExecKilledOnHangup(t *testing.T) {
 	for _, c := range []struct {
 		unit, command, ceiling, sleep string
@@ -456,6 +463,7 @@ func TestExecKilledOnHangup(t *testing.T) {
 // TestExecNotStartedAfterHangup: a request whose gate hung up before the
 // command started runs nothing.
 func TestExecNotStartedAfterHangup(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	out := filepath.Join(f.write, "late-out")
 	args := m{"command_id": "probe-op", "args": []string{"write", out}}
@@ -492,6 +500,7 @@ func TestExecNotStartedAfterHangup(t *testing.T) {
 // none is still running, so the answer is outcome_unknown, never the
 // command's success, and the journal line says why.
 func TestExecReapFailureIsOutcomeUnknown(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	f.opts.ReapOrphans = true
 	f.opts.ReapHooks = &ops.ReapHooks{

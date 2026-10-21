@@ -23,6 +23,7 @@ func mask0700() opt { return replace(`max: "0755"`, `max: "0700"`) }
 // setgid, sticky and world-write removed and masked by modes.max; the
 // result reports the mode set.
 func TestNewInodesWithinModesMax(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, mask0700())
 	var w struct {
 		Mode string `json:"mode"`
@@ -83,6 +84,7 @@ func TestNewInodesWithinModesMax(t *testing.T) {
 // A restored tree's entries are masked too, including a recorded mode the
 // file operations would refuse (world-write).
 func TestRestoreTreeWithinModesMax(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, mask0700())
 	tree := filepath.Join(f.write, "tree")
 	gatetest.Mkdir(t, tree, 0o755)
@@ -111,6 +113,7 @@ func TestRestoreTreeWithinModesMax(t *testing.T) {
 // keeps its mode, owner and change time. A single-link file and a
 // directory are still changed.
 func TestChmodChownRefuseHardLinks(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	outside := filepath.Join(f.d, "outside-linked.conf") // in no root
 	gatetest.WriteFile(t, outside, "outside\n", 0o644)
@@ -163,6 +166,7 @@ func TestChmodChownRefuseHardLinks(t *testing.T) {
 // to the test's own group; TestPrivMetaChownChanges reads back a real one
 // where the test has a supplementary group, and e2e-host as root).
 func TestChmodChownReadBack(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	p := filepath.Join(f.write, "app.conf")
 	f.opts.InjectMetadataReadBackFault = func(m fsx.Meta) fsx.Meta { m.Mode ^= 0o040; return m }
@@ -179,6 +183,7 @@ func TestChmodChownReadBack(t *testing.T) {
 // entry chmod or chown changed (handoff Q8), and nothing when it changed
 // nothing.
 func TestChmodChownAuditOldValues(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	p := filepath.Join(f.write, "app.conf") // 0640, the test user's
 	type change struct {

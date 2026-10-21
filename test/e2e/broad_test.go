@@ -450,7 +450,9 @@ func TestBroadProtectClock(t *testing.T) {
 
 // ---- Routing: each instance refuses the other unit's operations -------------------
 
-func wrongUnit(t *testing.T, socket, op string, args any) {
+// wrongUnit sends op to the helper at socket, requires helper_wrong_unit,
+// and returns the request id.
+func wrongUnit(t *testing.T, socket, op string, args any) string {
 	t.Helper()
 	a, _ := json.Marshal(args)
 	id := newID()
@@ -459,15 +461,15 @@ func wrongUnit(t *testing.T, socket, op string, args any) {
 	if err := json.Unmarshal([]byte(out), &r); err != nil || r.code() != "helper_wrong_unit" || r.ID != id {
 		t.Fatalf("%s %s on %s: %q", op, a, socket, out)
 	}
+	return id
 }
 
 // A request that reaches the wrong helper instance — whatever sent it
 // there — is refused with helper_wrong_unit and never executed.
 func TestMisroutedRequestsRefused(t *testing.T) {
-	start := time.Now()
-	wrongUnit(t, broadSocket, "priv_stat", map[string]any{"path": "/etc/example-app"})
+	statID := wrongUnit(t, broadSocket, "priv_stat", map[string]any{"path": "/etc/example-app"})
 	wrongUnit(t, broadSocket, "priv_exec", map[string]any{"command_id": "probe-echo", "args": []string{"echo", "core"}})
-	wrongUnit(t, socketPath, "priv_pkg_update_index", map[string]any{})
+	updateID := wrongUnit(t, socketPath, "priv_pkg_update_index", map[string]any{})
 	wrongUnit(t, socketPath, "priv_power", map[string]any{"action": "reboot"})
 	wrongUnit(t, socketPath, "priv_exec", map[string]any{"command_id": "probe-broad", "args": []string{"echo", "broad"}})
 	// Through the gate, a label that names the wrong unit sends the request
@@ -481,11 +483,11 @@ func TestMisroutedRequestsRefused(t *testing.T) {
 	if got := privExec(t, "probe-broad", "broad", "echo", "broad"); got != "broad" {
 		t.Fatalf("broad exec %q", got)
 	}
-	e := findJournal(t, "shell-mcp-privd", start, `"outcome":"helper_wrong_unit"`, `"op":"priv_pkg_update_index"`)
+	e := waitLine(t, "shell-mcp-privd", `"id":"`+updateID+`"`, `"outcome":"helper_wrong_unit"`, `"op":"priv_pkg_update_index"`)
 	if e.Priority != "5" || !strings.HasPrefix(e.Unit, "shell-mcp-privd@") {
 		t.Fatalf("core refusal logged at %s by %s", e.Priority, e.Unit)
 	}
-	e = findJournal(t, "shell-mcp-privd", start, `"outcome":"helper_wrong_unit"`, `"op":"priv_stat"`)
+	e = waitLine(t, "shell-mcp-privd", `"id":"`+statID+`"`, `"outcome":"helper_wrong_unit"`, `"op":"priv_stat"`)
 	if e.Priority != "4" || !strings.HasPrefix(e.Unit, "shell-mcp-privd-broad@") {
 		t.Fatalf("broad refusal logged at %s by %s", e.Priority, e.Unit)
 	}

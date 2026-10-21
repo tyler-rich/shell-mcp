@@ -31,6 +31,7 @@ func jobReply(m *dbus.Message) []byte {
 // reboot does when it talks to PID 1 — for an action the policy's power
 // section allows.
 func TestPower(t *testing.T) {
+	t.Parallel()
 	f, b := powerFixture(t, jobReply)
 	var d struct {
 		Action, Target, Job string
@@ -57,6 +58,7 @@ func TestPower(t *testing.T) {
 // Nothing reaches the bus for an action the policy does not allow, an
 // unknown action, a policy without power, or below max_tier destructive.
 func TestPowerRefusals(t *testing.T) {
+	t.Parallel()
 	f, b := powerFixture(t, jobReply)
 	f.fail("priv_power", m{"action": "poweroff"}, "policy_denied")
 	f.fail("priv_power", m{"action": "halt"}, "bad_request")
@@ -75,6 +77,7 @@ func TestPowerRefusals(t *testing.T) {
 // not_authorized; anything else, a masked target among them, is
 // exec_failed naming the D-Bus error. An unreachable bus is exec_failed.
 func TestPowerSystemdRefusals(t *testing.T) {
+	t.Parallel()
 	for name, c := range map[string]struct {
 		errName, code, want string
 	}{

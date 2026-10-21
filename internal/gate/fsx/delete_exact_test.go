@@ -502,6 +502,7 @@ func TestDeleteWindowAfterTheRecompute(t *testing.T) {
 // directory can find that name). The newcomer always survives, at the path
 // where it appeared, and no temporary name is left.
 func TestDeleteWindowDuringDeletion(t *testing.T) {
+	t.Parallel()
 	e := newDelEnv(t, 100)
 	staging := filepath.Join(e.write, "staging")
 	must(t, os.Mkdir(staging, 0o750))
@@ -590,6 +591,7 @@ func fiIsDir(t *testing.T, p string) bool {
 // tree and replacing random files of the tree by other inodes. Every file
 // it managed to create survives, in every run.
 func TestDeleteConcurrentRacer(t *testing.T) {
+	t.Parallel()
 	const runs = 400
 	e := newDelEnv(t, 100)
 	staging := filepath.Join(e.write, "staging")

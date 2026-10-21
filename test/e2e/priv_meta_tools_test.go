@@ -85,6 +85,7 @@ func metaTreeAt(t *testing.T, dir string) []string {
 
 func TestPrivMetaToolsApproval(t *testing.T) {
 	srv, h := privWriteServer(t)
+	conn := connOf(t, srv.cs)
 	if err := os.MkdirAll(privMetaDir, 0o755); err != nil { //nolint:gosec // G301: a fixture directory on a root-only path
 		t.Fatal(err)
 	}
@@ -93,10 +94,9 @@ func TestPrivMetaToolsApproval(t *testing.T) {
 	t.Run("chown -R: approved, run once, old values in the journal", func(t *testing.T) {
 		tree := privMetaDir + "/handover"
 		paths := metaTreeAt(t, tree)
-		since := time.Now()
 		args := map[string]any{"path": tree, "owner": "example-app", "group": "example-app", "recursive": true}
 		id := pendingID(t, srv.callTool(t, "shell_priv_change_owner", args))
-		if n := helperLines(t, since, "priv_chown", tree); n != 0 {
+		if n := helperLines(t, conn, "priv_chown", tree); n != 0 {
 			t.Fatalf("%d helper chown lines before approval", n)
 		}
 		srv.decide(t, h, id, "approve")
@@ -109,13 +109,13 @@ func TestPrivMetaToolsApproval(t *testing.T) {
 				t.Fatalf("%s is %d:%d", p, uid, gid)
 			}
 		}
-		j := findJournal(t, "shell-mcp-privd", since, `"op":"priv_chown"`, `"recursive":true`, `"changed":[`, `"changed_total":4`)
+		j := conn.waitHelper(t, `"op":"priv_chown"`, `"recursive":true`, `"changed":[`, `"changed_total":4`)
 		if !strings.Contains(j.Message, `"path":"`+tree+`/sub/b.conf"`) || !strings.Contains(j.Message, `"old_uid":0`) || !strings.Contains(j.Message, `"old_mode":"0600"`) {
 			t.Fatalf("journal line %s", j.Message)
 		}
 		refusal(t, srv.callTool(t, "shell_priv_change_owner", withApproval(args, id)), "approval_invalid", "")
 		time.Sleep(time.Second)
-		if n := helperLines(t, since, "priv_chown", tree); n != 1 {
+		if n := helperLines(t, conn, "priv_chown", tree); n != 1 {
 			t.Fatalf("%d helper chown lines, want 1", n)
 		}
 		// The tree's directories are now example-app's, so example-app could
@@ -175,6 +175,7 @@ func TestPrivMetaToolsApproval(t *testing.T) {
 			t.Fatal("the file outside the roots changed")
 		}
 	})
+	conn.same(t)
 }
 
 // TestPrivMetaMovedInRefused (N-1): example-app can write a directory in the

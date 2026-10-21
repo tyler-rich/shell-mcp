@@ -109,6 +109,7 @@ func modeOfPath(t *testing.T, p string) os.FileMode {
 }
 
 func TestPrivMetaPreviews(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	tree := filepath.Join(f.write, "tree")
 	metaTree(t, tree)
@@ -148,6 +149,7 @@ func TestPrivMetaPreviews(t *testing.T) {
 }
 
 func TestPrivMetaBindsThePreview(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	p := filepath.Join(f.write, "app.conf") // 0640
 	zero := strings.Repeat("0", 64)
@@ -215,6 +217,7 @@ func TestPrivMetaBindsThePreview(t *testing.T) {
 }
 
 func TestPrivMetaRecursive(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	tree := filepath.Join(f.write, "tree")
 	metaTree(t, tree)
@@ -266,6 +269,7 @@ func otherGroup(t *testing.T) uint32 {
 }
 
 func TestPrivMetaChownChanges(t *testing.T) {
+	t.Parallel()
 	g := otherGroup(t)
 	f := newFixture(t, replace("groups: [tester, root]", "groups: [tester, root, staff]"), withStaff(g))
 	tree := filepath.Join(f.write, "tree")
@@ -293,6 +297,7 @@ func TestPrivMetaChownChanges(t *testing.T) {
 // TestPrivMetaAuditBounded (Q8): the line lists at most 100 changed entries
 // and at most 32 KiB of them, with the total and a truncation flag.
 func TestPrivMetaAuditBounded(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, replace("max_delete_entries: 20", "max_delete_entries: 1000"))
 	many := filepath.Join(f.write, "many")
 	for i := range 150 {
@@ -320,6 +325,7 @@ func TestPrivMetaAuditBounded(t *testing.T) {
 // unprivileged test can simulate) is never changed, alone or inside a
 // walk, and keeps its mode when it is moved out again.
 func TestPrivMetaMovedInRefused(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	drop := filepath.Join(f.write, "drop")
 	gatetest.Mkdir(t, drop, 0o755)
@@ -363,6 +369,7 @@ func TestPrivMetaMovedInRefused(t *testing.T) {
 // with another name outside the roots is refused at the preview and at the
 // operation, and that file is unchanged.
 func TestPrivMetaHardLinkInTree(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	tree := filepath.Join(f.write, "tree")
 	metaTree(t, tree)

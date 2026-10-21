@@ -153,6 +153,7 @@ func replaceEnvs(t *testing.T) []replaceEnv {
 // content stays at the destination; a refused move leaves its source. In
 // the helper and in the gate.
 func TestVerifiedReplaceCommitWindow(t *testing.T) {
+	t.Parallel()
 	const old = "approved old\n"
 	for _, how := range []string{"replaced", "rewritten"} {
 		for _, re := range replaceEnvs(t) {
@@ -199,6 +200,7 @@ func TestVerifiedReplaceCommitWindow(t *testing.T) {
 // holds it). Every run is counted, and the test fails at the end if any
 // run lost the racer's content or ended in an unexpected error.
 func TestVerifiedReplaceConcurrentRace(t *testing.T) {
+	t.Parallel()
 	const old = "approved old\n"
 	for _, re := range replaceEnvs(t) {
 		e, backups := re.e, re.backups
