@@ -178,8 +178,10 @@ func (d *Deps) call(ctx context.Context, target, op string, args any, budget tim
 	}
 	resp, err := d.Gate.Call(ctx, o, op, ceiling.String(), args, budget)
 	// A privileged request that can change the host runs only once approved
-	// (D-006). A timeout of it, or an answer lost after it was sent, leaves
-	// its outcome unknown, and says so (handoff must-fix (b)).
+	// (D-006). An answer lost after it was sent leaves its outcome unknown:
+	// outcome_unknown, never another code (handoff must-fix (b)). The gate
+	// and the helper answer outcome_unknown themselves for what they see;
+	// the server adds what to do about it.
 	mayChange := strings.HasPrefix(op, "priv_") && protocol.PrivMayChange(op, ceiling.String())
 	if err != nil {
 		e := envelope.AsError(err)
@@ -188,7 +190,7 @@ func (d *Deps) call(ctx context.Context, target, op string, args any, budget tim
 		}
 		return nil, e
 	}
-	if mayChange && !resp.OK && resp.Error != nil && resp.Error.Code == protocol.CodeTimeout {
+	if !resp.OK && resp.Error != nil && resp.Error.Code == protocol.CodeOutcomeUnknown {
 		r, e := *resp, *resp.Error
 		e.Message = outcomeUnknown(e.Message).Message
 		r.Error = &e
@@ -197,11 +199,11 @@ func (d *Deps) call(ctx context.Context, target, op string, args any, budget tim
 	return resp, nil
 }
 
-// outcomeUnknown is the timeout of a privileged request that can change the
-// host, with what the server knows of its cause last (a message is cut at
-// envelope.MaxMessageBytes).
+// outcomeUnknown is the error of a privileged request that can change the
+// host and may have run, with what is known of its cause last (a message is
+// cut at envelope.MaxMessageBytes).
 func outcomeUnknown(cause string) *envelope.Error {
-	return envelope.Errorf(envelope.CodeTimeout, "Outcome unknown: the operation may have completed on the host, so check there "+
+	return envelope.Errorf(envelope.CodeOutcomeUnknown, "The operation may have completed on the host: check there "+
 		"(preview again, or read the helper's journal and the backups) before retrying; the approval was used, so a retry needs a new approval. Cause: %s", cause)
 }
 

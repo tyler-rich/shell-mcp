@@ -115,7 +115,8 @@ type Options struct {
 	// has ended (production: true). Tests leave it off: in a test binary,
 	// other tests' processes would be its children too.
 	ReapOrphans bool
-	// ReapHooks is a stub (failing-first commit): accepted and ignored.
+	// ReapHooks replace the child listing and the wait of ReapOrphans, and
+	// skip PR_SET_CHILD_SUBREAPER; tests only.
 	ReapHooks *ReapHooks
 }
 
@@ -201,6 +202,9 @@ type server struct {
 	// hungUp reports that the gate hung up while priv_exec ran its command,
 	// or before it started (the audit line records it).
 	hungUp bool
+	// reapErr is why the helper could not confirm that every process a
+	// command started has ended (the audit line records it).
+	reapErr string
 }
 
 // Serve handles one connection and returns the process exit code: 0 when a

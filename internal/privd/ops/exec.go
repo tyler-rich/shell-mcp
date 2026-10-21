@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json/jsontext"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -254,7 +255,7 @@ func (s *server) exec(raw jsontext.Value) (data any, warns []string, failure err
 		Dir:        rx.dir,
 		Timeout:    s.timeout(),
 		MaxOutput:  maxOut,
-	})
+	}, rx.c.Tier > policy.TierRead)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -308,19 +309,25 @@ const reapBound = 5 * time.Second
 // down its sending side because it stopped waiting, a reset, or a further
 // byte — is a hang-up: a command not yet started is not started, and a
 // running one is stopped as at its timeout (SIGTERM, then SIGKILL after the
-// grace, on its process group) before the answer. With ReapOrphans, the
-// helper is a child subreaper while the command runs, so what the command
-// started outside its process group becomes the helper's child when its
-// parent ends, and is killed and reaped after the command, however it
-// ended, before the answer.
-func (s *server) runCommand(spec *execx.Spec) (execx.Result, error) {
+// grace, on its process group) before the answer, which is outcome_unknown
+// for a command that can change the host (mayChange) and timeout for a
+// read command. With ReapOrphans, the helper is a child subreaper while the
+// command runs, so what the command started outside its process group
+// becomes the helper's child when its parent ends; after the command,
+// however it ended, the helper kills and reaps every child left, and
+// answers outcome_unknown (never a success) when it cannot confirm that
+// none is left.
+func (s *server) runCommand(spec *execx.Spec, mayChange bool) (execx.Result, error) {
 	if s.conn != nil && connHungUp(s.conn) {
 		s.hungUp = true
 		return execx.Result{}, errf(protocol.CodeTimeout, "the gate stopped waiting before the command started; nothing was run")
 	}
-	if s.o.ReapOrphans {
-		_ = unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0)
-		defer func() { _ = reapOrphans(reapBound, func() ([]int, error) { return children(), nil }, func(pid int) { _ = unix.Kill(pid, unix.SIGKILL) }, waitAnyChild) }()
+	if s.o.ReapOrphans && s.o.ReapHooks == nil {
+		// Without it, what the command leaves behind would escape the reaping.
+		if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0); err != nil {
+			s.reapErr = "PR_SET_CHILD_SUBREAPER: " + err.Error()
+			return execx.Result{}, errf(protocol.CodeExecFailed, "the helper could not make itself a child subreaper, so it could not account for what the command would start; nothing was run")
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -340,6 +347,13 @@ func (s *server) runCommand(spec *execx.Spec) (execx.Result, error) {
 		}()
 	}
 	res, err := execx.Run(ctx, spec)
+	if s.o.ReapOrphans {
+		if rerr := s.reap(); rerr != nil {
+			s.reapErr = rerr.Error()
+			return res, errf(protocol.CodeOutcomeUnknown, "the helper could not confirm that every process the command started has ended "+
+				"(see its journal on the host); the command may still be running or have changed the host")
+		}
+	}
 	if err != nil {
 		return res, err
 	}
@@ -347,7 +361,11 @@ func (s *server) runCommand(spec *execx.Spec) (execx.Result, error) {
 	// or this cancel); a hang-up after the command ended changes nothing.
 	if hung.Load() && res.TimedOut {
 		s.hungUp = true
-		return res, errf(protocol.CodeTimeout, "the gate stopped waiting (its connection closed) while the command ran; "+
+		code := protocol.CodeTimeout
+		if mayChange {
+			code = protocol.CodeOutcomeUnknown
+		}
+		return res, errf(code, "the gate stopped waiting (its connection closed) while the command ran; "+
 			"the command and every process it started were stopped before this answer, and what it changed before then stays")
 	}
 	return res, nil
@@ -386,34 +404,24 @@ func watchHangup(c net.Conn) <-chan struct{} {
 	return ch
 }
 
-// reapOrphans kills (SIGKILL) and reaps every child this process still
-// has, for at most bound: as a child subreaper, a process a command started
-// that left its process group became this process's child when its parent
-// ended. Children are listed in /proc/self/task/*/children (the helper's
-// own /proc/<pid>, which its Landlock ruleset and ProcSubset=pid leave
-// readable); it returns once wait4 says no child is left.
-func reapOrphans(bound time.Duration, list func() ([]int, error), kill func(int), wait func() (int, error)) error {
-	// Stub (failing-first commit): the old, fail-open behaviour.
-	deadline := time.Now().Add(bound)
-	for {
-		pids, _ := list()
-		for _, pid := range pids {
-			kill(pid)
-		}
-		for {
-			pid, err := wait()
-			if errors.Is(err, unix.ECHILD) {
-				return nil
-			}
-			if err != nil || pid <= 0 {
-				break
-			}
-		}
-		if time.Now().After(deadline) {
-			return nil
-		}
-		time.Sleep(10 * time.Millisecond)
+// ReapHooks replace how ReapOrphans lists this process's children and
+// waits for them (and skip PR_SET_CHILD_SUBREAPER); tests only.
+type ReapHooks struct {
+	// Children lists the children (production: /proc/self/task/*/children).
+	Children func() ([]int, error)
+	// Wait is wait4(-1, WNOHANG): the pid of a child that ended, 0 when
+	// children are left and none ended, or ECHILD when none is left.
+	Wait func() (int, error)
+}
+
+// reap kills and reaps every child left after a command (reapOrphans), with
+// the test hooks when set.
+func (s *server) reap() error {
+	list, wait := children, waitAnyChild
+	if h := s.o.ReapHooks; h != nil {
+		list, wait = h.Children, h.Wait
 	}
+	return reapOrphans(reapBound, list, func(pid int) { _ = unix.Kill(pid, unix.SIGKILL) }, wait)
 }
 
 func waitAnyChild() (int, error) {
@@ -421,32 +429,75 @@ func waitAnyChild() (int, error) {
 	return unix.Wait4(-1, &ws, unix.WNOHANG, nil)
 }
 
-// ReapHooks is a stub (failing-first commit): accepted and ignored.
-type ReapHooks struct {
-	Children func() ([]int, error)
-	Wait     func() (int, error)
+// reapOrphans kills (SIGKILL) and reaps every child this process still
+// has: as a child subreaper, a process a command started that left its
+// process group became this process's child when its parent ended. Each
+// round lists the children (so one born of a process killed in the
+// previous round, reparented here, is killed in the next), kills them, and
+// reaps whatever has ended; the rounds go on until wait4 says no child is
+// left. It fails closed: it returns nil only then, and an error when the
+// children cannot be listed (they could not be killed) or some are still
+// there after bound.
+func reapOrphans(bound time.Duration, list func() ([]int, error), kill func(int), wait func() (int, error)) error {
+	deadline := time.Now().Add(bound)
+	for {
+		pids, lerr := list()
+		for _, pid := range pids {
+			kill(pid)
+		}
+		for {
+			pid, err := wait()
+			if errors.Is(err, unix.ECHILD) {
+				if lerr != nil {
+					return fmt.Errorf("the children could not be listed: %w", lerr)
+				}
+				return nil
+			}
+			if err != nil || pid <= 0 {
+				break
+			}
+		}
+		if lerr != nil {
+			return fmt.Errorf("the children could not be listed, so some are left: %w", lerr)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("children of the command were still there %v after it ended", bound)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // maxChildren bounds the children read from /proc.
 const maxChildren = 4096
 
-// children lists this process's children from /proc/self/task/*/children.
-func children() []int {
+// children lists this process's children from /proc/self/task/*/children
+// (the helper's own /proc/<pid>, which its Landlock ruleset and
+// ProcSubset=pid leave readable). Any file it cannot read, or finding none
+// (a kernel without CONFIG_PROC_CHILDREN), is an error.
+func children() ([]int, error) {
 	tasks, err := filepath.Glob("/proc/self/task/*/children")
 	if err != nil {
-		return nil
+		return nil, err
+	}
+	if len(tasks) == 0 {
+		return nil, errors.New("no /proc/self/task/*/children file")
 	}
 	var out []int
 	for _, t := range tasks {
-		b, err := os.ReadFile(t) //nolint:gosec // G304: a /proc/self path from a fixed pattern
-		if err != nil {
-			continue
+		b, err := os.ReadFile(t)                           //nolint:gosec // G304: a /proc/self path from a fixed pattern
+		if err != nil && !errors.Is(err, os.ErrNotExist) { // a thread that ended meanwhile
+			return out, err
 		}
 		for _, f := range strings.Fields(string(b)) {
-			if pid, err := strconv.Atoi(f); err == nil && pid > 1 && len(out) < maxChildren {
-				out = append(out, pid)
+			pid, err := strconv.Atoi(f)
+			if err != nil || pid <= 1 {
+				return out, fmt.Errorf("%s: not a child pid list", t)
 			}
+			if len(out) == maxChildren {
+				return out, fmt.Errorf("more than %d children", maxChildren)
+			}
+			out = append(out, pid)
 		}
 	}
-	return out
+	return out, nil
 }

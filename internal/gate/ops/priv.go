@@ -98,7 +98,7 @@ func execBroad(args []byte) (bool, error) {
 // a request that can change the host (protocol.PrivMayChange), every
 // failure to get an answer after the request was written — none by the
 // deadline, a close without a byte, a malformed or mismatched answer — is
-// timeout, saying the operation may have run on the host (must-fix (b)).
+// outcome_unknown: the operation may have run on the host (must-fix (b)).
 // For any other request: a connection closed without a byte — only a peer
 // that failed the helper's SO_PEERCRED check gets that (PRIVILEGED §7) — is
 // helper_refused, also when it arrives as a reset because the helper never
@@ -158,7 +158,7 @@ func (s *server) forward(socket string) *protocol.Response {
 	}
 	if resp.ID != s.req.ID && (resp.OK || resp.ID != "") {
 		if wrote && protocol.PrivMayChange(s.req.Op, s.req.Ceiling) {
-			return s.errResp(errf(protocol.CodeTimeout, "the privileged helper answered a different request after this one was sent; the operation may have run on the host"))
+			return s.errResp(errf(protocol.CodeOutcomeUnknown, "the privileged helper answered a different request after this one was sent; the operation may have run on the host"))
 		}
 		return s.errResp(errf(protocol.CodeHelperUnavailable, "the privileged helper answered a different request"))
 	}
@@ -173,17 +173,17 @@ func (s *server) forwardErr(err error, wrote, hungUp bool) *protocol.Response {
 	noAnswer := errors.Is(err, protocol.ErrNoResponse)
 	late := errors.Is(err, os.ErrDeadlineExceeded) || errors.As(err, &ne) && ne.Timeout()
 	if wrote && protocol.PrivMayChange(s.req.Op, s.req.Ceiling) {
-		// The request may have run: an unknown outcome, never a refusal.
+		// The request may have run: outcome_unknown, never a refusal.
 		switch {
 		case late:
-			return s.errResp(errf(protocol.CodeTimeout, "the privileged helper did not answer in time, nor confirm that the operation ended; it may still be running, or complete, on the host"))
+			return s.errResp(errf(protocol.CodeOutcomeUnknown, "the privileged helper did not answer in time, nor confirm that the operation ended; it may still be running, or complete, on the host"))
 		case noAnswer && hungUp:
-			return s.errResp(errf(protocol.CodeTimeout, "the privileged helper did not answer in time and closed the connection when the gate stopped waiting; the operation may have run on the host before it ended"))
+			return s.errResp(errf(protocol.CodeOutcomeUnknown, "the privileged helper did not answer in time and closed the connection when the gate stopped waiting; the operation may have run on the host before it ended"))
 		case noAnswer:
-			return s.errResp(errf(protocol.CodeTimeout, "the privileged helper closed the connection without an answer after the request was sent: "+
+			return s.errResp(errf(protocol.CodeOutcomeUnknown, "the privileged helper closed the connection without an answer after the request was sent: "+
 				"it refused the connection (see its journal on the host) or ended while running the operation, which may have changed the host"))
 		}
-		return s.errResp(errf(protocol.CodeTimeout, "the privileged helper's answer could not be read after the request was sent; the operation may have run on the host"))
+		return s.errResp(errf(protocol.CodeOutcomeUnknown, "the privileged helper's answer could not be read after the request was sent; the operation may have run on the host"))
 	}
 	switch {
 	case noAnswer && hungUp:
