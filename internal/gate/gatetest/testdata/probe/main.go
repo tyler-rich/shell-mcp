@@ -119,6 +119,9 @@ func main() {
 		report(err, "READ:"+strings.TrimSpace(string(b)))
 	case "write":
 		report(os.WriteFile(args[0], []byte("probe"), 0o600), "WROTE")
+	case "cat":
+		b, err := os.ReadFile(args[0])
+		report(err, "READ:"+string(b))
 	case "nnp":
 		fmt.Println(statusField("NoNewPrivs"))
 	case "connect":

@@ -122,6 +122,10 @@ type Config struct {
 	// owner and group only when owner-matched. The helper sets it; the gate
 	// does not.
 	GuardMovedIn bool
+	// GuardExecPaths: ResolveRead, ResolveWrite and ResolveDir return a path
+	// only when every directory from / to its parent is closed (handoff
+	// N-10). Not yet applied.
+	GuardExecPaths bool
 	// InjectMetaStep, when non-nil, is called at each point of ApplyMeta's
 	// pass with the logical path of the entry concerned (the target's for
 	// MetaStepAfterCompare). Tests only; production code never sets it.
