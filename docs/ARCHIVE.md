@@ -2760,3 +2760,49 @@ Every other write in fsx and the helper opens with `O_CREAT|O_EXCL` (temporary f
 - **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0 (unchanged; `deps-current` reports 13 modules in scope, all current).
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+
+### 2026-10-20 — The psx path stays tested on ABI 8 runners: the landlock_forcepsx test build (PR #39, branch fix/ci-landlock-psx)
+
+**Problem:** GitHub moved `ubuntu-24.04` onto a kernel that reports Landlock ABI 8 (7.0.0-1017-azure on PR #37's run). The go job's psx entry then took the TSYNC path, and `TestLandlockThreadPath` failed it on every run: `LANDLOCK_PATH=tsync kernel_abi=8`, expected psx. The check was right to fail, but CI no longer ran the psx path at all. Every target below ABI 8 runs that path (Debian 13 is ABI 6).
+
+**Why a tag cannot simply flip go-landlock:** go-landlock v0.10.1 decides inside `restrict()` (`useTsync := abi.version >= 8`, the kernel's ABI after the errata downgrade), and nothing in its API selects psx. Its only build tag, `landlocktsync`, goes the other way and refuses every kernel below ABI 8.
+
+**Decision:**
+- **A test-only build tag, `landlock_forcepsx`.** It is compiled only from `internal/gate/sandbox/threadpath_forcepsx.go`. In that build the sandbox behaves as it would on an ABI 7 kernel:
+  - `capABI` plans as at ABI 7 on a kernel at ABI 8 or above, so there is no signal or abstract-socket scoping. That matches a real ABI 7 kernel: with per-thread domains, scoping stopped the gate killing its own children (the S1c entry).
+  - `restrict` creates the ruleset from the configuration `build` made, adds the same `grants`, and applies it the way go-landlock's psx branch does: `AllThreadsPrctl(PR_SET_NO_NEW_PRIVS)`, then `AllThreadsLandlockRestrictSelf(fd, 0)`. These are the same go-landlock `syscall` functions, so it is the same libcap/psx code (`syscall.AllThreadsSyscall` with `CGO_ENABLED=0`).
+- **Release builds make the same decision as before.** `threadpath.go` (`!landlock_forcepsx`) defines `capABI` as the identity and `restrict` as `cfg.Restrict(ll...)`. `build` now takes its rules from `grants`, a refactor with the same paths, rights and order. `KernelABI`, `Plan` and the call into go-landlock are otherwise unchanged.
+- **Nothing reaches it from a release build.** There is no variable, flag or config key. `scripts/release-binary-check.sh` refuses a binary that has the tag in its build settings or the tag's name anywhere in its bytes (the forced code names it in every error). It also does the existing checks: `CGO_ENABLED=0`, no `shellmcp_e2e_bypass`, no `shellmcp_diag`. CI runs it on the cross-builds of both Go entries and on the image's binary; ci-local runs it on its cross-builds (ci-local builds no image). Its self-test (`release-binary-check_test.sh`, in the deps-current job and in ci-local) builds the gate, the helper and the server as releases and as each test-only build.
+- **The path is read from the binary that applies the sandbox.** `sandbox.ThreadPath()` names it: `tsync`, `psx`, or `none` without Landlock. The applier reports it, and `TestLandlockThreadPath` checks it against `SHELL_MCP_EXPECT_LANDLOCK_PATH`. gatetest passes the test build's tag on to every binary a test builds. If the tag does not reach those binaries, the test binary and the applier disagree and the test fails. Before this change, a psx expectation passed on a kernel without Landlock; that is now `none` and fails. A tsync expectation on a kernel below ABI 8 still fails, never skips.
+- **CI.** The `ubuntu-24.04` entry runs the whole suite as `-tags landlock_forcepsx`, with `SHELL_MCP_EXPECT_LANDLOCK_PATH=psx` and `SHELL_MCP_REQUIRE_LANDLOCK_ABI=7` (the ABI it plans for). `ubuntu-26.04` stays untagged, expecting tsync at ABI 8. Both entries remain required. `go vet` and golangci-lint cover the tag. The job summary shows the build tags, the kernel ABI and the planned ABI. ci-local runs the gate's packages again under the tag.
+- **Threads started after Apply.** `TestApplyFilesystemAllThreads` now also pins 6 goroutines to OS threads after Apply. It requires at least one of them to be a thread that did not exist before Apply, and each one to have NoNewPrivs, the seccomp filter and `EACCES` outside the policy, like the 6 pinned before.
+
+**What this proves, and what it does not:**
+- Hosted runners no longer give real ABI 7 kernel coverage. The psx path is now tested on an ABI 8 kernel.
+- Proven: the psx mechanism restricts every thread, both the threads pinned before Apply and those started after it. The gate also works end to end with one domain per thread and an ABI 7 plan: the gate integration tests (exec timeouts and kills, the trampoline, pdeathsig, the network rules) run on that path.
+- Not proven: go-landlock's own psx branch. The forced build runs our copy of its two calls; go-landlock's ruleset construction, which both paths share, still runs on the TSYNC entry.
+- Not proven: behaviour specific to ABI 6 or 7 kernels. An ABI 8 kernel restricting each thread with an ABI 7 ruleset is not an ABI 7 kernel (kernel-side fixes, the errata). Debian 13's ABI 6 was not tested before this change either.
+- Below ABI 4, coverage is still local only (the ABI 3 containers).
+
+**Tests (failing first):**
+- `70ccb40` (tests only): under the tag, `TestThreadPathDecision` failed at ABI 8, 9 and 10 (`ABI 8 planned as 8, want 7`, `ABI 8: path tsync, want psx`). `TestLandlockThreadPath` cannot fail locally, because Docker Desktop's kernel is ABI 3, where psx is taken with or without the tag. Its CI evidence is PR #37's run (untagged, ABI 8: tsync, failed) against this PR's run of the tagged entry.
+- `16f30e2`: the release-check self-test gave 9 passed, 2 failed; the forced-psx gate and helper passed the check. After `f01dcf7`: 11/11.
+- Locally, tagged, `SHELL_MCP_EXPECT_LANDLOCK_PATH=tsync` fails `TestLandlockThreadPath` (ABI 3: `psx`).
+- In the tagged local run, the forced code is what applies the sandbox. `TestApplyFilesystemAllThreads` and the gate integration tests pass on a real kernel through it.
+
+**Alternatives rejected:**
+- `go build -overlay` to make go-landlock's ABI query report 7. It would run go-landlock's own psx branch, but it patches a dependency's source at build time, the copy must follow every go-landlock release, and an overlay leaves no build setting for a release check.
+- A `replace` directive or a vendored, patched go-landlock: a dependency change.
+- A seccomp filter to fake the ABI query: it can only return an errno, which reads as ABI 0. User notification would need a supervisor.
+- An environment variable or flag: a production downgrade lever.
+- The untagged suite plus a tagged step on `ubuntu-24.04`. Its untagged expectation would follow whatever kernel GitHub rolls out, which is the cause of this failure, and it adds test time. Running the whole suite tagged on that entry keeps the runtime unchanged.
+- Dropping a matrix entry.
+
+**Deferred:** if go-landlock gains a way to choose psx, use it and delete the copy in `threadpath_forcepsx.go`.
+
+**Versions:**
+- **Go:** 1.27.3.
+- **Refresh:** the writable-mount `go get -u` was not run this session; `deps-current` (ci-local) is the check: Go 1.27.3 current, 13 modules in scope, all current.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0 (unchanged).
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0; actionlint v1.7.12 as a session check (clean apart from its label list predating `ubuntu-26.04`).
