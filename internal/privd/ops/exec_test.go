@@ -19,6 +19,7 @@ type execData struct {
 }
 
 func TestExec(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	var d execData
 	f.ok("priv_exec", m{"command_id": "probe-echo", "args": []string{"echo", "canary"}}, &d)
@@ -46,6 +47,7 @@ func TestExec(t *testing.T) {
 // TestAuditNeverContent: across every write-class op, no audit line holds
 // file content, base64 content or command arguments.
 func TestAuditNeverContent(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	canary := "AUDIT-CANARY-CONTENT"
 	f.ok("priv_write_file", m{"path": filepath.Join(f.write, "app.conf"), "content_b64": b64(canary), "owner": "tester", "mode": "0640"}, nil)
@@ -71,7 +73,7 @@ func TestAuditNeverContent(t *testing.T) {
 // for a command that ignores it, SIGKILL after the kill grace; it answers
 // only once the command has ended (timed_out). The gate forwards the
 // timeout it waits for (handoff P-7); this is the helper's own bound behind
-// it.
+// it. Not parallel: it bounds the run's wall-clock time.
 func TestExecBoundedByOwnTimeout(t *testing.T) {
 	f := newFixture(t,
 		replace("  default_timeout_s: 5\n  max_timeout_s: 10\n", "  default_timeout_s: 1\n  max_timeout_s: 1\n"),

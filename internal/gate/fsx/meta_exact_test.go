@@ -803,6 +803,7 @@ func TestMetaWindowDuringThePass(t *testing.T) {
 // links (newcomers linked into the tree, and tree files linked from
 // outside the roots). No inode the racer created is ever changed.
 func TestMetaConcurrentRacer(t *testing.T) {
+	t.Parallel()
 	const runs = 400
 	e := newMetaEnv(t, 100)
 	staging := filepath.Join(e.write, "staging")

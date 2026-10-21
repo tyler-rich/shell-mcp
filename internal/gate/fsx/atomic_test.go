@@ -142,6 +142,7 @@ func TestExpectAbsentRules(t *testing.T) {
 // before each commit (InjectBeforeCommit), after every check fsx makes. The
 // commit itself must refuse it.
 func TestCreateOnlyCommitWindow(t *testing.T) {
+	t.Parallel()
 	for _, named := range createOnlyOps(newEnv(t)) {
 		t.Run(named.name, func(t *testing.T) {
 			e := newEnv(t)
@@ -192,6 +193,7 @@ func findOp(t *testing.T, ops []createOnly, name string) createOnly {
 // destination against the operation, with no hook: whoever creates the
 // destination first keeps it. Both succeeding means one replaced the other.
 func TestCreateOnlyConcurrentRace(t *testing.T) {
+	t.Parallel()
 	for _, named := range createOnlyOps(newEnv(t)) {
 		if strings.Contains(named.name, "directory") {
 			continue // a racing mkdir cannot detect being replaced; the window test covers it

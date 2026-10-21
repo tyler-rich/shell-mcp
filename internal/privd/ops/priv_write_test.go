@@ -83,6 +83,7 @@ type writeOut struct {
 // saying how full it is, and nothing changes; priv_backup_check reports
 // that it would not fit.
 func TestStoreCapRefusesAndChangesNothing(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, storeCap(minStore))
 	conf := filepath.Join(f.write, "app.conf")
 	f.junk(minStore - 8)
@@ -133,6 +134,7 @@ func TestStoreCapRefusesAndChangesNothing(t *testing.T) {
 // after this backup's own retention pruning, so a file rewritten again and
 // again at backups.keep versions never trips the cap.
 func TestStoreCapCountsRetention(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, storeCap(minStore), keep(2))
 	p := filepath.Join(f.write, "big.conf")
 	const size = 60000
@@ -155,6 +157,7 @@ func TestStoreCapCountsRetention(t *testing.T) {
 // than the helper reads, or metadata that does not decode) refuses every
 // backup, and the operation changes nothing.
 func TestStoreFailsClosed(t *testing.T) {
+	t.Parallel()
 	t.Run("unreadable metadata", func(t *testing.T) {
 		f := newFixture(t)
 		writeTestFile(t, filepath.Join(f.backups, "20261001T000000Z-0123456789abcdef.meta.json"), "{not json")
@@ -186,6 +189,7 @@ func TestStoreFailsClosed(t *testing.T) {
 // TestPruneAfterCommit: retention runs only once the operation succeeded,
 // and never removes the backup the request just created.
 func TestPruneAfterCommit(t *testing.T) {
+	t.Parallel()
 	t.Run("a failed write keeps the older version", func(t *testing.T) {
 		f := newFixture(t, keep(1))
 		p := filepath.Join(f.write, "app.conf")
@@ -224,6 +228,7 @@ func TestPruneAfterCommit(t *testing.T) {
 // (preview_sha256); a file changed between fsx's hash and the backup is
 // refused with backup_failed and nothing changes.
 func TestBackupBoundToPrecondition(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	p := filepath.Join(f.write, "app.conf")
 	want := shaHex("key: value\n")
@@ -243,6 +248,7 @@ func TestBackupBoundToPrecondition(t *testing.T) {
 
 // TestPrivCopyMoveExpectedDestination (P-9) through the request handling.
 func TestPrivCopyMoveExpectedDestination(t *testing.T) {
+	t.Parallel()
 	for _, op := range []string{"priv_copy", "priv_move"} {
 		t.Run(op, func(t *testing.T) {
 			f := newFixture(t)
@@ -276,6 +282,7 @@ func TestPrivCopyMoveExpectedDestination(t *testing.T) {
 
 // TestPrivBackupCheck (P-11): what an overwrite of a path would back up.
 func TestPrivBackupCheck(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	type check struct {
 		Written       bool  `json:"written"`
@@ -319,6 +326,7 @@ func TestPrivBackupCheck(t *testing.T) {
 // new inode's uid and gid, and their names when they are on the owners
 // lists; the mode is the one set.
 func TestPrivResultsReportOwner(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	var w writeOut
 	f.ok("priv_write_file", m{"path": filepath.Join(f.write, "owned.conf"), "content_b64": b64("x\n"), "owner": "tester", "group": "tester", "mode": "0600"}, &w)
@@ -347,6 +355,7 @@ func TestPrivResultsReportOwner(t *testing.T) {
 // content is replaced by another file after every check the helper makes,
 // immediately before the commit; it is never lost.
 func TestPrivReplaceCommitWindow(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	old := "approved old\n"
 	cases := []struct {
@@ -391,6 +400,7 @@ func TestPrivReplaceCommitWindow(t *testing.T) {
 // TestProductionOptionsHaveNoTestHooks: the production constructor sets no
 // test-only hook.
 func TestProductionOptionsHaveNoTestHooks(t *testing.T) {
+	t.Parallel()
 	o := ops.ProductionOptions("v", "/etc/shell-mcp/privileged.yaml")
 	if o.InjectReadBackFault != nil || o.InjectBeforeCommit != nil || o.InjectNoReplaceFault != nil || o.InjectMetadataReadBackFault != nil ||
 		o.InjectBeforeBackup != nil || o.InjectExchangeFault != nil || o.PkgLockRetry != 0 || o.InjectDeleteStep != nil || o.InjectStopAfterSetAside != nil {
@@ -413,6 +423,7 @@ func (f *fixture) storeUse() int64 {
 // so failed operations cannot fill the store; the cap's accounting goes back
 // down, and the room is there for the next operation.
 func TestFailedOperationDiscardsItsBackup(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, storeCap(minStore))
 	const size = 60000
 	p := filepath.Join(f.write, "big.conf")
@@ -467,6 +478,7 @@ func TestFailedOperationDiscardsItsBackup(t *testing.T) {
 // committed (its read-back failed) keeps its backup: it is the previous
 // version of a file that did change.
 func TestCommittedFailureKeepsItsBackup(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	p := filepath.Join(f.write, "app.conf")
 	f.opts.InjectReadBackFault = func(b []byte) []byte { return append(b, 'x') }
@@ -486,6 +498,7 @@ func TestCommittedFailureKeepsItsBackup(t *testing.T) {
 // leaving fsx's OnCommit unset) is not provably unchanged, so the backup is
 // kept: only fsx's positive "nothing was changed" signal deletes one.
 func TestUnreportedMutationKeepsItsBackup(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	p := filepath.Join(f.write, "app.conf")
 	f.opts.DisableCommitReport = true

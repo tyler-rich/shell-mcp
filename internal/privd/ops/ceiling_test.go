@@ -54,6 +54,7 @@ func notThere(t *testing.T, p string) {
 // A request without a ceiling, or with an unknown one, is bad_request, and
 // nothing runs.
 func TestCeilingRequired(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	marker := filepath.Join(f.write, "marker")
 	for _, c := range []string{"", "admin", "excluded", "READ", "read-only"} {
@@ -71,6 +72,7 @@ func TestCeilingRequired(t *testing.T) {
 
 // Operations: the lower of max_tier and the ceiling applies.
 func TestCeilingBoundsOps(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	conf := filepath.Join(f.write, "app.conf")
 	write := m{"path": conf, "content_b64": b64("changed\n")}
@@ -102,6 +104,7 @@ func TestCeilingBoundsOps(t *testing.T) {
 // policy allows operator, so only the ceiling stops the operator command,
 // and the marker it would write proves that nothing ran.
 func TestCeilingBoundsExec(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, maxTier("operator"))
 	marker := filepath.Join(f.write, "marker")
 	args := m{"command_id": "probe-op", "args": []string{"write", marker}}
@@ -128,6 +131,7 @@ func TestCeilingBoundsExec(t *testing.T) {
 // request's tier ceiling, for an operation that ran and for one the
 // ceiling refused.
 func TestAuditLineCarriesCeiling(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	f.ok("priv_stat", m{"path": f.write}, nil)
 	if l := f.lastAudit(); !strings.Contains(l, `"ceiling":"destructive"`) {

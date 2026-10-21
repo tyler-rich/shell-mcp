@@ -69,7 +69,8 @@ func (f *fakeChildren) wait() (int, error) {
 
 // TestReapOrphans: the rounds go on until no child is left, so a child
 // forked by one being killed is killed in the next round; reapOrphans fails
-// closed when the children cannot be listed or outlive the bound.
+// closed when the children cannot be listed or outlive the bound. Not
+// parallel: it bounds how long reapOrphans takes to give up.
 func TestReapOrphans(t *testing.T) {
 	t.Run("none", func(t *testing.T) {
 		f := &fakeChildren{}

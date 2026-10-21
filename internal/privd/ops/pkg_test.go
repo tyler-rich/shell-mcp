@@ -80,6 +80,7 @@ func pkgFixture(t *testing.T, mode string, opts ...opt) *fixture {
 }
 
 func TestPkgInstall(t *testing.T) {
+	t.Parallel()
 	f := pkgFixture(t, "ok")
 	var r pkgResult
 	f.ok("priv_pkg_install", m{"packages": []string{"example-hello"}}, &r)
@@ -105,6 +106,7 @@ func TestPkgInstall(t *testing.T) {
 // Only names from packages.install (packages.remove for removal); names
 // that are not Debian package names are bad_request; nothing runs.
 func TestPkgAllowList(t *testing.T) {
+	t.Parallel()
 	f := pkgFixture(t, "ok")
 	for op, args := range map[string]m{
 		"priv_pkg_install":         {"packages": []string{"example-other"}},
@@ -126,6 +128,7 @@ func TestPkgAllowList(t *testing.T) {
 }
 
 func TestPkgRemoveNeverPurges(t *testing.T) {
+	t.Parallel()
 	f := pkgFixture(t, "ok")
 	f.ok("priv_pkg_remove", m{"packages": []string{"example-hello"}}, nil)
 	c := f.lastApt()
@@ -139,6 +142,7 @@ func TestPkgRemoveNeverPurges(t *testing.T) {
 // update only with allow_update_index: true; nothing with packages
 // disabled.
 func TestPkgPolicySwitches(t *testing.T) {
+	t.Parallel()
 	f := pkgFixture(t, "ok")
 	f.fail("priv_pkg_upgrade", m{}, "policy_denied")
 	f.fail("priv_pkg_upgrade_preview", m{}, "policy_denied")
@@ -169,6 +173,7 @@ func TestPkgPolicySwitches(t *testing.T) {
 // The previews run the same transaction with apt-get -s and return what
 // would be installed, upgraded and removed. They are read tier.
 func TestPkgPreviews(t *testing.T) {
+	t.Parallel()
 	f := pkgFixture(t, "sim", maxTier("read"))
 	var p preview
 	f.ok("priv_pkg_install_preview", m{"packages": []string{"example-hello"}}, &p)
@@ -197,7 +202,7 @@ func TestPkgPreviews(t *testing.T) {
 }
 
 // A held lock is waited for, bounded, then reported clearly; nothing else
-// is retried.
+// is retried. Not parallel: it bounds the wait's wall-clock time.
 func TestPkgLock(t *testing.T) {
 	f := pkgFixture(t, "lock 1")
 	f.opts.PkgLockRetry = 20 * time.Millisecond
@@ -222,6 +227,7 @@ func TestPkgLock(t *testing.T) {
 // Output is capped and redacted; a failed transaction is data (exit code
 // and stderr), not a helper error.
 func TestPkgOutput(t *testing.T) {
+	t.Parallel()
 	f := pkgFixture(t, "secret")
 	var r pkgResult
 	f.ok("priv_pkg_install", m{"packages": []string{"example-hello"}}, &r)

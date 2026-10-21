@@ -12,6 +12,7 @@ import (
 // exist only under the e2e test build tag, never in a normal (or release)
 // build.
 func TestNoBypassInThisBuild(t *testing.T) {
+	t.Parallel()
 	if BypassBuild || len(extraOps) != 0 {
 		t.Fatalf("bypass build: %v, extra ops %d", BypassBuild, len(extraOps))
 	}
@@ -27,6 +28,7 @@ func TestNoBypassInThisBuild(t *testing.T) {
 // CAP_KILL (maintainer decision, PRIVILEGED §5.1); otherwise signals stay
 // scoped to the helper's domain from ABI 8.
 func TestRulesUnscopeSignalsOnlyForCAPKILL(t *testing.T) {
+	t.Parallel()
 	p := &policy.Policy{Capabilities: append([]string(nil), policy.BaseCapabilities...)}
 	if Rules(p, "/var/lib/shell-mcp/backups").UnscopedSignals {
 		t.Fatal("signals unscoped without CAP_KILL")

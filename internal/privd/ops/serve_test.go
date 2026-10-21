@@ -82,7 +82,11 @@ func breakages(t *testing.T) map[string]breakage {
 // authenticated gate only — with its own code and a one-line reason that
 // names no local path, before any byte of the request is read: the
 // response has no id, the sandbox is never applied, and the journal gets
-// one WARN line naming the check and the code.
+// one WARN line naming the check and the code. Not parallel, like every
+// test that applies breakages: "insecure binary" makes the fixture's helper
+// binary group-writable, and that binary is a hard link to this test
+// binary (gatetest.LinkSelf), so every fixture's helper binary would be
+// group-writable meanwhile.
 func TestSelfCheckFailuresAnswered(t *testing.T) {
 	for name, c := range breakages(t) {
 		t.Run(name, func(t *testing.T) {
@@ -118,6 +122,7 @@ func TestSelfCheckFailuresAnswered(t *testing.T) {
 // SO_PEERCRED uid is not that value, closes the connection without a byte
 // and leaves one WARN line explaining why. Nothing is read from disk first.
 func TestPreAuthRefusalsAreSilent(t *testing.T) {
+	t.Parallel()
 	for name, c := range map[string]struct {
 		env   func(uid uint32) string
 		check string
@@ -149,7 +154,7 @@ func TestPreAuthRefusalsAreSilent(t *testing.T) {
 
 // The peer check comes first: a wrong peer is refused silently whatever
 // else is broken, so an unauthenticated caller learns nothing about the
-// helper's installation.
+// helper's installation. Not parallel: breakages (TestSelfCheckFailuresAnswered).
 func TestPeerCheckComesFirst(t *testing.T) {
 	for name, c := range breakages(t) {
 		t.Run(name, func(t *testing.T) {
@@ -175,7 +180,8 @@ func TestPeerCheckComesFirst(t *testing.T) {
 // of the request until the peer check and every self-check have passed and
 // Landlock is applied. Every refusal — silent or answered — leaves the
 // whole request queued on the socket, and on success all of it is still
-// unread when the sandbox is applied.
+// unread when the sandbox is applied. Not parallel: breakages
+// (TestSelfCheckFailuresAnswered).
 func TestNoRequestByteReadBeforeChecksPass(t *testing.T) {
 	cases := map[string]func(f *fixture){
 		"wrong peer":  func(f *fixture) { f.opts.UnitClientUID = strconv.FormatUint(uint64(f.uid)+1, 10) },
@@ -211,6 +217,7 @@ func TestNoRequestByteReadBeforeChecksPass(t *testing.T) {
 // Stdin that is not a stream socket is refused (a pipe cannot carry peer
 // credentials either).
 func TestRefusesNonSocketStdin(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -229,6 +236,7 @@ func TestRefusesNonSocketStdin(t *testing.T) {
 }
 
 func TestServeAnswersAuthenticatedPeer(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	var e struct {
 		Path, Type string
@@ -266,6 +274,7 @@ func TestServeAnswersAuthenticatedPeer(t *testing.T) {
 // with a one-line message naming no local path, a WARN journal line naming
 // the check, and exit status 1.
 func TestSandboxRefusal(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	f.opts.ApplySandbox = func(*policy.Policy, string) (sandbox.Report, error) {
 		return sandbox.Report{}, sandbox.ErrUnavailable
@@ -288,6 +297,7 @@ func TestSandboxRefusal(t *testing.T) {
 }
 
 func TestRequestErrors(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	for in, code := range map[string]string{
 		`{"v":1,"id":"` + reqID + `","ceiling":"destructive","op":"priv_stat","op":"priv_stat"}` + "\n": "bad_request",
@@ -312,6 +322,7 @@ func TestRequestErrors(t *testing.T) {
 }
 
 func TestTierDenied(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, maxTier("read"))
 	f.ok("priv_stat", m{"path": f.read}, nil)
 	f.ok("priv_list_backups", m{}, nil)

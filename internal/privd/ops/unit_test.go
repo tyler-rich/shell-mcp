@@ -16,6 +16,7 @@ import (
 // broad unit takes the package operations, priv_power and the unit: broad
 // commands; the core unit takes everything else.
 func TestWrongUnitRefusedByCore(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, broadUsers())
 	f.ok("priv_stat", m{"path": f.read}, nil) // control: a core op in the core unit
 	f.ok("priv_exec", m{"command_id": "probe-echo", "args": []string{"echo", "core"}}, nil)
@@ -49,6 +50,7 @@ func TestWrongUnitRefusedByCore(t *testing.T) {
 }
 
 func TestWrongUnitRefusedByBroad(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, broadUsers(), asBroad())
 	marker := filepath.Join(f.write, "ran")
 	var ex struct {
@@ -85,6 +87,7 @@ func TestWrongUnitRefusedByBroad(t *testing.T) {
 // malformed, or broad for a policy that uses no broad unit, it is answered
 // as helper_install_insecure without an id.
 func TestUnitEnvironment(t *testing.T) {
+	t.Parallel()
 	for name, c := range map[string]struct {
 		opts []opt
 		unit string
@@ -116,6 +119,7 @@ func TestUnitEnvironment(t *testing.T) {
 // broad command declares CAP_SYS_TIME, CAP_SYS_TIME and CAP_WAKE_ALARM
 // (ProtectClock=yes). A broader set is a hand-edited unit.
 func TestBroadCapabilitySet(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, broadUsers(), asBroad())
 	f.ok("priv_exec", m{"command_id": "probe-broad", "args": []string{"echo", "ok"}}, nil) // control
 	for name, capBnd := range map[string]string{
@@ -138,6 +142,7 @@ func TestBroadCapabilitySet(t *testing.T) {
 // With a broad command that declares CAP_SYS_TIME the broad unit has no
 // ProtectClock=, so CAP_SYS_TIME and CAP_WAKE_ALARM are expected there.
 func TestBroadCapabilitySetWithSysTime(t *testing.T) {
+	t.Parallel()
 	sysTime := func(_ *fixture, s *string) {
 		*s = strings.Replace(*s, "    unit: broad\n", "    unit: broad\n    capabilities: [CAP_SYS_TIME]\n", 1)
 	}
@@ -155,6 +160,7 @@ func TestBroadCapabilitySetWithSysTime(t *testing.T) {
 // answered, with its policy hash, so that the gate can pass it to the
 // server as the `helper` block (handoff P-1).
 func TestResponseBlockNamesUnit(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		unit string
 		opts []opt

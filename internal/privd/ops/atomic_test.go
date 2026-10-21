@@ -21,6 +21,7 @@ import (
 const helperWindowRuns = 100
 
 func TestPrivWriteExpectAbsent(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	p := filepath.Join(f.write, "fresh.conf")
 	var w struct {
@@ -46,6 +47,7 @@ func TestPrivWriteExpectAbsent(t *testing.T) {
 // TestPrivCreateOnlyCommitWindow: the destination appears after every check
 // the helper makes, immediately before the commit.
 func TestPrivCreateOnlyCommitWindow(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	src := filepath.Join(f.write, "src.conf")
 	cases := []struct {
@@ -85,6 +87,7 @@ func TestPrivCreateOnlyCommitWindow(t *testing.T) {
 // TestPrivNoReplaceUnsupported: without RENAME_NOREPLACE support a move
 // without overwrite is refused, never done by check-then-rename.
 func TestPrivNoReplaceUnsupported(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	src := filepath.Join(f.write, "src.conf")
 	writeTestFile(t, src, "source\n")

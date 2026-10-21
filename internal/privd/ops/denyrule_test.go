@@ -14,6 +14,7 @@ import (
 // rule from the root-only privileged policy only by its paths.deny index,
 // never its value.
 func TestHelperDenyRefusalNamesTheRule(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	key := filepath.Join(f.read, ".ssh", "id_invented")
 	gatetest.WriteFile(t, key, "invented\n", 0o600)
