@@ -556,7 +556,10 @@ const delWindowRuns = 200
 // the request (the recompute differs), after the recompute matched, before
 // a file is read for the backup, after the backup was written, and at each
 // step of each entry's removal. Whatever the racer put there survives, in
-// every run, and the backup is kept exactly when entries were removed.
+// every run, and the backup is kept exactly when entries were removed. Each
+// run starts with an empty backup store, as in TestPrivRestoreWindows: the
+// 1600 runs would otherwise leave about 1100 backups behind, which every
+// later request and every count of the store reads again.
 func TestPrivDeleteWindows(t *testing.T) {
 	f := newFixture(t, replace("max_delete_entries: 20", "max_delete_entries: 200"))
 	staging := filepath.Join(f.write, "staging")
@@ -582,6 +585,7 @@ func TestPrivDeleteWindows(t *testing.T) {
 		outcomes[pt.name] = map[string]int{}
 		for i := range delWindowRuns {
 			n++
+			f.clearStore()
 			dir := filepath.Join(f.write, fmt.Sprintf("w%d", n))
 			paths := delTree(t, dir)
 			pv := f.previewDelete(dir, true)
@@ -651,7 +655,9 @@ func TestPrivDeleteWindows(t *testing.T) {
 // delay of up to a whole request's measured duration and then, until the
 // helper answers, keeps creating files in random directories of the tree
 // and replacing random files of the tree by other inodes. Every file it
-// managed to create survives, in every run; the outcomes are counted.
+// managed to create survives, in every run; the outcomes are counted. Each
+// run starts with an empty backup store, so that a request takes as long as
+// the calibration measured.
 func TestPrivDeleteConcurrentRacer(t *testing.T) {
 	const runs = 400
 	f := newFixture(t, replace("max_delete_entries: 20", "max_delete_entries: 200"))
@@ -682,6 +688,7 @@ func TestPrivDeleteConcurrentRacer(t *testing.T) {
 	counts := map[string]int{}
 	planted := 0
 	for i := range runs {
+		f.clearStore()
 		dir := filepath.Join(f.write, fmt.Sprintf("r%d", i))
 		files := mk(dir)
 		pv := f.previewDelete(dir, true)
