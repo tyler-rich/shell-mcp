@@ -28,10 +28,14 @@ jobs:
     # Two pinned runner images, one per all-thread Landlock path: below ABI 8
     # go-landlock applies no_new_privs and landlock_restrict_self on every
     # thread through libcap/psx (the production path on Debian 13, ABI 6);
-    # from ABI 8 it uses LANDLOCK_RESTRICT_SELF_TSYNC. Each entry requires
-    # its kernel's ABI, so the kernel-dependent tests fail rather than skip,
-    # and asserts which path it took.
-    name: go (fmt, vet, lint, test, vuln, build) — ${{ matrix.image }}, Landlock ABI ${{ matrix.abi }} (${{ matrix.path }})
+    # from ABI 8 it uses LANDLOCK_RESTRICT_SELF_TSYNC. Both images' kernels
+    # now report ABI 8, so the psx entry runs its tests as the
+    # landlock_forcepsx test build: the sandbox plans as at ABI 7 and applies
+    # through psx (internal/gate/sandbox/threadpath_forcepsx.go; never
+    # released, scripts/release-binary-check.sh). Each entry requires its
+    # ABI, so the kernel-dependent tests fail rather than skip, and asserts
+    # which path it took.
+    name: go (fmt, vet, lint, test, vuln, build) — ${{ matrix.image }}, Landlock ABI ${{ matrix.abi }} (${{ matrix.path }}${{ matrix.tags && ', forced' || '' }})
     runs-on: ${{ matrix.image }}
     timeout-minutes: 20
     strategy:
@@ -41,9 +45,11 @@ jobs:
           - image: ubuntu-24.04
             abi: "7"
             path: psx
+            tags: landlock_forcepsx
           - image: ubuntu-26.04
             abi: "8"
             path: tsync
+            tags: ""
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -68,36 +74,40 @@ jobs:
         run: |
           go vet ./...
           # Files built only with a tag: the e2e suite, the helper's e2e
-          # bypass build and the server's elicitation diagnostic build (none
-          # ever released).
+          # bypass build, the server's elicitation diagnostic build and the
+          # Landlock forced-psx test build (none ever released).
           go vet -tags e2e ./test/e2e/
           go vet -tags shellmcp_e2e_bypass ./internal/privd/... ./cmd/shell-mcp-privd/
           go vet -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/
+          go vet -tags landlock_forcepsx ./...
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
-      - name: golangci-lint (e2e and bypass build tags)
+      - name: golangci-lint (e2e, bypass, diagnostic and forced-psx build tags)
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
-          args: --build-tags=e2e,shellmcp_e2e_bypass,shellmcp_diag
+          args: --build-tags=e2e,shellmcp_e2e_bypass,shellmcp_diag,landlock_forcepsx
       # SHELL_MCP_REQUIRE_SECURE_TMP: tests fail (never skip) without a
       # trustworthy TMPDIR. SHELL_MCP_REQUIRE_LANDLOCK_ABI: each entry's
       # kernel ABI, so every sandbox test up to it (network rules from 4,
       # signal and abstract-socket scoping from 8) must run and fail rather
       # than skip. SHELL_MCP_EXPECT_LANDLOCK_PATH: the all-thread path this
-      # entry must take (TestLandlockThreadPath).
+      # entry must take (TestLandlockThreadPath, which reads it from a binary
+      # built like the gate). TEST_TAGS: the entry's build tags; the tests
+      # pass them on to the binaries they build (gatetest).
       - name: go test -race
         env:
           SHELL_MCP_REQUIRE_SECURE_TMP: "1"
           SHELL_MCP_REQUIRE_LANDLOCK_ABI: ${{ matrix.abi }}
           SHELL_MCP_EXPECT_LANDLOCK_PATH: ${{ matrix.path }}
+          TEST_TAGS: ${{ matrix.tags }}
           # The runner's kernel supports MPTCP: the MPTCP tests' control case
           # (a socket opened without the filter) must succeed here, or fail.
           SHELL_MCP_REQUIRE_MPTCP: "1"
         run: |
-          go test -race -timeout 20m -count=1 -v ./... 2>&1 | tee /tmp/go-test.log
+          go test -race -timeout 20m -count=1 -v -tags "$TEST_TAGS" ./... 2>&1 | tee /tmp/go-test.log
           test "${PIPESTATUS[0]}" -eq 0
       # The end-to-end test build skips fsx's forbidden-root check, so these
       # tests prove the built-in read deny list refuses on its own.
@@ -127,9 +137,10 @@ jobs:
         run: |
           {
             echo "### ${{ matrix.image }}: kernel $(uname -r)"
-            echo "- Landlock path exercised: $(grep -o 'LANDLOCK_PATH=[a-z]* kernel_abi=[0-9]*' /tmp/go-test.log | head -n1) (expected ${{ matrix.path }}, ABI ${{ matrix.abi }})"
+            echo "- build tags: ${{ matrix.tags || 'none (release build)' }}"
+            echo "- Landlock path exercised: $(grep -o 'LANDLOCK_PATH=[a-z]* kernel_abi=[0-9]* effective_abi=[0-9]*' /tmp/go-test.log | head -n1) (expected ${{ matrix.path }}, ABI ${{ matrix.abi }})"
             echo '```'
-            grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|LandlockThreadPath|Integration(Sandbox|Swap|ExecLimits|GitPull|ServiceOps|SystemOps)|RequiredRefused|BestEffort)' /tmp/go-test.log || true
+            grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|LandlockThreadPath|ThreadPathDecision|Integration(Sandbox|Swap|ExecLimits|GitPull|ServiceOps|SystemOps)|RequiredRefused|BestEffort)' /tmp/go-test.log || true
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: govulncheck
@@ -139,12 +150,10 @@ jobs:
           for arch in amd64 arm64; do
             for c in shell-mcp shell-mcp-gate shell-mcp-privd; do
               CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags '-s -w' -o "/tmp/$c-$arch" "./cmd/$c"
-              # The gate relies on CGO_ENABLED=0 (psx then uses syscall.AllThreadsSyscall).
-              go version -m "/tmp/$c-$arch" | grep -q 'CGO_ENABLED=0' || { echo "$c was built with cgo" >&2; exit 1; }
-              # The helper's e2e bypass build must never be what ships.
-              if go version -m "/tmp/$c-$arch" | grep -q shellmcp_e2e_bypass; then echo "$c was built with the e2e bypass tag" >&2; exit 1; fi
-              # Nor the server's elicitation diagnostic build.
-              if go version -m "/tmp/$c-$arch" | grep -q shellmcp_diag; then echo "$c was built with the diagnostic tag" >&2; exit 1; fi
+              # CGO_ENABLED=0 (psx then uses syscall.AllThreadsSyscall), and
+              # none of the test-only builds (e2e bypass, diagnostic,
+              # Landlock forced-psx).
+              bash scripts/release-binary-check.sh "/tmp/$c-$arch"
               echo "built $c linux/$arch (CGO_ENABLED=0)"
             done
           done
@@ -164,6 +173,9 @@ jobs:
         run: bash scripts/deps-current.sh
       - name: deps-current self-test
         run: bash scripts/deps-current_test.sh
+      # The release check against release builds and each test-only build.
+      - name: release-binary-check self-test
+        run: bash scripts/release-binary-check_test.sh
       # ci-local against a fake docker: it may label, list, stop and remove
       # only its own containers. No container is started here.
       - name: ci-local self-test
@@ -202,6 +214,16 @@ jobs:
         run: |
           docker run --rm shell-mcp:ci version
           test "$(docker image inspect shell-mcp:ci --format '{{.Config.User}}')" = "65532:65532"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # The image's binary is a release build too: no test-only tag or code.
+      - name: image binary is a release build
+        run: |
+          id="$(docker create shell-mcp:ci)"
+          docker cp "$id:/shell-mcp" "$RUNNER_TEMP/shell-mcp-image"
+          docker rm "$id" >/dev/null
+          bash scripts/release-binary-check.sh "$RUNNER_TEMP/shell-mcp-image"
       - name: Trivy
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
