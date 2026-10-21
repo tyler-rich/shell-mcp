@@ -45,8 +45,15 @@ fi
 # step and going on. The systemd probe labels its container the same way.
 run_label="shell-mcp.ci-local=$(date +%s)-$$-$RANDOM"
 export SHELL_MCP_CI_LOCAL_LABEL="$run_label"
+# This run's own TMPDIR on the shared cache volume (below). It is removed
+# when the run ends, however it ends, before the run's containers are.
+run_tmp="/cache/tmp/${run_label#*=}"
+tmp_made=""
 remove_own_containers() {
 	local ids
+	if [[ -n "$tmp_made" ]]; then
+		docker run --rm --label "$run_label" -u 0:0 -v "$cache_volume:/cache" "$go_image" rm -rf "$run_tmp" >/dev/null 2>&1 || true
+	fi
 	ids="$(docker ps -aq --filter "label=$run_label" 2>/dev/null || true)"
 	if [[ -n "$ids" ]]; then
 		# shellcheck disable=SC2086 # one container id per word
@@ -66,8 +73,16 @@ else
 fi
 cache_volume="shell-mcp-ci-cache"
 docker volume create "$cache_volume" >/dev/null
+# The caches belong to the container user. /cache/tmp holds every run's
+# TMPDIR, so nothing under it is chowned recursively: chown(2) moves the
+# change time of every file it touches, even to the same owner, and the
+# helper's and the gate's tests refuse a file whose change time moved
+# between two checks, so a second run starting meanwhile would fail the
+# first one's tests. /cache/tmp stays root's, 0755; each run gets its own
+# 0700 directory under it.
+tmp_made=1
 docker run --rm --label "$run_label" -u 0:0 -v "$cache_volume:/cache" "$go_image" \
-	sh -c "mkdir -p /cache/build /cache/mod /cache/lint /cache/tmp && chown -R $run_as /cache && chmod 0700 /cache/tmp" >/dev/null
+	sh -c "mkdir -p /cache/build /cache/mod /cache/lint /cache/tmp && chown -R $run_as /cache/build /cache/mod /cache/lint && chown $run_as /cache && chown 0:0 /cache/tmp && chmod 0755 /cache/tmp && mkdir -m 0700 $run_tmp && chown $run_as $run_tmp" >/dev/null
 
 common=(
 	--rm --label "$run_label" -u "$run_as"
@@ -78,7 +93,7 @@ common=(
 	# SHELL_MCP_REQUIRE_SECURE_TMP set they fail rather than skip without one.
 	# (The MPTCP tests skip here: Docker Desktop's kernel has no MPTCP, so
 	# their control case cannot run; CI requires them.)
-	-e TMPDIR=/cache/tmp -e SHELL_MCP_REQUIRE_SECURE_TMP=1
+	-e TMPDIR="$run_tmp" -e SHELL_MCP_REQUIRE_SECURE_TMP=1
 	-v "$cache_volume:/cache" -v "$repo:/src:ro" -w /src
 )
 in_go() { docker run "${common[@]}" "$go_image" "$@"; }
