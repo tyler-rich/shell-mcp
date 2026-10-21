@@ -31,30 +31,104 @@ import (
 // seed generated for this run, and POSTs the decision. Every value is
 // invented.
 
-// human is the simulated approver: one seed, and the last step it used,
-// since each step's code is accepted once and none from before the
-// server's start.
-type human struct {
+// approver is one enrolled approver's authenticator: its seed, and the
+// last step it used, since each step's code is accepted once per approver
+// and none from before the server's start.
+type approver struct {
+	name string
 	seed []byte
 	last int64
+}
+
+// human is the simulated person at the approval page, holding the
+// authenticators of one or more enrolled approvers (invented names).
+//
+// One approver (singleApprover) is the page as most deployments see it: a
+// form without an approver choice, and every approval after the first
+// waits for the next 30 s step. TestApprovalWebFlow uses it.
+//
+// Several (manyApprovers, the server's maximum) let a test that only needs
+// its requests approved approve up to that many within one step, each by
+// another approver, instead of waiting a step for each: every approval
+// still needs a current code of an enrolled approver, entered on the page.
+// Code replay, one use per step per approver and lockouts are proven by the
+// totp and page unit tests; a consumed approval (a second re-call) never
+// reaches the page, so the approver model does not touch those checks.
+type human struct {
+	approvers []*approver
+}
+
+const (
+	singleApprover = 1
+	manyApprovers  = approvers.MaxApprovers
+)
+
+var approverNames = [manyApprovers]string{"alice", "bob", "carol", "dave", "erin", "frank", "grace", "heidi"}
+
+// newHuman enrols n approvers with fresh seeds.
+func newHuman(t *testing.T, n int) *human {
+	t.Helper()
+	h := &human{}
+	for _, name := range approverNames[:n] {
+		a := &approver{name: name, seed: make([]byte, 20)}
+		if _, err := rand.Read(a.seed); err != nil {
+			t.Fatal(err)
+		}
+		h.approvers = append(h.approvers, a)
+	}
+	return h
+}
+
+// file writes the approvers file for h's approvers and returns its path.
+func (h *human) file(t *testing.T) string {
+	t.Helper()
+	var b strings.Builder
+	for _, a := range h.approvers {
+		b.WriteString(a.name + " " + approvers.EncodeSeed(a.seed) + "\n")
+	}
+	file := filepath.Join(t.TempDir(), "approvers")
+	if err := os.WriteFile(file, []byte(b.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+// env is the server configuration that enrols more than one approver.
+func (h *human) env() []string {
+	if len(h.approvers) == 1 {
+		return nil
+	}
+	return []string{"SHELL_MCP_APPROVAL_MAX_APPROVERS=" + strconv.Itoa(len(h.approvers))}
 }
 
 func step(t time.Time) int64 { return t.Unix() / int64(totp.Period/time.Second) }
 
 // started records a server start: no code for the current step or an
-// earlier one will be accepted.
-func (h *human) started() { h.last = max(h.last, step(time.Now())) }
+// earlier one will be accepted, from any approver.
+func (h *human) started() {
+	now := step(time.Now())
+	for _, a := range h.approvers {
+		a.last = max(a.last, now)
+	}
+}
 
-// code returns a code for the next unused step, waiting until that step
-// is within the verifier's ±1 window.
-func (h *human) code(t *testing.T) string {
+// code returns the approver whose next unused step comes first, and its
+// code for that step, waiting until the step is within the verifier's ±1
+// window.
+func (h *human) code(t *testing.T) (a *approver, code string) {
 	t.Helper()
-	want := h.last + 1
+	a = h.approvers[0]
+	for _, b := range h.approvers[1:] {
+		if b.last < a.last {
+			a = b
+		}
+	}
+	want := a.last + 1
 	for step(time.Now())+totp.Skew < want {
 		time.Sleep(500 * time.Millisecond)
 	}
-	h.last = want
-	return totp.Generate(h.seed, time.Unix(want*int64(totp.Period/time.Second), 0))
+	a.last = want
+	return a, totp.Generate(a.seed, time.Unix(want*int64(totp.Period/time.Second), 0))
 }
 
 type approvalServer struct {
@@ -78,7 +152,7 @@ func startApprovalServer(t *testing.T, h *human, file string, port int, extra ..
 			"SHELL_MCP_APPROVAL_PORT=" + strconv.Itoa(port),
 			"SHELL_MCP_APPROVAL_PUBLIC_URL=http://127.0.0.1:" + strconv.Itoa(port),
 			"SHELL_MCP_APPROVERS_FILE=" + file,
-		}, extra...)
+		}, append(h.env(), extra...)...)
 		cs, err = startServer(t, log, env...)
 		if err == nil {
 			break
@@ -119,8 +193,9 @@ func (s *approvalServer) callTool(t *testing.T, name string, args map[string]any
 
 var csrfRE = regexp.MustCompile(`name="csrf_token" value="([^"]+)"`)
 
-// decide acts as the approver: bookmark route with the id, the page, the
-// CSRF token, the code, the POST.
+// decide acts as an approver: bookmark route with the id, the page, the
+// CSRF token, the approver (when several are enrolled) and its code, the
+// POST.
 func (s *approvalServer) decide(t *testing.T, h *human, id, verb string) {
 	t.Helper()
 	noRedirect := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Timeout: 10 * time.Second}
@@ -146,13 +221,21 @@ func (s *approvalServer) decide(t *testing.T, h *human, id, verb string) {
 	if m == nil {
 		t.Fatalf("no CSRF token: %s", page)
 	}
-	res, err = noRedirect.PostForm(s.origin()+loc+"/"+verb, url.Values{"code": {h.code(t)}, "csrf_token": {string(m[1])}}) //nolint:noctx // test
+	a, code := h.code(t)
+	form := url.Values{"code": {code}, "csrf_token": {string(m[1])}}
+	if len(h.approvers) > 1 {
+		if !strings.Contains(string(page), `<select name="approver">`) {
+			t.Fatalf("several approvers, but no approver choice: %s", page)
+		}
+		form.Set("approver", a.name)
+	}
+	res, err = noRedirect.PostForm(s.origin()+loc+"/"+verb, form) //nolint:noctx // test
 	if err != nil {
 		t.Fatal(err)
 	}
 	b, _ := io.ReadAll(res.Body)
 	_ = res.Body.Close()
-	want := map[string]string{"approve": "Approved by alice", "decline": "Declined by alice"}[verb]
+	want := map[string]string{"approve": "Approved by ", "decline": "Declined by "}[verb] + a.name
 	if res.StatusCode != http.StatusOK || !strings.Contains(string(b), want) {
 		t.Fatalf("%s: %d %s", verb, res.StatusCode, b)
 	}
@@ -204,14 +287,10 @@ func freeLoopbackPort(t *testing.T) int {
 
 func TestApprovalWebFlow(t *testing.T) {
 	opsServer(t) // fixtures, and the ungated server that sets up the file
-	h := &human{seed: make([]byte, 20)}
-	if _, err := rand.Read(h.seed); err != nil {
-		t.Fatal(err)
-	}
-	file := filepath.Join(t.TempDir(), "approvers")
-	if err := os.WriteFile(file, []byte("alice "+approvers.EncodeSeed(h.seed)+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	// One approver: the page without an approver choice, each approval
+	// after the first waiting for the next step.
+	h := newHuman(t, singleApprover)
+	file := h.file(t)
 	port := freeLoopbackPort(t)
 	srv := startApprovalServer(t, h, file, port)
 	t.Cleanup(func() { _ = srv.cs.Close() })
@@ -379,7 +458,7 @@ func TestApprovalWebFlow(t *testing.T) {
 
 	// Never logged: codes, seeds, CSRF tokens, content.
 	log := srv.log.String()
-	for _, s := range []string{approvers.EncodeSeed(h.seed), "v2\\n", "changed\\n"} {
+	for _, s := range []string{approvers.EncodeSeed(h.approvers[0].seed), "v2\\n", "changed\\n"} {
 		if strings.Contains(log, s) {
 			t.Fatalf("server log contains %q", s)
 		}

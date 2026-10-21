@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"crypto/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,8 +10,6 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
-
-	"github.com/tyler-rich/shell-mcp/internal/approval/approvers"
 )
 
 // The delete tools end to end: shell_preview_delete through the operator
@@ -132,14 +129,8 @@ func TestDeleteToolsApproval(t *testing.T) {
 		conn.same(t)
 	})
 
-	h := &human{seed: make([]byte, 20)}
-	if _, err := rand.Read(h.seed); err != nil {
-		t.Fatal(err)
-	}
-	file := filepath.Join(t.TempDir(), "approvers")
-	if err := os.WriteFile(file, []byte("alice "+approvers.EncodeSeed(h.seed)+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	h := newHuman(t, manyApprovers)
+	file := h.file(t)
 	srv := startApprovalServer(t, h, file, freeLoopbackPort(t), "SHELL_MCP_PROFILE=admin")
 	t.Cleanup(func() { _ = srv.cs.Close() })
 	conn := connOf(t, srv.cs)

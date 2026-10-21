@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -11,8 +10,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/tyler-rich/shell-mcp/internal/approval/approvers"
 )
 
 // The privileged write tools end to end (S4c-2): the real shell-mcp (stdio,
@@ -35,14 +32,8 @@ func privWriteServer(t *testing.T) (*approvalServer, *human) {
 	if err := os.Mkdir(privWriteDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	h := &human{seed: make([]byte, 20)}
-	if _, err := rand.Read(h.seed); err != nil {
-		t.Fatal(err)
-	}
-	file := filepath.Join(t.TempDir(), "approvers")
-	if err := os.WriteFile(file, []byte("alice "+approvers.EncodeSeed(h.seed)+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	h := newHuman(t, manyApprovers)
+	file := h.file(t)
 	srv := startApprovalServer(t, h, file, freeLoopbackPort(t), "SHELL_MCP_PROFILE=admin", "SHELL_MCP_APPROVAL_TIERS=destructive",
 		"SHELL_MCP_SSH_KEY_FILE="+filepath.Join(bin(), "e2e-client-key"))
 	t.Cleanup(func() { _ = srv.cs.Close() })
