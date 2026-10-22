@@ -35,7 +35,7 @@ Common optional inputs on tools that run a process: `timeout_seconds` (1..`SHELL
 | Tool | Gate op | Inputs | Notes | Session |
 |---|---|---|---|---|
 | `shell_list_targets` | — (server) | — | Name, host, port and user as configured. Reachability is not probed here; `shell_get_policy` does that. | S2 |
-| `shell_get_policy` | `hello` + `policy` | `target` | Gate version, principal, `max_tier`, roots, limits, service/journal patterns, repos, command ids with templates and tiers. Call this first; it is the source of truth for what a target allows. | S2 |
+| `shell_get_policy` | `hello` + `policy` (+ `priv_policy` in `admin`) | `target` | Gate version, principal, `max_tier`, roots, limits, service/journal patterns, repos, command ids with templates and tiers. In the `admin` profile, when the gate forwards privileged operations, also `privileged.policy`: the privileged helper's policy summary (below). Call this first; it is the source of truth for what a target allows. | S2 / S4c-9 |
 | `shell_get_system_info` | `sysinfo` | `target` | OS release, kernel, uptime, load, memory, CPU count. | S3 |
 | `shell_get_disk_usage` | `disk` | `target`, `include_pseudo=false` | Per mount: fs type, size, used, avail, inodes. | S3 |
 | `shell_list_processes` | `processes` | `target`, `user?`, `name_contains?`, `sort_by=rss\|cpu\|pid`, `limit=100 (1..1000)` | Command lines redacted (values after secret-looking flags, URL userinfo, redaction patterns) and truncated to 512 chars. The walk is bounded by the policy's `max_processes`; a `hidepid` mount is reported. | S3 |
@@ -256,6 +256,13 @@ The package tools' previews are the helper's read-tier `priv_pkg_update_index_pr
 - **Errors.** The preview's refusals above, `exists` (the action, delay or policy changed since the approved preview), `not_found` (cancel: nothing is scheduled), `exec_failed` (cancel: too late, or not confirmed), `outcome_unknown`, `tier_denied`, `helper_wrong_unit`, and the gate's and helper's codes listed above.
 - **Descriptions.** "As root, reboot `<target>` 60 s after the call" / "As root, power off `<target>` 60 s after the call".
 - **Audit arguments.** `target` and `action`. The helper's journal line carries the action, `scheduled_at` and what happened (`power`), at WARN (PRIVILEGED §8).
+
+**Privileged tier: the policy summary (S4c-9).** No tool of its own: `shell_get_policy` (read tier, every profile) gains `privileged.policy` (handoff P-8).
+- **When.** Only in the `admin` profile (the profile that registers privileged tools), and only when the gate's `hello` says privileged forwarding is enabled. Otherwise nothing is sent to the helper and the field is absent. One `priv_policy` request at the tool's ceiling `read`, to the core unit.
+- **What.** The helper's summary of the policy it enforces (PRIVILEGED §6, "The policy summary"): `policy_sha256` (the privileged policy's; the gate policy's stays `gate.policy_sha256`), `max_tier`, `limits`, `roots` (`read`, `write`, `persistence`), `deny_patterns` (a count; the values are never shown), `owners`, `modes_max`, `backups_keep`, `backups_max_store_bytes`, `commands` (each with `id`, `tier`, `unit`, `description`, `templates`, `root_equivalent`, `capabilities` and `approval`), `packages`, `power`, `ops` (each operation the policy allows with its `tier`, `unit` and `approval`; `priv_exec` has tier and unit `command`, each command's being in `commands`) and `findings` (commands whose program bypasses a bound operation: a package tool, a power binary, or `find` with an action; each with `command_id`, `category`, `program` and `match`). No acknowledge text.
+- **Approval.** `approval` is the server's D-006 rule for privileged operations: true for operator and destructive, false for read. It says what a call will need, not whether an approval exists.
+- **Not for routing.** The server never takes a command's unit from the summary: `shell_priv_run_command` previews every call (handoff D6).
+- **Failures.** A helper refusal (any code), an answer without the helper's block, a summary whose `policy_sha256` is not that block's, or data this server does not know leave `shell_get_policy` successful with the gate's policy, without `privileged.policy`, and with a warning starting "the privileged policy summary is not shown:" and naming why.
 
 ## Not in v1
 
