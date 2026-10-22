@@ -57,7 +57,7 @@ func (s *server) openRecord(create bool) (*os.File, error) {
 		return nil, err
 	}
 	var st unix.Stat_t
-	if err := unix.Fstat(int(f.Fd()), &st); err != nil { //nolint:gosec // G115: a descriptor fits in int
+	if err := unix.Fstat(int(f.Fd()), &st); err != nil {
 		_ = f.Close()
 		return nil, err
 	}
@@ -76,7 +76,7 @@ func (s *server) holdRecord(killAt time.Time) (*pkgRecord, error) {
 	if err != nil {
 		return nil, errf(protocol.CodeExecFailed, "the package operation record could not be used (%s); nothing was changed", err.Error())
 	}
-	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil { //nolint:gosec // G115: a descriptor fits in int
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = f.Close()
 		if errors.Is(err, unix.EWOULDBLOCK) {
 			return nil, s.inProgressErr()
@@ -105,7 +105,7 @@ func (s *server) notInProgress() error {
 		return errf(protocol.CodeExecFailed, "the package operation record could not be used (%s)", err.Error())
 	}
 	defer func() { _ = f.Close() }()
-	if err := unix.Flock(int(f.Fd()), unix.LOCK_SH|unix.LOCK_NB); err != nil { //nolint:gosec // G115: a descriptor fits in int
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_SH|unix.LOCK_NB); err != nil {
 		if errors.Is(err, unix.EWOULDBLOCK) {
 			return s.inProgressErr()
 		}
@@ -139,7 +139,7 @@ func validTime(s string) bool {
 }
 
 // pkgLockHolder names the dpkg frontend lock's holder.
-func pkgLockHolder(path string) (string, bool, error) {
+func pkgLockHolder(path string) (holder string, held bool, err error) {
 	h, held, err := pkg.LockHolder(path)
 	return h.String(), held, err
 }

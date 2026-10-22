@@ -109,19 +109,20 @@ func (in *privPreviewPackagesIn) validate() *envelope.Error {
 	return invalid("operation must be install, upgrade or remove")
 }
 
-// PackageVersion, PackageUpgrade and PackageRemoval are a transaction's
-// entries.
+// PackageVersion is a package a transaction installs.
 type PackageVersion struct {
 	Name    string `json:"name" jsonschema:"Package name (with :arch for a foreign architecture)."`
 	Version string `json:"version" jsonschema:"Exact version."`
 }
 
+// PackageUpgrade is a package whose version a transaction changes.
 type PackageUpgrade struct {
 	Name string `json:"name" jsonschema:"Package name (with :arch for a foreign architecture)."`
 	From string `json:"from" jsonschema:"Installed version."`
 	To   string `json:"to" jsonschema:"Version it changes to."`
 }
 
+// PackageRemoval is a package a transaction removes.
 type PackageRemoval struct {
 	Name    string `json:"name" jsonschema:"Package name (with :arch for a foreign architecture)."`
 	Version string `json:"version" jsonschema:"Installed version."`
@@ -305,12 +306,12 @@ type pkgSpec struct {
 }
 
 func privInstallPackages(d *Deps) Tool {
-	return privPkgNamesTool[privInstallIn](d, pkgSpec{name: "shell_priv_install_packages", title: "Install packages as root", op: "install", tier: TierOperator, verb: "install",
+	return privPkgNamesTool[privInstallIn](d, &pkgSpec{name: "shell_priv_install_packages", title: "Install packages as root", op: "install", tier: TierOperator, verb: "install",
 		description: "Installs, as root, allow-listed packages exactly as their approved preview resolved them, every package at its approved version, never removing any; returns what dpkg shows was installed."})
 }
 
 func privRemovePackages(d *Deps) Tool {
-	return privPkgNamesTool[privRemoveIn](d, pkgSpec{name: "shell_priv_remove_packages", title: "Remove packages as root", op: "remove", tier: TierDestructive, verb: "remove",
+	return privPkgNamesTool[privRemoveIn](d, &pkgSpec{name: "shell_priv_remove_packages", title: "Remove packages as root", op: "remove", tier: TierDestructive, verb: "remove",
 		description: "Removes, as root, allow-listed packages exactly as their approved preview listed them, keeping their configuration files; returns what dpkg shows was removed."})
 }
 
@@ -329,7 +330,7 @@ func namesOf[In pkgIn](in *In) *privPkgNamesIn {
 	return nil
 }
 
-func privPkgNamesTool[In pkgIn](d *Deps, ps pkgSpec) Tool {
+func privPkgNamesTool[In pkgIn](d *Deps, ps *pkgSpec) Tool {
 	return define(d, spec[In, PackageResult]{
 		name: ps.name, title: ps.title, description: ps.description,
 		tier: ps.tier, privileged: true, idempotent: false,

@@ -284,8 +284,8 @@ func (s *server) pkgUpdate(raw jsontext.Value) (data any, warns []string, failur
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := s.pkgAllowed(pkg.OpUpdate, nil); err != nil {
-		return nil, nil, err
+	if aerr := s.pkgAllowed(pkg.OpUpdate, nil); aerr != nil {
+		return nil, nil, aerr
 	}
 	argv, _ := pkg.Args(pkg.OpUpdate, false, nil)
 	if pkg.UpdatePreviewHash(s.p.SHA256, argv) != want {
@@ -305,7 +305,7 @@ func (s *server) pkgUpdate(raw jsontext.Value) (data any, warns []string, failur
 	if err != nil {
 		return nil, nil, err
 	}
-	d, w := s.pkgResult(pkg.OpUpdate, []string{}, res.Result, res.Attempts, res.LockWait)
+	d, w := s.pkgResult(pkg.OpUpdate, []string{}, &res.Result, res.Attempts, res.LockWait)
 	return d, w, nil
 }
 
@@ -318,7 +318,7 @@ func holderOf(stderr []byte) string {
 }
 
 // pkgResult shapes apt-get's last run as the result.
-func (s *server) pkgResult(op pkg.Op, names []string, res execx.Result, attempts int, lockWait time.Duration) (pkgData, []string) {
+func (s *server) pkgResult(op pkg.Op, names []string, res *execx.Result, attempts int, lockWait time.Duration) (out pkgData, warns []string) {
 	maxOut := s.p.Limits.MaxOutputBytes
 	stdout, cutOut := s.red.Truncate(res.Stdout, maxOut)
 	stderr, cutErr := s.red.Truncate(res.Stderr, maxOut)
@@ -461,22 +461,22 @@ func (s *server) pkgPreview(raw jsontext.Value, op pkg.Op) (data any, warns []st
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := s.pkgAllowed(op, names); err != nil {
-		return nil, nil, err
+	if aerr := s.pkgAllowed(op, names); aerr != nil {
+		return nil, nil, aerr
 	}
-	if err := s.pkgChecks(); err != nil {
-		return nil, nil, err
+	if cerr := s.pkgChecks(); cerr != nil {
+		return nil, nil, cerr
 	}
-	if err := s.lockFree(); err != nil {
-		return nil, nil, err
+	if lerr := s.lockFree(); lerr != nil {
+		return nil, nil, lerr
 	}
 	argv, _ := pkg.Args(op, true, names)
 	sim, err := s.simulate(argv, s.start.Add(s.timeout()))
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := neverRemoves(op, sim.tx); err != nil {
-		return nil, nil, err
+	if rerr := neverRemoves(op, sim.tx); rerr != nil {
+		return nil, nil, rerr
 	}
 	w := wireTx(sim.tx)
 	stderr, cut := s.red.Truncate(sim.res.Stderr, s.p.Limits.MaxOutputBytes)
@@ -522,8 +522,8 @@ func (s *server) pkgChange(raw jsontext.Value, op pkg.Op) (data any, warns []str
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := s.pkgAllowed(op, names); err != nil {
-		return nil, nil, err
+	if aerr := s.pkgAllowed(op, names); aerr != nil {
+		return nil, nil, aerr
 	}
 	st := s.stages()
 	rec, err := s.holdRecord(st.killAt)
@@ -541,8 +541,8 @@ func (s *server) pkgChange(raw jsontext.Value, op pkg.Op) (data any, warns []str
 	if err != nil {
 		return nil, nil, errf(protocol.CodeExecFailed, "dpkg's status could not be read (%s); nothing was changed", err.Error())
 	}
-	if err := unfinishedErr(before, s.o.DpkgDir, "nothing was changed"); err != nil {
-		return nil, nil, err
+	if uerr := unfinishedErr(before, s.o.DpkgDir, "nothing was changed"); uerr != nil {
+		return nil, nil, uerr
 	}
 	// (1) The preview, recomputed with its own argv.
 	argv, _ := pkg.Args(op, true, names)
@@ -550,8 +550,8 @@ func (s *server) pkgChange(raw jsontext.Value, op pkg.Op) (data any, warns []str
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := neverRemoves(op, sim.tx); err != nil {
-		return nil, nil, err
+	if rerr := neverRemoves(op, sim.tx); rerr != nil {
+		return nil, nil, rerr
 	}
 	if pkg.PreviewHash(s.p.SHA256, op, names, sim.tx, argv) != want {
 		return nil, nil, errf(protocol.CodeExists, "the transaction differs from its preview (a new candidate version, dependency or removal, or the privileged policy changed); nothing was run; preview again")
@@ -594,7 +594,7 @@ func (s *server) pkgChange(raw jsontext.Value, op pkg.Op) (data any, warns []str
 	if err != nil {
 		return nil, nil, err
 	}
-	return s.pkgOutcome(op, names, before, tx, res, attempts, waited)
+	return s.pkgOutcome(op, names, before, tx, &res, attempts, waited)
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -804,7 +804,7 @@ func (s *server) answerEarly(when string) {
 // condition 2): the transaction applied exactly and nothing unfinished is
 // a success; nothing changed is exec_failed; anything else verify_failed.
 // apt's exit code decides nothing.
-func (s *server) pkgOutcome(op pkg.Op, names []string, before pkg.Status, tx pkg.Transaction, res execx.Result, attempts int, waited time.Duration) (any, []string, error) {
+func (s *server) pkgOutcome(op pkg.Op, names []string, before pkg.Status, tx pkg.Transaction, res *execx.Result, attempts int, waited time.Duration) (data any, warns []string, failure error) {
 	after, err := pkg.ReadStatus(s.o.DpkgDir)
 	if err != nil {
 		return nil, nil, errf(protocol.CodeOutcomeUnknown, "apt-get ran, but dpkg's status could not be read afterwards (%s); check the host", err.Error())
@@ -832,9 +832,9 @@ func (s *server) pkgOutcome(op pkg.Op, names []string, before pkg.Status, tx pkg
 	case "killed":
 		how = "apt-get was killed at the helper's limit; "
 	}
-	if err := unfinishedErr(after, s.o.DpkgDir, "the transaction cannot be undone"); err != nil {
+	if uerr := unfinishedErr(after, s.o.DpkgDir, "the transaction cannot be undone"); uerr != nil {
 		var oe *opError
-		errors.As(err, &oe)
+		errors.As(uerr, &oe)
 		return nil, nil, errf(protocol.CodeVerifyFailed, "%s%s; applied %s, approved %s", how, oe.msg, txSummary(diff), txSummary(tx))
 	}
 	switch {

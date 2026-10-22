@@ -107,7 +107,7 @@ var untilRE = regexp.MustCompile(`may run until \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ`
 
 // wantEarly checks an early answer: outcome_unknown naming the request id
 // and the time it may run until.
-func wantEarly(t *testing.T, r response) {
+func wantEarly(t *testing.T, r *response) {
 	t.Helper()
 	if r.OK || r.Error == nil || r.Error.Code != "outcome_unknown" || !strings.Contains(r.Error.Message, reqID) || !untilRE.MatchString(r.Error.Message) {
 		t.Fatalf("early answer %+v", r.Error)
@@ -129,13 +129,13 @@ func signalsGot(t *testing.T, p string) string {
 // signal; meanwhile a preview says the operation is in progress; the
 // journal line, written when it ends, has the operation's own result.
 func TestPkgEarlyAnswer(t *testing.T) {
-	f := modelFixture(t, pkgModel{}, nil, stagePolicy())
+	f := modelFixture(t, &pkgModel{}, nil, stagePolicy())
 	marker := filepath.Join(f.d, "child-signals")
 	p := f.pkgPreview("priv_pkg_install", hello)
-	f.setModel(pkgModel{Run: mrun{SlowMS: 2500, Child: marker}})
+	f.setModel(&pkgModel{Run: mrun{SlowMS: 2500, Child: marker}})
 	a := f.serveAsync(pkgLine("priv_pkg_install", bound(hello, p), 1000))
 	r, at := a.answer(3 * time.Second)
-	wantEarly(t, r)
+	wantEarly(t, &r)
 	if d := at.Sub(a.start); d < 900*time.Millisecond || d > 2*time.Second {
 		t.Fatalf("answered after %v, want at the 1 s deadline", d)
 	}
@@ -166,10 +166,10 @@ func TestPkgEarlyAnswer(t *testing.T) {
 func TestPkgHangupLetsFinish(t *testing.T) {
 	for _, mode := range []string{"close", "half"} {
 		t.Run(mode, func(t *testing.T) {
-			f := modelFixture(t, pkgModel{}, nil, stagePolicy())
+			f := modelFixture(t, &pkgModel{}, nil, stagePolicy())
 			marker := filepath.Join(f.d, "child-signals")
 			p := f.pkgPreview("priv_pkg_install", hello)
-			f.setModel(pkgModel{Run: mrun{SlowMS: 2000, Child: marker}})
+			f.setModel(&pkgModel{Run: mrun{SlowMS: 2000, Child: marker}})
 			a := f.serveAsync(pkgLine("priv_pkg_install", bound(hello, p), 4000))
 			time.Sleep(500 * time.Millisecond)
 			if mode == "close" {
@@ -177,7 +177,7 @@ func TestPkgHangupLetsFinish(t *testing.T) {
 			} else {
 				_ = unix.Shutdown(a.gate, unix.SHUT_WR)
 				r, at := a.answer(2 * time.Second)
-				wantEarly(t, r)
+				wantEarly(t, &r)
 				if at.Sub(a.start) > 1500*time.Millisecond {
 					t.Fatalf("answered %v after the request", at.Sub(a.start))
 				}
@@ -204,13 +204,13 @@ func TestPkgHangupLetsFinish(t *testing.T) {
 // at a safe point and exits 0; the part it applied is verify_failed, from
 // dpkg's status, not its exit code.
 func TestPkgSigintAtStopPoint(t *testing.T) {
-	f := modelFixture(t, pkgModel{}, nil, stagePolicy())
+	f := modelFixture(t, &pkgModel{}, nil, stagePolicy())
 	marker := filepath.Join(f.d, "child-signals")
 	p := f.pkgPreview("priv_pkg_install", hello)
-	f.setModel(pkgModel{Run: mrun{SlowMS: 30000, OnInt: "partial", Child: marker}})
+	f.setModel(&pkgModel{Run: mrun{SlowMS: 30000, OnInt: "partial", Child: marker}})
 	a := f.serveAsync(pkgLine("priv_pkg_install", bound(hello, p), 1000))
 	r, _ := a.answer(3 * time.Second)
-	wantEarly(t, r)
+	wantEarly(t, &r)
 	took := a.ended(10 * time.Second)
 	if took < 2900*time.Millisecond || took > 4*time.Second {
 		t.Fatalf("Serve returned after %v, want just after the 3 s stop point and before the 4 s kill", took)
@@ -235,13 +235,13 @@ func TestPkgSigintAtStopPoint(t *testing.T) {
 // journal line reports; everything ends well inside RuntimeMaxSec
 // (max_timeout_s + 30 s).
 func TestPkgFinalKill(t *testing.T) {
-	f := modelFixture(t, pkgModel{}, nil, stagePolicy())
+	f := modelFixture(t, &pkgModel{}, nil, stagePolicy())
 	marker := filepath.Join(f.d, "child-signals")
 	p := f.pkgPreview("priv_pkg_install", hello)
-	f.setModel(pkgModel{Run: mrun{SlowMS: 60000, OnInt: "ignore", IgnoreTerm: true, UnfinishedFirst: true, Child: marker}})
+	f.setModel(&pkgModel{Run: mrun{SlowMS: 60000, OnInt: "ignore", IgnoreTerm: true, UnfinishedFirst: true, Child: marker}})
 	a := f.serveAsync(pkgLine("priv_pkg_install", bound(hello, p), 1000))
 	r, _ := a.answer(3 * time.Second)
-	wantEarly(t, r)
+	wantEarly(t, &r)
 	took := a.ended(4*time.Second + 30*time.Second)
 	// SIGTERM at 4 s, SIGKILL 2 s later, the reaping and the journal line.
 	if took < 4*time.Second || took > 9*time.Second {
@@ -264,7 +264,7 @@ func TestPkgFinalKill(t *testing.T) {
 // TestPkgHangupBeforeStart: a hang-up before apt-get started (the lock
 // held, so the operation waits) runs nothing: timeout, nothing changed.
 func TestPkgHangupBeforeStart(t *testing.T) {
-	f := modelFixture(t, pkgModel{}, nil, stagePolicy())
+	f := modelFixture(t, &pkgModel{}, nil, stagePolicy())
 	f.opts.PkgLockRetry = 50 * time.Millisecond
 	p := f.pkgPreview("priv_pkg_install", hello)
 	_, release := f.holdDpkgLock()

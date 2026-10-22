@@ -217,8 +217,8 @@ func TestDiff(t *testing.T) {
 
 func TestTransactionEqual(t *testing.T) {
 	t.Parallel()
-	a := pkg.ParseSimulation([]byte("Inst example-b (1 R [all])\nInst example-a (2 R [all])\nInst example-c [1] (2 R [all])\nRemv example-d [3]\n")).Transaction()
-	b := pkg.ParseSimulation([]byte("Remv example-d [3]\nInst example-c [1] (2 R [all])\nInst example-a (2 R [all])\nInst example-b (1 R [all])\n")).Transaction()
+	a := txOf("Inst example-b (1 R [all])\nInst example-a (2 R [all])\nInst example-c [1] (2 R [all])\nRemv example-d [3]\n")
+	b := txOf("Remv example-d [3]\nInst example-c [1] (2 R [all])\nInst example-a (2 R [all])\nInst example-b (1 R [all])\n")
 	if !a.Equal(b) || a.Install[0].Name != "example-a" {
 		t.Fatalf("order: %+v %+v", a, b)
 	}
@@ -230,7 +230,7 @@ func TestTransactionEqual(t *testing.T) {
 		"removal":  "Inst example-b (1 R [all])\nInst example-a (2 R [all])\nInst example-c [1] (2 R [all])\n",
 		"upgraded": "Inst example-b (1 R [all])\nInst example-a (2 R [all])\nInst example-c (2 R [all])\nRemv example-d [3]\n",
 	} {
-		if a.Equal(pkg.ParseSimulation([]byte(other)).Transaction()) {
+		if a.Equal(txOf(other)) {
 			t.Errorf("%s: equal", name)
 		}
 	}
@@ -372,12 +372,12 @@ func TestLockHolder(t *testing.T) {
 	c.Env = append(os.Environ(), "PKG_TEST_HOLD_LOCK="+lock)
 	in, _ := c.StdinPipe()
 	out, _ := c.StdoutPipe()
-	if err := c.Start(); err != nil {
+	if err = c.Start(); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = in.Close(); _ = c.Wait() })
 	buf := make([]byte, 7)
-	if _, err := out.Read(buf); err != nil || string(buf[:6]) != "locked" {
+	if _, err = out.Read(buf); err != nil || string(buf[:6]) != "locked" {
 		t.Fatalf("helper process: %q %v", buf, err)
 	}
 	h, held, err := pkg.LockHolder(lock)
@@ -407,4 +407,10 @@ func holdLock(t *testing.T, path string) {
 	}
 	_, _ = os.Stdout.WriteString("locked\n")
 	_, _ = os.Stdin.Read(make([]byte, 1))
+}
+
+// txOf is a simulation's transaction.
+func txOf(out string) pkg.Transaction {
+	sim := pkg.ParseSimulation([]byte(out))
+	return sim.Transaction()
 }

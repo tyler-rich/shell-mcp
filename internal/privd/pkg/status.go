@@ -75,7 +75,7 @@ var (
 // characters, starting with a digit (Debian Policy §5.6.12: an epoch or an
 // upstream version), never ending in "-" (an empty revision, and apt's
 // suffix for a removal).
-var pinVersionRE = regexp.MustCompile(`^[0-9][A-Za-z0-9.+~:-]{0,127}$`)
+var pinVersionRE = regexp.MustCompile(`^\d[A-Za-z0-9.+~:-]{0,127}$`)
 
 // ReadStatus reads and parses <dir>/status: a regular file, opened without
 // following a symlink, at most MaxStatusBytes.
@@ -133,8 +133,9 @@ func ParseStatus(b []byte) (Status, error) {
 	if st.Native == "" || st.Native == "all" {
 		return Status{}, errors.New("dpkg's status file has no installed dpkg entry naming the native architecture")
 	}
-	for _, p := range list {
-		k := st.key(p)
+	for i := range list {
+		p := list[i]
+		k := st.key(&p)
 		if _, dup := st.Packages[k]; dup {
 			return Status{}, fmt.Errorf("dpkg's status file lists %s twice", k)
 		}
@@ -199,7 +200,7 @@ func parseStanza(stanza string) (Package, error) {
 	return p, nil
 }
 
-func (s Status) key(p Package) string {
+func (s Status) key(p *Package) string {
 	if p.Arch == "" || p.Arch == "all" || p.Arch == s.Native {
 		return p.Name
 	}
@@ -239,7 +240,7 @@ func PendingUpdates(dir string) ([]string, error) {
 
 // present: the package is on the system (dpkg has its files), in any state
 // but not-installed and config-files.
-func present(p Package) bool { return p.State != "not-installed" && p.State != "config-files" }
+func present(p *Package) bool { return p.State != "not-installed" && p.State != "config-files" }
 
 // Diff is what changed from before to after: packages that became present
 // (Install), present ones whose version changed (Upgrade, also for a
@@ -251,15 +252,15 @@ func Diff(before, after Status) Transaction {
 	for k, a := range after.Packages {
 		b, ok := before.Packages[k]
 		switch {
-		case !present(a):
-		case !ok || !present(b):
+		case !present(&a):
+		case !ok || !present(&b):
 			t.Install = append(t.Install, Version{Name: k, Version: a.Version})
 		case a.Version != b.Version:
 			t.Upgrade = append(t.Upgrade, Upgrade{Name: k, From: b.Version, To: a.Version})
 		}
 	}
 	for k, b := range before.Packages {
-		if a, ok := after.Packages[k]; present(b) && (!ok || !present(a)) {
+		if a, ok := after.Packages[k]; present(&b) && (!ok || !present(&a)) {
 			t.Remove = append(t.Remove, Removal{Name: k, Version: b.Version})
 		}
 	}
@@ -282,7 +283,7 @@ func (t Transaction) canon() Transaction {
 }
 
 // Transaction returns the simulation's changes in canonical order.
-func (s Simulation) Transaction() Transaction {
+func (s *Simulation) Transaction() Transaction {
 	return Transaction{Install: s.Install, Upgrade: s.Upgrade, Remove: s.Remove}.canon()
 }
 
@@ -484,7 +485,7 @@ func LockHolder(path string) (Holder, bool, error) {
 
 // comm is /proc/<pid>/comm as printable ASCII, "" when unreadable.
 func comm(pid int) string {
-	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/comm") //nolint:gosec // G304: a /proc path built from a pid
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/comm")
 	if err != nil || len(b) > 64 {
 		return ""
 	}
@@ -501,7 +502,7 @@ func printable(s string) string {
 }
 
 // heldByRE is apt's "It is held by process <pid> (<name>)".
-var heldByRE = regexp.MustCompile(`held by process ([0-9]{1,10}) \(([^()\n]{1,64})\)`)
+var heldByRE = regexp.MustCompile(`held by process (\d{1,10}) \(([^()\n]{1,64})\)`)
 
 // HolderFromStderr is the lock holder apt named in its refusal.
 func HolderFromStderr(stderr []byte) (Holder, bool) {

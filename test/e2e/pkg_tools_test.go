@@ -173,11 +173,12 @@ func lineClient(t *testing.T, line string) (string, time.Duration) {
 
 var untilRE = regexp.MustCompile(`may run until \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ`)
 
-func pkgRequest(t *testing.T, op string, args map[string]any, timeoutMS int) (line, id string) {
+// installRequest is a priv_pkg_install request line for the broad helper.
+func installRequest(t *testing.T, args map[string]any, timeoutMS int) (line, id string) {
 	t.Helper()
 	b, _ := json.Marshal(args)
 	id = newID()
-	return fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":%q,"args":%s,"timeout_ms":%d}`+"\n", id, op, b, timeoutMS), id
+	return fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":"priv_pkg_install","args":%s,"timeout_ms":%d}`+"\n", id, b, timeoutMS), id
 }
 
 // TestPackageStopPoints (the maintainer's decision on item 5), in the
@@ -205,7 +206,7 @@ func TestPackageStopPoints(t *testing.T) {
 	}
 	t.Run("early", func(t *testing.T) {
 		p := setup(t, "example-slow")
-		line, id := pkgRequest(t, "priv_pkg_install", withHash(map[string]any{"packages": []string{"example-slow"}}, p.PreviewSHA256), 3000)
+		line, id := installRequest(t, withHash(map[string]any{"packages": []string{"example-slow"}}, p.PreviewSHA256), 3000)
 		out, took := lineClient(t, line)
 		if !strings.Contains(out, `"code":"outcome_unknown"`) || !strings.Contains(out, id) || !untilRE.MatchString(out) || took > 8*time.Second {
 			t.Fatalf("answer after %v: %s", took, out)
@@ -214,19 +215,19 @@ func TestPackageStopPoints(t *testing.T) {
 			!strings.Contains(r.Error.Message, id) {
 			t.Fatalf("preview during the operation: %s %+v", r.code(), r.Error)
 		}
-		waitLineFor(t, 45*time.Second, `"id":"`+id+`"`, `"answered_early":true`, `"outcome":"ok"`, `"applied":`)
+		waitLineFor(t, `"id":"`+id+`"`, `"answered_early":true`, `"outcome":"ok"`, `"applied":`)
 		if got := installed(t, "example-slow"); got != "installed 1.0" {
 			t.Fatalf("dpkg %q", got)
 		}
 	})
 	t.Run("drop", func(t *testing.T) {
 		p := setup(t, "example-slow")
-		line, id := pkgRequest(t, "priv_pkg_install", withHash(map[string]any{"packages": []string{"example-slow"}}, p.PreviewSHA256), 20000)
+		line, id := installRequest(t, withHash(map[string]any{"packages": []string{"example-slow"}}, p.PreviewSHA256), 20000)
 		cl, out := hangupClient(t, "drop", broadSocket, line, 3*time.Second)
 		if err := cl.Wait(); err != nil {
 			t.Fatalf("client: %v %q", err, out.String())
 		}
-		waitLineFor(t, 45*time.Second, `"id":"`+id+`"`, `"hung_up":true`, `"answered_early":true`, `"outcome":"ok"`)
+		waitLineFor(t, `"id":"`+id+`"`, `"hung_up":true`, `"answered_early":true`, `"outcome":"ok"`)
 		if got := installed(t, "example-slow"); got != "installed 1.0" {
 			t.Fatalf("dpkg %q", got)
 		}
@@ -236,12 +237,12 @@ func TestPackageStopPoints(t *testing.T) {
 		if len(p.Install) != 2 {
 			t.Fatalf("preview %+v", p)
 		}
-		line, id := pkgRequest(t, "priv_pkg_install", withHash(map[string]any{"packages": []string{"example-slow-b"}}, p.PreviewSHA256), 3000)
+		line, id := installRequest(t, withHash(map[string]any{"packages": []string{"example-slow-b"}}, p.PreviewSHA256), 3000)
 		out, _ := lineClient(t, line)
 		if !strings.Contains(out, `"code":"outcome_unknown"`) {
 			t.Fatalf("answer %s", out)
 		}
-		j := waitLineFor(t, 45*time.Second, `"id":"`+id+`"`, `"stopped":"sigint"`, `"outcome":"verify_failed"`)
+		j := waitLineFor(t, `"id":"`+id+`"`, `"stopped":"sigint"`, `"outcome":"verify_failed"`)
 		if strings.Contains(j.Message, `"unfinished"`) {
 			t.Fatalf("the graceful stop left dpkg unfinished: %s", j.Message)
 		}
@@ -254,10 +255,10 @@ func TestPackageStopPoints(t *testing.T) {
 	})
 	t.Run("kill", func(t *testing.T) {
 		p := setup(t, "example-stuck")
-		line, id := pkgRequest(t, "priv_pkg_install", withHash(map[string]any{"packages": []string{"example-stuck"}}, p.PreviewSHA256), 3000)
+		line, id := installRequest(t, withHash(map[string]any{"packages": []string{"example-stuck"}}, p.PreviewSHA256), 3000)
 		start := time.Now()
 		lineClient(t, line)
-		j := waitLineFor(t, 45*time.Second, `"id":"`+id+`"`, `"stopped":"killed"`, `"outcome":"verify_failed"`, `"unfinished":["example-stuck"]`)
+		j := waitLineFor(t, `"id":"`+id+`"`, `"stopped":"killed"`, `"outcome":"verify_failed"`, `"unfinished":["example-stuck"]`)
 		// The kill at 24 s, its 2 s grace and the reaping, well inside
 		// RuntimeMaxSec (54 s): the instance ended on its own.
 		if d := time.Since(start); d > 50*time.Second {
@@ -272,11 +273,12 @@ func TestPackageStopPoints(t *testing.T) {
 	})
 }
 
-// waitLineFor is waitLine for the helper's journal with a longer bound: a
-// package operation's line comes when it ends, up to its max_timeout_s and
-// the kill after the request.
-func waitLineFor(t *testing.T, d time.Duration, want ...string) journalEntry {
+// waitLineFor is waitLine for the helper's journal with a longer bound (45 s):
+// a package operation's line comes when it ends, up to its max_timeout_s
+// and the kill after the request.
+func waitLineFor(t *testing.T, want ...string) journalEntry {
 	t.Helper()
+	const d = 45 * time.Second
 	deadline := time.Now().Add(d)
 	for {
 	entries:

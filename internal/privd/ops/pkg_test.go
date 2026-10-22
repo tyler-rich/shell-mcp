@@ -167,7 +167,7 @@ func dpkgStatus(installed ...string) string {
 
 // withModel makes the stand-in the model with mod, and dpkg's status the
 // given installed packages.
-func withModel(mod pkgModel, installed ...string) opt {
+func withModel(mod *pkgModel, installed ...string) opt {
 	return func(f *fixture, s *string) {
 		withFakeApt("model")(f, s)
 		f.setModel(mod)
@@ -175,19 +175,20 @@ func withModel(mod pkgModel, installed ...string) opt {
 	}
 }
 
-func (f *fixture) setModel(mod pkgModel) {
+func (f *fixture) setModel(mod *pkgModel) {
 	f.t.Helper()
-	mod.DpkgDir = f.dpkg
-	if mod.Repo == nil {
-		mod.Repo = repoV1()
+	m := *mod
+	m.DpkgDir = f.dpkg
+	if m.Repo == nil {
+		m.Repo = repoV1()
 	}
-	b, _ := json.Marshal(mod)
+	b, _ := json.Marshal(&m)
 	gatetest.WriteFile(f.t, f.aptLog+".model.json", string(b), 0o600)
 }
 
 // aptRuns is how many apt-get runs the stand-in has finished.
 func (f *fixture) aptRuns() int {
-	b, _ := os.ReadFile(f.aptLog + ".count") //nolint:gosec // G304: test fixture
+	b, _ := os.ReadFile(f.aptLog + ".count")
 	n, _ := strconv.Atoi(strings.TrimSpace(string(b)))
 	return n
 }
@@ -226,7 +227,7 @@ func pkgFixture(t *testing.T, mode string, opts ...opt) *fixture {
 }
 
 // modelFixture is pkgFixture with the model and the installed packages.
-func modelFixture(t *testing.T, mod pkgModel, installed []string, opts ...opt) *fixture {
+func modelFixture(t *testing.T, mod *pkgModel, installed []string, opts ...opt) *fixture {
 	t.Helper()
 	return newFixture(t, append([]opt{broadUsers(), withModel(mod, installed...), asBroad()}, opts...)...)
 }
@@ -235,15 +236,15 @@ func allowUpgrade() opt {
 	return replace("  allow_update_index: true\n", "  allow_update_index: true\n  allow_upgrade: true\n")
 }
 
-func (f *fixture) pkgPreview(op string, args m) preview {
+func (f *fixture) pkgPreview(op string, args m) *preview {
 	f.t.Helper()
 	var p preview
 	f.ok(op+"_preview", args, &p)
-	return p
+	return &p
 }
 
 // bound returns args with the preview's hash as expected_preview_sha256.
-func bound(args m, p preview) m {
+func bound(args m, p *preview) m {
 	out := m{"expected_preview_sha256": p.PreviewSHA256}
 	for k, v := range args {
 		out[k] = v
@@ -259,7 +260,7 @@ var hello = m{"packages": []string{"example-hello"}}
 // changes nothing.
 func TestPkgPreview(t *testing.T) {
 	t.Parallel()
-	f := modelFixture(t, pkgModel{}, nil)
+	f := modelFixture(t, &pkgModel{}, nil)
 	p := f.pkgPreview("priv_pkg_install", hello)
 	if p.Op != "install" || !slices.Equal(p.Packages, []string{"example-hello"}) || !p.Complete ||
 		!slices.Equal(p.Install, []entry{{Name: "example-hello", Version: "1.1"}, {Name: "example-lib", Version: "2.1-1"}}) || len(p.Upgrade)+len(p.Remove) != 0 {
@@ -274,7 +275,7 @@ func TestPkgPreview(t *testing.T) {
 	if again := f.pkgPreview("priv_pkg_install", hello); again.PreviewSHA256 != p.PreviewSHA256 {
 		t.Fatal("the same transaction hashes differently")
 	}
-	f.setModel(pkgModel{Repo: append(repoV1(), mpkg{Name: "example-hello", Version: "1.2", Depends: []string{"example-lib"}})})
+	f.setModel(&pkgModel{Repo: append(repoV1(), mpkg{Name: "example-hello", Version: "1.2", Depends: []string{"example-lib"}})})
 	if moved := f.pkgPreview("priv_pkg_install", hello); moved.PreviewSHA256 == p.PreviewSHA256 || moved.Install[0].Version != "1.2" {
 		t.Fatalf("a new candidate: %+v", moved)
 	}
@@ -293,7 +294,7 @@ func TestPkgPreview(t *testing.T) {
 	if len(f.realRuns()) != 0 {
 		t.Fatal("the update preview ran apt-get")
 	}
-	off := modelFixture(t, pkgModel{}, nil, replace("  allow_update_index: true\n", "  allow_update_index: false\n"))
+	off := modelFixture(t, &pkgModel{}, nil, replace("  allow_update_index: true\n", "  allow_update_index: false\n"))
 	off.fail("priv_pkg_update_index_preview", m{}, "policy_denied")
 }
 
@@ -303,7 +304,7 @@ func TestPkgPreview(t *testing.T) {
 // status shows changed.
 func TestPkgInstallBound(t *testing.T) {
 	t.Parallel()
-	f := modelFixture(t, pkgModel{}, nil)
+	f := modelFixture(t, &pkgModel{}, nil)
 	p := f.pkgPreview("priv_pkg_install", hello)
 	var r pkgResult
 	f.ok("priv_pkg_install", bound(hello, p), &r)
@@ -334,11 +335,11 @@ func TestPkgInstallBound(t *testing.T) {
 // preview's hash, well formed; nothing runs without it.
 func TestPkgRequiresPreviewHash(t *testing.T) {
 	t.Parallel()
-	f := modelFixture(t, pkgModel{}, []string{"example-hello=1.0", "example-lib=2.1-1"}, allowUpgrade())
+	f := modelFixture(t, &pkgModel{}, []string{"example-hello=1.0", "example-lib=2.1-1"}, allowUpgrade())
 	for op, args := range map[string]m{"priv_pkg_install": hello, "priv_pkg_remove": hello, "priv_pkg_upgrade": {}, "priv_pkg_update_index": {}} {
 		f.fail(op, args, "bad_request")
 		for _, bad := range []string{"", "abc", strings.Repeat("A", 64), strings.Repeat("g", 64)} {
-			f.fail(op, bound(args, preview{PreviewSHA256: bad}), "bad_request")
+			f.fail(op, bound(args, &preview{PreviewSHA256: bad}), "bad_request")
 		}
 	}
 	if r := f.realRuns(); len(r) != 0 {
@@ -368,17 +369,17 @@ func TestPkgChangedSincePreview(t *testing.T) {
 		change    func(f *fixture)
 	}{
 		"install/version": {"priv_pkg_install", hello, nil, func(f *fixture) {
-			f.setModel(pkgModel{Repo: append(repoV1(), mpkg{Name: "example-hello", Version: "1.2", Depends: []string{"example-lib"}})})
+			f.setModel(&pkgModel{Repo: append(repoV1(), mpkg{Name: "example-hello", Version: "1.2", Depends: []string{"example-lib"}})})
 		}},
-		"install/dependency": {"priv_pkg_install", hello, nil, func(f *fixture) { f.setModel(pkgModel{Repo: newDep(repoV1())}) }},
+		"install/dependency": {"priv_pkg_install", hello, nil, func(f *fixture) { f.setModel(&pkgModel{Repo: newDep(repoV1())}) }},
 		"install/between simulations": {"priv_pkg_install", hello, nil, func(f *fixture) {
-			f.setModel(pkgModel{SwapAfter: f.aptRuns() + 1, SwapRepo: slices.Concat([]mpkg{{Name: "example-lib", Version: "2.2-1"}}, repoV1()[1:])})
+			f.setModel(&pkgModel{SwapAfter: f.aptRuns() + 1, SwapRepo: slices.Concat([]mpkg{{Name: "example-lib", Version: "2.2-1"}}, repoV1()[1:])})
 		}},
 		"upgrade/new dependency between simulations": {"priv_pkg_upgrade", m{}, []string{"example-hello=1.0", "example-lib=2.1-1"}, func(f *fixture) {
-			f.setModel(pkgModel{SwapAfter: f.aptRuns() + 1, SwapRepo: newDep(repoV1())})
+			f.setModel(&pkgModel{SwapAfter: f.aptRuns() + 1, SwapRepo: newDep(repoV1())})
 		}},
 		"upgrade/version": {"priv_pkg_upgrade", m{}, []string{"example-hello=1.0", "example-lib=2.1-1"}, func(f *fixture) {
-			f.setModel(pkgModel{Repo: append(repoV1(), mpkg{Name: "example-hello", Version: "1.2", Depends: []string{"example-lib"}})})
+			f.setModel(&pkgModel{Repo: append(repoV1(), mpkg{Name: "example-hello", Version: "1.2", Depends: []string{"example-lib"}})})
 		}},
 		"remove/version": {"priv_pkg_remove", hello, []string{"example-hello=1.1", "example-lib=2.1-1"}, func(f *fixture) {
 			gatetest.WriteFile(f.t, filepath.Join(f.dpkg, "status"), dpkgStatus("example-hello=1.0", "example-lib=2.1-1"), 0o644)
@@ -386,7 +387,7 @@ func TestPkgChangedSincePreview(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			f := modelFixture(t, pkgModel{}, c.installed, allowUpgrade())
+			f := modelFixture(t, &pkgModel{}, c.installed, allowUpgrade())
 			p := f.pkgPreview(c.op, c.args)
 			c.change(f)
 			before := f.dpkgState()
@@ -422,7 +423,7 @@ func TestPkgResultFromStatus(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			f := modelFixture(t, pkgModel{Run: c.run}, nil)
+			f := modelFixture(t, &pkgModel{Run: c.run}, nil)
 			p := f.pkgPreview("priv_pkg_install", hello)
 			r := f.serve("priv_pkg_install", bound(hello, p))
 			if c.code == "" {
@@ -449,7 +450,7 @@ func TestPkgResultFromStatus(t *testing.T) {
 // with nothing to change runs nothing.
 func TestPkgUpgradeAndRemove(t *testing.T) {
 	t.Parallel()
-	f := modelFixture(t, pkgModel{}, []string{"example-hello=1.0", "example-lib=2.1-1"}, allowUpgrade())
+	f := modelFixture(t, &pkgModel{}, []string{"example-hello=1.0", "example-lib=2.1-1"}, allowUpgrade())
 	p := f.pkgPreview("priv_pkg_upgrade", m{})
 	if !slices.Equal(p.Upgrade, []entry{{Name: "example-hello", From: "1.0", To: "1.1"}}) || !slices.Equal(p.Argv, slices.Concat(aptCommon, []string{"--no-install-recommends", "-s", "upgrade"})) {
 		t.Fatalf("upgrade preview %+v", p)
@@ -505,22 +506,22 @@ func TestPkgRefusedUpFront(t *testing.T) {
 		}, "exec_failed", "dpkg --configure -a"},
 		"incomplete": {"sim", nil, nil, "exec_failed", "incomplete"},
 		"removes": {"model", []string{"example-old=0.9"}, func(f *fixture) {
-			f.setModel(pkgModel{Repo: []mpkg{{Name: "example-hello", Version: "1.1", Conflicts: []string{"example-old"}}}})
+			f.setModel(&pkgModel{Repo: []mpkg{{Name: "example-hello", Version: "1.1", Conflicts: []string{"example-old"}}}})
 		}, "policy_denied", "remove"},
-		"unknown package": {"model", nil, func(f *fixture) { f.setModel(pkgModel{Repo: []mpkg{{Name: "example-lib", Version: "1"}}}) }, "exec_failed", ""},
+		"unknown package": {"model", nil, func(f *fixture) { f.setModel(&pkgModel{Repo: []mpkg{{Name: "example-lib", Version: "1"}}}) }, "exec_failed", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			var f *fixture
 			if c.mode == "model" {
-				f = modelFixture(t, pkgModel{}, c.installed)
+				f = modelFixture(t, &pkgModel{}, c.installed)
 			} else {
 				f = pkgFixture(t, c.mode)
 			}
 			if c.setup != nil {
 				c.setup(f)
 			}
-			for op, args := range map[string]m{"priv_pkg_install_preview": hello, "priv_pkg_install": bound(hello, preview{PreviewSHA256: anyHash})} {
+			for op, args := range map[string]m{"priv_pkg_install_preview": hello, "priv_pkg_install": bound(hello, &preview{PreviewSHA256: anyHash})} {
 				r := f.serve(op, args)
 				if r.OK || r.Error == nil || r.Error.Code != c.code || !strings.Contains(r.Error.Message, c.inMsg) {
 					t.Fatalf("%s: %+v, want %s mentioning %q", op, r.Error, c.code, c.inMsg)
@@ -538,7 +539,7 @@ func TestPkgRefusedUpFront(t *testing.T) {
 // else are refused; nothing runs.
 func TestPkgAllowList(t *testing.T) {
 	t.Parallel()
-	f := modelFixture(t, pkgModel{}, nil)
+	f := modelFixture(t, &pkgModel{}, nil)
 	h := strings.Repeat("a", 64)
 	for op, args := range map[string]m{
 		"priv_pkg_install":         {"packages": []string{"example-other"}, "expected_preview_sha256": h},
@@ -574,10 +575,10 @@ func TestPkgAllowList(t *testing.T) {
 func TestPkgPolicySwitches(t *testing.T) {
 	t.Parallel()
 	h := strings.Repeat("a", 64)
-	f := modelFixture(t, pkgModel{}, nil)
+	f := modelFixture(t, &pkgModel{}, nil)
 	f.fail("priv_pkg_upgrade", m{"expected_preview_sha256": h}, "policy_denied")
 	f.fail("priv_pkg_upgrade_preview", m{}, "policy_denied")
-	off := modelFixture(t, pkgModel{}, nil, replace("  enabled: true\n", "  enabled: false\n"))
+	off := modelFixture(t, &pkgModel{}, nil, replace("  enabled: true\n", "  enabled: false\n"))
 	for op, args := range map[string]m{
 		"priv_pkg_update_index":         {"expected_preview_sha256": h},
 		"priv_pkg_update_index_preview": {},
@@ -591,7 +592,7 @@ func TestPkgPolicySwitches(t *testing.T) {
 		t.Fatal("apt-get ran with packages disabled")
 	}
 	// At max_tier read, the operations themselves are refused.
-	r := modelFixture(t, pkgModel{}, nil, maxTier("read"))
+	r := modelFixture(t, &pkgModel{}, nil, maxTier("read"))
 	for _, op := range []string{"priv_pkg_install", "priv_pkg_remove", "priv_pkg_update_index", "priv_pkg_upgrade"} {
 		r.fail(op, m{"packages": []string{"example-hello"}, "expected_preview_sha256": h}, "tier_denied")
 	}
@@ -629,13 +630,13 @@ func TestPkgUpdateIndex(t *testing.T) {
 // Output is capped and redacted.
 func TestPkgOutput(t *testing.T) {
 	t.Parallel()
-	f := modelFixture(t, pkgModel{Run: mrun{Stdout: "-----BEGIN " + "OPENSSH PRIVATE KEY-----\naW52ZW50ZWQgdGVzdCBrZXkgbWF0ZXJpYWw=\n-----END " + "OPENSSH PRIVATE KEY-----"}}, nil)
+	f := modelFixture(t, &pkgModel{Run: mrun{Stdout: "-----BEGIN " + "OPENSSH PRIVATE KEY-----\naW52ZW50ZWQgdGVzdCBrZXkgbWF0ZXJpYWw=\n-----END " + "OPENSSH PRIVATE KEY-----"}}, nil)
 	var r pkgResult
 	f.ok("priv_pkg_install", bound(hello, f.pkgPreview("priv_pkg_install", hello)), &r)
 	if strings.Contains(r.Stdout, "aW52ZW50ZWQ") || !strings.Contains(r.Stdout, "REDACTED") {
 		t.Fatalf("private key not redacted: %q", r.Stdout)
 	}
-	fl := modelFixture(t, pkgModel{Run: mrun{Flood: true}}, nil)
+	fl := modelFixture(t, &pkgModel{Run: mrun{Flood: true}}, nil)
 	fl.ok("priv_pkg_install", bound(hello, fl.pkgPreview("priv_pkg_install", hello)), &r)
 	if len(r.Stdout) > 4096 || !r.Truncated {
 		t.Fatalf("output %d bytes, truncated %v (max_output_bytes 4096)", len(r.Stdout), r.Truncated)
@@ -647,11 +648,11 @@ func TestPkgOutput(t *testing.T) {
 // given content, until the test ends or release is called.
 func (f *fixture) holdRecord(content string) (release func()) {
 	f.t.Helper()
-	fh, err := os.OpenFile(f.record, os.O_RDWR|os.O_CREATE, 0o600) //nolint:gosec // G304: test fixture
+	fh, err := os.OpenFile(f.record, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	if err := unix.Flock(int(fh.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil { //nolint:gosec // G115: a descriptor fits in int
+	if err := unix.Flock(int(fh.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		f.t.Fatal(err)
 	}
 	if _, err := fh.WriteString(content); err != nil {
@@ -675,7 +676,7 @@ func (f *fixture) holdRecord(content string) (release func()) {
 // not its contents alone: a record nobody holds is not in progress.
 func TestPkgInProgress(t *testing.T) {
 	t.Parallel()
-	f := modelFixture(t, pkgModel{}, nil, allowUpgrade())
+	f := modelFixture(t, &pkgModel{}, nil, allowUpgrade())
 	p := f.pkgPreview("priv_pkg_install", hello)
 	other := "0b5c0000-0000-4000-8000-0000000000aa"
 	rec := `{"request_id":"` + other + `","started":"2026-09-29T12:00:00Z","until":"2026-09-29T12:15:00Z"}`
@@ -703,7 +704,7 @@ func TestPkgInProgress(t *testing.T) {
 // naming the holder, nothing changed; released during the wait, the
 // operation goes on. Not parallel: it bounds the wait's wall-clock time.
 func TestPkgLockHolder(t *testing.T) {
-	f := modelFixture(t, pkgModel{}, nil)
+	f := modelFixture(t, &pkgModel{}, nil)
 	f.opts.PkgLockRetry = 50 * time.Millisecond
 	p := f.pkgPreview("priv_pkg_install", hello)
 	holder, release := f.holdDpkgLock()
@@ -766,7 +767,7 @@ func (f *fixture) holdDpkgLock() (pid int, release func()) {
 // journal line has what was applied and why.
 func TestPkgReapFailureIsOutcomeUnknown(t *testing.T) {
 	t.Parallel()
-	f := modelFixture(t, pkgModel{}, nil)
+	f := modelFixture(t, &pkgModel{}, nil)
 	p := f.pkgPreview("priv_pkg_install", hello)
 	f.opts.ReapOrphans = true
 	calls := 0
