@@ -53,7 +53,7 @@ func maskPower(t *testing.T) {
 			t.Errorf("CLEANUP FAILED: unmask: %v %s", err, out)
 		}
 		for _, u := range []string{"reboot.target", "poweroff.target"} {
-			if got, err := exec.CommandContext(ctx, "systemctl", "show", "-p", "LoadState", "--value", u).Output(); err != nil || strings.TrimSpace(string(got)) == "masked" {
+			if got, err := exec.CommandContext(ctx, "systemctl", "show", "-p", "LoadState", "--value", u).Output(); err != nil || strings.TrimSpace(string(got)) == "masked" { //nolint:gosec // G204: a fixed command; u is one of the two target names above
 				t.Errorf("CLEANUP FAILED: %s is still masked (%q, %v)", u, got, err)
 			}
 		}
