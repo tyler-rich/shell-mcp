@@ -258,6 +258,8 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 | X-9 | **Backups are not tied to approvals.** A backup's metadata records `op` and `request_id`, but not the preview it belongs to. | **MUST** (cheap) | The metadata records `preview_sha256` when the op carried one (a local file format, not the wire; D3). |
 | X-10 | **Read-back of metadata.** Chown and chmod do not re-read what they set. Writes verify their content. | **MUST** (cheap) | fstat the same descriptor after fchown or fchmod; a mismatch is `verify_failed` (S4c-0 for the non-recursive ops, S4c-3 for recursive). |
 
+**Status after S4c-7:** X-4 fixed for the package operations: the index update is stopped on a hang-up like a command; install, upgrade and remove follow must-fix (a)'s amended exception (an early `outcome_unknown` with the until-time, the graceful stop and the final kill), and every lost answer is `outcome_unknown`.
+
 **Status after S4c-6:** X-4 fixed for exec: the helper stops a command whose gate hung up, the gate tells it before giving up and waits for its answer, and a timeout or lost answer on a privileged operation that can change the host is reported as an outcome unknown (must-fixes (a) and (b), §5). The package operations' share is S4c-7's.
 
 **Status after S4c-5:** X-8 fixed for restore too: the backup being restored is never pruned by the restore's own retention, nor counted as freed by the store's cap (`store.protect`).
@@ -854,6 +856,7 @@ S4c-1 left one exception to "the gate never answers `timeout` while the helper's
 
 ### S4c-7: packages
 
+- **Status: done (PR #PRNUM; ARCHIVE §14, S4c-7).** P-2e, P-3 (packages), P-5 and P-6 as listed (no other protocol change; no error-code, envelope, unit, Landlock or schema change). The previews hash the transaction with the policy and refuse whatever the operation would refuse; an install, upgrade or remove recomputes the preview's hash, simulates the exact pinned argv and requires its transaction to equal the approved one, runs it, and decides its result from dpkg's status alone (`applied`, `verify_failed`, `exec_failed` when nothing changed). Decided with the maintainer (2026-10-21): the stop points and must-fix (a)'s exception for install, upgrade and remove (no signal at a hang-up or the deadline, an early `outcome_unknown` naming the request id and the until-time, `SIGINT` to apt-get alone at `max_timeout_s` less `min(60 s, max_timeout_s / 4)`, the process group killed at `max_timeout_s`; the index update keeps the kill); the second simulation with the pinned argv (D5 §5 differed: `--only-upgrade` installs new dependencies); the up-front refusal of unfinished dpkg state; the lock rule; the in-progress record (`flock` on `/run/shell-mcp-privd-pkg`). The five tools (`shell_priv_preview_packages` read; the update, install and upgrade tools operator; remove destructive). Findings: apt-get, apt and dpkg are not refused as privileged commands, which would bypass all of this (a schema change, not made); a recovery op for `dpkg --configure -a` is a possible follow-up.
 - **Prerequisite: N-10 (§2.1)** is fixed before S4c-7 (maintainer, 2026-10-21; not in PR #37). **Done in PR #40.**
 - **Includes.**
   - P-2e, P-3 (packages), P-5 and P-6.
