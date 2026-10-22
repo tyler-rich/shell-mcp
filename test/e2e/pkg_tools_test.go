@@ -247,21 +247,19 @@ func TestPackageStopPoints(t *testing.T) {
 		// The outcome, not only the journal line: the instance that served
 		// this connection ended on its own after apt-get finished, the
 		// package is fully installed, and the line has the result.
-		// Armed before the lookup, so that a failed lookup still prints what
-		// the runner has.
+		// The evidence is logged on a pass too (the journal line, the end
+		// message, dpkg's state); armed before the lookup, so that a failed
+		// lookup still prints what the runner has.
 		var inst string
 		var seen []string
-		defer func() {
-			if t.Failed() {
-				dropDiagnostics(t, inst, id, seen)
-			}
-		}()
+		defer func() { dropDiagnostics(t, inst, id, seen) }()
 		inst, seen = helperInstance(t, cl.Process.Pid)
 		if inst == "" {
 			t.Fatalf("no broad helper instance name carries client pid %d (broad instances seen: %v)", cl.Process.Pid, seen)
 		}
 		watchInstance(t, inst, 45*time.Second)
 		end, endAt := instanceEnd(t, inst, 45*time.Second)
+		t.Logf("end of %s at %s: %s", inst, endAt.UTC().Format("15:04:05.000000"), end)
 		if strings.Contains(end, "code=killed") || strings.Contains(end, "code=dumped") || strings.Contains(end, "signal") {
 			t.Errorf("the helper instance did not exit normally: %s", end)
 		}
@@ -276,6 +274,14 @@ func TestPackageStopPoints(t *testing.T) {
 		}
 		if _, ok := findLine(id, `"hung_up":true`, `"answered_early":true`, `"outcome":"ok"`); !ok {
 			t.Errorf("no helper journal line for %s with hung_up, answered_early and outcome ok", id)
+		}
+		// The line's applied record is dpkg's diff: the approved transaction,
+		// example-slow at 1.0 and nothing else, as dpkg shows it installed.
+		if !slices.Equal(p.Install, []pkgEntry{{Name: "example-slow", Version: "1.0"}}) || len(p.Upgrade)+len(p.Remove) != 0 {
+			t.Errorf("approved transaction %+v", p)
+		}
+		if _, ok := findLine(id, `"applied":{"install":[{"name":"example-slow","version":"1.0"}],"upgrade":[],"remove":[]}`); !ok {
+			t.Errorf("the line for %s does not record example-slow 1.0 as the one change applied", id)
 		}
 	})
 	t.Run("sigint", func(t *testing.T) {
@@ -522,9 +528,10 @@ lines:
 	return "", false
 }
 
-// dropDiagnostics prints what the drop test needs to explain a failure:
-// every journal entry of the helper instance and of the request (not the
-// last N lines), dpkg's view of example-slow and its log.
+// dropDiagnostics logs the drop case's evidence, on a pass as on a
+// failure: every journal entry of the helper instance (systemd's messages,
+// the end message among them) and the request's line (not the last N
+// lines), dpkg's view of example-slow and its log.
 func dropDiagnostics(t *testing.T, inst, id string, seen []string) {
 	t.Helper()
 	t.Logf("helper instance %q; broad instances seen: %v", inst, seen)
