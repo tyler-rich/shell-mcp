@@ -152,7 +152,7 @@ func waitingInstance(t *testing.T) string {
 // ends, and waits until logind lists it.
 func inhibit(t *testing.T, who, mode string) {
 	t.Helper()
-	c := exec.CommandContext(t.Context(), "systemd-inhibit", "--what=shutdown", "--mode="+mode, "--who="+who, "--why=e2e test lock", "sleep", "300")
+	c := exec.CommandContext(t.Context(), "systemd-inhibit", "--what=shutdown", "--mode="+mode, "--who="+who, "--why=e2e test lock", "sleep", "300") //nolint:gosec // G204: a fixed test command; mode and who are the tests' own constants
 	if err := c.Start(); err != nil {
 		t.Fatal(err)
 	}

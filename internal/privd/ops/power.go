@@ -319,12 +319,12 @@ func logindProperty(c *dbus.Conn, name, sig string, out any) error {
 // errorNameRE is a D-Bus error name safe to put in a message.
 var errorNameRE = regexp.MustCompile(`^[A-Za-z0-9_.]{1,255}$`)
 
-func errorName(err error) (string, string, bool) {
+func errorName(err error) (name, msg string, ok bool) {
 	var de *dbus.Error
 	if !errors.As(err, &de) {
 		return "", "", false
 	}
-	name := de.Name
+	name = de.Name
 	if !errorNameRE.MatchString(name) {
 		name = "an unreadable error"
 	}
@@ -353,7 +353,7 @@ func cleanText(s string, n int) string {
 		return s
 	}
 	s = s[:n]
-	for len(s) > 0 && !utf8.ValidString(s) {
+	for s != "" && !utf8.ValidString(s) {
 		s = s[:len(s)-1]
 	}
 	return s + "..."
@@ -390,7 +390,7 @@ func (s *server) power(raw jsontext.Value) (data any, warns []string, failure er
 	// (1) The record: no package operation of this helper, and no second
 	// power action, runs while this one waits.
 	now := time.Now()
-	rec, err := s.holdRecordAs(pkgRecordData{RequestID: s.req.ID, Started: now.UTC().Format(time.RFC3339),
+	rec, err := s.holdRecordAs(&pkgRecordData{RequestID: s.req.ID, Started: now.UTC().Format(time.RFC3339),
 		Until: now.Add(s.delay() + powerConfirmWait + 2*powerTimeout).UTC().Format(time.RFC3339)})
 	if err != nil {
 		return nil, nil, err
@@ -398,8 +398,8 @@ func (s *server) power(raw jsontext.Value) (data any, warns []string, failure er
 	defer rec.release()
 	// A decision file left by an earlier action is stale: this instance
 	// holds the record, so no other action is waiting.
-	if err := os.Remove(s.decisionPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return nil, nil, errf(protocol.CodeExecFailed, "the power decision file could not be removed (%s); nothing was scheduled", err.Error())
+	if rerr := os.Remove(s.decisionPath()); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+		return nil, nil, errf(protocol.CodeExecFailed, "the power decision file could not be removed (%s); nothing was scheduled", rerr.Error())
 	}
 	// (2) The preview again, with every check.
 	p, err := s.powerResolve(a.Action, true)
@@ -412,9 +412,9 @@ func (s *server) power(raw jsontext.Value) (data any, warns []string, failure er
 	// (3) The answer, before anything is scheduled to happen.
 	at := time.Now().Add(s.delay()).Truncate(time.Millisecond).Add(time.Millisecond)
 	s.powerAt = at.UTC().Format(time.RFC3339Nano)
-	if err := rec.write(pkgRecordData{RequestID: s.req.ID, Started: now.UTC().Format(time.RFC3339),
-		Until: at.Add(2 * powerTimeout).UTC().Format(time.RFC3339), Op: protocol.OpPrivPower, Action: a.Action, ScheduledAt: s.powerAt}); err != nil {
-		return nil, nil, errf(protocol.CodeExecFailed, "the package operation record could not be written (%s); nothing was scheduled", err.Error())
+	if werr := rec.write(&pkgRecordData{RequestID: s.req.ID, Started: now.UTC().Format(time.RFC3339),
+		Until: at.Add(2 * powerTimeout).UTC().Format(time.RFC3339), Op: protocol.OpPrivPower, Action: a.Action, ScheduledAt: s.powerAt}); werr != nil {
+		return nil, nil, errf(protocol.CodeExecFailed, "the package operation record could not be written (%s); nothing was scheduled", werr.Error())
 	}
 	cancel := fmt.Sprintf("send priv_power_cancel (the shell_priv_cancel_power tool) to this host before %s", s.powerAt)
 	if u := ownUnit(); u != "" {
@@ -457,17 +457,17 @@ func (s *server) power(raw jsontext.Value) (data any, warns []string, failure er
 	if !rec.intact(s.o.PkgRecord) {
 		return refuse(errf(protocol.CodeExecFailed, "the package operation record is no longer the file this instance locked; nothing was requested"))
 	}
-	if err := s.powerPackageChecks(); err != nil {
-		return refuse(err)
+	if cerr := s.powerPackageChecks(); cerr != nil {
+		return refuse(cerr)
 	}
 	// (7) The decision: a cancel that created the file first wins.
-	if d, err := s.decide(powerDecision{RequestID: s.req.ID, Decision: "commit"}); err != nil {
+	if d, derr := s.decide(powerDecision{RequestID: s.req.ID, Decision: "commit"}); derr != nil {
 		if d.RequestID == s.req.ID && d.Decision == "cancel" {
 			_ = os.Remove(s.decisionPath())
 			s.powerState = "cancelled"
 			return powerData{Action: a.Action, Target: p.Target, ScheduledAt: s.powerAt, DelayS: p.DelayS, Cancel: cancel}, nil, nil
 		}
-		return refuse(errf(protocol.CodeExecFailed, "the power decision could not be recorded (%s); nothing was requested", err.Error()))
+		return refuse(errf(protocol.CodeExecFailed, "the power decision could not be recorded (%s); nothing was requested", derr.Error()))
 	}
 	// (8) logind. The shutdown it starts stops this instance; the journal
 	// line must still be written, so SIGTERM is ignored from here on (systemd

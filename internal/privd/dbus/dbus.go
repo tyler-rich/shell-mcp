@@ -505,7 +505,7 @@ func (d *decoder) value(t string, depth int) (any, error) {
 		if err := d.align(alignOf(elem[0])); err != nil {
 			return nil, err
 		}
-		if uint64(n) > uint64(len(d.b)-d.pos) {
+		if int64(n) > int64(len(d.b)-d.pos) {
 			return nil, errShort
 		}
 		end := d.pos + int(n)

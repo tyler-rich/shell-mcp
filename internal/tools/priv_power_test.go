@@ -22,8 +22,8 @@ func init() {
 }
 
 const (
-	shaPW  = "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
-	shaPW2 = "e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2"
+	shaPV  = "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
+	shaPV2 = "e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2"
 )
 
 func fakePowerPreview(action, sha string) string {
@@ -38,7 +38,7 @@ func fakePowerResult(action string) string {
 func newPrivPowerHarness(t *testing.T, method approval.Method) *approvalHarness {
 	t.Helper()
 	a := newPrivWriteHarness(t, method)
-	a.g.set("priv_power_preview", gateReply{data: fakePowerPreview("reboot", shaPW)})
+	a.g.set("priv_power_preview", gateReply{data: fakePowerPreview("reboot", shaPV)})
 	a.g.set("priv_power", gateReply{data: fakePowerResult("reboot")})
 	a.g.set("priv_power_cancel", gateReply{data: `{"cancelled":true,"request_id":"0b5c0000-0000-4000-8000-000000000042","action":"reboot","scheduled_at":"2026-10-22T12:01:00Z"}`})
 	return a
@@ -105,7 +105,7 @@ func TestPrivRebootApprovalFlow(t *testing.T) {
 	for _, action := range []string{"reboot", "poweroff"} {
 		t.Run(action, func(t *testing.T) {
 			a := newPrivPowerHarness(t, approval.MethodWeb)
-			a.g.set("priv_power_preview", gateReply{data: fakePowerPreview(action, shaPW)})
+			a.g.set("priv_power_preview", gateReply{data: fakePowerPreview(action, shaPV)})
 			a.g.set("priv_power", gateReply{data: fakePowerResult(action)})
 			args := map[string]any{"action": action}
 			id := a.pending("shell_priv_reboot_host", args)
@@ -116,7 +116,7 @@ func TestPrivRebootApprovalFlow(t *testing.T) {
 				t.Fatalf("preview args %v", pa)
 			}
 			pm := previewMap(t, a, id)
-			if pm["action"] != action || pm["target_unit"] != action+".target" || pm["delay_seconds"] != "60" || pm["preview_sha256"] != shaPW {
+			if pm["action"] != action || pm["target_unit"] != action+".target" || pm["delay_seconds"] != "60" || pm["preview_sha256"] != shaPV {
 				t.Fatalf("preview %v", pm)
 			}
 			rec, _ := a.store.Get(id)
@@ -137,13 +137,13 @@ func TestPrivRebootApprovalFlow(t *testing.T) {
 			if reqs := a.g.requests(); reqs[2].Ceiling != "destructive" {
 				t.Fatalf("priv_power at ceiling %s", reqs[2].Ceiling)
 			}
-			if oa := a.g.args(t, "priv_power"); oa["action"] != action || oa["expected_preview_sha256"] != shaPW || len(oa) != 2 {
+			if oa := a.g.args(t, "priv_power"); oa["action"] != action || oa["expected_preview_sha256"] != shaPV || len(oa) != 2 {
 				t.Fatalf("op args %v", oa)
 			}
 			if env, _ := a.call("shell_priv_reboot_host", withID(args, id)); errCode(env) != "approval_invalid" || a.count("priv_power") != 1 {
 				t.Fatalf("second re-call %v", env)
 			}
-			if strings.Contains(a.logs.String(), shaPW) {
+			if strings.Contains(a.logs.String(), shaPV) {
 				t.Fatal("the preview hash reached the server's logs")
 			}
 		})
@@ -163,7 +163,7 @@ func TestPrivRebootGatedUnderNone(t *testing.T) {
 func TestPrivRebootChangedAfterApproval(t *testing.T) {
 	for name, change := range map[string]func(a *approvalHarness){
 		"preview": func(a *approvalHarness) {
-			a.g.set("priv_power_preview", gateReply{data: fakePowerPreview("reboot", shaPW2)})
+			a.g.set("priv_power_preview", gateReply{data: fakePowerPreview("reboot", shaPV2)})
 		},
 		"helper": func(a *approvalHarness) { a.g.setHelperSHA("f00d") },
 		"gate":   func(a *approvalHarness) { a.g.setSHA("f00d") },
@@ -193,7 +193,7 @@ func TestPrivRebootPreviewRefusals(t *testing.T) {
 		"blocked":      {gateReply{code: "exec_failed", msg: "a shutdown inhibitor lock is held by example-backup (nightly copy), uid 1001, pid 4242"}, "exec_failed"},
 		"not listed":   {gateReply{code: "policy_denied", msg: "the privileged policy's power section does not allow poweroff"}, "policy_denied"},
 		"no hash":      {gateReply{data: fakePowerPreview("reboot", "nothash")}, "internal"},
-		"other action": {gateReply{data: fakePowerPreview("poweroff", shaPW)}, "internal"},
+		"other action": {gateReply{data: fakePowerPreview("poweroff", shaPV)}, "internal"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			a := newPrivPowerHarness(t, approval.MethodWeb)
@@ -233,7 +233,7 @@ func TestPrivPowerValidation(t *testing.T) {
 			t.Fatalf("%s %v: %v", name, args, env)
 		}
 	}
-	for _, args := range []map[string]any{{}, {"action": "kexec"}, {"action": "reboot", "delay_seconds": 1}, {"action": "reboot", "expected_preview_sha256": shaPW}} {
+	for _, args := range []map[string]any{{}, {"action": "kexec"}, {"action": "reboot", "delay_seconds": 1}, {"action": "reboot", "expected_preview_sha256": shaPV}} {
 		if env, _ := a.call("shell_priv_reboot_host", args); errCode(env) != "validation_error" {
 			t.Fatalf("%v: %v", args, env)
 		}

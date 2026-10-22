@@ -56,7 +56,7 @@ func (r *pkgRecord) release() {
 }
 
 // write replaces the record's contents.
-func (r *pkgRecord) write(d pkgRecordData) error {
+func (r *pkgRecord) write(d *pkgRecordData) error {
 	b, _ := json.Marshal(d)
 	if err := r.f.Truncate(0); err != nil {
 		return err
@@ -103,12 +103,12 @@ func (s *server) openRecord(create bool) (*os.File, error) {
 // (released by its release, or by the instance's end), and refuses while
 // another operation holds it.
 func (s *server) holdRecord(killAt time.Time) (*pkgRecord, error) {
-	return s.holdRecordAs(pkgRecordData{RequestID: s.req.ID, Started: s.start.UTC().Format(time.RFC3339), Until: killAt.UTC().Format(time.RFC3339)})
+	return s.holdRecordAs(&pkgRecordData{RequestID: s.req.ID, Started: s.start.UTC().Format(time.RFC3339), Until: killAt.UTC().Format(time.RFC3339)})
 }
 
 // holdRecordAs takes the record with the contents d, and refuses while
 // another operation holds it.
-func (s *server) holdRecordAs(d pkgRecordData) (*pkgRecord, error) {
+func (s *server) holdRecordAs(d *pkgRecordData) (*pkgRecord, error) {
 	f, err := s.openRecord(true)
 	if err != nil {
 		return nil, errf(protocol.CodeExecFailed, "the package operation record could not be used (%s); nothing was changed", err.Error())
