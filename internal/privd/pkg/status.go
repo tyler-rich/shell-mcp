@@ -359,14 +359,16 @@ func list(b []byte, l []string) []byte {
 
 // PinnedArgs is the argv a package operation runs (simulate: -s, the same
 // argv simulated), pinned to the approved transaction t (handoff D5 §3):
-//   - install: each requested name that t installs or upgrades, as
-//     name=version, with --no-remove; its dependencies are not pinned, so
-//     apt keeps marking them automatically installed;
+//   - install: each requested name that t installs or upgrades as
+//     name=version (one already at its version as it is: the simulation of
+//     this argv must still resolve to t), with --no-remove; dependencies
+//     are not pinned, so apt keeps marking them automatically installed;
 //   - upgrade: install --only-upgrade --no-remove over exactly t's upgrade
 //     list, each name=to, never apt-get upgrade;
 //   - remove: the names, unpinned (there is no candidate to pin).
 //
-// Nothing to run (no name left to pin or remove) is nil. Every version is
+// Nothing to run (an empty transaction; for an upgrade or a removal, no
+// upgrade or removal in it) is nil. Every version is
 // host data from the simulation and is checked again here.
 func PinnedArgs(op Op, simulate bool, names []string, t Transaction) ([]string, error) {
 	var pins []string
@@ -375,17 +377,22 @@ func PinnedArgs(op Op, simulate bool, names []string, t Transaction) ([]string, 
 		if err := checkNames(op, names); err != nil {
 			return nil, err
 		}
+		if t.Empty() {
+			return nil, nil
+		}
 		for _, n := range names {
+			pin := n // already at its version: passed as it is
 			for _, v := range t.Install {
 				if v.Name == n {
-					pins = append(pins, n+"="+v.Version)
+					pin = n + "=" + v.Version
 				}
 			}
 			for _, u := range t.Upgrade {
 				if u.Name == n {
-					pins = append(pins, n+"="+u.To)
+					pin = n + "=" + u.To
 				}
 			}
+			pins = append(pins, pin)
 		}
 	case OpUpgrade:
 		if len(names) != 0 {
@@ -406,7 +413,7 @@ func PinnedArgs(op Op, simulate bool, names []string, t Transaction) ([]string, 
 		return nil, fmt.Errorf("%s cannot be pinned", op)
 	}
 	for _, p := range pins {
-		if !validPin(p) {
+		if strings.Contains(p, "=") && !validPin(p) {
 			return nil, fmt.Errorf("%q is not a package pinned to a Debian version", p)
 		}
 	}

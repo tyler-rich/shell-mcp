@@ -566,6 +566,9 @@ func (s *server) pkgChange(raw jsontext.Value, op pkg.Op) (data any, warns []str
 		return nil, nil, errf(protocol.CodeExecFailed, "the approved transaction cannot be pinned (%s); nothing was run", err.Error())
 	}
 	pinned, _ := pkg.PinnedArgs(op, false, names, tx)
+	if pinned == nil && !tx.Empty() {
+		return nil, nil, errf(protocol.CodeExecFailed, "the approved transaction (%s) cannot be run pinned to the request; nothing was run", txSummary(tx))
+	}
 	if pinned == nil {
 		// Nothing to change: approved, and nothing runs.
 		return pkgData{Op: string(op), Packages: names, Applied: ptr(wireTx(pkg.Transaction{})), LockWaitMS: waited.Milliseconds()}, nil, nil
