@@ -134,13 +134,26 @@ func TestForwardOutcomeUnknown(t *testing.T) {
 
 // TestPrivMayChangeMatchesTiers: every privileged op the gate knows is a
 // may-change request exactly when its tier is above read; priv_exec, whose
-// tier is its command's, exactly above ceiling read.
+// tier is its command's, exactly above ceiling read. priv_power_cancel is
+// the one read-tier op that changes the host (S4c-8, P-13: read tier only so
+// that it is never approval-gated), so a lost answer of it is outcome_unknown.
 func TestPrivMayChangeMatchesTiers(t *testing.T) {
 	for _, op := range protocol.PrivOps {
 		f := newFixture(t, "read")
 		f.writePolicy("read", "privileged:\n  enabled: true\n  socket: /run/shell-mcp/privd.sock\n  max_tier: read\n")
 		r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"` + op + `","args":{},"timeout_ms":300}` + "\n")
 		readTier := r.Error == nil || r.Error.Code != "tier_denied"
+		if op == protocol.OpPrivPowerCancel {
+			if !readTier {
+				t.Errorf("priv_power_cancel is not read tier at the gate")
+			}
+			for _, ceiling := range protocol.Ceilings {
+				if !protocol.PrivMayChange(op, ceiling) {
+					t.Errorf("PrivMayChange(priv_power_cancel, %s) = false", ceiling)
+				}
+			}
+			continue
+		}
 		if op == protocol.OpPrivExec {
 			if protocol.PrivMayChange(op, "read") || !protocol.PrivMayChange(op, "operator") || !protocol.PrivMayChange(op, "destructive") {
 				t.Errorf("PrivMayChange(priv_exec) does not follow the ceiling")

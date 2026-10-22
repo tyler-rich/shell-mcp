@@ -1,12 +1,13 @@
 // Package dbus is the smallest D-Bus client the privileged helper needs
-// (docs/PRIVILEGED.md §6, priv_power): connect to the system bus socket,
-// authenticate with EXTERNAL as the process's uid, say Hello, send one
-// method call with string arguments, and read its reply. It implements the
-// D-Bus specification's wire format for exactly that — little-endian
-// output, either byte order on input, header fields of basic types, and
-// bodies of strings and object paths — with every length bounded and every
-// message strictly checked. Nothing else: no signals, no file descriptors,
-// no introspection. The standard library only.
+// (docs/PRIVILEGED.md §6, "Power"): connect to the system bus socket,
+// authenticate with EXTERNAL as the process's uid, say Hello, send method
+// calls with string and uint64 arguments, and read their replies. It
+// implements the D-Bus specification's wire format for exactly that —
+// little-endian output, either byte order on input, header fields of basic
+// types, and bodies of basic types, arrays, structs and variants — with
+// every length and nesting bounded and every message strictly checked.
+// Nothing else: no dict entries, no signals, no file descriptors, no
+// introspection. The standard library only.
 package dbus
 
 import (
@@ -303,6 +304,268 @@ func (m *Message) required() error {
 	return nil
 }
 
+// Variant is a decoded variant: its signature and its value.
+type Variant struct {
+	Signature string
+	Value     any
+}
+
+// maxDepth bounds the nesting of arrays, structs and variants in a
+// signature, and of variants in a body. The specification allows 32 arrays
+// and 32 structs; nothing the helper reads nests more than three deep.
+const maxDepth = 32
+
+var errUnsupported = errors.New("dbus: unsupported or malformed signature")
+
+// nextType splits the first complete type off sig: a basic type, a
+// variant, an array of a complete type, or a non-empty struct. Doubles,
+// dict entries and file descriptors are not supported (nothing the helper
+// reads uses them).
+func nextType(sig string, depth int) (typ, rest string, err error) {
+	if sig == "" || depth > maxDepth {
+		return "", "", errUnsupported
+	}
+	switch sig[0] {
+	case 'y', 'b', 'n', 'q', 'i', 'u', 'x', 't', 's', 'o', 'g', 'v':
+		return sig[:1], sig[1:], nil
+	case 'a':
+		elem, rest, err := nextType(sig[1:], depth+1)
+		if err != nil {
+			return "", "", err
+		}
+		return "a" + elem, rest, nil
+	case '(':
+		n := 1
+		for {
+			if n >= len(sig) {
+				return "", "", errUnsupported
+			}
+			if sig[n] == ')' {
+				if n == 1 {
+					return "", "", errUnsupported // an empty struct
+				}
+				return sig[:n+1], sig[n+1:], nil
+			}
+			field, _, err := nextType(sig[n:], depth+1)
+			if err != nil {
+				return "", "", err
+			}
+			n += len(field)
+		}
+	}
+	return "", "", errUnsupported
+}
+
+// splitTypes splits a signature into its complete types.
+func splitTypes(sig string, depth int) ([]string, error) {
+	var out []string
+	for sig != "" {
+		t, rest, err := nextType(sig, depth)
+		if err != nil {
+			return nil, err
+		}
+		out, sig = append(out, t), rest
+	}
+	return out, nil
+}
+
+// alignOf is a type's alignment in the wire format.
+func alignOf(t byte) int {
+	switch t {
+	case 'y', 'g', 'v':
+		return 1
+	case 'n', 'q':
+		return 2
+	case 'x', 't', '(':
+		return 8
+	}
+	return 4 // b, i, u, s, o, a
+}
+
+// validObjectPath is the specification's object path grammar: "/", or
+// "/" followed by non-empty elements of [A-Za-z0-9_] separated by "/".
+func validObjectPath(p string) bool {
+	if p == "/" {
+		return true
+	}
+	if !strings.HasPrefix(p, "/") || strings.HasSuffix(p, "/") {
+		return false
+	}
+	for _, e := range strings.Split(p[1:], "/") {
+		if e == "" {
+			return false
+		}
+		for _, c := range e {
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '_' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// value decodes one value of the complete type t: strings, object paths and
+// signatures as string, b as bool, y as byte, n as int16, q as uint16, i as
+// int32, u as uint32, x as int64, t as uint64, an array or a
+// struct as []any, a variant as Variant.
+func (d *decoder) value(t string, depth int) (any, error) {
+	if depth > maxDepth {
+		return nil, errUnsupported
+	}
+	if err := d.align(alignOf(t[0])); err != nil {
+		return nil, err
+	}
+	switch t[0] {
+	case 'y':
+		v, err := d.take(1)
+		if err != nil {
+			return nil, err
+		}
+		return v[0], nil
+	case 'b':
+		v, err := d.uint32()
+		if err != nil {
+			return nil, err
+		}
+		if v > 1 {
+			return nil, errors.New("dbus: a boolean that is neither 0 nor 1")
+		}
+		return v == 1, nil
+	case 'n', 'q':
+		v, err := d.take(2)
+		if err != nil {
+			return nil, err
+		}
+		u := d.o.Uint16(v)
+		if t[0] == 'n' {
+			return int16(u), nil //nolint:gosec // G115: the wire's two's complement
+		}
+		return u, nil
+	case 'i', 'u':
+		v, err := d.uint32()
+		if err != nil {
+			return nil, err
+		}
+		if t[0] == 'i' {
+			return int32(v), nil //nolint:gosec // G115: the wire's two's complement
+		}
+		return v, nil
+	case 'x', 't':
+		v, err := d.take(8)
+		if err != nil {
+			return nil, err
+		}
+		u := d.o.Uint64(v)
+		if t[0] == 'x' {
+			return int64(u), nil //nolint:gosec // G115: the wire's two's complement
+		}
+		return u, nil
+	case 's':
+		return d.str()
+	case 'o':
+		s, err := d.str()
+		if err != nil {
+			return nil, err
+		}
+		if !validObjectPath(s) {
+			return nil, errors.New("dbus: malformed object path")
+		}
+		return s, nil
+	case 'g':
+		s, err := d.sig()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := splitTypes(s, depth+1); err != nil {
+			return nil, err
+		}
+		return s, nil
+	case 'v':
+		s, err := d.sig()
+		if err != nil {
+			return nil, err
+		}
+		inner, rest, err := nextType(s, depth+1)
+		if err != nil || rest != "" {
+			return nil, errors.New("dbus: a variant's signature is not one complete type")
+		}
+		v, err := d.value(inner, depth+1)
+		if err != nil {
+			return nil, err
+		}
+		return Variant{Signature: s, Value: v}, nil
+	case 'a':
+		n, err := d.uint32()
+		if err != nil {
+			return nil, err
+		}
+		elem := t[1:]
+		// The padding to the first element is there even when the array is
+		// empty, and is not counted in its length.
+		if err := d.align(alignOf(elem[0])); err != nil {
+			return nil, err
+		}
+		if int64(n) > int64(len(d.b)-d.pos) {
+			return nil, errShort
+		}
+		end := d.pos + int(n)
+		out := []any{}
+		for d.pos < end {
+			v, err := d.value(elem, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, v)
+		}
+		if d.pos != end {
+			return nil, errors.New("dbus: an array's length does not end on an element")
+		}
+		return out, nil
+	case '(':
+		fields, err := splitTypes(t[1:len(t)-1], depth+1)
+		if err != nil {
+			return nil, err
+		}
+		out := make([]any, 0, len(fields))
+		for _, f := range fields {
+			v, err := d.value(f, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, v)
+		}
+		return out, nil
+	}
+	return nil, errUnsupported
+}
+
+// Values decodes the whole body by its signature, consuming it exactly
+// (value says which Go type each wire type becomes). Any malformed or
+// unsupported value is an error, never a partial result.
+func (m *Message) Values() ([]any, error) {
+	o := m.order
+	if o == nil {
+		o = binary.LittleEndian
+	}
+	types, err := splitTypes(m.Signature, 0)
+	if err != nil {
+		return nil, err
+	}
+	d := &decoder{b: m.Body, o: o}
+	out := make([]any, 0, len(types))
+	for _, t := range types {
+		v, err := d.value(t, 0)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	if d.pos != len(m.Body) {
+		return nil, errors.New("dbus: body longer than its signature")
+	}
+	return out, nil
+}
+
 // Strings decodes a body whose signature holds only strings and object
 // paths, consuming it exactly.
 func (m *Message) Strings() ([]string, error) {
@@ -349,16 +612,34 @@ func (e *encoder) field(code, typ byte, s string) {
 	e.str(s)
 }
 
-// marshal encodes a METHOD_CALL with string arguments.
-func marshal(serial uint32, dest, path, iface, member string, args []string) ([]byte, error) {
-	for _, s := range append([]string{dest, path, iface, member}, args...) {
+// marshal encodes a METHOD_CALL whose arguments are strings (signature s)
+// or uint64s (t); anything else is refused.
+func marshal(serial uint32, dest, path, iface, member string, args []any) ([]byte, error) {
+	for _, s := range []string{dest, path, iface, member} {
 		if len(s) > 255 || strings.IndexByte(s, 0) >= 0 || !utf8.ValidString(s) {
 			return nil, errors.New("dbus: argument is not a short valid string")
 		}
 	}
 	var body encoder
+	var sig strings.Builder
 	for _, a := range args {
-		body.str(a)
+		switch v := a.(type) {
+		case string:
+			if len(v) > 255 || strings.IndexByte(v, 0) >= 0 || !utf8.ValidString(v) {
+				return nil, errors.New("dbus: argument is not a short valid string")
+			}
+			body.str(v)
+			sig.WriteByte('s')
+		case uint64:
+			body.align(8)
+			body.b = binary.LittleEndian.AppendUint64(body.b, v)
+			sig.WriteByte('t')
+		default:
+			return nil, fmt.Errorf("dbus: argument of type %T is not supported", a)
+		}
+	}
+	if sig.Len() > 255 {
+		return nil, errors.New("dbus: too many arguments")
 	}
 	h := encoder{b: []byte{'l', TypeMethodCall, 0, 1}}
 	h.b = binary.LittleEndian.AppendUint32(h.b, uint32(len(body.b))) //nolint:gosec // G115: bounded above
@@ -370,8 +651,8 @@ func marshal(serial uint32, dest, path, iface, member string, args []string) ([]
 	}
 	h.field(fieldMember, 's', member)
 	h.field(fieldDestination, 's', dest)
-	if len(args) > 0 {
-		h.field(fieldSignature, 'g', strings.Repeat("s", len(args)))
+	if sig.Len() > 0 {
+		h.field(fieldSignature, 'g', sig.String())
 	}
 	binary.LittleEndian.PutUint32(h.b[12:], uint32(len(h.b)-16)) //nolint:gosec // G115: bounded above
 	h.align(8)
@@ -454,10 +735,11 @@ func (c *Conn) line() (string, error) {
 	return "", errors.New("dbus: auth line too long")
 }
 
-// Call sends a method call with string arguments and returns its reply;
+// Call sends a method call with string and uint64 arguments (marshal) and
+// returns its reply;
 // an ERROR reply is returned as *Error. Other messages (signals) read
 // meanwhile are skipped, at most maxReplies of them.
-func (c *Conn) Call(dest, path, iface, member string, args ...string) (*Message, error) {
+func (c *Conn) Call(dest, path, iface, member string, args ...any) (*Message, error) {
 	c.serial++
 	msg, err := marshal(c.serial, dest, path, iface, member, args)
 	if err != nil {

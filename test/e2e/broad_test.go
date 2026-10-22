@@ -21,9 +21,9 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
 )
 
-// The broad unit, the apt operations, the core unit's hardening and
-// priv_power, against the runner's own systemd and apt (setup.sh). Every
-// restriction is shown two-sided.
+// The broad unit, the apt operations and the core unit's hardening,
+// against the runner's own systemd and apt (setup.sh; the power operations
+// are in power_test.go). Every restriction is shown two-sided.
 
 // ---- Local apt repository ------------------------------------------------------
 
@@ -575,51 +575,6 @@ func TestMisroutedRequestsRefused(t *testing.T) {
 	e = waitLine(t, "shell-mcp-privd", `"id":"`+statID+`"`, `"outcome":"helper_wrong_unit"`, `"op":"priv_stat"`)
 	if e.Priority != "4" || !strings.HasPrefix(e.Unit, "shell-mcp-privd-broad@") {
 		t.Fatalf("broad refusal logged at %s by %s", e.Priority, e.Unit)
-	}
-}
-
-// ---- priv_power ---------------------------------------------------------------------
-
-// priv_power reaches systemd and is authorized, without rebooting the
-// runner: reboot.target and poweroff.target are runtime-masked first (and
-// the test refuses to go on unless systemd reports them masked), so
-// systemd authorizes the StartUnit call — the caller is root — and then
-// refuses it because the target is masked (the masked check comes after
-// authorization: bus_unit_method_start_generic, then the transaction,
-// systemd 257 and 259). An unprivileged caller making the same call is
-// refused by the authorization itself, before the target is looked at.
-func TestPowerReachesSystemd(t *testing.T) {
-	run(t, "systemctl", "mask", "--runtime", "reboot.target", "poweroff.target")
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		_ = exec.CommandContext(ctx, "systemctl", "unmask", "--runtime", "reboot.target", "poweroff.target").Run()
-	})
-	for _, u := range []string{"reboot.target", "poweroff.target"} {
-		if got := show(t, u, "LoadState"); got != "masked" {
-			t.Fatalf("%s LoadState=%q after masking: refusing to call priv_power", u, got)
-		}
-	}
-	start := time.Now()
-	r, id := gate(t, svcShell, "priv_power", map[string]any{"action": "reboot"})
-	if r.code() != "exec_failed" || !strings.Contains(r.Error.Message, "org.freedesktop.systemd1.UnitMasked") {
-		t.Fatalf("priv_power: %s %+v, want exec_failed naming UnitMasked", r.code(), r.Error)
-	}
-	e := findJournal(t, "shell-mcp-privd", start, `"id":"`+id+`"`, `"op":"priv_power"`, `"action":"reboot"`)
-	if e.Priority != "4" || !strings.HasPrefix(e.Unit, "shell-mcp-privd-broad@") {
-		t.Fatalf("priv_power logged at %s by %s", e.Priority, e.Unit)
-	}
-	// poweroff is not in the policy's power.allowed.
-	wantGate(t, svcShell, "priv_power", map[string]any{"action": "poweroff"}, "policy_denied")
-	// Control: the same call from an unprivileged account is refused by
-	// systemd's authorization, not by the masked target.
-	c := exec.CommandContext(t.Context(), "busctl", "--system", "call", "org.freedesktop.systemd1", "/org/freedesktop/systemd1",
-		"org.freedesktop.systemd1.Manager", "StartUnit", "ss", "reboot.target", "replace-irreversibly")
-	c.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, svcOther)}
-	out, err := c.CombinedOutput()
-	refused := strings.Contains(string(out), "ccess denied") || strings.Contains(string(out), "nteractive authentication required")
-	if err == nil || strings.Contains(string(out), "masked") || !refused {
-		t.Fatalf("unprivileged StartUnit: %v %q", err, out)
 	}
 }
 

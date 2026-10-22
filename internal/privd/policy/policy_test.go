@@ -714,6 +714,17 @@ func TestPower(t *testing.T) {
 	if !strings.Contains(strings.Join(low.Warnings, "\n"), "power") {
 		t.Errorf("power under max_tier operator is not warned: %q", low.Warnings)
 	}
+	// priv_power waits 60 s inside its instance (S4c-8), so a limit below
+	// that is warned about; 60 is enough, and without power nothing is said.
+	for limit, warned := range map[int]bool{59: true, 60: false} {
+		y := fmt.Sprintf("%slimits:\n  max_timeout_s: %d\npower:\n  allowed: [reboot]\n  acknowledge: \"x\"\n", head, limit)
+		if got := strings.Contains(strings.Join(f.mustLoad(t, y).Warnings, "\n"), "max_timeout_s"); got != warned {
+			t.Errorf("max_timeout_s %d with power: warned %v, want %v", limit, got, warned)
+		}
+	}
+	if w := f.mustLoad(t, head+"limits:\n  max_timeout_s: 30\n").Warnings; strings.Contains(strings.Join(w, "\n"), "max_timeout_s") {
+		t.Errorf("a short limit without power is warned about: %q", w)
+	}
 }
 
 // A loaded privileged policy's deny list carries the /proc entries of the

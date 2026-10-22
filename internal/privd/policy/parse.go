@@ -858,8 +858,9 @@ func (v *validator) aptGet(p *Policy) {
 var PowerActions = []string{"reboot", "poweroff"}
 
 // power validates the power section: the built-in priv_power operation,
-// which asks systemd to start reboot.target or poweroff.target from the
-// broad unit. It needs a non-empty one-line acknowledge (POLICY §5 group
+// which asks logind, after its answer and a 60 s wait, to start
+// reboot.target or poweroff.target from the broad unit (PRIVILEGED §6,
+// "Power"). It needs a non-empty one-line acknowledge (POLICY §5 group
 // 11 is list B) and is always reported.
 func (v *validator) power(p *Policy, raw *rawPower) {
 	if raw == nil {
@@ -892,10 +893,13 @@ func (v *validator) power(p *Policy, raw *rawPower) {
 		return
 	}
 	p.Power = Power{Allowed: allowed, Acknowledge: raw.Acknowledge}
-	v.find("power", strings.Join(allowed, " "), "priv_power runs in the broad unit and asks systemd to start %s; acknowledge: %s",
+	v.find("power", strings.Join(allowed, " "), "priv_power runs in the broad unit and asks logind, 60 s after its answer, to start %s; acknowledge: %s",
 		strings.Join(powerTargets(allowed), " and "), raw.Acknowledge)
 	if p.MaxTier != 0 && p.MaxTier < TierDestructive {
 		v.warn("power: priv_power is destructive and max_tier %s will always refuse it", p.MaxTier)
+	}
+	if p.Limits.MaxTimeoutS > 0 && p.Limits.MaxTimeoutS < 60 {
+		v.warn("power: priv_power waits 60 s inside its instance, so limits.max_timeout_s %d (below 60) will always refuse it", p.Limits.MaxTimeoutS)
 	}
 }
 

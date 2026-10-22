@@ -32,11 +32,11 @@ func DialHelper(ctx context.Context, socket string) (net.Conn, error) {
 var broadOps = []string{
 	protocol.OpPrivPkgUpdateIndex, protocol.OpPrivPkgInstall, protocol.OpPrivPkgUpgrade, protocol.OpPrivPkgRemove,
 	protocol.OpPrivPkgInstallPreview, protocol.OpPrivPkgUpgradePreview, protocol.OpPrivPkgRemovePreview, protocol.OpPrivPkgUpdateIndexPreview,
-	protocol.OpPrivPower,
+	protocol.OpPrivPower, protocol.OpPrivPowerPreview, protocol.OpPrivPowerCancel,
 }
 
 // route picks the helper socket for a privileged op: privileged.broad_socket
-// for the package operations, their previews and priv_power, and for
+// for the package operations, their previews and the power operations, and for
 // priv_exec when its `unit` argument is "broad" (the server supplies it: the
 // gate cannot read the privileged policy to learn a command's unit);
 // privileged.socket for everything else. This only picks the door: each

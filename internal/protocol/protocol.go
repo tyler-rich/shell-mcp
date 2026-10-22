@@ -167,8 +167,16 @@ const (
 	// privileged policy's hash, with the hash priv_pkg_update_index requires
 	// (handoff P-2e; broad).
 	OpPrivPkgUpdateIndexPreview = "priv_pkg_update_index_preview"
-	// OpPrivPower asks systemd to reboot or power off (broad unit).
+	// OpPrivPower answers first, then asks logind to reboot or power off
+	// after a fixed delay (broad unit; PRIVILEGED §6, "Power").
 	OpPrivPower = "priv_power"
+	// OpPrivPowerPreview reports what priv_power would do, with the hash it
+	// requires, and refuses whatever would block it (handoff P-2f; broad).
+	OpPrivPowerPreview = "priv_power_preview"
+	// OpPrivPowerCancel stops a power action that is still waiting for its
+	// time (handoff P-13; broad). It is read tier only so that it is never
+	// approval-gated; it changes the host, so it is not in privReadOps.
+	OpPrivPowerCancel = "priv_power_cancel"
 	// OpPrivBackupCheck says whether an overwrite of a path would write a
 	// backup and whether it fits the backup store (handoff P-11; core).
 	OpPrivBackupCheck = "priv_backup_check"
@@ -195,7 +203,7 @@ const (
 var privReadOps = []string{
 	OpPrivReadFile, OpPrivListDir, OpPrivStat, OpPrivListBackups, OpPrivBackupCheck,
 	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview, OpPrivExecPreview,
-	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPkgUpdateIndexPreview,
+	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPkgUpdateIndexPreview, OpPrivPowerPreview,
 }
 
 // PrivMayChange reports whether a privileged request can change the host:
@@ -218,7 +226,7 @@ var PrivOps = []string{
 	OpPrivExec, OpPrivPkgUpdateIndex, OpPrivPkgInstall, OpPrivPkgUpgrade, OpPrivPkgRemove,
 	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPower, OpPrivBackupCheck,
 	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview, OpPrivExecPreview,
-	OpPrivPkgUpdateIndexPreview,
+	OpPrivPkgUpdateIndexPreview, OpPrivPowerPreview, OpPrivPowerCancel,
 }
 
 // Tier names on the wire: a request's ceiling, and max_tier in the gate

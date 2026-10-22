@@ -391,7 +391,7 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 		pr("broad unit: none")
 	}
 	if len(p.Power.Allowed) > 0 {
-		pr("power: %s (broad unit, systemd StartUnit; acknowledge: %q)", strings.Join(p.Power.Allowed, " "), p.Power.Acknowledge)
+		pr("power: %s (broad unit, logind 60 s after the answer, respecting inhibitor locks; acknowledge: %q)", strings.Join(p.Power.Allowed, " "), p.Power.Acknowledge)
 	}
 	if p.Packages.Enabled {
 		pr("packages: apt (%s); install %s; remove %s; update index %v; upgrade %v", p.Packages.AptGet, strings.Join(p.Packages.Install, " "), strings.Join(p.Packages.Remove, " "), p.Packages.AllowUpdateIndex, p.Packages.AllowUpgrade)
