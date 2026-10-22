@@ -248,6 +248,11 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 - **Documented recovery (PRIVILEGED §6, "Package operations"):** a fixed broad-unit command template in the privileged policy, `path: /usr/bin/dpkg`, `unit: broad`, `tier: operator`, `templates: [["--configure", "-a"]]`, run through `shell_priv_run_command` (always approval-gated). It runs maintainer scripts as root and is subject to N-13's concern and to `priv_exec`'s kill on a hang-up, so it is the operator's deliberate, reviewed exception, not a default.
 - **Status:** documented; no op proposed in S4c-7.
 
+**N-15. An answer that cannot be delivered makes the instance exit 1 (found in S4c-7, PR #42; recorded in S4c-8).**
+- **What.** `Serve` returns the result of writing the answer as the instance's exit status. A package operation that finished, whose answer (or early `outcome_unknown` answer) could not be written because the gate had gone, therefore exits 1, and systemd logs the instance as failed, while the helper's journal line for the request says `ok` (or the operation's own result). The same holds for every operation, since all of them answer through the same code.
+- **Decision (maintainer, 2026-10-22):** keep exit 1: it records that the answer was not delivered. The helper's journal line is authoritative for the outcome; the instance's exit status says only whether the answer was delivered. Documented in PRIVILEGED §8.
+- **Status:** documented; no code change.
+
 **R-1. A restore's narrowed mode is not reported.**
 - S4c-0 clamps the restored mode but does not report it: the result has no `mode` field, and adding one was a protocol change.
 - **Decision:** S4c-5 reports the resulting mode in the preview and in the result, so a narrowing is never silent. Any protocol field for that is pre-approved (P-10, §4).
