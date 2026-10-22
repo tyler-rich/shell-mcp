@@ -228,6 +228,9 @@ func (s *server) powerBlockers(held bool) error {
 	if what != "" && usec != 0 {
 		return errf(protocol.CodeExecFailed, "logind already has a shutdown scheduled (%s); nothing was scheduled; an administrator cancels it on the host with shutdown -c", cleanText(what, 40))
 	}
+	if err := shutdownJobs(c, "nothing was scheduled"); err != nil {
+		return err
+	}
 	var preparing bool
 	if err := logindProperty(c, "PreparingForShutdown", "b", &preparing); err != nil {
 		return err
@@ -297,6 +300,69 @@ func inhibited(c *dbus.Conn) error {
 		}
 		return errf(protocol.CodeExecFailed, "a shutdown inhibitor lock (%s) is held by %q (%q), uid %d, pid %d; nothing was scheduled; preview again after it is released",
 			mode, cleanText(who, 100), cleanText(why, 200), uid, pid)
+	}
+	return nil
+}
+
+// shutdownTargets are the targets a job for which means the host is going
+// down: the ones systemctl reboot, poweroff, halt, kexec and soft-reboot
+// start, and the targets every shutdown pulls in.
+var shutdownTargets = []string{"reboot.target", "poweroff.target", "halt.target", "kexec.target", "soft-reboot.target", "shutdown.target", "final.target"}
+
+// shutdownJobs refuses while PID 1 holds a job other than a stop job for a
+// shutdown-family target: a shutdown that did not go through logind
+// (systemctl start reboot.target, or systemctl reboot's fallback when logind
+// is unavailable), which logind's ScheduledShutdown and PreparingForShutdown
+// do not show. ListJobs answers a(usssoo): id, unit, type, state, job path,
+// unit path (systemd 257 and 259, method_list_jobs). systemctl reboot
+// --force queues no job (Manager.Reboot sets PID 1's objective directly and
+// the manager leaves its main loop at once), so there is nothing to see.
+func shutdownJobs(c *dbus.Conn, tail string) error {
+	r, err := c.Call("org.freedesktop.systemd1", "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "ListJobs")
+	if err != nil {
+		if name, msg, ok := errorName(err); ok {
+			return errf(protocol.CodeExecFailed, "systemd refused ListJobs (%s: %s); %s", name, msg, tail)
+		}
+		return errf(protocol.CodeExecFailed, "systemd's answer to ListJobs could not be read; %s", tail)
+	}
+	return shutdownJobErr(r, tail)
+}
+
+// noShutdownJob is shutdownJobs on a connection of its own, for the checks
+// immediately before the request.
+func (s *server) noShutdownJob() error {
+	ctx, cancel := context.WithTimeout(context.Background(), powerTimeout)
+	defer cancel()
+	c, err := s.dialBus(ctx)
+	if err != nil {
+		return errf(protocol.CodeExecFailed, "the system bus cannot be reached, so systemd's jobs could not be checked; nothing was requested")
+	}
+	defer func() { _ = c.Close() }()
+	return shutdownJobs(c, "nothing was requested")
+}
+
+// shutdownJobErr is shutdownJobs' decision on a ListJobs answer.
+func shutdownJobErr(r *dbus.Message, tail string) error {
+	unreadable := errf(protocol.CodeExecFailed, "systemd's list of jobs could not be read; %s", tail)
+	v, err := r.Values()
+	if err != nil || r.Signature != "a(usssoo)" || len(v) != 1 {
+		return unreadable
+	}
+	list, _ := v[0].([]any)
+	for _, e := range list {
+		f, _ := e.([]any)
+		if len(f) != 6 {
+			return unreadable
+		}
+		id, _ := f[0].(uint32)
+		unit, _ := f[1].(string)
+		typ, _ := f[2].(string)
+		state, _ := f[3].(string)
+		if typ == "stop" || !slices.Contains(shutdownTargets, unit) {
+			continue
+		}
+		return errf(protocol.CodeExecFailed, "the host is already going down: systemd has a %s job for %s (job %d, %s); %s",
+			cleanText(typ, 30), unit, id, cleanText(state, 30), tail)
 	}
 	return nil
 }
@@ -472,6 +538,9 @@ func (s *server) power(raw jsontext.Value) (data any, warns []string, failure er
 	}
 	if cerr := s.powerPackageChecks(); cerr != nil {
 		return refuse(cerr)
+	}
+	if jerr := s.noShutdownJob(); jerr != nil {
+		return refuse(jerr)
 	}
 	// (7) The decision: a cancel that created the file first wins.
 	if d, derr := s.decide(powerDecision{RequestID: s.req.ID, Decision: "commit"}); derr != nil {

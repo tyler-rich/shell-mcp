@@ -44,6 +44,7 @@ func FuzzValues(f *testing.F) {
 		dbustest.Property(o, 2, "(st)", dbustest.ST(o, "reboot", 42)),
 		dbustest.Property(binary.BigEndian, 3, "b", dbustest.Bool(binary.BigEndian, false)),
 		dbustest.Empty(o, 4),
+		dbustest.Jobs(o, 6, []dbustest.Job{{ID: 7, Unit: "reboot.target", Type: "start", State: "waiting", Path: "/org/freedesktop/systemd1/job/7", UPath: "/org/freedesktop/systemd1/unit/reboot_2etarget"}}),
 		dbustest.Raw(o, 5, "av", []byte{8, 0, 0, 0, 1, 'y', 0, 7, 1, 'y', 0, 8}),
 	} {
 		m, err := dbus.ReadMessage(bytes.NewReader(b))
