@@ -201,6 +201,29 @@ func Inhibitors(o Order, serial uint32, list []Inhibitor) []byte {
 	return Raw(o, serial, "a(ssssuu)", body)
 }
 
+// Job is one entry of systemd's ListJobs answer.
+type Job struct {
+	ID                             uint32
+	Unit, Type, State, Path, UPath string
+}
+
+// Jobs is systemd's ListJobs answer, a(usssoo): id, unit, type, state, job
+// path, unit path (systemd 259, method_list_jobs).
+func Jobs(o Order, serial uint32, list []Job) []byte {
+	body := o.AppendUint32(nil, 0) // the array's length, below
+	body = pad(body, 8)
+	start := len(body)
+	for _, j := range list {
+		body = pad(body, 8)
+		body = o.AppendUint32(body, j.ID)
+		for _, s := range []string{j.Unit, j.Type, j.State, j.Path, j.UPath} {
+			body = str(o, body, s)
+		}
+	}
+	o.PutUint32(body, uint32(len(body)-start)) //nolint:gosec // G115: test bodies are short
+	return Raw(o, serial, "a(usssoo)", body)
+}
+
 // Property is the answer to org.freedesktop.DBus.Properties.Get: one
 // variant of signature sig, whose value enc appends.
 func Property(o Order, serial uint32, sig string, enc func([]byte) []byte) []byte {

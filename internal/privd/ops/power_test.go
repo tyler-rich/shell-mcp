@@ -37,7 +37,10 @@ import (
 type logind struct {
 	mu         sync.Mutex
 	inhibitors []dbustest.Inhibitor
-	scheduled  string
+	// jobs are PID 1's jobs, which the fake answers ListJobs with (the
+	// same fake bus stands for systemd).
+	jobs      []dbustest.Job
+	scheduled string
 	// immediate makes a scheduled shutdown read as logind leaves it after an
 	// immediate request it refused: the action with time 0.
 	immediate bool
@@ -61,6 +64,10 @@ func (l *logind) answer(m *dbus.Message) []byte {
 	o := binary.LittleEndian
 	l.mu.Lock()
 	switch {
+	case m.Member == "ListJobs" && m.Interface == "org.freedesktop.systemd1.Manager" && m.Destination == "org.freedesktop.systemd1":
+		jobs := append([]dbustest.Job(nil), l.jobs...)
+		l.mu.Unlock()
+		return dbustest.Jobs(o, m.Serial, jobs)
 	case m.Member == "ListInhibitors" && m.Interface == "org.freedesktop.login1.Manager":
 		list := append([]dbustest.Inhibitor(nil), l.inhibitors...)
 		l.mu.Unlock()
@@ -610,5 +617,56 @@ func TestPowerLogindRefusal(t *testing.T) {
 	}
 	if len(l.requests()) != 1 {
 		t.Fatalf("requests %+v", l.requests())
+	}
+}
+
+// shutdownJob is a job PID 1 holds for unit, of the given type.
+func shutdownJob(unit, typ string) dbustest.Job {
+	return dbustest.Job{ID: 4711, Unit: unit, Type: typ, State: "waiting", Path: "/org/freedesktop/systemd1/job/4711", UPath: "/org/freedesktop/systemd1/unit/x"}
+}
+
+// TestPowerShutdownJobs: a shutdown that does not go through logind (a job
+// PID 1 holds for a shutdown-family target, started for example by
+// systemctl start reboot.target, or systemctl reboot's fallback when logind
+// is unavailable) is refused at the preview, naming the job; a job for any
+// other unit, or one that stops such a target, does not block.
+func TestPowerShutdownJobs(t *testing.T) {
+	t.Parallel()
+	for _, unit := range []string{"reboot.target", "poweroff.target", "halt.target", "kexec.target", "soft-reboot.target", "shutdown.target", "final.target"} {
+		l := &logind{jobs: []dbustest.Job{shutdownJob(unit, "start")}}
+		f := powerFixture(t, l)
+		r := f.serve("priv_power_preview", m{"action": "reboot"})
+		if r.OK || r.Error.Code != "exec_failed" || !strings.Contains(r.Error.Message, unit) || !strings.Contains(r.Error.Message, "4711") {
+			t.Fatalf("%s job: %+v", unit, r.Error)
+		}
+	}
+	for name, j := range map[string]dbustest.Job{
+		"another unit": shutdownJob("example-app.service", "start"),
+		"a stop job":   shutdownJob("reboot.target", "stop"),
+	} {
+		f := powerFixture(t, &logind{jobs: []dbustest.Job{j}})
+		if p := f.powerPreview("reboot"); !sha256RE.MatchString(p.PreviewSHA256) {
+			t.Fatalf("%s: %+v", name, p)
+		}
+	}
+}
+
+// TestPowerShutdownJobAtTheTime: a shutdown job PID 1 holds at the time of
+// the request stops it as the final checks do: logind is never asked.
+func TestPowerShutdownJobAtTheTime(t *testing.T) {
+	t.Parallel()
+	l := &logind{}
+	f := powerFixture(t, l)
+	p := f.powerPreview("reboot")
+	a := f.serveAsync(pkgLine("priv_power", powerArgs("reboot", p.PreviewSHA256), 5000))
+	a.answer(5 * time.Second)
+	l.set(func(l *logind) { l.jobs = []dbustest.Job{shutdownJob("poweroff.target", "start")} })
+	a.ended(10 * time.Second)
+	if reqs := l.requests(); len(reqs) != 0 {
+		t.Fatalf("logind was asked %+v", reqs)
+	}
+	au := f.auditOf("priv_power")
+	if detail, _ := au["detail"].(string); au["power"] != "refused" || !strings.Contains(detail, "poweroff.target") {
+		t.Fatalf("audit %v", au)
 	}
 }
