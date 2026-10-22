@@ -4,6 +4,7 @@ package ops_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -71,8 +72,14 @@ func (a *asyncServe) answer(d time.Duration) (response, time.Time) {
 	_ = unix.SetsockoptTimeval(a.gate, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &unix.Timeval{Sec: int64(d / time.Second), Usec: int64(d % time.Second / time.Microsecond)})
 	var b []byte
 	buf := make([]byte, 64<<10)
+	deadline := time.Now().Add(d)
 	for !strings.Contains(string(b), "\n") {
 		n, err := unix.Read(a.gate, buf)
+		if errors.Is(err, unix.EINTR) && time.Now().Before(deadline) {
+			// A raw read is interrupted by the runtime's own signals
+			// (goroutine preemption); that is not the end of the answer.
+			continue
+		}
 		if n <= 0 || err != nil {
 			a.t.Fatalf("no answer within %v (read %q, %v)", d, b, err)
 		}
