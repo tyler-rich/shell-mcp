@@ -168,7 +168,7 @@ func (s *server) inProgressErr() error {
 		_ = f.Close()
 		switch {
 		case ok && r.Op == protocol.OpPrivPower:
-			msg = fmt.Sprintf("a %s is scheduled for %s (request id %s); priv_power_cancel cancels it until then", r.Action, r.ScheduledAt, r.RequestID)
+			msg = fmt.Sprintf("a %s is already scheduled for %s (request id %s); priv_power_cancel cancels it until then", r.Action, r.ScheduledAt, r.RequestID)
 		case ok:
 			msg = fmt.Sprintf("package operation in progress (request id %s, started %s, may run until %s)", r.RequestID, r.Started, r.Until)
 		}

@@ -212,8 +212,21 @@ func (s *server) powerBlockers(held bool) error {
 	if err := logindProperty(c, "ScheduledShutdown", "(st)", &sched); err != nil {
 		return err
 	}
-	if what, ok := sched[0].(string); !ok || what != "" {
-		return errf(protocol.CodeExecFailed, "logind already has a shutdown scheduled (%s); nothing was scheduled; an administrator cancels it on the host with shutdown -c", cleanText(fmt.Sprint(sched[0]), 40))
+	// A shutdown is scheduled when logind names an action with a time. An
+	// action with time 0 is what an immediate request leaves behind: logind
+	// sets it before it checks the target and does not reset it when it
+	// refuses (systemd 259, method_do_shutdown_or_sleep), so with nothing
+	// preparing (checked next) nothing is scheduled.
+	if len(sched) != 2 {
+		return errf(protocol.CodeExecFailed, "logind's ScheduledShutdown could not be read; nothing was scheduled")
+	}
+	what, ok := sched[0].(string)
+	usec, tok := sched[1].(uint64)
+	if !ok || !tok {
+		return errf(protocol.CodeExecFailed, "logind's ScheduledShutdown could not be read; nothing was scheduled")
+	}
+	if what != "" && usec != 0 {
+		return errf(protocol.CodeExecFailed, "logind already has a shutdown scheduled (%s); nothing was scheduled; an administrator cancels it on the host with shutdown -c", cleanText(what, 40))
 	}
 	var preparing bool
 	if err := logindProperty(c, "PreparingForShutdown", "b", &preparing); err != nil {
