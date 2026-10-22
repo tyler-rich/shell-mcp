@@ -89,10 +89,12 @@ func (f *fixture) summary() (s summaryWire, raw, helperSHA string) {
 		OK     bool            `json:"ok"`
 		Data   json.RawMessage `json:"data"`
 		Error  any             `json:"error"`
+		// The helper answers with its own block as "gate"; the gate passes
+		// it on to the server as "helper" (ARCHITECTURE §4.2).
 		Helper struct {
 			PolicySHA256 string `json:"policy_sha256"`
 			Unit         string `json:"unit"`
-		} `json:"helper"`
+		} `json:"gate"`
 	}
 	if err := json.Unmarshal([]byte(out), &r); err != nil || !r.OK {
 		f.t.Fatalf("priv_policy: %s", out)
@@ -190,8 +192,9 @@ func TestPrivPolicySummary(t *testing.T) {
 			t.Errorf("op %s listed", op)
 		}
 	}
-	f.fail("priv_pkg_upgrade_preview", m{}, "policy_denied")
-	f.fail("priv_power_preview", m{"action": "reboot"}, "policy_denied")
+	broad := newFixture(t, broadUsers(), asBroad())
+	broad.fail("priv_pkg_upgrade_preview", m{}, "policy_denied")
+	broad.fail("priv_power_preview", m{"action": "reboot"}, "policy_denied")
 	if !strings.Contains(f.lastAudit(), `"op":"priv_policy"`) {
 		t.Fatalf("audit %s", f.lastAudit())
 	}
