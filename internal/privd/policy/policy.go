@@ -164,6 +164,16 @@ type Command struct {
 	// ListB is the POLICY §5 group (11–13) the binary belongs to, or 0.
 	ListB     int
 	Templates []template.Template
+	// Findings are the command's N-13 findings (handoff §2.1).
+	Findings []CommandFinding
+}
+
+// CommandFinding is a declared command whose program defeats a bound
+// operation (handoff N-13). Stub: S4c-9 fills it in.
+type CommandFinding struct {
+	Category string
+	Program  string
+	Match    string
 }
 
 // Packages is the packages section (the apt operations, broad unit).
