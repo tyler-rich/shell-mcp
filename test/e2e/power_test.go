@@ -41,12 +41,32 @@ func maskPower(t *testing.T) {
 	run(t, "systemctl", "mask", "--runtime", "reboot.target", "poweroff.target")
 	t.Cleanup(func() {
 		if !drainPower(t) {
-			t.Errorf("a power action may still be waiting: reboot.target and poweroff.target stay masked")
+			// Fail the test and the job; never unmask while an action may
+			// still be requested.
+			t.Errorf("CLEANUP FAILED: the cancel could not be confirmed (the package operation record is still held after 90 s), " +
+				"so a power action may still be waiting; reboot.target and poweroff.target are left masked on this runner")
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		_ = exec.CommandContext(ctx, "systemctl", "unmask", "--runtime", "reboot.target", "poweroff.target").Run()
+		if out, err := exec.CommandContext(ctx, "systemctl", "unmask", "--runtime", "reboot.target", "poweroff.target").CombinedOutput(); err != nil {
+			t.Errorf("CLEANUP FAILED: unmask: %v %s", err, out)
+		}
+		for _, u := range []string{"reboot.target", "poweroff.target"} {
+			if got, err := exec.CommandContext(ctx, "systemctl", "show", "-p", "LoadState", "--value", u).Output(); err != nil || strings.TrimSpace(string(got)) == "masked" {
+				t.Errorf("CLEANUP FAILED: %s is still masked (%q, %v)", u, got, err)
+			}
+		}
+		// An immediate request logind refused at the masked target leaves its
+		// ScheduledShutdown at (reboot, 0) (systemd 259: the action is set
+		// before the target is checked, and nothing resets it on failure).
+		// CancelScheduledShutdown resets it, so the runner's logind is left as
+		// it was found.
+		if out, err := exec.CommandContext(ctx, "busctl", "get-property", "org.freedesktop.login1", "/org/freedesktop/login1",
+			"org.freedesktop.login1.Manager", "ScheduledShutdown").Output(); err == nil && !strings.Contains(string(out), `"" 0`) {
+			_ = exec.CommandContext(ctx, "busctl", "call", "org.freedesktop.login1", "/org/freedesktop/login1",
+				"org.freedesktop.login1.Manager", "CancelScheduledShutdown").Run()
+		}
 	})
 	for _, u := range []string{"reboot.target", "poweroff.target"} {
 		if got := show(t, u, "LoadState"); got != "masked" {
@@ -204,7 +224,7 @@ func TestPowerPreviewOnHost(t *testing.T) {
 
 // TestPowerScheduleAndCancel: the action is answered with its time and how
 // to cancel it; until then systemd shows the waiting instance, the record
-// is held, and previews of power and packages say a reboot is scheduled;
+// is held, and previews of power and packages say a reboot is already scheduled;
 // the cancel stops the instance (systemd shows it ended) and releases the
 // record, and the journal says cancelled.
 func TestPowerScheduleAndCancel(t *testing.T) {
@@ -220,7 +240,7 @@ func TestPowerScheduleAndCancel(t *testing.T) {
 	}
 	for op, args := range map[string]map[string]any{"priv_power_preview": {"action": "reboot"}, "priv_pkg_install_preview": {"packages": []string{"example-hello"}}} {
 		r, _ := gate(t, svcShell, op, args)
-		if r.code() != "exec_failed" || !strings.Contains(r.Error.Message, "reboot is scheduled for "+d.ScheduledAt) {
+		if r.code() != "exec_failed" || !strings.Contains(r.Error.Message, "reboot is already scheduled for "+d.ScheduledAt) {
 			t.Fatalf("%s while scheduled: %s %+v", op, r.code(), r.Error)
 		}
 	}

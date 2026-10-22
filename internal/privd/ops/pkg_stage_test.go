@@ -15,7 +15,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/privd/ops"
+	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 )
 
 // The stop points of install, upgrade and remove (S4c-7, the maintainer's
@@ -48,13 +50,20 @@ func (f *fixture) serveAsync(line string) *asyncServe {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	f.helperFD = fds[0]
 	if _, err := unix.Write(fds[1], []byte(line)); err != nil {
 		f.t.Fatal(err)
 	}
 	conn := os.NewFile(uintptr(fds[0]), "conn")
 	o := f.opts
 	o.Conn = conn
+	// This Serve runs beside others (a preview or a cancel while an
+	// operation waits), so its checks must not write the fixture's counters
+	// or helperFD, which serveRaw resets and its own checks bump (the race
+	// detector found it in CI). It reads the same status and lookups.
+	status := f.status
+	o.ReadStatus = func() ([]byte, error) { return []byte(status), nil }
+	o.Lookups = f.fakeLookups
+	o.ApplySandbox = func(*policy.Policy, string) (sandbox.Report, error) { return sandbox.Report{Mode: "best-effort"}, nil }
 	a := &asyncServe{t: f.t.(*testing.T), gate: fds[1], start: time.Now(), done: make(chan time.Time, 1)}
 	go func() {
 		ops.Serve(&o)

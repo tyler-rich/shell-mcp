@@ -226,31 +226,7 @@ commands:
 		Trust:      gatetest.Trust(),
 		Lookups: func(o *policy.LoadOptions) {
 			f.lookups++
-			users := map[string]uint32{"root": 0, "tester": f.uid, "example-app": 1001}
-			groups := map[string]uint32{"root": 0, "tester": f.gid, "svc-shell-priv": 60124}
-			o.LookupUser = func(n string) (uint32, error) {
-				if id, ok := users[n]; ok {
-					return id, nil
-				}
-				return 0, errors.New("unknown user")
-			}
-			o.LookupGroup = func(n string) (uint32, error) {
-				if id, ok := f.extraGroups[n]; ok {
-					return id, nil
-				}
-				if id, ok := groups[n]; ok {
-					return id, nil
-				}
-				return 0, errors.New("unknown group")
-			}
-			o.UserName = func(uid uint32) string {
-				for n, id := range users {
-					if id == uid {
-						return n
-					}
-				}
-				return ""
-			}
+			f.fakeLookups(o)
 		},
 		SystemBinDirs: []string{filepath.Join(d, "sysbin")},
 		UnitClientUID: strconv.FormatUint(uint64(f.uid), 10),
@@ -273,6 +249,37 @@ commands:
 	}
 	f.rehash()
 	return f
+}
+
+// fakeLookups fills the policy loader's user and group lookups with the
+// fixture's invented accounts. It writes nothing on the fixture, so a Serve
+// running beside another (serveAsync) may use it.
+func (f *fixture) fakeLookups(o *policy.LoadOptions) {
+	users := map[string]uint32{"root": 0, "tester": f.uid, "example-app": 1001}
+	groups := map[string]uint32{"root": 0, "tester": f.gid, "svc-shell-priv": 60124}
+	o.LookupUser = func(n string) (uint32, error) {
+		if id, ok := users[n]; ok {
+			return id, nil
+		}
+		return 0, errors.New("unknown user")
+	}
+	o.LookupGroup = func(n string) (uint32, error) {
+		if id, ok := f.extraGroups[n]; ok {
+			return id, nil
+		}
+		if id, ok := groups[n]; ok {
+			return id, nil
+		}
+		return 0, errors.New("unknown group")
+	}
+	o.UserName = func(uid uint32) string {
+		for n, id := range users {
+			if id == uid {
+				return n
+			}
+		}
+		return ""
+	}
 }
 
 // rehash sets the unit's expected hash to the policy file's current hash.

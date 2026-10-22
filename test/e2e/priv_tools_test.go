@@ -129,13 +129,19 @@ func TestPrivToolsListed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writes := "shell_priv_change_owner shell_priv_copy_path shell_priv_delete_path shell_priv_install_packages shell_priv_make_directory shell_priv_move_path shell_priv_remove_packages shell_priv_restore_backup shell_priv_run_command shell_priv_set_permissions shell_priv_update_package_index shell_priv_upgrade_packages shell_priv_write_file"
+	writes := "shell_priv_change_owner shell_priv_copy_path shell_priv_delete_path shell_priv_install_packages shell_priv_make_directory shell_priv_move_path shell_priv_remove_packages shell_priv_restore_backup shell_priv_run_command shell_priv_reboot_host shell_priv_set_permissions shell_priv_update_package_index shell_priv_upgrade_packages shell_priv_write_file"
 	var got []string
 	for _, tool := range res.Tools {
 		if strings.HasPrefix(tool.Name, "shell_priv_") {
 			got = append(got, tool.Name)
 			a := tool.Annotations
 			switch {
+			case tool.Name == "shell_priv_cancel_power":
+				// The one read-tier tool that changes the host (TOOLS.md, power): never
+				// gated, not read-only, not destructive.
+				if a == nil || a.ReadOnlyHint || a.DestructiveHint == nil || *a.DestructiveHint || tool.Meta["anthropic/requiresUserInteraction"] != nil {
+					t.Fatalf("%s: annotations %+v meta %v", tool.Name, a, tool.Meta)
+				}
 			case strings.Contains(writes, tool.Name):
 				if a == nil || a.ReadOnlyHint || a.DestructiveHint == nil || !*a.DestructiveHint || tool.Meta["anthropic/requiresUserInteraction"] != true {
 					t.Fatalf("%s: annotations %+v meta %v", tool.Name, a, tool.Meta)
@@ -145,7 +151,7 @@ func TestPrivToolsListed(t *testing.T) {
 			}
 		}
 	}
-	if want := "shell_priv_change_owner shell_priv_copy_path shell_priv_delete_path shell_priv_install_packages shell_priv_list_backups shell_priv_list_directory shell_priv_make_directory shell_priv_move_path shell_priv_preview_delete shell_priv_preview_packages shell_priv_read_file shell_priv_remove_packages shell_priv_restore_backup shell_priv_run_command shell_priv_set_permissions shell_priv_stat_path shell_priv_update_package_index shell_priv_upgrade_packages shell_priv_write_file"; strings.Join(got, " ") != want {
+	if want := "shell_priv_cancel_power shell_priv_change_owner shell_priv_copy_path shell_priv_delete_path shell_priv_install_packages shell_priv_list_backups shell_priv_list_directory shell_priv_make_directory shell_priv_move_path shell_priv_preview_delete shell_priv_preview_packages shell_priv_read_file shell_priv_reboot_host shell_priv_remove_packages shell_priv_restore_backup shell_priv_run_command shell_priv_set_permissions shell_priv_stat_path shell_priv_update_package_index shell_priv_upgrade_packages shell_priv_write_file"; strings.Join(got, " ") != want {
 		t.Fatalf("privileged tools %v, want %s", got, want)
 	}
 }

@@ -38,7 +38,10 @@ type logind struct {
 	mu         sync.Mutex
 	inhibitors []dbustest.Inhibitor
 	scheduled  string
-	preparing  bool
+	// immediate makes a scheduled shutdown read as logind leaves it after an
+	// immediate request it refused: the action with time 0.
+	immediate bool
+	preparing bool
 	// refuse is the error name a request is answered with ("" accepts it).
 	refuse string
 	// hold, when set, makes a request wait for it to be closed before
@@ -64,13 +67,13 @@ func (l *logind) answer(m *dbus.Message) []byte {
 		return dbustest.Inhibitors(o, m.Serial, list)
 	case m.Member == "Get" && m.Interface == "org.freedesktop.DBus.Properties":
 		args, _ := m.Strings()
-		scheduled, preparing := l.scheduled, l.preparing
+		scheduled, immediate, preparing := l.scheduled, l.immediate, l.preparing
 		l.mu.Unlock()
 		if len(args) == 2 && args[0] == "org.freedesktop.login1.Manager" {
 			switch args[1] {
 			case "ScheduledShutdown":
 				at := uint64(0)
-				if scheduled != "" {
+				if scheduled != "" && !immediate {
 					at = 1_790_000_000_000_000
 				}
 				return dbustest.Property(o, m.Serial, "(st)", dbustest.ST(o, scheduled, at))
@@ -268,6 +271,15 @@ func TestPowerPreviewRefusals(t *testing.T) {
 				t.Fatal("a refused preview requested an action")
 			}
 		})
+	}
+	// What logind leaves behind after an immediate request it refused at the
+	// target (a masked one): ScheduledShutdown (reboot, 0) with nothing
+	// preparing and no timer (systemd 259, method_do_shutdown_or_sleep sets
+	// the action before bus_manager_shutdown_or_sleep_now_or_later, and nothing
+	// resets it on failure). It is not a scheduled shutdown and does not block.
+	stale := &logind{scheduled: "reboot", immediate: true}
+	if p := powerFixture(t, stale).powerPreview("reboot"); !sha256RE.MatchString(p.PreviewSHA256) {
+		t.Fatalf("stale immediate request: %+v", p)
 	}
 	for name, inh := range map[string]dbustest.Inhibitor{
 		"delay":      {What: "shutdown", Who: "example-updater", Why: "finishing", Mode: "delay", UID: 0, PID: 77},
@@ -480,7 +492,7 @@ func TestPowerCancel(t *testing.T) {
 		t.Fatalf("answer %+v", r)
 	}
 	pr := f.serve("priv_pkg_install_preview", hello)
-	if pr.OK || pr.Error.Code != "exec_failed" || !strings.Contains(pr.Error.Message, "reboot is scheduled") || !strings.Contains(pr.Error.Message, d.ScheduledAt) {
+	if pr.OK || pr.Error.Code != "exec_failed" || !strings.Contains(pr.Error.Message, "reboot is already scheduled") || !strings.Contains(pr.Error.Message, d.ScheduledAt) {
 		t.Fatalf("package preview while scheduled: %+v", pr.Error)
 	}
 	f.fail("priv_power_preview", m{"action": "reboot"}, "exec_failed")
