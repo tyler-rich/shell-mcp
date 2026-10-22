@@ -46,6 +46,7 @@ const (
 	socketPath  = "/run/shell-mcp/privd.sock"
 	broadSocket = "/run/shell-mcp/privd-broad.sock"
 	repoDir     = "/srv/e2e-apt"
+	repoNextDir = "/srv/e2e-apt-next"
 	backupDir   = "/var/lib/shell-mcp/backups"
 	svcShell    = 4200001
 	socketGroup = 4200002

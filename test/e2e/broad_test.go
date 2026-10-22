@@ -33,14 +33,30 @@ import (
 // [trusted=yes] accepts. No internet is involved.
 func aptRepo(t *testing.T, debs ...string) {
 	t.Helper()
+	aptRepoAt(t, repoDir, debs...)
+}
+
+// aptRepoNext stages a repository in repoNextDir, which the test build's
+// package hook moves into repoDir at its stage (armPkgHook).
+func aptRepoNext(t *testing.T, debs ...string) {
+	t.Helper()
+	if err := os.MkdirAll(repoNextDir, 0o755); err != nil { //nolint:gosec // G301: read by apt's unprivileged methods
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(repoNextDir) })
+	aptRepoAt(t, repoNextDir, debs...)
+}
+
+func aptRepoAt(t *testing.T, dir string, debs ...string) {
+	t.Helper()
 	// Each Release file's Date must be newer than the last one apt saw.
 	time.Sleep(1100 * time.Millisecond)
-	ents, err := os.ReadDir(repoDir)
+	ents, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range ents {
-		if err := os.Remove(filepath.Join(repoDir, e.Name())); err != nil {
+		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -51,7 +67,7 @@ func aptRepo(t *testing.T, debs ...string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(repoDir, d), b, 0o644); err != nil { //nolint:gosec // G306: apt's unprivileged methods read the repository
+		if err := os.WriteFile(filepath.Join(dir, d), b, 0o644); err != nil { //nolint:gosec // G306: apt's unprivileged methods read the repository
 			t.Fatal(err)
 		}
 		control := strings.TrimRight(run(t, "dpkg-deb", "-f", src), "\n")
@@ -59,13 +75,13 @@ func aptRepo(t *testing.T, debs ...string) {
 		fmt.Fprintf(&index, "%s\nFilename: ./%s\nSize: %d\nSHA256: %s\n\n", control, d, len(b), hex.EncodeToString(sum[:]))
 	}
 	pkgs := []byte(index.String())
-	if err := os.WriteFile(filepath.Join(repoDir, "Packages"), pkgs, 0o644); err != nil { //nolint:gosec // G306: read by apt
+	if err := os.WriteFile(filepath.Join(dir, "Packages"), pkgs, 0o644); err != nil { //nolint:gosec // G306: read by apt
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(pkgs)
 	release := fmt.Sprintf("Origin: shell-mcp-e2e\nLabel: shell-mcp-e2e\nSuite: e2e\nCodename: e2e\nDate: %s\nArchitectures: all amd64 arm64\nSHA256:\n %s %d Packages\n",
 		time.Now().UTC().Format(time.RFC1123), hex.EncodeToString(sum[:]), len(pkgs))
-	if err := os.WriteFile(filepath.Join(repoDir, "Release"), []byte(release), 0o644); err != nil { //nolint:gosec // G306: read by apt
+	if err := os.WriteFile(filepath.Join(dir, "Release"), []byte(release), 0o644); err != nil { //nolint:gosec // G306: read by apt
 		t.Fatal(err)
 	}
 }

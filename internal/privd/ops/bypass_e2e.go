@@ -9,6 +9,7 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -35,20 +36,41 @@ func init() {
 	pkgHook = e2ePkgHook
 }
 
-// e2ePkgHookFile names the stage of the next package operation at which
-// e2ePkgHook updates the package index (written by the e2e tests, root's).
-const e2ePkgHookFile = "/run/shell-mcp-e2e-pkg-hook"
+// The e2e tests' package hook (written by them, root's): e2ePkgHookFile
+// names the stage of the next package operation at which e2ePkgHook
+// replaces the local repository e2eRepo with the one staged in
+// e2eRepoNext and updates the package index. The repository is staged
+// rather than written in place because apt's file: method links a flat
+// repository's index into its lists, so a repository written in place
+// changes what apt resolves at once, before the stage.
+const (
+	e2ePkgHookFile = "/run/shell-mcp-e2e-pkg-hook"
+	e2eRepo        = "/srv/e2e-apt"
+	e2eRepoNext    = "/srv/e2e-apt-next"
+)
 
-// e2ePkgHook updates the package index (apt-get -q update, through the
-// helper's exec engine) at the stage the hook file names, once, so that the
-// e2e tests can change what apt resolves between the operation's own steps
-// (TestPackageChangedBeforeRun, TestPackageUpgradeExactList).
+// e2ePkgHook swaps in the staged repository and updates the package index
+// (apt-get -q update, through the helper's exec engine) at the stage the
+// hook file names, once, so that the e2e tests can change what apt
+// resolves between the operation's own steps (TestPackageChangedBeforeRun,
+// TestPackageUpgradeExactList).
 func e2ePkgHook(s *server, stage string) {
 	b, err := os.ReadFile(e2ePkgHookFile)
 	if err != nil || strings.TrimSpace(string(b)) != stage {
 		return
 	}
 	_ = os.Remove(e2ePkgHookFile)
+	if next, err := os.ReadDir(e2eRepoNext); err == nil {
+		if old, err := os.ReadDir(e2eRepo); err == nil {
+			for _, e := range old {
+				_ = os.Remove(filepath.Join(e2eRepo, e.Name()))
+			}
+		}
+		for _, e := range next {
+			_ = os.Rename(filepath.Join(e2eRepoNext, e.Name()), filepath.Join(e2eRepo, e.Name()))
+		}
+		_ = os.Remove(e2eRepoNext)
+	}
 	argv, _ := pkg.Args(pkg.OpUpdate, false, nil)
 	_, _ = execx.Run(context.Background(), &execx.Spec{Trampoline: s.o.Executable, Path: s.o.AptGet, Args: argv, Env: s.aptEnv(), Dir: "/",
 		Timeout: time.Minute, MaxOutput: 64 << 10})

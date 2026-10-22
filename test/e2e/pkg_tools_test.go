@@ -66,9 +66,9 @@ func TestPackageNewVersionAfterApproval(t *testing.T) {
 	}
 }
 
-// armPkgHook makes the e2e test build of the helper update the package
-// index (apt-get update, run by the helper itself) at stage of its next
-// package operation: "before-pinned-sim" (after the preview's hash was
+// armPkgHook makes the e2e test build of the helper move the repository
+// staged by aptRepoNext into place and update the package index (apt-get
+// update, run by the helper itself) at stage of its next package operation: "before-pinned-sim" (after the preview's hash was
 // recomputed) or "before-run" (after the pinned simulation, before the
 // run). The release build has no such hook.
 func armPkgHook(t *testing.T, stage string) {
@@ -97,10 +97,12 @@ func TestPackageChangedBeforeRun(t *testing.T) {
 		aptRepo(t, "example-hello_1.0_all.deb", "example-extra_1.0_all.deb")
 		mustPkg(t, "update_index", map[string]any{})
 		p := pkgPreview(t, "install", helloArgs)
+		aptRepoNext(t, "example-hello_1.1_all.deb", "example-extra_1.0_all.deb")
 		armPkgHook(t, "before-pinned-sim")
-		aptRepo(t, "example-hello_1.1_all.deb", "example-extra_1.0_all.deb")
 		r, _ := gate(t, svcShell, "priv_pkg_install", withHash(helloArgs, p.PreviewSHA256))
-		if r.code() != "exists" {
+		// Refused by the pinned simulation (the recompute still saw the
+		// approved transaction): the approved version is gone.
+		if r.code() != "exists" || !strings.Contains(r.Error.Message, "pinned") {
 			t.Fatalf("answer %s %+v", r.code(), r.Error)
 		}
 		if got := installed(t, "example-hello"); strings.HasPrefix(got, "installed") {
@@ -112,14 +114,13 @@ func TestPackageChangedBeforeRun(t *testing.T) {
 		aptRepo(t, "example-hello_1.0_all.deb", "example-extra_1.0_all.deb")
 		mustPkg(t, "update_index", map[string]any{})
 		p := pkgPreview(t, "install", helloArgs)
+		aptRepoNext(t, "example-hello_1.0_all.deb", "example-hello_1.1_all.deb", "example-extra_1.0_all.deb")
 		armPkgHook(t, "before-run")
-		aptRepo(t, "example-hello_1.0_all.deb", "example-hello_1.1_all.deb", "example-extra_1.0_all.deb")
 		r, _ := gate(t, svcShell, "priv_pkg_install", withHash(helloArgs, p.PreviewSHA256))
-		switch got := installed(t, "example-hello"); {
-		case r.OK && got == "installed 1.0":
-		case !r.OK && (r.code() == "exists" || r.code() == "verify_failed" || r.code() == "exec_failed") && !strings.HasPrefix(got, "installed 1.1"):
-		default:
-			t.Fatalf("answer %s %+v, dpkg %q: a different transaction ran", r.code(), r.Error, got)
+		// 1.1 is the candidate when the run starts; the pinned run installs
+		// the approved 1.0, exactly.
+		if got := installed(t, "example-hello"); !r.OK || got != "installed 1.0" {
+			t.Fatalf("answer %s %+v, dpkg %q: not the approved transaction", r.code(), r.Error, got)
 		}
 	})
 }
@@ -139,8 +140,8 @@ func TestPackageUpgradeExactList(t *testing.T) {
 	if len(p.Upgrade) != 1 || p.Upgrade[0].Name != "example-hello" {
 		t.Fatalf("upgrade preview %+v", p)
 	}
+	aptRepoNext(t, "example-hello_1.1_all.deb", "example-extra_1.0_all.deb", "example-conf_1.0_all.deb", "example-conf_1.1_all.deb")
 	armPkgHook(t, "before-run")
-	aptRepo(t, "example-hello_1.1_all.deb", "example-extra_1.0_all.deb", "example-conf_1.0_all.deb", "example-conf_1.1_all.deb")
 	var r pkgResult
 	mustGate(t, "priv_pkg_upgrade", map[string]any{"expected_preview_sha256": p.PreviewSHA256}, &r)
 	if installed(t, "example-hello") != "installed 1.1" || installed(t, "example-conf") != "installed 1.0" {
@@ -184,7 +185,7 @@ func installRequest(t *testing.T, args map[string]any, timeoutMS int) (line, id 
 // TestPackageStopPoints (the maintainer's decision on item 5), in the
 // broad unit with max_timeout_s 24 (privileged-pkgstage.yaml: a 6 s stop
 // allowance, so SIGINT at 18 s and the kill at 24 s):
-//   - early: example-slow (an 8 s postinst): the request's deadline (3 s)
+//   - early: example-slow (an 8 s postinst): the request's deadline (6 s)
 //     gets outcome_unknown at once, naming the request id and the time it
 //     may run until; a preview says the operation is in progress; apt-get
 //     finishes before the stop point; the journal line has the result;
@@ -206,9 +207,9 @@ func TestPackageStopPoints(t *testing.T) {
 	}
 	t.Run("early", func(t *testing.T) {
 		p := setup(t, "example-slow")
-		line, id := installRequest(t, withHash(map[string]any{"packages": []string{"example-slow"}}, p.PreviewSHA256), 3000)
+		line, id := installRequest(t, withHash(map[string]any{"packages": []string{"example-slow"}}, p.PreviewSHA256), 6000)
 		out, took := lineClient(t, line)
-		if !strings.Contains(out, `"code":"outcome_unknown"`) || !strings.Contains(out, id) || !untilRE.MatchString(out) || took > 8*time.Second {
+		if !strings.Contains(out, `"code":"outcome_unknown"`) || !strings.Contains(out, id) || !untilRE.MatchString(out) || took > 10*time.Second {
 			t.Fatalf("answer after %v: %s", took, out)
 		}
 		if r, _ := gate(t, svcShell, "priv_pkg_install_preview", helloArgs); r.code() != "exec_failed" || !strings.Contains(r.Error.Message, "package operation in progress") ||
@@ -223,7 +224,9 @@ func TestPackageStopPoints(t *testing.T) {
 	t.Run("drop", func(t *testing.T) {
 		p := setup(t, "example-slow")
 		line, id := installRequest(t, withHash(map[string]any{"packages": []string{"example-slow"}}, p.PreviewSHA256), 20000)
-		cl, out := hangupClient(t, "drop", broadSocket, line, 3*time.Second)
+		// At 6 s apt-get is running example-slow's 8 s postinst (a hang-up
+		// during the simulations before it would run nothing).
+		cl, out := hangupClient(t, "drop", broadSocket, line, 6*time.Second)
 		if err := cl.Wait(); err != nil {
 			t.Fatalf("client: %v %q", err, out.String())
 		}
@@ -237,7 +240,7 @@ func TestPackageStopPoints(t *testing.T) {
 		if len(p.Install) != 2 {
 			t.Fatalf("preview %+v", p)
 		}
-		line, id := installRequest(t, withHash(map[string]any{"packages": []string{"example-slow-b"}}, p.PreviewSHA256), 3000)
+		line, id := installRequest(t, withHash(map[string]any{"packages": []string{"example-slow-b"}}, p.PreviewSHA256), 6000)
 		out, _ := lineClient(t, line)
 		if !strings.Contains(out, `"code":"outcome_unknown"`) {
 			t.Fatalf("answer %s", out)
@@ -255,7 +258,7 @@ func TestPackageStopPoints(t *testing.T) {
 	})
 	t.Run("kill", func(t *testing.T) {
 		p := setup(t, "example-stuck")
-		line, id := installRequest(t, withHash(map[string]any{"packages": []string{"example-stuck"}}, p.PreviewSHA256), 3000)
+		line, id := installRequest(t, withHash(map[string]any{"packages": []string{"example-stuck"}}, p.PreviewSHA256), 6000)
 		start := time.Now()
 		lineClient(t, line)
 		j := waitLineFor(t, `"id":"`+id+`"`, `"stopped":"killed"`, `"outcome":"verify_failed"`, `"unfinished":["example-stuck"]`)
