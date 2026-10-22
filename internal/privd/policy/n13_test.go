@@ -60,9 +60,9 @@ func (f *fixture) declareAs(t *testing.T, name, way string) string {
 	case "written":
 		return f.exe(t, name, "written "+name+"\n")
 	case "resolved":
-		real := filepath.Join(f.dir, "real")
-		gatetest.Mkdir(t, real, 0o755)
-		target := filepath.Join(real, name)
+		dir := filepath.Join(f.dir, "real")
+		gatetest.Mkdir(t, dir, 0o755)
+		target := filepath.Join(dir, name)
 		gatetest.WriteFile(t, target, "resolved "+name+"\n", 0o755)
 		link := filepath.Join(f.bin, "tool-link")
 		_ = os.Remove(link)

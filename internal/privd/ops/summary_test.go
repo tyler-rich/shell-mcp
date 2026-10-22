@@ -86,9 +86,9 @@ func (f *fixture) summary() (s summaryWire, raw, helperSHA string) {
 	f.t.Helper()
 	out, _ := f.serveRaw(request("priv_policy", m{}))
 	var r struct {
-		OK     bool            `json:"ok"`
-		Data   json.RawMessage `json:"data"`
-		Error  any             `json:"error"`
+		OK    bool            `json:"ok"`
+		Data  json.RawMessage `json:"data"`
+		Error any             `json:"error"`
 		// The helper answers with its own block as "gate"; the gate passes
 		// it on to the server as "helper" (ARCHITECTURE §4.2).
 		Helper struct {

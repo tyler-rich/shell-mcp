@@ -74,7 +74,7 @@ func helperScanNames() []string { return append(slices.Clone(packageTools), find
 
 // Classify returns a program base name's class, and for ClassNever and
 // ClassListB its POLICY §5 group.
-func Classify(base string) (Class, int) {
+func Classify(base string) (class Class, group int) {
 	switch {
 	case slices.Contains(packageTools, base):
 		return ClassPackageTool, 0

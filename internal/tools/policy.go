@@ -274,7 +274,7 @@ func getPolicy(d *Deps) Tool {
 	return define(d, spec[targetArg, PolicyData]{
 		name:        "shell_get_policy",
 		title:       "Get target policy",
-		description: "Returns a target gate's version, principal, sandbox status and effective policy: roots, limits, services, repositories, commands with their templates, and privileged forwarding.",
+		description: "Returns a target gate's version, principal, sandbox status and effective policy: roots, limits, services, repositories, commands with their templates, and privileged forwarding with the privileged helper's policy summary.",
 		tier:        TierRead,
 		schema:      boundTarget,
 		audit:       func(in targetArg) map[string]any { return map[string]any{"target": in.Target} },
@@ -372,7 +372,7 @@ func privApproval(tier string) bool {
 // tool's read ceiling) and returns it, or nil and a warning saying why not:
 // a refusal, an answer without the helper's block, or a summary whose hash
 // is not that block's.
-func (d *Deps) privPolicy(ctx context.Context, target string) (*PrivPolicy, []string) {
+func (d *Deps) privPolicy(ctx context.Context, target string) (summary *PrivPolicy, warnings []string) {
 	const what = "the privileged policy summary is not shown: "
 	resp, e := d.call(ctx, target, protocol.OpPrivPolicy, nil, d.budget())
 	if e != nil {
