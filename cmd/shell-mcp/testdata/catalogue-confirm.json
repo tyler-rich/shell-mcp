@@ -557,6 +557,26 @@
     "requires_user_interaction": true
   },
   {
+    "name": "shell_priv_install_packages",
+    "title": "Install packages as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Install packages as root"
+    },
+    "description": "Installs, as root, allow-listed packages exactly as their approved preview resolved them, every package at its approved version, never removing any; returns what dpkg shows was installed.",
+    "input_schema_sha256": "203e97f4cdec4401af00c6862eeb5a55da9f399c1b715519ca0f676ca1db97c5",
+    "output_schema_sha256": "054d6c9b9a230a9ef630af79794583ad6d94b1590ffd4477ac9a511743aeeeab",
+    "requires_user_interaction": true
+  },
+  {
     "name": "shell_priv_list_backups",
     "title": "List backups",
     "tier": "read",
@@ -657,6 +677,26 @@
     "requires_user_interaction": false
   },
   {
+    "name": "shell_priv_preview_packages",
+    "title": "Preview packages as root",
+    "tier": "read",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Preview packages as root"
+    },
+    "description": "Reports, as root, what installing, upgrading or removing packages would change, without changing anything: every package with its exact version, and a hash of the transaction.",
+    "input_schema_sha256": "30daa473d1e9535cf14cfcd170279261761a8d4b58a80a18d3117f19d279b10d",
+    "output_schema_sha256": "3f1e459d2419ddd8ef966bf88eb05d52a643ce400aafe14b06e8e6fa6173baa6",
+    "requires_user_interaction": false
+  },
+  {
     "name": "shell_priv_read_file",
     "title": "Read file as root",
     "tier": "read",
@@ -675,6 +715,26 @@
     "input_schema_sha256": "062ac73f234b5f9c2277ef86f8b1d9778203a1c82b5c0a5f3c64d6a359cd4cf7",
     "output_schema_sha256": "c1d53a1021aab2f2f0f9339e00e2d15d8c31061dbc137b256cb5bd34b9ed700d",
     "requires_user_interaction": false
+  },
+  {
+    "name": "shell_priv_remove_packages",
+    "title": "Remove packages as root",
+    "tier": "destructive",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Remove packages as root"
+    },
+    "description": "Removes, as root, allow-listed packages exactly as their approved preview listed them, keeping their configuration files; returns what dpkg shows was removed.",
+    "input_schema_sha256": "203e97f4cdec4401af00c6862eeb5a55da9f399c1b715519ca0f676ca1db97c5",
+    "output_schema_sha256": "054d6c9b9a230a9ef630af79794583ad6d94b1590ffd4477ac9a511743aeeeab",
+    "requires_user_interaction": true
   },
   {
     "name": "shell_priv_restore_backup",
@@ -755,6 +815,46 @@
     "input_schema_sha256": "2af6ff11abe9191b4568e62addcb7bc71d353c46c7684eb247b1de81115b627a",
     "output_schema_sha256": "86435fb795786e7bc96d78f626e9d93da3f8b28bdf49b2e33ee82c89c0896cbc",
     "requires_user_interaction": false
+  },
+  {
+    "name": "shell_priv_update_package_index",
+    "title": "Update package index as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Update package index as root"
+    },
+    "description": "Updates, as root, the host's package index from its configured sources; returns apt-get's exit status and redacted, size-capped output.",
+    "input_schema_sha256": "6ae8497bec2bac4c9473d84c65286fe270594c68ee8ef34676a32987e07cc6b8",
+    "output_schema_sha256": "67c4286ef6cf791e25e3619443d228512e035a84eb5f08d171e07e19c9280201",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_upgrade_packages",
+    "title": "Upgrade packages as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Upgrade packages as root"
+    },
+    "description": "Upgrades, as root, exactly the packages its approved preview listed, each to its approved version, never installing what was not approved nor removing anything; returns what dpkg shows was upgraded.",
+    "input_schema_sha256": "6ae8497bec2bac4c9473d84c65286fe270594c68ee8ef34676a32987e07cc6b8",
+    "output_schema_sha256": "054d6c9b9a230a9ef630af79794583ad6d94b1590ffd4477ac9a511743aeeeab",
+    "requires_user_interaction": true
   },
   {
     "name": "shell_priv_write_file",

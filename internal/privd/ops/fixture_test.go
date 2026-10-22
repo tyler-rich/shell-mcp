@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,13 +34,16 @@ type fixture struct {
 	policyPath                          string
 	uid, gid                            uint32
 	opts                                ops.Options
-	audit                               *bytes.Buffer
+	audit                               *auditBuffer
 	status                              string
 	// unit is SHELL_MCP_PRIVD_UNIT (core unless asBroad).
 	unit string
 	// aptGet is the apt-get the policy checks and package operations run
 	// (the probe unless withFakeApt), aptLog the fake's log.
 	aptGet, aptLog string
+	// dpkg is the dpkg directory (status, updates/, lock-frontend) and
+	// record the package operation record the package operations use.
+	dpkg, record string
 	// sandboxCalls counts ApplySandbox; unreadAtSandbox is how many request
 	// bytes were still unread on the helper's end of the connection when it
 	// was applied, and unread how many were left when Serve returned (both
@@ -149,7 +153,7 @@ func newFixture(t testing.TB, opts ...opt) *fixture {
 		etc:     filepath.Join(d, "etc", "shell-mcp"),
 		uid:     uint32(os.Getuid()), //nolint:gosec // G115: test ids fit
 		gid:     uint32(os.Getgid()), //nolint:gosec // G115: test ids fit
-		audit:   &bytes.Buffer{},
+		audit:   &auditBuffer{},
 		status:  statusFor("0", "1", "000000000000000f"),
 		unit:    "core",
 	}
@@ -157,6 +161,12 @@ func newFixture(t testing.TB, opts ...opt) *fixture {
 		gatetest.Mkdir(t, p, 0o755)
 	}
 	gatetest.Mkdir(t, f.backups, 0o700)
+	f.dpkg = filepath.Join(d, "var", "lib", "dpkg")
+	gatetest.Mkdir(t, filepath.Join(f.dpkg, "updates"), 0o755)
+	gatetest.WriteFile(t, filepath.Join(f.dpkg, "lock-frontend"), "", 0o640)
+	gatetest.WriteFile(t, filepath.Join(f.dpkg, "status"), dpkgStatus(), 0o644)
+	f.record = filepath.Join(d, "run", "shell-mcp-privd-pkg")
+	gatetest.Mkdir(t, filepath.Dir(f.record), 0o755)
 	gatetest.WriteFile(t, filepath.Join(f.read, "hello.txt"), "hello\nworld\n", 0o644)
 	gatetest.WriteFile(t, filepath.Join(f.read, "secrets", "token"), "TOPSECRET", 0o600)
 	gatetest.WriteFile(t, filepath.Join(f.write, "app.conf"), "key: value\n", 0o640)
@@ -246,6 +256,8 @@ commands:
 		UnitClientUID: strconv.FormatUint(uint64(f.uid), 10),
 		Unit:          f.unit,
 		AptGet:        f.aptGet,
+		DpkgDir:       f.dpkg,
+		PkgRecord:     f.record,
 		ReadStatus: func() ([]byte, error) {
 			f.statusReads++
 			return []byte(f.status), nil
@@ -421,3 +433,22 @@ func (f *fixture) backupFiles() []string {
 }
 
 var _ = units.BackupDir
+
+// auditBuffer collects the audit lines of every Serve of a fixture; a test
+// may run two at once (a preview while a package operation runs).
+type auditBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (a *auditBuffer) Write(p []byte) (int, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.b.Write(p)
+}
+
+func (a *auditBuffer) String() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.b.String()
+}

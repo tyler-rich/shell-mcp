@@ -9,8 +9,8 @@
 // There is never a free-form apt argument: every option is fixed here, and
 // package names (already checked against the policy's allow-lists by the
 // caller) are validated again and passed only after "--", which ends
-// apt-get's option parsing (apt-pkg/contrib/cmndline.cc, apt 3.0.3 and
-// 3.1.16).
+// apt-get's option parsing (apt-pkg/contrib/cmndline.cc, apt 3.0.3, 3.1.16 and
+// 3.2.0).
 package pkg
 
 import (
@@ -255,6 +255,9 @@ type Runner struct {
 	LockWait time.Duration
 	// Retry is the pause between attempts (0 means DefaultRetry).
 	Retry time.Duration
+	// Exec runs one attempt (nil: execx.Run); the helper passes its own,
+	// which stops apt-get when the gate goes away.
+	Exec func(context.Context, *execx.Spec) (execx.Result, error)
 }
 
 // Result is apt-get's last run, how many runs there were and how long a
@@ -281,7 +284,11 @@ func (r *Runner) Run(ctx context.Context, timeout time.Duration, args []string) 
 		if remaining <= 0 {
 			return res, fmt.Errorf("%w (waited %v)", ErrLockHeld, res.LockWait.Round(time.Second))
 		}
-		er, err := execx.Run(ctx, &execx.Spec{Path: r.AptGet, Trampoline: r.Trampoline, Args: args, Env: r.Env, Dir: "/", Timeout: remaining, MaxOutput: r.MaxOutput})
+		run := r.Exec
+		if run == nil {
+			run = execx.Run
+		}
+		er, err := run(ctx, &execx.Spec{Path: r.AptGet, Trampoline: r.Trampoline, Args: args, Env: r.Env, Dir: "/", Timeout: remaining, MaxOutput: r.MaxOutput})
 		if err != nil {
 			return res, err
 		}

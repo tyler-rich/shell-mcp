@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -58,6 +59,13 @@ type Options struct {
 	Unit string
 	// AptGet is the apt-get binary (production: /usr/bin/apt-get).
 	AptGet string
+	// DpkgDir is dpkg's administrative directory (production:
+	// /var/lib/dpkg): its status file, updates/ journal and frontend lock.
+	DpkgDir string
+	// PkgRecord is the package operation record (production:
+	// /run/shell-mcp-privd-pkg), locked while an install, upgrade or remove
+	// runs (PRIVILEGED §6, "Package operations").
+	PkgRecord string
 	// ResolveExecutable, when set, resolves Executable after the peer check
 	// (production: the running binary, so nothing touches the filesystem
 	// before the peer is authenticated).
@@ -138,6 +146,8 @@ func ProductionOptions(version, policyPath string) Options {
 		UnitClientUID:  os.Getenv(units.ClientUIDEnv),
 		Unit:           os.Getenv(units.UnitEnv),
 		AptGet:         policy.DefaultAptGet,
+		DpkgDir:        DefaultDpkgDir,
+		PkgRecord:      DefaultPkgRecord,
 		SystemBus:      dbus.SystemBus,
 		ExpectedSHA256: os.Getenv(units.HashEnv),
 		Trust:          gpolicy.RootTrust(),
@@ -205,6 +215,22 @@ type server struct {
 	// reapErr is why the helper could not confirm that every process a
 	// command started has ended (the audit line records it).
 	reapErr string
+	// hangOnce starts the one watcher of the connection (hangup), whose
+	// channel hangCh is closed when the gate hangs up.
+	hangOnce sync.Once
+	hangCh   <-chan struct{}
+	// mu guards what a package operation's stop-point watcher sets while
+	// apt-get runs: answered (the request was answered early,
+	// outcome_unknown, and earlyCode is respond's result) and stopped
+	// ("sigint" or "killed").
+	mu        sync.Mutex
+	answered  bool
+	earlyCode int
+	stopped   string
+	// applied is what dpkg's status shows a package operation changed, and
+	// unfinished the packages dpkg left part-way, for the audit line.
+	applied    *auditApplied
+	unfinished []string
 }
 
 // Serve handles one connection and returns the process exit code: 0 when a
@@ -251,7 +277,12 @@ func Serve(o *Options) int {
 	if s.req != nil {
 		resp.ID = s.req.ID
 	}
-	code := s.respond(nc, resp)
+	// A package operation answered early (outcome_unknown, while apt-get
+	// ran) is not answered again; its journal line has its own result.
+	code := s.earlyCode
+	if !s.answered {
+		code = s.respond(nc, resp)
+	}
 	s.auditRequest(resp)
 	return code
 }

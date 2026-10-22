@@ -142,6 +142,9 @@ type preview struct {
 	// unit is the helper unit a privileged command's preview reported
 	// (priv_exec_preview), where priv_exec is sent; "" otherwise.
 	unit string
+	// count is how many packages a package preview's transaction changes
+	// (shell_priv_upgrade_packages' description); 0 otherwise.
+	count int
 }
 
 // policyAcc collects the policy hashes of a preview's requests.

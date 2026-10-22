@@ -163,6 +163,10 @@ const (
 	OpPrivPkgInstallPreview = "priv_pkg_install_preview"
 	OpPrivPkgUpgradePreview = "priv_pkg_upgrade_preview"
 	OpPrivPkgRemovePreview  = "priv_pkg_remove_preview"
+	// OpPrivPkgUpdateIndexPreview reports the index update's action and the
+	// privileged policy's hash, with the hash priv_pkg_update_index requires
+	// (handoff P-2e; broad).
+	OpPrivPkgUpdateIndexPreview = "priv_pkg_update_index_preview"
 	// OpPrivPower asks systemd to reboot or power off (broad unit).
 	OpPrivPower = "priv_power"
 	// OpPrivBackupCheck says whether an overwrite of a path would write a
@@ -191,7 +195,7 @@ const (
 var privReadOps = []string{
 	OpPrivReadFile, OpPrivListDir, OpPrivStat, OpPrivListBackups, OpPrivBackupCheck,
 	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview, OpPrivExecPreview,
-	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview,
+	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPkgUpdateIndexPreview,
 }
 
 // PrivMayChange reports whether a privileged request can change the host:
@@ -214,6 +218,7 @@ var PrivOps = []string{
 	OpPrivExec, OpPrivPkgUpdateIndex, OpPrivPkgInstall, OpPrivPkgUpgrade, OpPrivPkgRemove,
 	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPower, OpPrivBackupCheck,
 	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview, OpPrivExecPreview,
+	OpPrivPkgUpdateIndexPreview,
 }
 
 // Tier names on the wire: a request's ceiling, and max_tier in the gate
@@ -499,3 +504,7 @@ func DecodeResponse(r io.Reader) (*Response, error) {
 	}
 	return &resp, nil
 }
+
+// ValidID reports whether s is a request id in its documented format (a
+// lowercase UUID v4), as DecodeRequest accepts it.
+func ValidID(s string) bool { return validID(s) }

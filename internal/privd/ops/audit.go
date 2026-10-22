@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
+	"github.com/tyler-rich/shell-mcp/internal/privd/pkg"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 	"github.com/tyler-rich/shell-mcp/internal/privd/selfcheck"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
@@ -181,11 +182,24 @@ type auditLine struct {
 	HungUp bool `json:"hung_up,omitempty"`
 	// ReapError is why the helper could not confirm that every process a
 	// command started has ended (the request answered outcome_unknown).
-	ReapError  string `json:"reap_error,omitempty"`
-	Outcome    string `json:"outcome"`
-	Check      string `json:"check,omitempty"`
-	Detail     string `json:"detail,omitempty"`
-	DurationMS int64  `json:"duration_ms"`
+	// Applied is what dpkg's status shows a package operation changed
+	// (bounded as Changed), AppliedTotal how many changes,
+	// AppliedTruncated set when Applied lists fewer; Unfinished the
+	// packages dpkg left part-way (at most 100); Stopped how the helper
+	// stopped apt-get ("sigint", "killed"); AnsweredEarly that the request
+	// was answered outcome_unknown before the operation ended, whose own
+	// result Outcome then is.
+	Applied          *auditApplied `json:"applied,omitempty"`
+	AppliedTotal     int           `json:"applied_total,omitzero"`
+	AppliedTruncated bool          `json:"applied_truncated,omitzero"`
+	Unfinished       []string      `json:"unfinished,omitzero"`
+	Stopped          string        `json:"stopped,omitzero"`
+	AnsweredEarly    bool          `json:"answered_early,omitzero"`
+	ReapError        string        `json:"reap_error,omitempty"`
+	Outcome          string        `json:"outcome"`
+	Check            string        `json:"check,omitempty"`
+	Detail           string        `json:"detail,omitempty"`
+	DurationMS       int64         `json:"duration_ms"`
 }
 
 func (s *server) writeAudit(pri int, l *auditLine) {
@@ -232,7 +246,11 @@ func (s *server) auditRequest(resp *protocol.Response) {
 	uid, pid := s.cred.UID, s.cred.PID
 	l := &auditLine{PeerUID: &uid, PeerPID: &pid, Outcome: "ok", BackupIDs: s.ids(), BackupIDsDiscarded: s.discarded, Changed: s.changed,
 		ChangedTotal: s.changedTotal, ChangedTruncated: s.changedTruncated, Removed: s.removed, RemovedTotal: s.removedTotal,
-		RemovedTruncated: s.removedTruncated, SetAside: s.setAside, HungUp: s.hungUp, ReapError: auditText(s.reapErr)}
+		RemovedTruncated: s.removedTruncated, SetAside: s.setAside, HungUp: s.hungUp, ReapError: auditText(s.reapErr),
+		Unfinished: s.unfinished, Stopped: s.stopped, AnsweredEarly: s.answered}
+	if a := s.applied; a != nil {
+		l.Applied, l.AppliedTotal, l.AppliedTruncated = a, a.total, a.truncated
+	}
 	if s.req != nil {
 		l.ID, l.Ceiling, l.Op, l.Args = s.req.ID, s.req.Ceiling, auditText(s.req.Op), sanitizeArgs(s.req.Args)
 	}
@@ -245,4 +263,53 @@ func (s *server) auditRequest(resp *protocol.Response) {
 		pri = 4
 	}
 	s.writeAudit(pri, l)
+}
+
+// auditApplied is what a package operation changed, for the audit line:
+// package names and versions (identifiers, never output), bounded as the
+// changed list (at most 100 entries or 32 KiB in all).
+type auditApplied struct {
+	Install   []auditPkg `json:"install"`
+	Upgrade   []auditPkg `json:"upgrade"`
+	Remove    []auditPkg `json:"remove"`
+	total     int
+	truncated bool
+	bytes     int
+}
+
+type auditPkg struct {
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+	From    string `json:"from,omitempty"`
+	To      string `json:"to,omitempty"`
+}
+
+func (a *auditApplied) add(list *[]auditPkg, e auditPkg) {
+	a.total++
+	if a.truncated {
+		return
+	}
+	b, _ := json.Marshal(e) // a plain struct of strings
+	if len(a.Install)+len(a.Upgrade)+len(a.Remove) == maxAuditChanged || a.bytes+len(b)+1 > maxAuditChangedBytes {
+		a.truncated = true
+		return
+	}
+	*list = append(*list, e)
+	a.bytes += len(b) + 1
+}
+
+// recordApplied notes what dpkg's status shows a package operation
+// changed.
+func (s *server) recordApplied(t pkg.Transaction) {
+	a := &auditApplied{Install: []auditPkg{}, Upgrade: []auditPkg{}, Remove: []auditPkg{}}
+	for _, v := range t.Install {
+		a.add(&a.Install, auditPkg{Name: auditText(v.Name), Version: auditText(v.Version)})
+	}
+	for _, u := range t.Upgrade {
+		a.add(&a.Upgrade, auditPkg{Name: auditText(u.Name), From: auditText(u.From), To: auditText(u.To)})
+	}
+	for _, r := range t.Remove {
+		a.add(&a.Remove, auditPkg{Name: auditText(r.Name), Version: auditText(r.Version)})
+	}
+	s.applied = a
 }

@@ -129,6 +129,45 @@ mkdeb example-hello 1.0 example-extra
 mkdeb example-hello 1.1 example-extra
 mkdeb example-extra 1.0
 mkdeb example-other 1.0
+# The package operations' stop points and results (broad_test.go, S4c-7).
+# example-conf has a configuration file, so a removal that never purges is
+# visible (config-files). example-slow's postinst sleeps 8 s (an early
+# answer, a hang-up). example-slow-a's sleeps 18 s and example-slow-b
+# pre-depends on it, so apt configures example-slow-a in a dpkg run of its
+# own before it unpacks example-slow-b: a SIGINT during that run stops apt
+# before example-slow-b. example-stuck's postinst never ends.
+# Both sleeps end at once when /run/shell-mcp-e2e-pkg-fast exists (the
+# tests' cleanup). Invented packages; never shipped.
+mkdeb_x() { # mkdeb_x <name> <version> <pre-depends> <postinst body> <conffile>
+	local d
+	d="$(mktemp -d)"
+	install -d "$d/DEBIAN" "$d/usr/share/$1"
+	printf '%s %s\n' "$1" "$2" >"$d/usr/share/$1/version"
+	{
+		printf 'Package: %s\nVersion: %s\nArchitecture: all\n' "$1" "$2"
+		printf 'Maintainer: shell-mcp end-to-end tests <e2e@example.test>\n'
+		if [ -n "$3" ]; then printf 'Pre-Depends: %s\n' "$3"; fi
+		printf 'Description: invented package for the shell-mcp end-to-end tests\n'
+	} >"$d/DEBIAN/control"
+	if [ -n "$4" ]; then
+		printf '#!/bin/sh\n%s\n' "$4" >"$d/DEBIAN/postinst"
+		chmod 0755 "$d/DEBIAN/postinst"
+	fi
+	if [ -n "$5" ]; then
+		install -d "$d$(dirname "$5")"
+		printf 'invented setting\n' >"$d$5"
+		printf '%s\n' "$5" >"$d/DEBIAN/conffiles"
+	fi
+	dpkg-deb --root-owner-group --build "$d" "$bin/debs/${1}_${2}_all.deb" >/dev/null
+	rm -rf "$d"
+}
+wait_fast='i=0; while [ ! -e /run/shell-mcp-e2e-pkg-fast ] && [ $i -lt'
+mkdeb_x example-conf 1.0 '' '' /etc/example-conf/example-conf.conf
+mkdeb_x example-conf 1.1 '' '' /etc/example-conf/example-conf.conf
+mkdeb_x example-slow 1.0 '' "$wait_fast 8 ]; do sleep 1; i=\$((i+1)); done" ''
+mkdeb_x example-slow-a 1.0 '' "$wait_fast 18 ]; do sleep 1; i=\$((i+1)); done" ''
+mkdeb_x example-slow-b 1.0 example-slow-a '' ''
+mkdeb_x example-stuck 1.0 '' "$wait_fast 600 ]; do sleep 1; i=\$((i+1)); done" ''
 
 # --- Policies ---------------------------------------------------------------
 install -o root -g root -m 0755 -d /etc/shell-mcp
@@ -398,8 +437,8 @@ power:
 packages:
   enabled: true
   manager: apt
-  install: [example-hello]
-  remove: [example-hello]
+  install: [example-hello, example-conf, example-slow, example-slow-a, example-slow-b, example-stuck]
+  remove: [example-hello, example-conf]
   allow_update_index: true
   allow_upgrade: $3
 EOF
@@ -410,6 +449,9 @@ priv_policy '    capabilities: [CAP_KILL]
 priv_policy '' '    capabilities: [CAP_SYS_TIME]
 ' false >"$bin/privileged-sys-time.yaml"
 priv_policy '' '' true >"$bin/privileged-upgrade.yaml"
+# Short limits for the package stop points (broad_test.go): max_timeout_s 24
+# gives a 6 s stop allowance, so SIGINT at 18 s and the kill at 24 s.
+priv_policy '' '' true | sed 's/^  default_timeout_s: 30$/  default_timeout_s: 10/; s/^  max_timeout_s: 60$/  max_timeout_s: 24/' >"$bin/privileged-pkgstage.yaml"
 # The smallest backup store cap (64 MiB), for the store-cap test.
 priv_policy '' '' false | sed 's/^  keep: 3$/  keep: 3\n  max_store_bytes: 67108864/' >"$bin/privileged-small-store.yaml"
 chmod 0600 "$bin"/privileged*.yaml
