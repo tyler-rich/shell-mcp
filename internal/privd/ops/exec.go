@@ -377,6 +377,9 @@ func (s *server) runCommand(spec *execx.Spec, mayChange bool) (execx.Result, err
 	return res, nil
 }
 
+// pollFn is poll(2); tests inject its errors.
+var pollFn = unix.Poll
+
 // connHungUp reports, without blocking, whether anything is readable on the
 // connection: end of file, a reset, or bytes the gate should never send.
 func connHungUp(c net.Conn) bool {
@@ -391,7 +394,7 @@ func connHungUp(c net.Conn) bool {
 	gone := false
 	_ = rc.Control(func(fd uintptr) {
 		fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN | unix.POLLRDHUP}} //nolint:gosec // G115: a descriptor fits in int32
-		n, err := unix.Poll(fds, 0)
+		n, err := pollFn(fds, 0)
 		gone = err == nil && n > 0 && fds[0].Revents != 0
 	})
 	return gone
