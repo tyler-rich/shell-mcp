@@ -110,6 +110,8 @@ func TestRouting(t *testing.T) {
 		"priv_pkg_remove":               {`{"packages":["htop"]}`, "broad"},
 		"priv_pkg_remove_preview":       {`{"packages":["htop"]}`, "broad"},
 		"priv_power":                    {`{"action":"reboot"}`, "broad"},
+		"priv_power_preview":            {`{"action":"reboot"}`, "broad"},
+		"priv_power_cancel":             {`{}`, "broad"},
 	} {
 		t.Run(op, func(t *testing.T) {
 			f := newFixture(t, "destructive")
@@ -169,11 +171,11 @@ func TestRoutingRefusals(t *testing.T) {
 
 // The gate's tiers for the new operations: the previews are read, the
 // mutating package operations operator (remove destructive), priv_power
-// destructive.
+// destructive, and priv_power_cancel read (S4c-8: never approval-gated).
 func TestRoutingTiers(t *testing.T) {
 	f := newFixture(t, "destructive")
 	h := startTwoHelpers(t, f, "privileged:\n  enabled: true\n  socket: "+coreSock+"\n  broad_socket: "+broadSock+"\n  max_tier: read\n")
-	for _, op := range []string{"priv_pkg_update_index_preview", "priv_pkg_install_preview", "priv_pkg_upgrade_preview", "priv_pkg_remove_preview"} {
+	for _, op := range []string{"priv_pkg_update_index_preview", "priv_pkg_install_preview", "priv_pkg_upgrade_preview", "priv_pkg_remove_preview", "priv_power_preview", "priv_power_cancel"} {
 		f.ok(op, m{}, nil)
 	}
 	for _, op := range []string{"priv_pkg_update_index", "priv_pkg_install", "priv_pkg_upgrade", "priv_pkg_remove", "priv_power"} {
@@ -183,8 +185,8 @@ func TestRoutingTiers(t *testing.T) {
 	f.ok("priv_pkg_install", m{}, nil)
 	f.fail("priv_pkg_remove", m{}, "tier_denied")
 	f.fail("priv_power", m{}, "tier_denied")
-	if h.count(broadSock) != 5 {
-		t.Fatalf("broad got %d requests, want 5", h.count(broadSock))
+	if h.count(broadSock) != 7 {
+		t.Fatalf("broad got %d requests, want 7", h.count(broadSock))
 	}
 }
 

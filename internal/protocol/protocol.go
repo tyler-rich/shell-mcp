@@ -169,6 +169,9 @@ const (
 	OpPrivPkgUpdateIndexPreview = "priv_pkg_update_index_preview"
 	// OpPrivPower asks systemd to reboot or power off (broad unit).
 	OpPrivPower = "priv_power"
+	// OpPrivPowerPreview and OpPrivPowerCancel (stubs).
+	OpPrivPowerPreview = "priv_power_preview"
+	OpPrivPowerCancel  = "priv_power_cancel"
 	// OpPrivBackupCheck says whether an overwrite of a path would write a
 	// backup and whether it fits the backup store (handoff P-11; core).
 	OpPrivBackupCheck = "priv_backup_check"

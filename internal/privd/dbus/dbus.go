@@ -303,6 +303,17 @@ func (m *Message) required() error {
 	return nil
 }
 
+// Variant is a decoded variant: its signature and its value.
+type Variant struct {
+	Signature string
+	Value     any
+}
+
+// Values decodes the whole body by its signature (not implemented yet).
+func (m *Message) Values() ([]any, error) {
+	return nil, errors.New("dbus: body decoding is not implemented")
+}
+
 // Strings decodes a body whose signature holds only strings and object
 // paths, consuming it exactly.
 func (m *Message) Strings() ([]string, error) {
@@ -350,7 +361,15 @@ func (e *encoder) field(code, typ byte, s string) {
 }
 
 // marshal encodes a METHOD_CALL with string arguments.
-func marshal(serial uint32, dest, path, iface, member string, args []string) ([]byte, error) {
+func marshal(serial uint32, dest, path, iface, member string, anyArgs []any) ([]byte, error) {
+	args := make([]string, 0, len(anyArgs))
+	for _, a := range anyArgs {
+		s, ok := a.(string)
+		if !ok {
+			return nil, errors.New("dbus: only string arguments are implemented")
+		}
+		args = append(args, s)
+	}
 	for _, s := range append([]string{dest, path, iface, member}, args...) {
 		if len(s) > 255 || strings.IndexByte(s, 0) >= 0 || !utf8.ValidString(s) {
 			return nil, errors.New("dbus: argument is not a short valid string")
@@ -457,7 +476,7 @@ func (c *Conn) line() (string, error) {
 // Call sends a method call with string arguments and returns its reply;
 // an ERROR reply is returned as *Error. Other messages (signals) read
 // meanwhile are skipped, at most maxReplies of them.
-func (c *Conn) Call(dest, path, iface, member string, args ...string) (*Message, error) {
+func (c *Conn) Call(dest, path, iface, member string, args ...any) (*Message, error) {
 	c.serial++
 	msg, err := marshal(c.serial, dest, path, iface, member, args)
 	if err != nil {

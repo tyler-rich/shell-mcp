@@ -93,6 +93,17 @@ type Options struct {
 	// SystemBus is the system bus socket priv_power talks to (production:
 	// dbus.SystemBus).
 	SystemBus string
+	// PowerDecision is the power decision file (production:
+	// /run/shell-mcp-privd-power; PRIVILEGED §6, "Power").
+	PowerDecision string
+	// PowerDelay replaces priv_power's 60 s delay; tests only.
+	PowerDelay time.Duration
+	// PowerConfirmWait replaces the 10 s the gate has to read priv_power's
+	// answer in; tests only.
+	PowerConfirmWait time.Duration
+	// HoldTermWhileRequesting ignores SIGTERM from just before priv_power's
+	// logind call until its journal line is written (production: true).
+	HoldTermWhileRequesting bool
 	// PkgLockRetry is the pause between attempts while the dpkg or lists lock
 	// is held (0 means 2 s); tests only.
 	PkgLockRetry time.Duration

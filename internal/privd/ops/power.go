@@ -88,3 +88,11 @@ func (s *server) power(raw jsontext.Value) (data any, warns []string, failure er
 	}
 	return powerData{Action: a.Action, Target: target, Job: job[0]}, nil, nil
 }
+
+func (s *server) powerPreview(jsontext.Value) (data any, warns []string, failure error) {
+	return nil, nil, errf(protocol.CodeInternal, "not implemented")
+}
+
+func (s *server) powerCancel(jsontext.Value) (data any, warns []string, failure error) {
+	return nil, nil, errf(protocol.CodeInternal, "not implemented")
+}

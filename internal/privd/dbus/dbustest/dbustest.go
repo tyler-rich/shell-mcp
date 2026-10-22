@@ -165,6 +165,68 @@ func Reply(o Order, serial uint32, sig, v string) []byte {
 	return message(o, 2, func(h []byte) []byte { return replySerial(o, h, serial) }, sig, str(o, nil, v))
 }
 
+// Empty is a METHOD_RETURN to serial without a body (logind's
+// RebootWithFlags and PowerOffWithFlags answer so).
+func Empty(o Order, serial uint32) []byte {
+	return message(o, 2, func(h []byte) []byte { return replySerial(o, h, serial) }, "", nil)
+}
+
+// Raw is a METHOD_RETURN to serial with the body and signature given, for
+// tests of the decoder's strictness.
+func Raw(o Order, serial uint32, sig string, body []byte) []byte {
+	return message(o, 2, func(h []byte) []byte { return replySerial(o, h, serial) }, sig, body)
+}
+
+// Inhibitor is one entry of logind's ListInhibitors answer.
+type Inhibitor struct {
+	What, Who, Why, Mode string
+	UID, PID             uint32
+}
+
+// Inhibitors is logind's ListInhibitors answer, a(ssssuu): what, who, why,
+// mode, uid, pid (systemd 259, method_list_inhibitors).
+func Inhibitors(o Order, serial uint32, list []Inhibitor) []byte {
+	body := o.AppendUint32(nil, 0) // the array's length, below
+	body = pad(body, 8)            // its first element is a struct
+	start := len(body)
+	for _, i := range list {
+		body = pad(body, 8)
+		for _, s := range []string{i.What, i.Who, i.Why, i.Mode} {
+			body = str(o, body, s)
+		}
+		body = pad(body, 4)
+		body = o.AppendUint32(o.AppendUint32(body, i.UID), i.PID)
+	}
+	o.PutUint32(body, uint32(len(body)-start)) //nolint:gosec // G115: test bodies are short
+	return Raw(o, serial, "a(ssssuu)", body)
+}
+
+// Property is the answer to org.freedesktop.DBus.Properties.Get: one
+// variant of signature sig, whose value enc appends.
+func Property(o Order, serial uint32, sig string, enc func([]byte) []byte) []byte {
+	body := append([]byte{byte(len(sig))}, sig...) //nolint:gosec // G115: test signatures are short
+	return Raw(o, serial, "v", enc(append(body, 0)))
+}
+
+// ST appends a struct (st): logind's ScheduledShutdown property.
+func ST(o Order, s string, t uint64) func([]byte) []byte {
+	return func(b []byte) []byte {
+		b = str(o, pad(b, 8), s)
+		return o.AppendUint64(pad(b, 8), t)
+	}
+}
+
+// Bool appends a boolean: logind's PreparingForShutdown property.
+func Bool(o Order, v bool) func([]byte) []byte {
+	return func(b []byte) []byte {
+		n := uint32(0)
+		if v {
+			n = 1
+		}
+		return o.AppendUint32(pad(b, 4), n)
+	}
+}
+
 // ErrorReply is an ERROR reply to serial.
 func ErrorReply(o Order, serial uint32, name, msg string) []byte {
 	return message(o, 3, func(h []byte) []byte {
