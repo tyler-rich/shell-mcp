@@ -125,6 +125,7 @@ func TestBodyStrict(t *testing.T) {
 		"bad object path":        {"o", str("not/absolute")},
 		"object path double /":   {"o", str("/a//b")},
 		"unix fd":                {"h", u32(0)},
+		"double":                 {"d", make([]byte, 8)},
 		"dict entry":             {"a{su}", cat(u32(0), make([]byte, 4))},
 		"empty struct":           {"()", nil},
 		"unclosed struct":        {"(su", cat(str("x"), u32(1))},

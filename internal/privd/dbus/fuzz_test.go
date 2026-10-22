@@ -52,6 +52,8 @@ func FuzzValues(f *testing.F) {
 		}
 		f.Add(m.Signature, m.Body, b[0] == 'B')
 	}
+	// Found by the fuzzer: a double (NaN), which the decoder no longer accepts.
+	f.Add("d", append([]byte{0xff, 0xff}, "000000"...), true)
 	f.Fuzz(func(t *testing.T, sig string, body []byte, big bool) {
 		var ord dbustest.Order = binary.LittleEndian
 		if big {

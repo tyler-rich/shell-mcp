@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"strconv"
 	"strings"
@@ -319,14 +318,15 @@ const maxDepth = 32
 var errUnsupported = errors.New("dbus: unsupported or malformed signature")
 
 // nextType splits the first complete type off sig: a basic type, a
-// variant, an array of a complete type, or a non-empty struct. Dict
-// entries and file descriptors are not supported.
+// variant, an array of a complete type, or a non-empty struct. Doubles,
+// dict entries and file descriptors are not supported (nothing the helper
+// reads uses them).
 func nextType(sig string, depth int) (typ, rest string, err error) {
 	if sig == "" || depth > maxDepth {
 		return "", "", errUnsupported
 	}
 	switch sig[0] {
-	case 'y', 'b', 'n', 'q', 'i', 'u', 'x', 't', 'd', 's', 'o', 'g', 'v':
+	case 'y', 'b', 'n', 'q', 'i', 'u', 'x', 't', 's', 'o', 'g', 'v':
 		return sig[:1], sig[1:], nil
 	case 'a':
 		elem, rest, err := nextType(sig[1:], depth+1)
@@ -376,7 +376,7 @@ func alignOf(t byte) int {
 		return 1
 	case 'n', 'q':
 		return 2
-	case 'x', 't', 'd', '(':
+	case 'x', 't', '(':
 		return 8
 	}
 	return 4 // b, i, u, s, o, a
@@ -406,7 +406,7 @@ func validObjectPath(p string) bool {
 
 // value decodes one value of the complete type t: strings, object paths and
 // signatures as string, b as bool, y as byte, n as int16, q as uint16, i as
-// int32, u as uint32, x as int64, t as uint64, d as float64, an array or a
+// int32, u as uint32, x as int64, t as uint64, an array or a
 // struct as []any, a variant as Variant.
 func (d *decoder) value(t string, depth int) (any, error) {
 	if depth > maxDepth {
@@ -450,17 +450,14 @@ func (d *decoder) value(t string, depth int) (any, error) {
 			return int32(v), nil //nolint:gosec // G115: the wire's two's complement
 		}
 		return v, nil
-	case 'x', 't', 'd':
+	case 'x', 't':
 		v, err := d.take(8)
 		if err != nil {
 			return nil, err
 		}
 		u := d.o.Uint64(v)
-		switch t[0] {
-		case 'x':
+		if t[0] == 'x' {
 			return int64(u), nil //nolint:gosec // G115: the wire's two's complement
-		case 'd':
-			return math.Float64frombits(u), nil
 		}
 		return u, nil
 	case 's':
