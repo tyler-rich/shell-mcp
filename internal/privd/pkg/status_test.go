@@ -323,9 +323,14 @@ func TestPinnedArgs(t *testing.T) {
 	if !slices.Equal(got, slices.Concat(common, []string{"-o", "APT::Get::Purge=false", "remove", "--", "example-hello"})) {
 		t.Fatalf("remove %q", got)
 	}
-	// A requested name already at its version is not in the transaction:
-	// nothing to pin, and an operation with nothing left runs nothing.
-	if got, err := pkg.PinnedArgs(pkg.OpInstall, false, []string{"example-other"}, tx); err != nil || got != nil {
+	// A requested name already at its version is not in the transaction: it
+	// is passed unpinned (the pinned simulation still has to resolve to the
+	// approved transaction), and only an empty transaction runs nothing.
+	got, _ = pkg.PinnedArgs(pkg.OpInstall, false, []string{"example-other", "example-hello"}, tx)
+	if !slices.Equal(got, slices.Concat(common, []string{"--no-install-recommends", "--no-remove", "install", "--", "example-other", "example-hello=1.1"})) {
+		t.Fatalf("an installed name with a non-empty transaction: %q", got)
+	}
+	if got, err := pkg.PinnedArgs(pkg.OpInstall, false, []string{"example-other"}, pkg.Transaction{}); err != nil || got != nil {
 		t.Fatalf("nothing to run: %q %v", got, err)
 	}
 	if got, err := pkg.PinnedArgs(pkg.OpUpgrade, false, nil, pkg.Transaction{}); err != nil || got != nil {
