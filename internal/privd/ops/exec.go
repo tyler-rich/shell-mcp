@@ -380,6 +380,9 @@ func (s *server) runCommand(spec *execx.Spec, mayChange bool) (execx.Result, err
 // pollFn is poll(2); tests inject its errors.
 var pollFn = unix.Poll
 
+// maxPollEINTR bounds connHungUp's retries of an interrupted poll.
+const maxPollEINTR = 100
+
 // connHungUp reports, without blocking, whether anything is readable on the
 // connection: end of file, a reset, or bytes the gate should never send.
 func connHungUp(c net.Conn) bool {
@@ -394,8 +397,19 @@ func connHungUp(c net.Conn) bool {
 	gone := false
 	_ = rc.Control(func(fd uintptr) {
 		fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN | unix.POLLRDHUP}} //nolint:gosec // G115: a descriptor fits in int32
-		n, err := pollFn(fds, 0)
-		gone = err == nil && n > 0 && fds[0].Revents != 0
+		// poll(2) is never restarted after a signal handler (signal(7)), and
+		// the runtime's own signals can interrupt it: poll again. Still
+		// interrupted after maxPollEINTR tries, the gate counts as gone, so
+		// nothing is started (fail closed).
+		for range maxPollEINTR {
+			n, err := pollFn(fds, 0)
+			if errors.Is(err, unix.EINTR) {
+				gone = true
+				continue
+			}
+			gone = err == nil && n > 0 && fds[0].Revents != 0
+			return
+		}
 	})
 	return gone
 }
