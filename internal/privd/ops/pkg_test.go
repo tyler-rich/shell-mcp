@@ -5,6 +5,7 @@ package ops_test
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,6 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
+	"github.com/tyler-rich/shell-mcp/internal/privd/ops"
 )
 
 // The package operations (S4c-7; PRIVILEGED §6 "Package operations";
@@ -756,4 +758,32 @@ func (f *fixture) holdDpkgLock() (pid int, release func()) {
 		f.t.Fatalf("lock holder: %q %v", b, err)
 	}
 	return c.Process.Pid, release
+}
+
+// TestPkgReapFailureIsOutcomeUnknown (fail closed, as for a command): when
+// the helper cannot confirm that every process apt-get started has ended,
+// the result is outcome_unknown, never the transaction's success, and the
+// journal line has what was applied and why.
+func TestPkgReapFailureIsOutcomeUnknown(t *testing.T) {
+	t.Parallel()
+	f := modelFixture(t, pkgModel{}, nil)
+	p := f.pkgPreview("priv_pkg_install", hello)
+	f.opts.ReapOrphans = true
+	calls := 0
+	f.opts.ReapHooks = &ops.ReapHooks{
+		// The two simulations reap cleanly; the run's reaping fails.
+		Children: func() ([]int, error) {
+			calls++
+			if calls == 3 {
+				return nil, errors.New("injected: children unreadable")
+			}
+			return []int{}, nil
+		},
+		Wait: func() (int, error) { return 0, unix.ECHILD },
+	}
+	f.fail("priv_pkg_install", bound(hello, p), "outcome_unknown")
+	l := f.lastAudit()
+	if !strings.Contains(l, `"outcome":"outcome_unknown"`) || !strings.Contains(l, "injected: children unreadable") || !strings.Contains(l, `"applied":`) {
+		t.Fatalf("audit %q", l)
+	}
 }

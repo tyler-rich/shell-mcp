@@ -62,11 +62,13 @@ type Spec struct {
 	// command is started through it; see trampoline.go.
 	Trampoline string
 
-	// Started, when set, is called with the command's pid once the
+	// Started, when set, is called with the command's process once the
 	// trampoline has execve(2)d it (the pid is the command's own, which
 	// leads its process group), before Run waits for it. The privileged
-	// helper uses it to signal apt-get alone (PRIVILEGED §6).
-	Started func(pid int)
+	// helper uses it to signal apt-get alone (PRIVILEGED §6); os.Process
+	// refuses a signal once Run has waited for the process, so a reused pid
+	// is never signalled.
+	Started func(*os.Process)
 }
 
 // Result reports what happened. Stdout and Stderr hold at most
@@ -252,7 +254,7 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 		return Result{}, err
 	}
 	if s.Started != nil {
-		s.Started(cmd.Process.Pid)
+		s.Started(cmd.Process)
 	}
 	_ = cmd.Wait()
 	killGroup(syscall.SIGKILL)

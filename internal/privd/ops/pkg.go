@@ -7,6 +7,7 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -708,11 +709,11 @@ func (s *server) runApt(argv []string, st pkgStages) (execx.Result, error) {
 		}
 	}
 	var mu sync.Mutex
-	pid := 0
+	var proc *os.Process
 	spec := &execx.Spec{
 		Trampoline: s.o.Executable, Path: s.o.AptGet, Args: argv, Env: s.aptEnv(), Dir: "/",
 		Timeout: time.Until(st.killAt), MaxOutput: s.p.Limits.MaxOutputBytes,
-		Started: func(p int) { mu.Lock(); pid = p; mu.Unlock() },
+		Started: func(p *os.Process) { mu.Lock(); proc = p; mu.Unlock() },
 	}
 	done := make(chan struct{})
 	var watcher sync.WaitGroup
@@ -743,9 +744,9 @@ func (s *server) runApt(argv []string, st pkgStages) (execx.Result, error) {
 				s.answerEarly("at the request's timeout")
 			case <-stop.C:
 				mu.Lock()
-				p := pid
+				p := proc
 				mu.Unlock()
-				if p == 0 {
+				if p == nil {
 					// Not started yet: try again shortly.
 					stop.Reset(50 * time.Millisecond)
 					continue
@@ -754,8 +755,9 @@ func (s *server) runApt(argv []string, st pkgStages) (execx.Result, error) {
 				// finishes, nothing after it is unpacked or removed.
 				// Never the process group: dpkg and maintainer scripts
 				// would get it too.
-				_ = unix.Kill(p, unix.SIGINT)
-				s.setStopped("sigint")
+				if p.Signal(unix.SIGINT) == nil {
+					s.setStopped("sigint")
+				}
 			}
 		}
 	}()
@@ -812,6 +814,12 @@ func (s *server) pkgOutcome(op pkg.Op, names []string, before pkg.Status, tx pkg
 	s.unfinished = after.Unfinished()
 	if len(s.unfinished) > maxAuditChanged {
 		s.unfinished = s.unfinished[:maxAuditChanged]
+	}
+	if s.reapErr != "" {
+		// Fail closed, as for a command (S4c-6): something apt-get or a
+		// maintainer script started may still run as root.
+		return nil, nil, errf(protocol.CodeOutcomeUnknown, "the helper could not confirm that every process apt-get started has ended (see its journal on the host); "+
+			"applied so far %s, approved %s", txSummary(diff), txSummary(tx))
 	}
 	stopped := ""
 	s.mu.Lock()
