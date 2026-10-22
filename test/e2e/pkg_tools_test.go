@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -206,7 +207,17 @@ func TestPackageStopPoints(t *testing.T) {
 		cleanupPackages(t)
 		aptRepo(t, "example-slow_1.0_all.deb", "example-slow-a_1.0_all.deb", "example-slow-b_1.0_all.deb", "example-stuck_1.0_all.deb", "example-hello_1.0_all.deb", "example-extra_1.0_all.deb")
 		mustPkg(t, "update_index", map[string]any{})
-		return pkgPreview(t, "install", map[string]any{"packages": names})
+		// Every requested package must still be to install: a package left
+		// installed by an earlier case would make the transaction empty,
+		// and the operation would run nothing (the first three CI runs'
+		// drop failures: example-slow was not purged after early).
+		p := pkgPreview(t, "install", map[string]any{"packages": names})
+		for _, n := range names {
+			if !slices.ContainsFunc(p.Install, func(e pkgEntry) bool { return e.Name == n }) {
+				t.Fatalf("the preview does not install %s (left installed by an earlier case?): %+v", n, p)
+			}
+		}
+		return p
 	}
 	t.Run("early", func(t *testing.T) {
 		p := setup(t, "example-slow")

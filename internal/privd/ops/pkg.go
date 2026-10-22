@@ -572,6 +572,7 @@ func (s *server) pkgChange(raw jsontext.Value, op pkg.Op) (data any, warns []str
 	}
 	if pinned == nil {
 		// Nothing to change: approved, and nothing runs.
+		s.recordApplied(pkg.Transaction{})
 		return pkgData{Op: string(op), Packages: names, Applied: ptr(wireTx(pkg.Transaction{})), LockWaitMS: waited.Milliseconds()}, nil, nil
 	}
 	ps, err := s.simulate(pinnedSim, st.deadline)

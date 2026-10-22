@@ -484,6 +484,10 @@ func TestPkgUpgradeAndRemove(t *testing.T) {
 	if len(f.realRuns()) != runs || r.Applied == nil || len(r.Applied.Upgrade) != 0 {
 		t.Fatalf("an empty transaction ran apt-get, or applied %+v", r.Applied)
 	}
+	// Its journal line says what changed: nothing.
+	if l := f.lastAudit(); !strings.Contains(l, `"applied":{"install":[],"upgrade":[],"remove":[]}`) {
+		t.Fatalf("audit of an empty transaction %q", l)
+	}
 }
 
 // TestPkgRefusedUpFront: a preview refuses whatever the operation would
