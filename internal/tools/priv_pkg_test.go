@@ -19,6 +19,7 @@ import (
 
 func init() {
 	alwaysGated = append(alwaysGated, "shell_priv_update_package_index", "shell_priv_install_packages", "shell_priv_upgrade_packages", "shell_priv_remove_packages")
+	ceilingCallArgs["shell_priv_preview_packages"] = map[string]any{"operation": "install", "packages": []string{"example-hello"}}
 }
 
 const (

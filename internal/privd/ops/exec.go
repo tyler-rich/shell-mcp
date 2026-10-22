@@ -324,7 +324,7 @@ const reapBound = 5 * time.Second
 // answers outcome_unknown (never a success) when it cannot confirm that
 // none is left.
 func (s *server) runCommand(spec *execx.Spec, mayChange bool) (execx.Result, error) {
-	if s.conn != nil && connHungUp(s.conn) {
+	if s.conn != nil && (connHungUp(s.conn) || closed(s.hangup())) {
 		s.hungUp = true
 		return execx.Result{}, errf(protocol.CodeTimeout, "the gate stopped waiting before the command started; nothing was run")
 	}
@@ -339,7 +339,7 @@ func (s *server) runCommand(spec *execx.Spec, mayChange bool) (execx.Result, err
 	defer cancel()
 	var hung atomic.Bool
 	if s.conn != nil {
-		hangup := watchHangup(s.conn)
+		hangup := s.hangup()
 		done := make(chan struct{})
 		defer func() { cancel(); <-done }()
 		go func() {
@@ -395,6 +395,30 @@ func connHungUp(c net.Conn) bool {
 		gone = err == nil && n > 0 && fds[0].Revents != 0
 	})
 	return gone
+}
+
+// hangup is the connection's one hang-up watcher (watchHangup), started on
+// first use and shared by everything that waits for the gate to go away in
+// this request; without a connection, a channel never closed.
+func (s *server) hangup() <-chan struct{} {
+	s.hangOnce.Do(func() {
+		if s.conn == nil {
+			s.hangCh = make(chan struct{})
+			return
+		}
+		s.hangCh = watchHangup(s.conn)
+	})
+	return s.hangCh
+}
+
+// closed reports whether ch is closed, without waiting.
+func closed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }
 
 // watchHangup returns a channel closed when a read on the connection

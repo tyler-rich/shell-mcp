@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,7 +34,7 @@ type fixture struct {
 	policyPath                          string
 	uid, gid                            uint32
 	opts                                ops.Options
-	audit                               *bytes.Buffer
+	audit                               *auditBuffer
 	status                              string
 	// unit is SHELL_MCP_PRIVD_UNIT (core unless asBroad).
 	unit string
@@ -152,7 +153,7 @@ func newFixture(t testing.TB, opts ...opt) *fixture {
 		etc:     filepath.Join(d, "etc", "shell-mcp"),
 		uid:     uint32(os.Getuid()), //nolint:gosec // G115: test ids fit
 		gid:     uint32(os.Getgid()), //nolint:gosec // G115: test ids fit
-		audit:   &bytes.Buffer{},
+		audit:   &auditBuffer{},
 		status:  statusFor("0", "1", "000000000000000f"),
 		unit:    "core",
 	}
@@ -432,3 +433,22 @@ func (f *fixture) backupFiles() []string {
 }
 
 var _ = units.BackupDir
+
+// auditBuffer collects the audit lines of every Serve of a fixture; a test
+// may run two at once (a preview while a package operation runs).
+type auditBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (a *auditBuffer) Write(p []byte) (int, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.b.Write(p)
+}
+
+func (a *auditBuffer) String() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.b.String()
+}

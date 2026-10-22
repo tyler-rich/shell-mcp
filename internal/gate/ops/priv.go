@@ -31,7 +31,8 @@ func DialHelper(ctx context.Context, socket string) (net.Conn, error) {
 // broadOps go to the broad unit's socket (PRIVILEGED §5.2, §6).
 var broadOps = []string{
 	protocol.OpPrivPkgUpdateIndex, protocol.OpPrivPkgInstall, protocol.OpPrivPkgUpgrade, protocol.OpPrivPkgRemove,
-	protocol.OpPrivPkgInstallPreview, protocol.OpPrivPkgUpgradePreview, protocol.OpPrivPkgRemovePreview, protocol.OpPrivPower,
+	protocol.OpPrivPkgInstallPreview, protocol.OpPrivPkgUpgradePreview, protocol.OpPrivPkgRemovePreview, protocol.OpPrivPkgUpdateIndexPreview,
+	protocol.OpPrivPower,
 }
 
 // route picks the helper socket for a privileged op: privileged.broad_socket

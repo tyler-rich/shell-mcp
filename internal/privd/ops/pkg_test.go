@@ -412,9 +412,9 @@ func TestPkgResultFromStatus(t *testing.T) {
 		exitCode int
 	}{
 		"exactly":                {mrun{}, "", []string{"example-hello 1.1 installed", "example-lib 2.1-1 installed"}, "", 0},
-		"exactly, apt exits 100": {mrun{Exit: 100}, "", []string{"example-hello 1.1 installed", "example-lib 2.1-1 installed"}, "", 100},
+		"exactly; apt exits 100": {mrun{Exit: 100}, "", []string{"example-hello 1.1 installed", "example-lib 2.1-1 installed"}, "", 100},
 		"extra package":          {mrun{Extra: []mpkg{{Name: "example-extra", Version: "1.0"}}}, "verify_failed", nil, "example-extra", 0},
-		"part of it, exit 0":     {mrun{Partial: 1}, "verify_failed", nil, "approved", 0},
+		"part of it; exit 0":     {mrun{Partial: 1}, "verify_failed", nil, "approved", 0},
 		"unfinished":             {mrun{Unfinished: "example-hello"}, "verify_failed", nil, "dpkg --configure -a", 0},
 		"nothing changed":        {mrun{Fail: true}, "exec_failed", []string{}, "Failed to fetch", 100},
 	} {
@@ -518,8 +518,8 @@ func TestPkgRefusedUpFront(t *testing.T) {
 			if c.setup != nil {
 				c.setup(f)
 			}
-			for _, op := range []string{"priv_pkg_install_preview", "priv_pkg_install"} {
-				r := f.serve(op, bound(hello, preview{PreviewSHA256: anyHash}))
+			for op, args := range map[string]m{"priv_pkg_install_preview": hello, "priv_pkg_install": bound(hello, preview{PreviewSHA256: anyHash})} {
+				r := f.serve(op, args)
 				if r.OK || r.Error == nil || r.Error.Code != c.code || !strings.Contains(r.Error.Message, c.inMsg) {
 					t.Fatalf("%s: %+v, want %s mentioning %q", op, r.Error, c.code, c.inMsg)
 				}

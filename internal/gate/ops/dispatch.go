@@ -97,8 +97,8 @@ var privTiers = map[string]policy.Tier{
 	protocol.OpPrivRestoreBackup: policy.TierOperator, protocol.OpPrivPkgUpdateIndex: policy.TierOperator,
 	protocol.OpPrivPkgInstall: policy.TierOperator, protocol.OpPrivPkgUpgrade: policy.TierOperator,
 	protocol.OpPrivPkgInstallPreview: policy.TierRead, protocol.OpPrivPkgUpgradePreview: policy.TierRead,
-	protocol.OpPrivPkgRemovePreview: policy.TierRead,
-	protocol.OpPrivDelete:           policy.TierDestructive, protocol.OpPrivPkgRemove: policy.TierDestructive,
+	protocol.OpPrivPkgRemovePreview: policy.TierRead, protocol.OpPrivPkgUpdateIndexPreview: policy.TierRead,
+	protocol.OpPrivDelete: policy.TierDestructive, protocol.OpPrivPkgRemove: policy.TierDestructive,
 	protocol.OpPrivPower: policy.TierDestructive,
 }
 

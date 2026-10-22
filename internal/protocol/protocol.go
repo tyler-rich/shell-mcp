@@ -195,7 +195,7 @@ const (
 var privReadOps = []string{
 	OpPrivReadFile, OpPrivListDir, OpPrivStat, OpPrivListBackups, OpPrivBackupCheck,
 	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview, OpPrivExecPreview,
-	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview,
+	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPkgUpdateIndexPreview,
 }
 
 // PrivMayChange reports whether a privileged request can change the host:
@@ -218,6 +218,7 @@ var PrivOps = []string{
 	OpPrivExec, OpPrivPkgUpdateIndex, OpPrivPkgInstall, OpPrivPkgUpgrade, OpPrivPkgRemove,
 	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPower, OpPrivBackupCheck,
 	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview, OpPrivExecPreview,
+	OpPrivPkgUpdateIndexPreview,
 }
 
 // Tier names on the wire: a request's ceiling, and max_tier in the gate
@@ -503,3 +504,7 @@ func DecodeResponse(r io.Reader) (*Response, error) {
 	}
 	return &resp, nil
 }
+
+// ValidID reports whether s is a request id in its documented format (a
+// lowercase UUID v4), as DecodeRequest accepts it.
+func ValidID(s string) bool { return validID(s) }

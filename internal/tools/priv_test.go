@@ -332,6 +332,7 @@ func privReplies(r map[string]gateReply) map[string]gateReply {
 	r["priv_stat"] = gateReply{data: fakeStatEntry}
 	r["priv_list_backups"] = gateReply{data: fakeBackups}
 	r["priv_delete_preview"] = gateReply{data: fakeDeletePreview(shaDel)}
+	r["priv_pkg_install_preview"] = gateReply{data: fakePkgPreview("install", shaPK)}
 	return r
 }
 

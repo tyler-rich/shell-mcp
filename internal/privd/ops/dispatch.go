@@ -69,14 +69,15 @@ func opTable() map[string]opSpec {
 		protocol.OpPrivRestoreBackup: {policy.TierOperator, (*server).restoreBackup},
 		protocol.OpPrivDelete:        {policy.TierDestructive, (*server).delete},
 		// Broad unit (broadOps).
-		protocol.OpPrivPkgUpdateIndex:    {policy.TierOperator, (*server).pkgUpdateIndex},
-		protocol.OpPrivPkgInstall:        {policy.TierOperator, (*server).pkgInstall},
-		protocol.OpPrivPkgUpgrade:        {policy.TierOperator, (*server).pkgUpgrade},
-		protocol.OpPrivPkgRemove:         {policy.TierDestructive, (*server).pkgRemove},
-		protocol.OpPrivPkgInstallPreview: {policy.TierRead, (*server).pkgInstallPreview},
-		protocol.OpPrivPkgUpgradePreview: {policy.TierRead, (*server).pkgUpgradePreview},
-		protocol.OpPrivPkgRemovePreview:  {policy.TierRead, (*server).pkgRemovePreview},
-		protocol.OpPrivPower:             {policy.TierDestructive, (*server).power},
+		protocol.OpPrivPkgUpdateIndex:        {policy.TierOperator, (*server).pkgUpdateIndex},
+		protocol.OpPrivPkgInstall:            {policy.TierOperator, (*server).pkgInstall},
+		protocol.OpPrivPkgUpgrade:            {policy.TierOperator, (*server).pkgUpgrade},
+		protocol.OpPrivPkgRemove:             {policy.TierDestructive, (*server).pkgRemove},
+		protocol.OpPrivPkgInstallPreview:     {policy.TierRead, (*server).pkgInstallPreview},
+		protocol.OpPrivPkgUpgradePreview:     {policy.TierRead, (*server).pkgUpgradePreview},
+		protocol.OpPrivPkgRemovePreview:      {policy.TierRead, (*server).pkgRemovePreview},
+		protocol.OpPrivPkgUpdateIndexPreview: {policy.TierRead, (*server).pkgUpdateIndexPreview},
+		protocol.OpPrivPower:                 {policy.TierDestructive, (*server).power},
 	}
 }
 
@@ -85,7 +86,8 @@ func opTable() map[string]opSpec {
 // core unit.
 var broadOps = []string{
 	protocol.OpPrivPkgUpdateIndex, protocol.OpPrivPkgInstall, protocol.OpPrivPkgUpgrade, protocol.OpPrivPkgRemove,
-	protocol.OpPrivPkgInstallPreview, protocol.OpPrivPkgUpgradePreview, protocol.OpPrivPkgRemovePreview, protocol.OpPrivPower,
+	protocol.OpPrivPkgInstallPreview, protocol.OpPrivPkgUpgradePreview, protocol.OpPrivPkgRemovePreview, protocol.OpPrivPkgUpdateIndexPreview,
+	protocol.OpPrivPower,
 }
 
 // wrongUnit is the refusal of an operation meant for the other unit's

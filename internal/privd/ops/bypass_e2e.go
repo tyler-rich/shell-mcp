@@ -3,15 +3,20 @@
 package ops
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/jsontext"
 	"errors"
 	"os"
+	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
+	"github.com/tyler-rich/shell-mcp/internal/privd/pkg"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 )
 
@@ -27,6 +32,26 @@ func init() {
 	BypassBuild = true
 	extraOps["bypass_raw_write"] = opSpec{policy.TierRead, (*server).rawWrite}
 	extraOps["bypass_raw_read"] = opSpec{policy.TierRead, (*server).rawRead}
+	pkgHook = e2ePkgHook
+}
+
+// e2ePkgHookFile names the stage of the next package operation at which
+// e2ePkgHook updates the package index (written by the e2e tests, root's).
+const e2ePkgHookFile = "/run/shell-mcp-e2e-pkg-hook"
+
+// e2ePkgHook updates the package index (apt-get -q update, through the
+// helper's exec engine) at the stage the hook file names, once, so that the
+// e2e tests can change what apt resolves between the operation's own steps
+// (TestPackageChangedBeforeRun, TestPackageUpgradeExactList).
+func e2ePkgHook(s *server, stage string) {
+	b, err := os.ReadFile(e2ePkgHookFile)
+	if err != nil || strings.TrimSpace(string(b)) != stage {
+		return
+	}
+	_ = os.Remove(e2ePkgHookFile)
+	argv, _ := pkg.Args(pkg.OpUpdate, false, nil)
+	_, _ = execx.Run(context.Background(), &execx.Spec{Trampoline: s.o.Executable, Path: s.o.AptGet, Args: argv, Env: s.aptEnv(), Dir: "/",
+		Timeout: time.Minute, MaxOutput: 64 << 10})
 }
 
 type rawArgs struct {
