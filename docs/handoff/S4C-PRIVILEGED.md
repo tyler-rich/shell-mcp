@@ -238,6 +238,16 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 - **Proposed (not done):** one test per layer that disables only that layer (a test-only hook, or a build of `openTarget` without it) and shows the escape is still refused by the others, naming which layer refused; or, where a layer turns out to be the last line for some case (a write, a directory target), a test that shows it is. No production change is proposed.
 - **Status:** recorded; no session assigned.
 
+**N-13. Privileged command templates can call apt-get, apt or dpkg (found in S4c-7, PR #42).**
+- **What.** Neither the privileged policy's never list nor POLICY §5's groups name `apt-get`, `apt` or `dpkg`, so a command declared with one of them as its path (any unit, any tier) runs as root through `priv_exec`, outside everything S4c-7 binds: no transaction in the approval, no recompute, no pinned simulation, no dpkg-status diff, and `priv_exec`'s kill on a hang-up instead of the package operations' stop points (a killed dpkg leaves the database half-configured). The allow-lists of `packages.install` and `packages.remove` do not apply to it either.
+- **Proposed (not done here; maintainer, 2026-10-22):** S4c-9's policy check warns about, or refuses, a command whose binary (as written or resolved, and by identity, as POLICY §5's check) is apt-get, apt or dpkg, except the one fixed recovery template of N-14 if it is kept. A refusal is a privileged-policy schema change (a STOP for that session).
+- **Status:** recorded.
+
+**N-14. The recovery path for an unfinished dpkg database (found in S4c-7, PR #42).**
+- **What.** A package operation killed at its limit (or any other interrupted dpkg) leaves packages half-configured; every later apt run, unattended security upgrades included, and every package preview refuses until `dpkg --configure -a` runs. No package operation does that (it would be a new op).
+- **Documented recovery (PRIVILEGED §6, "Package operations"):** a fixed broad-unit command template in the privileged policy, `path: /usr/bin/dpkg`, `unit: broad`, `tier: operator`, `templates: [["--configure", "-a"]]`, run through `shell_priv_run_command` (always approval-gated). It runs maintainer scripts as root and is subject to N-13's concern and to `priv_exec`'s kill on a hang-up, so it is the operator's deliberate, reviewed exception, not a default.
+- **Status:** documented; no op proposed in S4c-7.
+
 **R-1. A restore's narrowed mode is not reported.**
 - S4c-0 clamps the restored mode but does not report it: the result has no `mode` field, and adding one was a protocol change.
 - **Decision:** S4c-5 reports the resulting mode in the preview and in the result, so a narrowing is never silent. Any protocol field for that is pre-approved (P-10, §4).

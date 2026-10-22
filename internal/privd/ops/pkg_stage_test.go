@@ -307,3 +307,53 @@ func TestPkgUpdateIndexKilledOnHangup(t *testing.T) {
 		t.Fatalf("audit %q", l)
 	}
 }
+
+// TestPkgDropKeepsTheOperation (the maintainer's follow-up on the e2e
+// drop): a gate that goes away while apt-get runs, by a reset (it leaves
+// the early answer unread and closes, so the helper's next read or write
+// on the connection fails with ECONNRESET or EPIPE) or by closing before
+// the early answer (whose write then fails), must not stop the operation
+// or skip its journal line: apt-get and its process group get no signal,
+// the whole transaction is applied, nothing is left unfinished, Serve
+// returns only after apt-get ended, and the line has the result.
+func TestPkgDropKeepsTheOperation(t *testing.T) {
+	for _, mode := range []string{"reset after the early answer", "closed before the early answer"} {
+		t.Run(mode, func(t *testing.T) {
+			f := modelFixture(t, &pkgModel{}, nil, stagePolicy())
+			marker := filepath.Join(f.d, "child-signals")
+			p := f.pkgPreview("priv_pkg_install", hello)
+			f.setModel(&pkgModel{Run: mrun{SlowMS: 2500, Child: marker}})
+			timeoutMS := 4000
+			if mode == "reset after the early answer" {
+				timeoutMS = 700
+			}
+			a := f.serveAsync(pkgLine("priv_pkg_install", bound(hello, p), timeoutMS))
+			if mode == "reset after the early answer" {
+				// The early answer is queued on the gate's end, unread.
+				deadline := time.Now().Add(2 * time.Second)
+				for unreadBytes(t, a.gate) == 0 && time.Now().Before(deadline) {
+					time.Sleep(20 * time.Millisecond)
+				}
+				if unreadBytes(t, a.gate) == 0 {
+					t.Fatal("no early answer by 2 s")
+				}
+			} else {
+				time.Sleep(400 * time.Millisecond)
+			}
+			_ = unix.Close(a.gate)
+			if took := a.ended(8 * time.Second); took < 2500*time.Millisecond {
+				t.Fatalf("Serve returned after %v, before apt-get finished", took)
+			}
+			if s := signalsGot(t, marker); s != "" {
+				t.Fatalf("apt-get's process group got %q", s)
+			}
+			if got := f.dpkgState(); strings.Join(got, ",") != "example-hello 1.1 installed,example-lib 2.1-1 installed" {
+				t.Fatalf("dpkg %v", got)
+			}
+			l := f.lastAudit()
+			if !strings.Contains(l, `"answered_early":true`) || !strings.Contains(l, `"outcome":"ok"`) || strings.Contains(l, `"unfinished"`) {
+				t.Fatalf("audit %q", l)
+			}
+		})
+	}
+}

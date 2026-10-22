@@ -3,12 +3,15 @@
 package e2e
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -230,9 +233,30 @@ func TestPackageStopPoints(t *testing.T) {
 		if err := cl.Wait(); err != nil {
 			t.Fatalf("client: %v %q", err, out.String())
 		}
-		waitLineFor(t, `"id":"`+id+`"`, `"hung_up":true`, `"answered_early":true`, `"outcome":"ok"`)
+		// The outcome, not only the journal line: the instance that served
+		// this connection ended on its own after apt-get finished, the
+		// package is fully installed, and the line has the result.
+		inst := helperInstance(t, cl.Process.Pid)
+		defer func() {
+			if t.Failed() {
+				dropDiagnostics(t, inst, id)
+			}
+		}()
+		end, endAt := instanceEnd(t, inst, 45*time.Second)
+		if strings.Contains(end, "code=killed") || strings.Contains(end, "code=dumped") || strings.Contains(end, "signal") {
+			t.Errorf("the helper instance did not exit normally: %s", end)
+		}
+		if out := run(t, "dpkg", "--audit"); strings.TrimSpace(out) != "" {
+			t.Errorf("dpkg --audit after the drop: %s", out)
+		}
 		if got := installed(t, "example-slow"); got != "installed 1.0" {
-			t.Fatalf("dpkg %q", got)
+			t.Errorf("example-slow after the drop: %q, want installed 1.0", got)
+		}
+		if at, ok := dpkgInstalledAt("example-slow"); !ok || endAt.Truncate(time.Second).Before(at) {
+			t.Errorf("the helper instance ended at %v, before dpkg recorded example-slow installed (%v, found %v)", endAt, at, ok)
+		}
+		if _, ok := findLine(id, `"hung_up":true`, `"answered_early":true`, `"outcome":"ok"`); !ok {
+			t.Errorf("no helper journal line for %s with hung_up, answered_early and outcome ok", id)
 		}
 	})
 	t.Run("sigint", func(t *testing.T) {
@@ -297,5 +321,157 @@ func waitLineFor(t *testing.T, want ...string) journalEntry {
 			t.Fatalf("no shell-mcp-privd journal entry within %v containing %q", d, want)
 		}
 		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// rawJournal returns every journal entry since the run started that
+// matches the journalctl arguments, as field maps (a field that is not
+// valid text, which journald writes as a byte array, is left out).
+func rawJournal(t *testing.T, match ...string) []map[string]string {
+	t.Helper()
+	args := append([]string{"--no-pager", "-o", "json", "--since", "@" + strconv.FormatInt(runStart.Unix()-1, 10)}, match...)
+	out, err := exec.CommandContext(t.Context(), "journalctl", args...).Output() //nolint:gosec // G204: fixed test command and matches
+	if err != nil {
+		t.Logf("journalctl %q: %v", match, err)
+		return nil
+	}
+	var es []map[string]string
+	sc := bufio.NewScanner(bytes.NewReader(out))
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		var raw map[string]any
+		if json.Unmarshal(sc.Bytes(), &raw) != nil {
+			continue
+		}
+		e := map[string]string{}
+		for k, v := range raw {
+			if s, ok := v.(string); ok {
+				e[k] = s
+			}
+		}
+		es = append(es, e)
+	}
+	return es
+}
+
+// helperInstance is the broad unit instance systemd started for the
+// connection of the client with pid: Accept=yes names a per-connection
+// instance <socket>@<n>-<peer pid>-<peer uid>.service.
+func helperInstance(t *testing.T, pid int) string {
+	t.Helper()
+	re := regexp.MustCompile(`^shell-mcp-privd-broad@[0-9]+-` + strconv.Itoa(pid) + `-[0-9]+\.service$`)
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, e := range rawJournal(t, "-t", "shell-mcp-privd") {
+			if re.MatchString(e["_SYSTEMD_UNIT"]) {
+				return e["_SYSTEMD_UNIT"]
+			}
+		}
+		for _, e := range rawJournal(t, "-t", "systemd") {
+			if re.MatchString(e["UNIT"]) {
+				return e["UNIT"]
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatalf("no broad helper instance for client pid %d", pid)
+	return ""
+}
+
+// instanceEnd waits up to d for systemd's record of how inst's main
+// process ended, and returns its messages and when it ended.
+func instanceEnd(t *testing.T, inst string, d time.Duration) (string, time.Time) {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		var msgs []string
+		var at time.Time
+		done := false
+		for _, e := range rawJournal(t, "UNIT="+inst) {
+			m := e["MESSAGE"]
+			if strings.Contains(m, "Main process exited") || strings.Contains(m, "Deactivated successfully") || strings.Contains(m, "Failed with result") {
+				msgs = append(msgs, m)
+				if us, err := strconv.ParseInt(e["__REALTIME_TIMESTAMP"], 10, 64); err == nil && at.IsZero() {
+					at = time.UnixMicro(us)
+				}
+				done = true
+			}
+		}
+		if done {
+			return strings.Join(msgs, " | "), at
+		}
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("%s did not end within %v", inst, d)
+	return "", time.Time{}
+}
+
+// dpkgInstalledAt is when /var/log/dpkg.log last recorded pkg installed.
+func dpkgInstalledAt(pkg string) (time.Time, bool) {
+	b, err := os.ReadFile("/var/log/dpkg.log")
+	if err != nil {
+		return time.Time{}, false
+	}
+	var at time.Time
+	found := false
+	for _, l := range strings.Split(string(b), "\n") {
+		f := strings.Fields(l)
+		if len(f) >= 5 && f[2] == "status" && f[3] == "installed" && strings.HasPrefix(f[4], pkg+":") {
+			if t, err := time.ParseInLocation("2006-01-02 15:04:05", f[0]+" "+f[1], time.Local); err == nil {
+				at, found = t, true
+			}
+		}
+	}
+	return at, found
+}
+
+// findLine looks for the helper's journal line of request id holding every
+// string in want.
+func findLine(id string, want ...string) (string, bool) {
+	out, err := exec.Command("journalctl", "--no-pager", "-o", "cat", "-t", "shell-mcp-privd", //nolint:gosec,noctx // G204: fixed test command; a bounded local call
+		"--since", "@"+strconv.FormatInt(runStart.Unix()-1, 10)).Output()
+	if err != nil {
+		return "", false
+	}
+lines:
+	for _, l := range strings.Split(string(out), "\n") {
+		if !strings.Contains(l, `"id":"`+id+`"`) {
+			continue
+		}
+		for _, w := range want {
+			if !strings.Contains(l, w) {
+				continue lines
+			}
+		}
+		return l, true
+	}
+	return "", false
+}
+
+// dropDiagnostics prints what the drop test needs to explain a failure:
+// every journal entry of the helper instance and of the request (not the
+// last N lines), dpkg's view of example-slow and its log.
+func dropDiagnostics(t *testing.T, inst, id string) {
+	t.Helper()
+	for _, match := range [][]string{{"_SYSTEMD_UNIT=" + inst}, {"UNIT=" + inst}} {
+		for _, e := range rawJournal(t, match...) {
+			t.Logf("journal %s %s pid=%s: %s", match[0], e["__REALTIME_TIMESTAMP"], e["_PID"], e["MESSAGE"])
+		}
+	}
+	if l, ok := findLine(id); ok {
+		t.Logf("helper line for %s: %s", id, l)
+	} else {
+		t.Logf("no helper line carries request id %s", id)
+	}
+	for _, args := range [][]string{{"dpkg", "-s", "example-slow"}, {"dpkg", "--audit"}} {
+		out, err := exec.CommandContext(t.Context(), args[0], args[1:]...).CombinedOutput() //nolint:gosec // G204: fixed test commands
+		t.Logf("%s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	if b, err := os.ReadFile("/var/log/dpkg.log"); err == nil {
+		for _, l := range strings.Split(string(b), "\n") {
+			if strings.Contains(l, "example-slow") {
+				t.Logf("dpkg.log: %s", l)
+			}
+		}
 	}
 }
