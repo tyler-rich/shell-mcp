@@ -163,6 +163,10 @@ const (
 	OpPrivPkgInstallPreview = "priv_pkg_install_preview"
 	OpPrivPkgUpgradePreview = "priv_pkg_upgrade_preview"
 	OpPrivPkgRemovePreview  = "priv_pkg_remove_preview"
+	// OpPrivPkgUpdateIndexPreview reports the index update's action and the
+	// privileged policy's hash, with the hash priv_pkg_update_index requires
+	// (handoff P-2e; broad).
+	OpPrivPkgUpdateIndexPreview = "priv_pkg_update_index_preview"
 	// OpPrivPower asks systemd to reboot or power off (broad unit).
 	OpPrivPower = "priv_power"
 	// OpPrivBackupCheck says whether an overwrite of a path would write a

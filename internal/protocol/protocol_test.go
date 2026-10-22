@@ -247,9 +247,9 @@ func TestCodesClosedSet(t *testing.T) {
 	// PRIVILEGED §6: the core operations, priv_exec, the four package
 	// operations, their three read-tier previews, priv_power,
 	// priv_backup_check (handoff P-11), the chown and chmod previews
-	// (P-2b), the delete and restore previews (P-2a, P-2c) and the exec
-	// preview (P-2d).
-	if len(PrivOps) != 27 {
+	// (P-2b), the delete and restore previews (P-2a, P-2c), the exec
+	// preview (P-2d) and the index update preview (P-2e).
+	if len(PrivOps) != 28 {
 		t.Fatalf("PrivOps has %d entries", len(PrivOps))
 	}
 }
@@ -358,6 +358,9 @@ func TestPrivMayChange(t *testing.T) {
 		{OpPrivExecPreview, TierDestructive, false},
 		{OpPrivDeletePreview, TierDestructive, false},
 		{OpPrivPkgInstallPreview, TierOperator, false},
+		{OpPrivPkgUpdateIndexPreview, TierOperator, false},
+		{OpPrivPkgUpdateIndex, TierOperator, true},
+		{OpPrivPkgInstall, TierOperator, true},
 		{OpPrivWriteFile, TierOperator, true},
 		{OpPrivDelete, TierDestructive, true},
 		{OpPrivRestoreBackup, TierOperator, true},

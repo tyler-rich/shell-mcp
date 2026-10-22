@@ -58,6 +58,13 @@ type Options struct {
 	Unit string
 	// AptGet is the apt-get binary (production: /usr/bin/apt-get).
 	AptGet string
+	// DpkgDir is dpkg's administrative directory (production:
+	// /var/lib/dpkg): its status file, updates/ journal and frontend lock.
+	DpkgDir string
+	// PkgRecord is the package operation record (production:
+	// /run/shell-mcp-privd-pkg), locked while an install, upgrade or remove
+	// runs (PRIVILEGED §6, "Package operations").
+	PkgRecord string
 	// ResolveExecutable, when set, resolves Executable after the peer check
 	// (production: the running binary, so nothing touches the filesystem
 	// before the peer is authenticated).
@@ -138,6 +145,8 @@ func ProductionOptions(version, policyPath string) Options {
 		UnitClientUID:  os.Getenv(units.ClientUIDEnv),
 		Unit:           os.Getenv(units.UnitEnv),
 		AptGet:         policy.DefaultAptGet,
+		DpkgDir:        DefaultDpkgDir,
+		PkgRecord:      DefaultPkgRecord,
 		SystemBus:      dbus.SystemBus,
 		ExpectedSHA256: os.Getenv(units.HashEnv),
 		Trust:          gpolicy.RootTrust(),

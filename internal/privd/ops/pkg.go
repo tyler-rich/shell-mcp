@@ -209,3 +209,11 @@ func (s *server) pkgOp(raw jsontext.Value, op pkg.Op, simulate bool) (data any, 
 		Attempts: res.Attempts, LockWaitMS: res.LockWait.Milliseconds(), DurationMS: res.Duration.Milliseconds(),
 	}, warnings, nil
 }
+
+// Production paths of the package operations.
+const (
+	// DefaultDpkgDir is dpkg's administrative directory.
+	DefaultDpkgDir = "/var/lib/dpkg"
+	// DefaultPkgRecord is the package operation record (PRIVILEGED §6).
+	DefaultPkgRecord = "/run/shell-mcp-privd-pkg"
+)

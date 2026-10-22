@@ -89,26 +89,27 @@ func TestRouting(t *testing.T) {
 		args string
 		want string
 	}{
-		"priv_stat":                {`{"path":"/etc/example-app"}`, "core"},
-		"priv_backup_check":        {`{"path":"/etc/example-app/x"}`, "core"},
-		"priv_chown_preview":       {`{"path":"/etc/example-app/x","owner":"root"}`, "core"},
-		"priv_chmod_preview":       {`{"path":"/etc/example-app/x","mode":"0640","recursive":true}`, "core"},
-		"priv_write_file":          {`{"path":"/etc/example-app/x","content_b64":"eA=="}`, "core"},
-		"priv_delete":              {`{"path":"/etc/example-app/x"}`, "core"},
-		"priv_delete_preview":      {`{"path":"/etc/example-app/x","recursive":true}`, "core"},
-		"priv_restore_preview":     {`{"id":"20261019T120000Z-0123456789abcdef"}`, "core"},
-		"priv_exec_preview":        {`{"command_id":"renew","args":[]}`, "core"},
-		"priv_exec":                {`{"command_id":"probe","args":[]}`, "core"},
-		"priv_exec/core":           {`{"command_id":"probe","args":[],"unit":"core"}`, "core"},
-		"priv_exec/broad":          {`{"command_id":"renew","args":[],"unit":"broad"}`, "broad"},
-		"priv_pkg_update_index":    {`{}`, "broad"},
-		"priv_pkg_install":         {`{"packages":["htop"]}`, "broad"},
-		"priv_pkg_install_preview": {`{"packages":["htop"]}`, "broad"},
-		"priv_pkg_upgrade":         {`{}`, "broad"},
-		"priv_pkg_upgrade_preview": {`{}`, "broad"},
-		"priv_pkg_remove":          {`{"packages":["htop"]}`, "broad"},
-		"priv_pkg_remove_preview":  {`{"packages":["htop"]}`, "broad"},
-		"priv_power":               {`{"action":"reboot"}`, "broad"},
+		"priv_stat":                     {`{"path":"/etc/example-app"}`, "core"},
+		"priv_backup_check":             {`{"path":"/etc/example-app/x"}`, "core"},
+		"priv_chown_preview":            {`{"path":"/etc/example-app/x","owner":"root"}`, "core"},
+		"priv_chmod_preview":            {`{"path":"/etc/example-app/x","mode":"0640","recursive":true}`, "core"},
+		"priv_write_file":               {`{"path":"/etc/example-app/x","content_b64":"eA=="}`, "core"},
+		"priv_delete":                   {`{"path":"/etc/example-app/x"}`, "core"},
+		"priv_delete_preview":           {`{"path":"/etc/example-app/x","recursive":true}`, "core"},
+		"priv_restore_preview":          {`{"id":"20261019T120000Z-0123456789abcdef"}`, "core"},
+		"priv_exec_preview":             {`{"command_id":"renew","args":[]}`, "core"},
+		"priv_exec":                     {`{"command_id":"probe","args":[]}`, "core"},
+		"priv_exec/core":                {`{"command_id":"probe","args":[],"unit":"core"}`, "core"},
+		"priv_exec/broad":               {`{"command_id":"renew","args":[],"unit":"broad"}`, "broad"},
+		"priv_pkg_update_index":         {`{}`, "broad"},
+		"priv_pkg_update_index_preview": {`{}`, "broad"},
+		"priv_pkg_install":              {`{"packages":["htop"]}`, "broad"},
+		"priv_pkg_install_preview":      {`{"packages":["htop"]}`, "broad"},
+		"priv_pkg_upgrade":              {`{}`, "broad"},
+		"priv_pkg_upgrade_preview":      {`{}`, "broad"},
+		"priv_pkg_remove":               {`{"packages":["htop"]}`, "broad"},
+		"priv_pkg_remove_preview":       {`{"packages":["htop"]}`, "broad"},
+		"priv_power":                    {`{"action":"reboot"}`, "broad"},
 	} {
 		t.Run(op, func(t *testing.T) {
 			f := newFixture(t, "destructive")
@@ -172,7 +173,7 @@ func TestRoutingRefusals(t *testing.T) {
 func TestRoutingTiers(t *testing.T) {
 	f := newFixture(t, "destructive")
 	h := startTwoHelpers(t, f, "privileged:\n  enabled: true\n  socket: "+coreSock+"\n  broad_socket: "+broadSock+"\n  max_tier: read\n")
-	for _, op := range []string{"priv_pkg_install_preview", "priv_pkg_upgrade_preview", "priv_pkg_remove_preview"} {
+	for _, op := range []string{"priv_pkg_update_index_preview", "priv_pkg_install_preview", "priv_pkg_upgrade_preview", "priv_pkg_remove_preview"} {
 		f.ok(op, m{}, nil)
 	}
 	for _, op := range []string{"priv_pkg_update_index", "priv_pkg_install", "priv_pkg_upgrade", "priv_pkg_remove", "priv_power"} {
@@ -182,8 +183,8 @@ func TestRoutingTiers(t *testing.T) {
 	f.ok("priv_pkg_install", m{}, nil)
 	f.fail("priv_pkg_remove", m{}, "tier_denied")
 	f.fail("priv_power", m{}, "tier_denied")
-	if h.count(broadSock) != 4 {
-		t.Fatalf("broad got %d requests, want 4", h.count(broadSock))
+	if h.count(broadSock) != 5 {
+		t.Fatalf("broad got %d requests, want 5", h.count(broadSock))
 	}
 }
 

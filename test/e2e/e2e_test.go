@@ -79,11 +79,12 @@ func TestMain(m *testing.M) {
 
 // client is this binary run as another user: it connects to the helper's
 // socket (E2E_SOCKET, default the core unit's) and either sends stdin and
-// prints everything the helper writes ("send"), or holds the connection
-// open without sending ("hold"). "drop" and "half" send stdin and hang up
-// E2E_HANGUP_MS later as a gate would: "drop" closes the connection (a
-// gate that exited or was killed), "half" shuts down its sending side (a
-// gate that stopped waiting) and then prints what the helper writes.
+// prints everything the helper writes ("send") or only its first line
+// ("line"), or holds the connection open without sending ("hold"). "drop"
+// and "half" send stdin and hang up E2E_HANGUP_MS later as a gate would:
+// "drop" closes the connection (a gate that exited or was killed), "half"
+// shuts down its sending side (a gate that stopped waiting) and then prints
+// what the helper writes.
 // "swap" connects nowhere: it is the racer of priv_exec_chain_test.go
 // (swapClient).
 func client() int {
@@ -120,6 +121,13 @@ func client() int {
 		}
 	}
 	_ = c.SetReadDeadline(time.Now().Add(30 * time.Second))
+	if os.Getenv("E2E_CLIENT") == "line" {
+		// The first answer line, as soon as it arrives (a package
+		// operation's early answer, while its connection stays open).
+		line, _ := bufio.NewReader(c).ReadBytes('\n')
+		_, _ = os.Stdout.Write(line)
+		return 0
+	}
 	out, _ := io.ReadAll(c)
 	_, _ = os.Stdout.Write(out)
 	return 0

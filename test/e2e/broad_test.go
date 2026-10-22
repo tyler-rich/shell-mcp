@@ -78,58 +78,100 @@ func installed(t *testing.T, pkg string) string {
 }
 
 // cleanupPackages removes the test packages directly with dpkg (outside
-// the helper) when the test ends.
+// the helper) when the test ends, first letting any slow or stuck
+// maintainer script end (the fast flag) and finishing what dpkg left.
 func cleanupPackages(t *testing.T) {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
-		_ = exec.CommandContext(ctx, "dpkg", "--purge", "example-hello", "example-extra", "example-other").Run()
+		_ = os.WriteFile("/run/shell-mcp-e2e-pkg-fast", nil, 0o600)
+		_ = exec.CommandContext(ctx, "dpkg", "--configure", "-a").Run()
+		_ = exec.CommandContext(ctx, "dpkg", "--purge", "example-hello", "example-extra", "example-other", "example-conf",
+			"example-slow-b", "example-slow-a", "example-stuck").Run()
+		_ = os.Remove("/run/shell-mcp-e2e-pkg-fast")
 	})
 }
 
+type pkgEntry struct {
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+	From    string `json:"from,omitempty"`
+	To      string `json:"to,omitempty"`
+}
+
 type previewResult struct {
-	Install []struct {
-		Name    string `json:"name"`
-		Version string `json:"version"`
-	} `json:"install"`
-	Upgrade []struct {
-		Name string `json:"name"`
-		From string `json:"from"`
-		To   string `json:"to"`
-	} `json:"upgrade"`
-	Remove []struct {
-		Name    string `json:"name"`
-		Version string `json:"version"`
-	} `json:"remove"`
-	Complete bool `json:"complete"`
+	Install       []pkgEntry `json:"install"`
+	Upgrade       []pkgEntry `json:"upgrade"`
+	Remove        []pkgEntry `json:"remove"`
+	Complete      bool       `json:"complete"`
+	Argv          []string   `json:"argv"`
+	PreviewSHA256 string     `json:"preview_sha256"`
 }
 
 type pkgResult struct {
 	ExitCode *int   `json:"exit_code"`
 	Stderr   string `json:"stderr"`
+	Applied  *struct {
+		Install []pkgEntry `json:"install"`
+		Upgrade []pkgEntry `json:"upgrade"`
+		Remove  []pkgEntry `json:"remove"`
+	} `json:"applied"`
 }
 
-func mustPkg(t *testing.T, op string, args any) {
+// pkgPreview previews op (priv_pkg_<op>_preview) through the gate.
+func pkgPreview(t *testing.T, op string, args map[string]any) previewResult {
 	t.Helper()
+	var p previewResult
+	mustGate(t, "priv_pkg_"+op+"_preview", args, &p)
+	return p
+}
+
+// withHash is args with the preview's hash as expected_preview_sha256.
+func withHash(args map[string]any, hash string) map[string]any {
+	out := map[string]any{"expected_preview_sha256": hash}
+	for k, v := range args {
+		out[k] = v
+	}
+	return out
+}
+
+// mustPkg previews op and runs it bound to that preview; it returns the
+// result.
+func mustPkg(t *testing.T, op string, args map[string]any) pkgResult {
+	t.Helper()
+	var hash string
+	if op == "update_index" {
+		var u struct {
+			PreviewSHA256 string `json:"preview_sha256"`
+		}
+		mustGate(t, "priv_pkg_update_index_preview", map[string]any{}, &u)
+		hash = u.PreviewSHA256
+	} else {
+		hash = pkgPreview(t, op, args).PreviewSHA256
+	}
 	var r pkgResult
-	mustGate(t, op, args, &r)
+	mustGate(t, "priv_pkg_"+op, withHash(args, hash), &r)
 	if r.ExitCode == nil || *r.ExitCode != 0 {
 		t.Logf("broad unit process status:\n%s", privExec(t, "probe-broad", "broad", "status"))
 		t.Fatalf("%s: exit %v, stderr %q", op, r.ExitCode, r.Stderr)
 	}
+	return r
 }
+
+var helloArgs = map[string]any{"packages": []string{"example-hello"}}
 
 // Update the index, preview then install an allow-listed package (without
 // its Recommends), refuse the others, preview then remove it; upgrade is
-// refused while allow_upgrade is false.
+// refused while allow_upgrade is false. Every operation is bound to its
+// preview.
 func TestPackages(t *testing.T) {
 	cleanupPackages(t)
 	aptRepo(t, "example-hello_1.0_all.deb", "example-extra_1.0_all.deb", "example-other_1.0_all.deb")
-	mustPkg(t, "priv_pkg_update_index", map[string]any{})
+	mustPkg(t, "update_index", map[string]any{})
 
-	var p previewResult
-	mustGate(t, "priv_pkg_install_preview", map[string]any{"packages": []string{"example-hello"}}, &p)
-	if len(p.Install) != 1 || p.Install[0].Name != "example-hello" || p.Install[0].Version != "1.0" || len(p.Upgrade)+len(p.Remove) != 0 || !p.Complete {
+	p := pkgPreview(t, "install", helloArgs)
+	if len(p.Install) != 1 || p.Install[0].Name != "example-hello" || p.Install[0].Version != "1.0" || len(p.Upgrade)+len(p.Remove) != 0 || !p.Complete ||
+		len(p.PreviewSHA256) != 64 {
 		t.Fatalf("install preview %+v", p)
 	}
 	// Control: apt's default installs the recommended package too; the
@@ -140,12 +182,15 @@ func TestPackages(t *testing.T) {
 	if installed(t, "example-hello") != "" && !strings.HasPrefix(installed(t, "example-hello"), "not-installed") {
 		t.Fatalf("the preview installed something: %q", installed(t, "example-hello"))
 	}
-
 	for _, name := range []string{"example-other", "example-extra"} {
-		wantGate(t, svcShell, "priv_pkg_install", map[string]any{"packages": []string{name}}, "policy_denied")
+		wantGate(t, svcShell, "priv_pkg_install", withHash(map[string]any{"packages": []string{name}}, p.PreviewSHA256), "policy_denied")
 		wantGate(t, svcShell, "priv_pkg_install_preview", map[string]any{"packages": []string{name}}, "policy_denied")
 	}
-	mustPkg(t, "priv_pkg_install", map[string]any{"packages": []string{"example-hello"}})
+	wantGate(t, svcShell, "priv_pkg_install", helloArgs, "bad_request")
+	r := mustPkg(t, "install", helloArgs)
+	if r.Applied == nil || len(r.Applied.Install) != 1 || r.Applied.Install[0] != (pkgEntry{Name: "example-hello", Version: "1.0"}) {
+		t.Fatalf("applied %+v", r.Applied)
+	}
 	if got := installed(t, "example-hello"); got != "installed 1.0" {
 		t.Fatalf("example-hello: %q", got)
 	}
@@ -158,23 +203,41 @@ func TestPackages(t *testing.T) {
 	if b, err := os.ReadFile("/usr/share/example-hello/version"); err != nil || string(b) != "example-hello 1.0\n" {
 		t.Fatalf("installed file: %q %v", b, err)
 	}
+	waitLine(t, "shell-mcp-privd", `"op":"priv_pkg_install"`, `"outcome":"ok"`, `"applied":`)
 
-	wantGate(t, svcShell, "priv_pkg_upgrade", map[string]any{}, "policy_denied")
+	wantGate(t, svcShell, "priv_pkg_upgrade", map[string]any{"expected_preview_sha256": p.PreviewSHA256}, "policy_denied")
 	wantGate(t, svcShell, "priv_pkg_upgrade_preview", map[string]any{}, "policy_denied")
 
-	mustGate(t, "priv_pkg_remove_preview", map[string]any{"packages": []string{"example-hello"}}, &p)
+	p = pkgPreview(t, "remove", helloArgs)
 	if len(p.Remove) != 1 || p.Remove[0].Name != "example-hello" || p.Remove[0].Version != "1.0" || len(p.Install) != 0 {
 		t.Fatalf("remove preview %+v", p)
 	}
 	if got := installed(t, "example-hello"); got != "installed 1.0" {
 		t.Fatalf("the remove preview removed something: %q", got)
 	}
-	mustPkg(t, "priv_pkg_remove", map[string]any{"packages": []string{"example-hello"}})
+	mustPkg(t, "remove", helloArgs)
 	if got := installed(t, "example-hello"); strings.HasPrefix(got, "installed") {
 		t.Fatalf("example-hello still installed: %q", got)
 	}
 	if _, err := os.Stat("/usr/share/example-hello/version"); err == nil {
 		t.Fatal("the removed package's file is still there")
+	}
+}
+
+// TestPackageRemoveNeverPurges: a removed package keeps its configuration
+// files (dpkg's config-files state).
+func TestPackageRemoveNeverPurges(t *testing.T) {
+	cleanupPackages(t)
+	aptRepo(t, "example-conf_1.0_all.deb")
+	mustPkg(t, "update_index", map[string]any{})
+	conf := map[string]any{"packages": []string{"example-conf"}}
+	mustPkg(t, "install", conf)
+	mustPkg(t, "remove", conf)
+	if got := installed(t, "example-conf"); got != "config-files 1.0" {
+		t.Fatalf("after the removal: %q", got)
+	}
+	if _, err := os.Stat("/etc/example-conf/example-conf.conf"); err != nil {
+		t.Fatalf("the configuration file was purged: %v", err)
 	}
 }
 
@@ -184,30 +247,32 @@ func TestPackageUpgrade(t *testing.T) {
 	cleanupPackages(t)
 	installPolicy(t, "privileged-upgrade.yaml")
 	aptRepo(t, "example-hello_1.0_all.deb", "example-extra_1.0_all.deb")
-	mustPkg(t, "priv_pkg_update_index", map[string]any{})
-	mustPkg(t, "priv_pkg_install", map[string]any{"packages": []string{"example-hello"}})
+	mustPkg(t, "update_index", map[string]any{})
+	mustPkg(t, "install", helloArgs)
 	aptRepo(t, "example-hello_1.1_all.deb", "example-extra_1.0_all.deb")
-	mustPkg(t, "priv_pkg_update_index", map[string]any{})
-	var p previewResult
-	mustGate(t, "priv_pkg_upgrade_preview", map[string]any{}, &p)
+	mustPkg(t, "update_index", map[string]any{})
+	p := pkgPreview(t, "upgrade", map[string]any{})
 	if len(p.Upgrade) != 1 || p.Upgrade[0].Name != "example-hello" || p.Upgrade[0].From != "1.0" || p.Upgrade[0].To != "1.1" {
 		t.Fatalf("upgrade preview %+v", p)
 	}
 	if got := installed(t, "example-hello"); got != "installed 1.0" {
 		t.Fatalf("the preview upgraded: %q", got)
 	}
-	mustPkg(t, "priv_pkg_upgrade", map[string]any{})
+	mustPkg(t, "upgrade", map[string]any{})
 	if got := installed(t, "example-hello"); got != "installed 1.1" {
 		t.Fatalf("after the upgrade: %q", got)
 	}
 }
 
-// A held dpkg frontend lock is waited for — bounded by half the request's
-// timeout — and reported clearly; once released, the same install works.
+// TestPackageLock: a held dpkg frontend lock: a preview refuses at once,
+// naming the holder; an install waits, bounded by half the request's
+// timeout, and is refused naming the holder, nothing changed; once
+// released, the same install (newly previewed) works.
 func TestPackageLock(t *testing.T) {
 	cleanupPackages(t)
 	aptRepo(t, "example-hello_1.0_all.deb", "example-extra_1.0_all.deb")
-	mustPkg(t, "priv_pkg_update_index", map[string]any{})
+	mustPkg(t, "update_index", map[string]any{})
+	p := pkgPreview(t, "install", helloArgs)
 	f, err := os.OpenFile("/var/lib/dpkg/lock-frontend", os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		t.Fatal(err)
@@ -217,9 +282,13 @@ func TestPackageLock(t *testing.T) {
 	if err := syscall.FcntlFlock(f.Fd(), syscall.F_SETLK, &lk); err != nil {
 		t.Fatalf("taking the dpkg frontend lock: %v", err)
 	}
+	holder := fmt.Sprintf("(pid %d)", os.Getpid())
+	if r, _ := gate(t, svcShell, "priv_pkg_install_preview", helloArgs); r.code() != "exec_failed" || !strings.Contains(r.Error.Message, holder) {
+		t.Fatalf("preview with the lock held: %s %+v", r.code(), r.Error)
+	}
 	start := time.Now()
-	r, _ := gate(t, svcShell, "priv_pkg_install", map[string]any{"packages": []string{"example-hello"}})
-	if r.code() != "exec_failed" || !strings.Contains(r.Error.Message, "locked") {
+	r, _ := gate(t, svcShell, "priv_pkg_install", withHash(helloArgs, p.PreviewSHA256))
+	if r.code() != "exec_failed" || !strings.Contains(r.Error.Message, holder) || !strings.Contains(r.Error.Message, "nothing was changed") {
 		t.Fatalf("with the lock held: %s %+v", r.code(), r.Error)
 	}
 	if d := time.Since(start); d > 25*time.Second {
@@ -232,7 +301,7 @@ func TestPackageLock(t *testing.T) {
 	if err := syscall.FcntlFlock(f.Fd(), syscall.F_SETLK, &lk); err != nil {
 		t.Fatal(err)
 	}
-	mustPkg(t, "priv_pkg_install", map[string]any{"packages": []string{"example-hello"}})
+	mustPkg(t, "install", helloArgs)
 }
 
 // ---- Network: broad yes, core no ------------------------------------------------

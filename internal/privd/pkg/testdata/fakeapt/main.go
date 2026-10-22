@@ -6,7 +6,12 @@
 // then behaves as the mode file next to the log says. Real apt and dpkg are
 // exercised by the runner-host e2e job with a local repository; this only
 // stands in for the command-line contract, verified against the apt 3.0.3
-// and 3.1.16 sources. Invented output; never shipped.
+// and 3.2.0 sources and runs. Invented output and packages; never shipped.
+//
+// The "model" mode resolves install, upgrade and remove against an invented
+// repository and a dpkg status file (model.go), so that the helper's
+// binding, its pinned argv, its status diff and its stop points can be
+// tested against a transaction that really changes the status file.
 package main
 
 import (
@@ -22,6 +27,14 @@ import (
 var logPath = ""
 
 func main() {
+	if p := os.Getenv("FAKEAPT_HOLD_LOCK"); p != "" {
+		holdLock(p)
+		return
+	}
+	if p := os.Getenv("FAKEAPT_CHILD"); p != "" {
+		child(p)
+		return
+	}
 	env := os.Environ()
 	slices.Sort(env)
 	if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil { //nolint:gosec // G304: test log path baked in by the test
@@ -36,20 +49,25 @@ func main() {
 	}
 	simulate := slices.Contains(os.Args[1:], "-s")
 	switch fields[0] {
+	case "model":
+		os.Exit(model(os.Args[1:]))
 	case "ok":
 		fmt.Println("Reading package lists...")
 		fmt.Println("fake apt-get: done")
+	case "slow": // update: runs until killed, ignoring nothing
+		fmt.Println("Reading package lists...")
+		sleepForever()
 	case "lock": // held for the first N runs
 		n, _ := strconv.Atoi(fields[1])
 		c, _ := os.ReadFile(logPath + ".count") //nolint:gosec // G304: test control file
 		k, _ := strconv.Atoi(strings.TrimSpace(string(c)))
 		_ = os.WriteFile(logPath+".count", []byte(strconv.Itoa(k+1)), 0o600)
 		if k < n {
-			lock()
+			lockMessage(4242, "apt-get")
 		}
 		fmt.Println("fake apt-get: done after the lock")
 	case "lockforever":
-		lock()
+		lockMessage(4242, "apt-get")
 	case "listslock":
 		fmt.Fprintln(os.Stderr, "E: Could not get lock /var/lib/apt/lists/lock. It is held by process 4242 (apt-get)")
 		fmt.Fprintln(os.Stderr, "E: Unable to lock directory /var/lib/apt/lists/")
@@ -75,19 +93,11 @@ Inst broken line without version
 	case "fail":
 		fmt.Fprintln(os.Stderr, "E: Unable to locate package example-missing")
 		os.Exit(100)
-	case "secret":
-		// An invented key-shaped block, assembled at run time so that no
-		// key literal is committed (secret scanners).
-		fmt.Println("-----BEGIN " + "OPENSSH PRIVATE KEY-----")
-		fmt.Println("aW52ZW50ZWQgdGVzdCBrZXkgbWF0ZXJpYWw=")
-		fmt.Println("-----END " + "OPENSSH PRIVATE KEY-----")
-	case "flood":
-		fmt.Print(strings.Repeat("y", 1<<20))
 	}
 }
 
-func lock() {
-	fmt.Fprintln(os.Stderr, "E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 4242 (apt-get)")
+func lockMessage(pid int, comm string) {
+	fmt.Fprintf(os.Stderr, "E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process %d (%s)\n", pid, comm)
 	fmt.Fprintln(os.Stderr, "E: Unable to acquire the dpkg frontend lock (/var/lib/dpkg/lock-frontend), is another process using it?")
 	os.Exit(100)
 }
