@@ -236,12 +236,20 @@ func TestPackageStopPoints(t *testing.T) {
 		// The outcome, not only the journal line: the instance that served
 		// this connection ended on its own after apt-get finished, the
 		// package is fully installed, and the line has the result.
-		inst := helperInstance(t, cl.Process.Pid)
+		// Armed before the lookup, so that a failed lookup still prints what
+		// the runner has.
+		var inst string
+		var seen []string
 		defer func() {
 			if t.Failed() {
-				dropDiagnostics(t, inst, id)
+				dropDiagnostics(t, inst, id, seen)
 			}
 		}()
+		inst, seen = helperInstance(t, cl.Process.Pid)
+		if inst == "" {
+			t.Fatalf("no broad helper instance name carries client pid %d (broad instances seen: %v)", cl.Process.Pid, seen)
+		}
+		watchInstance(t, inst, 45*time.Second)
 		end, endAt := instanceEnd(t, inst, 45*time.Second)
 		if strings.Contains(end, "code=killed") || strings.Contains(end, "code=dumped") || strings.Contains(end, "signal") {
 			t.Errorf("the helper instance did not exit normally: %s", end)
@@ -354,28 +362,83 @@ func rawJournal(t *testing.T, match ...string) []map[string]string {
 	return es
 }
 
-// helperInstance is the broad unit instance systemd started for the
-// connection of the client with pid: Accept=yes names a per-connection
-// instance <socket>@<n>-<peer pid>-<peer uid>.service.
-func helperInstance(t *testing.T, pid int) string {
+// helperInstance finds the broad unit instance systemd started for the
+// connection of the client with pid, and returns it with every broad
+// instance name it saw. Accept=yes names a per-connection instance after
+// the connection; the format differs between systemd versions (this
+// runner's: <n>-<n>-<peer pid>_<n>-<peer uid>), so the peer pid is matched
+// as one whole field of the name, split at "-" and "_", not by position.
+// Names come from the units systemd has now (the operation still runs)
+// and from the journal (systemd's messages and the helper's own lines).
+func helperInstance(t *testing.T, pid int) (unit string, seen []string) {
 	t.Helper()
-	re := regexp.MustCompile(`^shell-mcp-privd-broad@[0-9]+-` + strconv.Itoa(pid) + `-[0-9]+\.service$`)
+	const prefix = "shell-mcp-privd-broad@"
+	want := strconv.Itoa(pid)
+	names := map[string]bool{}
+	carries := func(unit string) bool {
+		name, ok := strings.CutPrefix(unit, prefix)
+		name, ok2 := strings.CutSuffix(name, ".service")
+		if !ok || !ok2 {
+			return false
+		}
+		names[unit] = true
+		for _, f := range strings.FieldsFunc(name, func(r rune) bool { return r == '-' || r == '_' }) {
+			if f == want {
+				return true
+			}
+		}
+		return false
+	}
+	list := func() []string {
+		out := []string{}
+		for k := range names {
+			out = append(out, k)
+		}
+		return out
+	}
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		for _, e := range rawJournal(t, "-t", "shell-mcp-privd") {
-			if re.MatchString(e["_SYSTEMD_UNIT"]) {
-				return e["_SYSTEMD_UNIT"]
+		units, _ := exec.CommandContext(t.Context(), "systemctl", "list-units", "--all", "--plain", "--no-legend", prefix+"*").Output()
+		for _, l := range strings.Split(string(units), "\n") {
+			if f := strings.Fields(l); len(f) > 0 && carries(f[0]) {
+				return f[0], list()
 			}
 		}
 		for _, e := range rawJournal(t, "-t", "systemd") {
-			if re.MatchString(e["UNIT"]) {
-				return e["UNIT"]
+			if carries(e["UNIT"]) {
+				return e["UNIT"], list()
+			}
+		}
+		for _, e := range rawJournal(t, "-t", "shell-mcp-privd") {
+			if carries(e["_SYSTEMD_UNIT"]) {
+				return e["_SYSTEMD_UNIT"], list()
 			}
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	t.Fatalf("no broad helper instance for client pid %d", pid)
-	return ""
+	return "", list()
+}
+
+// watchInstance samples inst's state from systemd until it is inactive or
+// failed (or gone, collected), or d has passed, and logs every change:
+// its main pid while it runs, and how the main process ended.
+func watchInstance(t *testing.T, inst string, d time.Duration) {
+	t.Helper()
+	last := ""
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		out, _ := exec.CommandContext(t.Context(), "systemctl", "show", inst, //nolint:gosec // G204: fixed test command and a unit name from systemd
+			"-p", "LoadState", "-p", "ActiveState", "-p", "SubState", "-p", "MainPID", "-p", "ExecMainCode", "-p", "ExecMainStatus", "-p", "Result").Output()
+		s := strings.Join(strings.Fields(string(out)), " ")
+		if s != last {
+			t.Logf("%s %s: %s", time.Now().UTC().Format("15:04:05.000"), inst, s)
+			last = s
+		}
+		if strings.Contains(s, "LoadState=not-found") || strings.Contains(s, "ActiveState=inactive") || strings.Contains(s, "ActiveState=failed") {
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 }
 
 // instanceEnd waits up to d for systemd's record of how inst's main
@@ -451,8 +514,9 @@ lines:
 // dropDiagnostics prints what the drop test needs to explain a failure:
 // every journal entry of the helper instance and of the request (not the
 // last N lines), dpkg's view of example-slow and its log.
-func dropDiagnostics(t *testing.T, inst, id string) {
+func dropDiagnostics(t *testing.T, inst, id string, seen []string) {
 	t.Helper()
+	t.Logf("helper instance %q; broad instances seen: %v", inst, seen)
 	for _, match := range [][]string{{"_SYSTEMD_UNIT=" + inst}, {"UNIT=" + inst}} {
 		for _, e := range rawJournal(t, match...) {
 			t.Logf("journal %s %s pid=%s: %s", match[0], e["__REALTIME_TIMESTAMP"], e["_PID"], e["MESSAGE"])
