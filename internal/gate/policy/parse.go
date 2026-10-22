@@ -701,6 +701,10 @@ func (v *validator) resolveCommand(field string, rc *rawCommand, opts *LoadOptio
 			v.fail(field+".path", "%q may not be a policy command; use the built-in operations", base)
 			return "", false
 		}
+		if slices.Contains(busClients, base) {
+			v.fail(field+".path", "%q may not be a policy command: a D-Bus client can start units or power off the host", base)
+			return "", false
+		}
 		if slices.Contains(containerCLIs, base) && !rc.RootEquivalent {
 			v.fail(field+".root_equivalent", "%q is root-equivalent; set root_equivalent: true to acknowledge it", base)
 			return "", false

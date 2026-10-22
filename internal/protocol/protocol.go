@@ -195,6 +195,9 @@ const (
 	// priv_exec requires for an operator or destructive command (handoff
 	// P-2d; core, for commands of either unit).
 	OpPrivExecPreview = "priv_exec_preview"
+	// OpPrivPolicy returns the privileged policy summary: what the helper
+	// enforces, never a deny pattern or an acknowledge (handoff P-8; core).
+	OpPrivPolicy = "priv_policy"
 )
 
 // privReadOps are the read-tier privileged operations, which change nothing
@@ -203,7 +206,7 @@ const (
 var privReadOps = []string{
 	OpPrivReadFile, OpPrivListDir, OpPrivStat, OpPrivListBackups, OpPrivBackupCheck,
 	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview, OpPrivExecPreview,
-	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPkgUpdateIndexPreview, OpPrivPowerPreview,
+	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPkgUpdateIndexPreview, OpPrivPowerPreview, OpPrivPolicy,
 }
 
 // PrivMayChange reports whether a privileged request can change the host:
@@ -226,7 +229,7 @@ var PrivOps = []string{
 	OpPrivExec, OpPrivPkgUpdateIndex, OpPrivPkgInstall, OpPrivPkgUpgrade, OpPrivPkgRemove,
 	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPower, OpPrivBackupCheck,
 	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview, OpPrivExecPreview,
-	OpPrivPkgUpdateIndexPreview, OpPrivPowerPreview, OpPrivPowerCancel,
+	OpPrivPkgUpdateIndexPreview, OpPrivPowerPreview, OpPrivPowerCancel, OpPrivPolicy,
 }
 
 // Tier names on the wire: a request's ceiling, and max_tier in the gate

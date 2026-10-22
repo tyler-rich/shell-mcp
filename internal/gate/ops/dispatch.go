@@ -90,6 +90,7 @@ var privTiers = map[string]policy.Tier{
 	protocol.OpPrivBackupCheck: policy.TierRead, protocol.OpPrivChownPreview: policy.TierRead, protocol.OpPrivChmodPreview: policy.TierRead,
 	protocol.OpPrivDeletePreview: policy.TierRead, protocol.OpPrivRestorePreview: policy.TierRead,
 	protocol.OpPrivExecPreview: policy.TierRead,
+	protocol.OpPrivPolicy:      policy.TierRead,
 	protocol.OpPrivExec:        policy.TierRead,
 	protocol.OpPrivWriteFile:   policy.TierOperator, protocol.OpPrivMkdir: policy.TierOperator,
 	protocol.OpPrivChown: policy.TierOperator, protocol.OpPrivChmod: policy.TierOperator,

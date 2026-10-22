@@ -299,21 +299,110 @@ func getPolicy(d *Deps) Tool {
 				return envelope.Failure[PolicyData](t.Name, sum.Error)
 			}
 			h, s := hello.Data, sum.Data
+			// The privileged helper's summary, in the admin profile only (the
+			// profile that registers privileged tools) and only when this gate
+			// forwards privileged operations; a failure leaves the gate policy
+			// reported, with a warning.
+			var priv *PrivPolicy
+			var privWarn []string
+			if d.Principal.Profile == string(ProfileAdmin) && h.Privileged.Enabled {
+				priv, privWarn = d.privPolicy(ctx, t.Name)
+			}
 			out := envelope.Success(t.Name, PolicyData{
 				Gate: GateHello{Version: h.GateVersion, Protocol: h.Protocol, Principal: h.Principal,
 					PolicySHA256: h.PolicySHA256, MaxTier: h.MaxTier, Ops: h.Ops},
 				Sandbox:    h.Sandbox,
-				Privileged: PrivilegedStatus{Enabled: h.Privileged.Enabled, MaxTier: h.Privileged.MaxTier},
+				Privileged: PrivilegedStatus{Enabled: h.Privileged.Enabled, MaxTier: h.Privileged.MaxTier, Policy: priv},
 				Policy: Policy{Version: s.Version, MaxTier: s.MaxTier, SHA256: s.SHA256, Sandbox: s.Sandbox,
 					Limits: Limits(s.Limits), Paths: s.Paths, Services: s.Services, Journal: s.Journal,
 					Git: s.Git, RedactPatterns: s.Redact, Commands: s.Commands},
 			})
 			out.Gate = sum.Gate
-			out.Warnings = slices.Concat(hello.Warnings, sum.Warnings)
+			out.Warnings = slices.Concat(hello.Warnings, sum.Warnings, privWarn)
 			if h.PolicySHA256 != s.SHA256 {
 				out.Warnings = append(out.Warnings, "the policy changed between the hello and policy requests")
 			}
 			return out
 		},
 	})
+}
+
+// privPolicyWire is the helper's priv_policy data (handoff P-8), decoded
+// strictly: a field this server does not know is a protocol mismatch.
+type privPolicyWire struct {
+	PolicySHA256         string        `json:"policy_sha256"`
+	MaxTier              string        `json:"max_tier"`
+	Limits               PrivLimits    `json:"limits"`
+	Roots                PrivRoots     `json:"roots"`
+	DenyPatterns         int           `json:"deny_patterns"`
+	Owners               PrivOwners    `json:"owners"`
+	ModesMax             string        `json:"modes_max"`
+	BackupsKeep          int           `json:"backups_keep"`
+	BackupsMaxStoreBytes int64         `json:"backups_max_store_bytes"`
+	Commands             []privCmdWire `json:"commands"`
+	Packages             PrivPackages  `json:"packages"`
+	Power                PrivPower     `json:"power"`
+	Ops                  []privOpWire  `json:"ops"`
+	Findings             []PrivFinding `json:"findings"`
+}
+
+type privCmdWire struct {
+	ID             string     `json:"id"`
+	Tier           string     `json:"tier"`
+	Unit           string     `json:"unit"`
+	Description    string     `json:"description"`
+	Templates      [][]string `json:"templates"`
+	RootEquivalent bool       `json:"root_equivalent"`
+	Capabilities   []string   `json:"capabilities"`
+}
+
+type privOpWire struct {
+	Op   string `json:"op"`
+	Tier string `json:"tier"`
+	Unit string `json:"unit"`
+}
+
+// privApproval is D-006's rule for a privileged tier: operator and
+// destructive always need a human approval, read never.
+func privApproval(tier string) bool {
+	return tier == TierOperator.String() || tier == TierDestructive.String()
+}
+
+// privPolicy asks the helper for its policy summary (priv_policy, at the
+// tool's read ceiling) and returns it, or nil and a warning saying why not:
+// a refusal, an answer without the helper's block, or a summary whose hash
+// is not that block's.
+func (d *Deps) privPolicy(ctx context.Context, target string) (*PrivPolicy, []string) {
+	const what = "the privileged policy summary is not shown: "
+	resp, e := d.call(ctx, target, protocol.OpPrivPolicy, nil, d.budget())
+	if e != nil {
+		return nil, []string{what + e.Code + ": " + e.Message}
+	}
+	env := envelope.FromGate[privPolicyWire](target, resp)
+	if !env.OK {
+		return nil, []string{what + env.Error.Code + ": " + env.Error.Message}
+	}
+	if resp.Helper == nil || resp.Helper.PolicySHA256 == "" {
+		return nil, []string{what + "the answer carries no helper block"}
+	}
+	w := env.Data
+	if w.PolicySHA256 != resp.Helper.PolicySHA256 {
+		return nil, []string{what + "its policy hash is not the helper block's"}
+	}
+	p := &PrivPolicy{
+		PolicySHA256: w.PolicySHA256, MaxTier: w.MaxTier, Limits: w.Limits, Roots: w.Roots, DenyPatterns: w.DenyPatterns,
+		Owners: w.Owners, ModesMax: w.ModesMax, BackupsKeep: w.BackupsKeep, BackupsMaxStoreBytes: w.BackupsMaxStoreBytes,
+		Commands: []PrivCommand{}, Packages: w.Packages, Power: w.Power, Ops: []PrivOp{}, Findings: w.Findings,
+	}
+	for _, c := range w.Commands {
+		p.Commands = append(p.Commands, PrivCommand{ID: c.ID, Tier: c.Tier, Unit: c.Unit, Description: c.Description, Templates: c.Templates,
+			RootEquivalent: c.RootEquivalent, Capabilities: c.Capabilities, Approval: privApproval(c.Tier)})
+	}
+	for _, o := range w.Ops {
+		p.Ops = append(p.Ops, PrivOp{Op: o.Op, Tier: o.Tier, Unit: o.Unit, Approval: privApproval(o.Tier)})
+	}
+	if p.Findings == nil {
+		p.Findings = []PrivFinding{}
+	}
+	return p, env.Warnings
 }

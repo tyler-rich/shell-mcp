@@ -21,6 +21,10 @@ func BuiltinProtected() []string { return slices.Clone(builtinProtected) }
 // command because its safe forms are built-in gate operations.
 func IsBuiltinOp(base string) bool { return slices.Contains(builtinOps, base) }
 
+// IsBusClient reports whether a binary base name is a D-Bus client, which
+// may never be a policy command either.
+func IsBusClient(base string) bool { return slices.Contains(busClients, base) }
+
 // IsContainerCLI reports whether a binary base name needs
 // `root_equivalent: true`.
 func IsContainerCLI(base string) bool { return slices.Contains(containerCLIs, base) }

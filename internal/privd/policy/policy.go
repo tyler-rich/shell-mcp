@@ -169,11 +169,16 @@ type Command struct {
 }
 
 // CommandFinding is a declared command whose program defeats a bound
-// operation (handoff N-13). Stub: S4c-9 fills it in.
+// operation, declared with an acknowledge (handoff N-13): a package tool, a
+// power binary, or find with an action in a template.
 type CommandFinding struct {
+	// Category is FindingPackage, FindingPower or FindingExec.
 	Category string
-	Program  string
-	Match    string
+	// Program is the listed name recognised (apt-get, reboot, find).
+	Program string
+	// Match is how: MatchWritten, MatchResolved, MatchIdentity, or for
+	// find MatchTemplate (the action in a template is what decides).
+	Match string
 }
 
 // Packages is the packages section (the apt operations, broad unit).
