@@ -52,7 +52,7 @@ func registerDiag(r *Registry, d *Deps) error {
 		Name:        "shell_diag_elicit",
 		Title:       "Elicitation diagnostic",
 		Description: "Asks a harmless yes/no question through MCP elicitation and reports whether the client asked the user and what came back.",
-		Annotations: annotations("Elicitation diagnostic", TierRead, true, false),
+		Annotations: annotations("Elicitation diagnostic", TierRead, true, false, false),
 		InputSchema: in, OutputSchema: out,
 	}
 	handler := func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {

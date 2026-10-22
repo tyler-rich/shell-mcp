@@ -497,6 +497,26 @@
     "requires_user_interaction": false
   },
   {
+    "name": "shell_priv_cancel_power",
+    "title": "Cancel a scheduled reboot or power-off",
+    "tier": "read",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Cancel a scheduled reboot or power-off"
+    },
+    "description": "Cancels, as root, the reboot or power-off the host's privileged helper scheduled and has not yet requested; returns the cancelled action and its time.",
+    "input_schema_sha256": "42809bf68a1fbfc1ec56832b0e720e986e33781f27d916d7d9a1e9ebc2696207",
+    "output_schema_sha256": "dacb732a398f78bc8ea0528a9c3edf46f8f84179cbff69ab621369ced128df49",
+    "requires_user_interaction": false
+  },
+  {
     "name": "shell_priv_change_owner",
     "title": "Change owner as root",
     "tier": "operator",
@@ -715,6 +735,26 @@
     "input_schema_sha256": "062ac73f234b5f9c2277ef86f8b1d9778203a1c82b5c0a5f3c64d6a359cd4cf7",
     "output_schema_sha256": "c1d53a1021aab2f2f0f9339e00e2d15d8c31061dbc137b256cb5bd34b9ed700d",
     "requires_user_interaction": false
+  },
+  {
+    "name": "shell_priv_reboot_host",
+    "title": "Reboot or power off as root",
+    "tier": "destructive",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Reboot or power off as root"
+    },
+    "description": "Reboots or powers off the host as root: answers at once with the time the action will be requested from logind, 60 seconds later, unless it is cancelled, or blocked by a package operation or an inhibitor lock, first.",
+    "input_schema_sha256": "e649128261bef36d86fa80d328870be888d2f05794d06871cea05ca2c6f50cbb",
+    "output_schema_sha256": "0a307efb187453a59ffe019e743a7da94d3392fa1fe24f7d4b25e7ad91acbd66",
+    "requires_user_interaction": true
   },
   {
     "name": "shell_priv_remove_packages",

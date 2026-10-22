@@ -29,6 +29,11 @@ type spec[In, Out any] struct {
 	// idempotent is the idempotentHint for operator tools; read tools are
 	// always idempotent and destructive ones never.
 	idempotent bool
+	// changesState marks a read-tier tool that still changes the host
+	// (shell_priv_cancel_power: read tier only so that it is never
+	// approval-gated): it is annotated readOnlyHint false, destructiveHint
+	// false.
+	changesState bool
 	// schema adjusts the inferred input schema (descriptions are inferred
 	// from the jsonschema tags; bounds are set here).
 	schema func(*jsonschema.Schema)
@@ -105,7 +110,7 @@ func define[In, Out any](d *Deps, s spec[In, Out]) Tool {
 	}
 	def := &mcp.Tool{
 		Name: s.name, Title: s.title, Description: s.description,
-		Annotations: annotations(s.title, s.tier, s.idempotent, s.privileged), InputSchema: in, OutputSchema: out,
+		Annotations: annotations(s.title, s.tier, s.idempotent, s.privileged, s.changesState), InputSchema: in, OutputSchema: out,
 	}
 	if canGate && d.gated(s.tier, s.privileged) {
 		// Client-side defence in depth (handoff §3 a.2): Claude Code shows
@@ -236,10 +241,14 @@ func result[Out any](env envelope.Envelope[Out], summary string) (*mcp.CallToolR
 // tool, open world; destructive → destructive, not idempotent, open world.
 // A privileged operator tool changes root-owned state, so it is
 // destructive, with idempotentHint per tool (handoff D9).
-func annotations(title string, tier Tier, idempotent, privileged bool) *mcp.ToolAnnotations {
+// A read tool that changes the host (shell_priv_cancel_power) is not
+// read-only, not destructive, idempotent.
+func annotations(title string, tier Tier, idempotent, privileged, changesState bool) *mcp.ToolAnnotations {
 	t, f := true, false
 	a := &mcp.ToolAnnotations{Title: title, OpenWorldHint: &t}
 	switch {
+	case tier == TierRead && changesState:
+		a.DestructiveHint, a.IdempotentHint = &f, true
 	case tier == TierRead:
 		a.ReadOnlyHint, a.DestructiveHint, a.IdempotentHint = true, &f, true
 	case tier == TierOperator && privileged:

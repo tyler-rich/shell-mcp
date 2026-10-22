@@ -154,22 +154,24 @@ func ProductionOptions(version, policyPath string) Options {
 			}
 			return filepath.EvalSymlinks(exe)
 		},
-		UnitClientUID:  os.Getenv(units.ClientUIDEnv),
-		Unit:           os.Getenv(units.UnitEnv),
-		AptGet:         policy.DefaultAptGet,
-		DpkgDir:        DefaultDpkgDir,
-		PkgRecord:      DefaultPkgRecord,
-		SystemBus:      dbus.SystemBus,
-		ExpectedSHA256: os.Getenv(units.HashEnv),
-		Trust:          gpolicy.RootTrust(),
-		Lookups:        policy.ProductionLookups,
-		ReadStatus:     func() ([]byte, error) { return os.ReadFile("/proc/self/status") },
-		Conn:           os.Stdin,
-		BackupDir:      units.BackupDir,
-		ApplySandbox:   ApplyLandlock,
-		Audit:          os.Stderr,
-		Now:            time.Now,
-		ReapOrphans:    true,
+		UnitClientUID:           os.Getenv(units.ClientUIDEnv),
+		Unit:                    os.Getenv(units.UnitEnv),
+		AptGet:                  policy.DefaultAptGet,
+		DpkgDir:                 DefaultDpkgDir,
+		PkgRecord:               DefaultPkgRecord,
+		SystemBus:               dbus.SystemBus,
+		ExpectedSHA256:          os.Getenv(units.HashEnv),
+		Trust:                   gpolicy.RootTrust(),
+		Lookups:                 policy.ProductionLookups,
+		ReadStatus:              func() ([]byte, error) { return os.ReadFile("/proc/self/status") },
+		Conn:                    os.Stdin,
+		BackupDir:               units.BackupDir,
+		ApplySandbox:            ApplyLandlock,
+		Audit:                   os.Stderr,
+		Now:                     time.Now,
+		ReapOrphans:             true,
+		PowerDecision:           DefaultPowerDecision,
+		HoldTermWhileRequesting: true,
 	}
 }
 
@@ -242,6 +244,10 @@ type server struct {
 	// unfinished the packages dpkg left part-way, for the audit line.
 	applied    *auditApplied
 	unfinished []string
+	// powerState is what became of priv_power's action ("not_delivered",
+	// "cancelled", "refused", "unconfirmed", "requested"), powerAt its
+	// scheduled time and powerDetail why it was refused, for the audit line.
+	powerState, powerAt, powerDetail string
 }
 
 // Serve handles one connection and returns the process exit code: 0 when a

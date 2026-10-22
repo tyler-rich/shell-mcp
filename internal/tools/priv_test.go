@@ -333,6 +333,7 @@ func privReplies(r map[string]gateReply) map[string]gateReply {
 	r["priv_list_backups"] = gateReply{data: fakeBackups}
 	r["priv_delete_preview"] = gateReply{data: fakeDeletePreview(shaDel)}
 	r["priv_pkg_install_preview"] = gateReply{data: fakePkgPreview("install", shaPK)}
+	r["priv_power_cancel"] = gateReply{data: `{"cancelled":true,"request_id":"0b5c0000-0000-4000-8000-000000000042","action":"reboot","scheduled_at":"2026-10-22T12:01:00Z"}`}
 	return r
 }
 

@@ -100,6 +100,9 @@ var privTiers = map[string]policy.Tier{
 	protocol.OpPrivPkgRemovePreview: policy.TierRead, protocol.OpPrivPkgUpdateIndexPreview: policy.TierRead,
 	protocol.OpPrivDelete: policy.TierDestructive, protocol.OpPrivPkgRemove: policy.TierDestructive,
 	protocol.OpPrivPower: policy.TierDestructive,
+	// The power preview, and the cancel: read tier so that it is never
+	// approval-gated, although it changes the host (handoff P-13).
+	protocol.OpPrivPowerPreview: policy.TierRead, protocol.OpPrivPowerCancel: policy.TierRead,
 }
 
 func (s *server) dispatch() *protocol.Response {

@@ -201,7 +201,13 @@ func TestEveryToolFollowsConventions(t *testing.T) {
 				t.Fatalf("description breaks the conventions: %q", d)
 			}
 			a := def.Annotations
-			if r.Tier == TierRead && (!a.ReadOnlyHint || a.DestructiveHint == nil || *a.DestructiveHint || !a.IdempotentHint || a.OpenWorldHint == nil || !*a.OpenWorldHint) {
+			// The one read-tier tool that changes the host (TOOLS.md, power):
+			// never gated, not read-only, not destructive.
+			if def.Name == "shell_priv_cancel_power" {
+				if a.ReadOnlyHint || a.DestructiveHint == nil || *a.DestructiveHint || !a.IdempotentHint {
+					t.Fatalf("cancel annotations: %+v", a)
+				}
+			} else if r.Tier == TierRead && (!a.ReadOnlyHint || a.DestructiveHint == nil || *a.DestructiveHint || !a.IdempotentHint || a.OpenWorldHint == nil || !*a.OpenWorldHint) {
 				t.Fatalf("read-tier annotations: %+v", a)
 			}
 			in, ok := def.InputSchema.(*jsonschema.Schema)

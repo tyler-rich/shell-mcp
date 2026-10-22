@@ -195,11 +195,16 @@ type auditLine struct {
 	Unfinished       []string      `json:"unfinished,omitzero"`
 	Stopped          string        `json:"stopped,omitzero"`
 	AnsweredEarly    bool          `json:"answered_early,omitzero"`
-	ReapError        string        `json:"reap_error,omitempty"`
-	Outcome          string        `json:"outcome"`
-	Check            string        `json:"check,omitempty"`
-	Detail           string        `json:"detail,omitempty"`
-	DurationMS       int64         `json:"duration_ms"`
+	// Power is what became of priv_power's action (not_delivered, cancelled,
+	// refused, unconfirmed, requested) and ScheduledAt its time; Detail then
+	// says why it was refused (PRIVILEGED §8).
+	Power       string `json:"power,omitzero"`
+	ScheduledAt string `json:"scheduled_at,omitzero"`
+	ReapError   string `json:"reap_error,omitempty"`
+	Outcome     string `json:"outcome"`
+	Check       string `json:"check,omitempty"`
+	Detail      string `json:"detail,omitempty"`
+	DurationMS  int64  `json:"duration_ms"`
 }
 
 func (s *server) writeAudit(pri int, l *auditLine) {
@@ -247,7 +252,10 @@ func (s *server) auditRequest(resp *protocol.Response) {
 	l := &auditLine{PeerUID: &uid, PeerPID: &pid, Outcome: "ok", BackupIDs: s.ids(), BackupIDsDiscarded: s.discarded, Changed: s.changed,
 		ChangedTotal: s.changedTotal, ChangedTruncated: s.changedTruncated, Removed: s.removed, RemovedTotal: s.removedTotal,
 		RemovedTruncated: s.removedTruncated, SetAside: s.setAside, HungUp: s.hungUp, ReapError: auditText(s.reapErr),
-		Unfinished: s.unfinished, Stopped: s.stopped, AnsweredEarly: s.answered}
+		Unfinished: s.unfinished, Stopped: s.stopped, AnsweredEarly: s.answered, Power: s.powerState, ScheduledAt: s.powerAt}
+	if s.powerDetail != "" {
+		l.Detail = auditText(s.powerDetail)
+	}
 	if a := s.applied; a != nil {
 		l.Applied, l.AppliedTotal, l.AppliedTruncated = a, a.total, a.truncated
 	}

@@ -18,6 +18,7 @@ import (
 func init() {
 	alwaysGated = append(alwaysGated, "shell_priv_reboot_host")
 	ceilingCallArgs["shell_priv_reboot_host"] = map[string]any{"action": "reboot"}
+	ceilingCallArgs["shell_priv_cancel_power"] = map[string]any{}
 }
 
 const (
