@@ -3073,3 +3073,8 @@ CI before (PR #40's last run, `e580253`): `internal/privd/ops` 456.2 s (ubuntu-2
 - **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0 (unchanged).
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+
+**2026-10-22 — PR #42 follow-up: the first CI run.**
+- **First run (head `040cf36`):** every Go job green (`ubuntu-24.04`: `LANDLOCK_PATH=psx kernel_abi=8 effective_abi=7`, forced; `ubuntu-26.04`: `LANDLOCK_PATH=tsync kernel_abi=8 effective_abi=8`, and its forced step `psx`); `internal/privd/ops` 131 s and 130 s, `internal/privd/pkg` 7 s and 8 s. e2e-host red on two of my tests, both test-side; every other package test green, among them `TestPackageChangedBeforeRun`, `TestPackageToolApproval` and the `early`, `sigint` and `kill` stop points.
+  - `TestPackageUpgradeExactList`: `exists` at the recompute. apt's `file:` method links a flat repository's index into its lists, so a repository written in place changes what apt resolves at once, before the hook's stage; `TestPackageChangedBeforeRun` had passed through the recompute rather than the stage it targets. The test build's hook now moves a repository staged in `/srv/e2e-apt-next` into place and then updates the index, and the hook cases assert the step that refused (the pinned simulation) or the exact approved run.
+  - `TestPackageStopPoints/drop`: the client hung up 3 s after connecting, which on the runner can fall inside the two simulations; then nothing runs (`timeout`, "nothing was changed", as specified) and no `ok` line comes. It now hangs up at 6 s, while the 8 s postinst runs; the other cases use a 6 s request deadline for the same reason.
