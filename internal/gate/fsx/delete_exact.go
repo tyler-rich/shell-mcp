@@ -421,8 +421,8 @@ func (f *FS) walkDir(pl *plan, dir *os.Root, dfd int, top *ident, node *planEntr
 		if strings.HasPrefix(name, deleteTempPrefix) {
 			return errSetAside()
 		}
-		if err := f.stagedRefused(name); err != nil {
-			return err
+		if serr := f.stagedRefused(name); serr != nil {
+			return serr
 		}
 		if err := f.checkPath(e.lp, true); err != nil {
 			return err
