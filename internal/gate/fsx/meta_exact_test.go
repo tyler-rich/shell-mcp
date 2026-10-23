@@ -583,13 +583,12 @@ func decodeMetaEntry(b []byte) (path string, id ident, rest []byte, ok bool) {
 		return "", ident{}, nil, false
 	}
 	path, b = string(b[k:k+int(n)]), b[k+int(n):] //nolint:gosec // G115: n is at most len(b)
-	if len(b) < 4+8*3+4*3+1 {
+	if len(b) < 4+8*2+4*3+1 {
 		return "", ident{}, nil, false
 	}
 	id.typ, b = binary.BigEndian.Uint32(b), b[4:]
 	id.dev, b = binary.BigEndian.Uint64(b), b[8:]
 	id.ino, b = binary.BigEndian.Uint64(b), b[8:]
-	id.mnt, b = binary.BigEndian.Uint64(b), b[8:]
 	id.uid, b = binary.BigEndian.Uint32(b), b[4:]
 	id.gid, b = binary.BigEndian.Uint32(b), b[4:]
 	id.perm, b = binary.BigEndian.Uint32(b), b[4:]
@@ -609,6 +608,42 @@ func decodeMetaEntry(b []byte) (path string, id ident, rest []byte, ok bool) {
 	return "", ident{}, nil, false
 }
 
+// TestMetaHashIgnoresMountID: two plans of the same tree that differ only
+// in their entries' mount ids hash the same. The mount id (statx
+// stx_mnt_id) is local to the mount namespace that read it: every helper
+// instance runs in a mount namespace of its own, whose mounts get new ids
+// (the lowest free ones, freed only as other namespaces are torn down), so
+// the preview's instance and the operation's, or the approval's preview
+// and the re-call's, can see different ids for the same unchanged tree.
+// Any other field still changes the hash.
+func TestMetaHashIgnoresMountID(t *testing.T) {
+	uid := uint32(1001)
+	plan := func(mnt uint64, edit func(*ident)) *metaPlan {
+		top := &metaNode{lp: "/srv/app/data", id: ident{dev: 2049, ino: 10, mnt: mnt, typ: unix.S_IFDIR, perm: 0o755, hasBtime: true, btime: unix.StatxTimestamp{Sec: 1, Nsec: 2}}}
+		sub := &metaNode{lp: "/srv/app/data/sub", id: ident{dev: 2049, ino: 11, mnt: mnt, typ: unix.S_IFDIR, perm: 0o755}}
+		file := &metaNode{lp: "/srv/app/data/sub/a.conf", id: ident{dev: 2049, ino: 12, mnt: mnt, typ: unix.S_IFREG, perm: 0o640}}
+		if edit != nil {
+			edit(&file.id)
+		}
+		sub.kids = []*metaNode{file}
+		top.kids = []*metaNode{sub}
+		return &metaPlan{ch: MetaChange{Op: MetaChown, UID: &uid}, recursive: true, top: top}
+	}
+	const bind = "invented policy hash"
+	want := metaHash(plan(31, nil), bind)
+	for _, mnt := range []uint64{0, 32, 1 << 40} {
+		if got := metaHash(plan(mnt, nil), bind); got != want {
+			t.Errorf("mount id %d: hash %s, want %s (the same tree)", mnt, got, want)
+		}
+	}
+	if metaHash(plan(31, func(i *ident) { i.ino++ }), bind) == want {
+		t.Error("an entry replaced by another inode hashes the same")
+	}
+	if metaHash(plan(31, func(i *ident) { i.perm = 0o600 }), bind) == want {
+		t.Error("an entry chmod-ed hashes the same")
+	}
+}
+
 // TestMetaEntryEncodingCoversEveryField: each field of an entry changes its
 // hash input (uid and gid included, which an unprivileged test cannot
 // change on a real file).
@@ -616,7 +651,7 @@ func TestMetaEntryEncodingCoversEveryField(t *testing.T) {
 	base := ident{dev: 1, ino: 2, mnt: 3, typ: unix.S_IFREG, perm: 0o640, uid: 5, gid: 6, hasBtime: true, btime: unix.StatxTimestamp{Sec: 7, Nsec: 8}}
 	enc := string(appendMetaEntry(nil, "/srv/app/x", &base))
 	for name, edit := range map[string]func(*ident){
-		"dev": func(i *ident) { i.dev++ }, "ino": func(i *ident) { i.ino++ }, "mnt": func(i *ident) { i.mnt++ },
+		"dev": func(i *ident) { i.dev++ }, "ino": func(i *ident) { i.ino++ },
 		"type": func(i *ident) { i.typ = unix.S_IFDIR }, "mode": func(i *ident) { i.perm = 0o600 },
 		"uid": func(i *ident) { i.uid++ }, "gid": func(i *ident) { i.gid++ },
 		"btime": func(i *ident) { i.btime.Nsec++ }, "no btime": func(i *ident) { i.hasBtime = false; i.btime = unix.StatxTimestamp{} },
@@ -635,6 +670,13 @@ func TestMetaEntryEncodingCoversEveryField(t *testing.T) {
 	id.size, id.ctime.Sec = 99, 99
 	if string(appendMetaEntry(nil, "/srv/app/x", &id)) != enc {
 		t.Error("size or change time is in the encoding")
+	}
+	// Nor is the mount id: it is local to the mount namespace that read it,
+	// and every helper instance has its own (handoff D4, as amended).
+	id = base
+	id.mnt = 99
+	if string(appendMetaEntry(nil, "/srv/app/x", &id)) != enc {
+		t.Error("the mount id is in the encoding")
 	}
 }
 
@@ -921,6 +963,7 @@ func FuzzMetaEntryEncoding(f *testing.F) {
 		}
 		b := appendMetaEntry(nil, path, &id)
 		b = appendMetaEntry(b, path2, &id)
+		id.mnt = 0 // never encoded (handoff D4, as amended)
 		p, got, rest, ok := decodeMetaEntry(b)
 		if !ok || p != path || got != id {
 			t.Fatalf("first entry: %q %+v ok %v; want %q %+v", p, got, ok, path, id)
