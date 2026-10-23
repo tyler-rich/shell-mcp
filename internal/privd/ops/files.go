@@ -297,6 +297,11 @@ func (s *server) move(raw jsontext.Value) (data any, warns []string, failure err
 	}
 	s.precondition = a.ExpectedDestinationSHA256
 	r, err := s.fs.MoveExpecting(a.Source, a.Destination, a.Overwrite, a.ExpectedDestinationSHA256)
+	// What a move could not put back under the source's name (handoff N-17).
+	var fe *fsx.Error
+	if errors.As(err, &fe) {
+		s.setAside = fe.SetAside
+	}
 	if err != nil {
 		return nil, nil, err
 	}

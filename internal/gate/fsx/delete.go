@@ -14,12 +14,15 @@ import (
 const previewFirst = 50
 
 // treeEntry is one entry visited by walkTree: its logical and real paths,
-// its name in dir (the verified os.Root of its parent directory), and its
-// lstat information.
+// its name in dir (the verified os.Root of its parent directory), its
+// lstat information, and in the helper (Config.GuardMovedIn) the moved
+// tree's directories from its top down to dir, each read by statx on the
+// descriptor the walk opened (the move rule, move_rule.go).
 type treeEntry struct {
 	lp, rp, name string
 	info         fs.FileInfo
 	dir          *os.Root
+	tree         []ChainDir
 }
 
 // walkTree visits every entry beneath dir (pre-order, not dir itself).
@@ -27,8 +30,10 @@ type treeEntry struct {
 // and the protected set (the walk serves writes), subdirectories are opened
 // as verified sub-roots and never through symlinks, and depth is bounded.
 // Each directory is read completely before its entries are visited, so a
-// visitor may remove entries.
-func (f *FS) walkTree(l *loc, dir *os.Root, logical, dirReal string, depth int, visit func(e *treeEntry) error) error {
+// visitor may remove entries. tree is the chain of directories down to dir
+// (the helper's move rule); in the helper each subdirectory is added to it
+// as it is opened, after its mode is checked (moveDirMode).
+func (f *FS) walkTree(l *loc, dir *os.Root, logical, dirReal string, depth int, tree []ChainDir, visit func(e *treeEntry) error) error {
 	if depth > maxTreeDepth {
 		return errf(protocol.CodeTooLarge, "tree is deeper than %d levels", maxTreeDepth)
 	}
@@ -49,7 +54,7 @@ func (f *FS) walkTree(l *loc, dir *os.Root, logical, dirReal string, depth int, 
 		if err != nil {
 			return mapErr(err)
 		}
-		if err := visit(&treeEntry{lp: lp, rp: rp, name: name, info: info, dir: dir}); err != nil {
+		if err := visit(&treeEntry{lp: lp, rp: rp, name: name, info: info, dir: dir, tree: tree}); err != nil {
 			return err
 		}
 		if info.IsDir() {
@@ -57,7 +62,14 @@ func (f *FS) walkTree(l *loc, dir *os.Root, logical, dirReal string, depth int, 
 			if err != nil {
 				return err
 			}
-			err = f.walkTree(l, sub, lp, subReal, depth+1, visit)
+			subTree := tree
+			if f.cfg.GuardMovedIn {
+				if subTree, err = f.treeDir(sub, lp, tree); err != nil {
+					_ = sub.Close()
+					return err
+				}
+			}
+			err = f.walkTree(l, sub, lp, subReal, depth+1, subTree, visit)
 			_ = sub.Close()
 			if err != nil {
 				return err

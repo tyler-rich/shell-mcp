@@ -175,7 +175,8 @@ type auditLine struct {
 	Removed          []string `json:"removed,omitempty"`
 	RemovedTotal     int      `json:"removed_total,omitempty"`
 	RemovedTruncated bool     `json:"removed_truncated,omitempty"`
-	// SetAside is an entry a delete left set aside and did not remove.
+	// SetAside is an entry a delete left set aside and did not remove, or
+	// one a move left staged or could not put back under its name.
 	SetAside string `json:"set_aside,omitempty"`
 	// HungUp is set when the gate hung up while priv_exec ran its command
 	// (stopped before the line was written) or before it started it.

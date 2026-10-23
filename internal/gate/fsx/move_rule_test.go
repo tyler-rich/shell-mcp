@@ -83,7 +83,7 @@ func TestMoveRuleFile(t *testing.T) {
 		{"closed to closed", true, 0o755, 0o755, 0o600, false, true, ""},
 		{"(a) into a world-writable directory", true, 0o755, 0o777, 0o600, false, false, "dst"},
 		{"(a) into a group-writable directory", true, 0o755, 0o770, 0o600, false, false, "dst"},
-		{"(a) into a sticky world-writable directory", true, 0o755, 0o1777, 0o600, false, false, "dst"},
+		{"(a) into a sticky world-writable directory", true, 0o755, os.ModeSticky | 0o777, 0o600, false, false, "dst"},
 		{"(a) over a file in a world-writable directory", true, 0o755, 0o777, 0o600, true, false, "dst"},
 		{"(b) out of a world-writable directory", true, 0o777, 0o755, 0o600, false, false, "src"},
 		{"(b) out of a group-writable directory", true, 0o770, 0o755, 0o600, false, false, "src"},
@@ -225,8 +225,8 @@ func TestMoveDirectoryModes(t *testing.T) {
 		{"world-writable", 0o777, 0o755, 0, false, "top", "0777"},
 		{"world-writable, not readable by others", 0o753, 0o755, 0, false, "top", "0753"},
 		{"group-writable", 0o775, 0o755, 0, false, "top", "0775"},
-		{"sticky", 0o1755, 0o755, 0, false, "top", "1755"},
-		{"setgid", 0o2755, 0o755, 0, false, "top", "2755"},
+		{"sticky", os.ModeSticky | 0o755, 0o755, 0, false, "top", "1755"},
+		{"setgid", os.ModeSetgid | 0o755, 0o755, 0, false, "top", "2755"},
 		{"beyond modes.max", 0o755, 0o750, 0o750, false, "top", "0755"},
 		{"an inner directory world-writable", 0o755, 0o777, 0, false, "inner", "0777"},
 		{"an inner directory beyond modes.max", 0o750, 0o755, 0o750, false, "inner", "0755"},
@@ -470,4 +470,64 @@ func TestMoveStoppedAfterStage(t *testing.T) {
 	if read(t, dst) != "precious\n" {
 		t.Fatal("not moved after recovery")
 	}
+}
+
+// FuzzMoveDirMode: a moved directory's mode is refused exactly when it has
+// a bit priv_mkdir could not create (beyond modes.max, group- or
+// world-writable, setuid, setgid or sticky), and the refusal names it.
+func FuzzMoveDirMode(f *testing.F) {
+	f.Add(uint16(0o755), uint16(0o755))
+	f.Add(uint16(0o2755), uint16(0o755))
+	f.Add(uint16(0o750), uint16(0o700))
+	f.Add(uint16(0o777), uint16(0))
+	f.Fuzz(func(t *testing.T, perm, maxBits uint16) {
+		p := uint32(perm) & 0o7777
+		fs := New(&Config{})
+		allowed := uint32(0o755)
+		if maxBits != 0 {
+			m := os.FileMode(maxBits & 0o777)
+			fs.cfg.ModesMax = &m
+			allowed &= uint32(m)
+		}
+		err := fs.moveDirMode("/srv/r/d", p)
+		want := p&^allowed != 0
+		if (err != nil) != want {
+			t.Fatalf("mode %04o, allowed %04o: refused %v", p, allowed, err)
+		}
+		if err != nil && !strings.Contains(err.Error(), fmt.Sprintf("%04o", p)) {
+			t.Fatalf("the refusal does not name the mode %04o: %v", p, err)
+		}
+	})
+}
+
+// FuzzStagedComponent: a path is refused in the helper exactly when one of
+// its components starts with the staging prefix; relTo inverts join.
+func FuzzStagedComponent(f *testing.F) {
+	f.Add("/srv/r/.shell-mcp-move-0123", "x")
+	f.Add("/srv/r/a/b", ".shell-mcp-move-")
+	f.Add("/srv/r", "a/.shell-mcp-movex")
+	f.Fuzz(func(t *testing.T, base, rel string) {
+		p := base + "/" + rel
+		want := false
+		for _, c := range strings.Split(p, "/") {
+			if strings.HasPrefix(c, stagePrefix) {
+				want = true
+			}
+		}
+		if hasStagedComponent(p) != want {
+			t.Fatalf("%q: staged %v", p, !want)
+		}
+		helper := New(&Config{GuardMovedIn: true})
+		if (helper.stagedRefused(p) != nil) != want {
+			t.Fatalf("%q: the helper's refusal disagrees", p)
+		}
+		if New(&Config{}).stagedRefused(p) != nil {
+			t.Fatalf("%q: the gate refuses it", p)
+		}
+		if b := filepath.Clean(base); filepath.IsAbs(b) && rel != "" && !strings.HasPrefix(rel, "/") && filepath.Clean(rel) == rel && rel != "." && !strings.HasPrefix(rel, "..") {
+			if got := relTo(b, join(b, rel)); got != rel {
+				t.Fatalf("relTo(%q, join(%q, %q)) = %q", b, b, rel, got)
+			}
+		}
+	})
 }

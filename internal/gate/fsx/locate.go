@@ -182,6 +182,9 @@ func (f *FS) locate(p string, write bool) (*loc, error) {
 	if err := pathx.CheckClean(p); err != nil {
 		return nil, errf(protocol.CodeBadRequest, "path must be absolute and clean: %v", err)
 	}
+	if err := f.stagedRefused(p); err != nil {
+		return nil, err
+	}
 	root, ok := pathx.Longest(f.roots(write), p)
 	if !ok {
 		if write {
@@ -229,6 +232,10 @@ func (f *FS) locate(p string, write bool) (*loc, error) {
 	if e := f.checkReal(l, l.targetReal(), write); e != nil {
 		l.close()
 		return nil, e
+	}
+	if err := f.stagedRefused(l.targetReal()); err != nil {
+		l.close()
+		return nil, err
 	}
 	return l, nil
 }

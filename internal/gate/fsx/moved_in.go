@@ -381,5 +381,8 @@ func (f *FS) CheckWritable(p string) error {
 	if _, ok := pathx.Longest(f.cfg.WriteRoots, p); !ok {
 		return errf(protocol.CodePathDenied, "path is outside the policy's write roots")
 	}
+	if err := f.stagedRefused(p); err != nil {
+		return err
+	}
 	return f.checkPath(p, true).orNil()
 }
