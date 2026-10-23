@@ -182,8 +182,9 @@ func TestPrivOwnerRule(t *testing.T) {
 // root-only directory elsewhere in the root, again and again, while the
 // helper is asked to create files beneath it: without an owner, as root,
 // and as example-app. Root's are always refused; example-app's either land
-// in example-app's own directory, as example-app's, or are refused; nothing
-// ever lands in the root-only directory.
+// in example-app's own directory, as example-app's (verify_failed when the
+// racer moved it before the read-back), or are refused; nothing ever lands
+// in the root-only directory.
 func TestPrivOwnerRuleRace(t *testing.T) {
 	race := "/etc/example-app/e2e-owner-race"
 	vault := "/etc/example-app/e2e-owner-vault"
@@ -230,6 +231,11 @@ func TestPrivOwnerRuleRace(t *testing.T) {
 			r, _ := gate(t, svcShell, "priv_write_file", args)
 			switch {
 			case r.OK && c.own:
+				written++
+			case c.own && r.code() == "verify_failed":
+				// Committed in example-app's own directory, which the racer
+				// then moved before the read-back re-opened the file: never
+				// a success; the ownership check below covers the file.
 				written++
 			case r.OK:
 				_ = stdin.Close()
