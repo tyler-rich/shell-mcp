@@ -124,6 +124,8 @@ type Options struct {
 	InjectDeleteStep func(fsx.DeleteStep, string)
 	// InjectStopAfterSetAside is passed to fsx; tests only.
 	InjectStopAfterSetAside func(string) error
+	// InjectAfterStage is passed to fsx (a move's staging); tests only.
+	InjectAfterStage func(string) error
 	// DisableCommitReport leaves fsx's OnCommit unset, as a mutating site
 	// that never reports would; tests only.
 	DisableCommitReport bool
