@@ -703,13 +703,17 @@ func TestPrivMovedIn(t *testing.T) {
 	if readFile(t, public) != "public\n" {
 		t.Fatal("a refused overwrite changed the file")
 	}
-	var w writeOut
-	f.ok("priv_write_file", m{"path": public, "content_b64": b64("new\n"), "owner": "tester", "group": "tester"}, &w)
-	if len(w.BackupIDs) != 1 || readFile(t, public) != "new\n" {
-		t.Fatalf("an explicit owner and group: %+v", w)
+	// An explicit owner and group pass only where that owner could have
+	// made the file itself; under a world-writable directory no owner does
+	// (rule R, handoff N-8).
+	f.failMsg("priv_write_file", m{"path": public, "content_b64": b64("new\n"), "owner": "tester", "group": "tester"}, "path_denied", drop)
+	if readFile(t, public) != "public\n" {
+		t.Fatal("a refused overwrite changed the file")
 	}
-	// A restore whose recorded owner would land under that directory.
-	f.failMsg("priv_restore_preview", m{"id": w.BackupIDs[0]}, "path_denied", drop)
+	// A restore whose recorded owner would land under that directory: the
+	// backup a delete (no chain rule) wrote.
+	_, del := f.deleteBound(public, false)
+	f.failMsg("priv_restore_preview", m{"id": del.BackupIDs[0]}, "path_denied", drop)
 	// A same-parent directory swap inside a read root.
 	app := filepath.Join(f.read, "app")
 	gatetest.Mkdir(t, filepath.Join(app, "secrets"), 0o755)

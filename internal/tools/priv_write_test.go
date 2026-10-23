@@ -31,7 +31,7 @@ const (
 	privSrcSt = `{"path":"` + privSrc + `","name":"app.conf.new","type":"file","size":4,"mode":"0600","uid":0,"gid":0,"owner":"root","group":"root","mtime":"2026-10-01T00:00:00Z"}`
 	privDirSt = `{"path":"/etc/example-app","name":"example-app","type":"dir","size":4096,"mode":"0755","uid":0,"gid":0,"mtime":"2026-10-01T00:00:00Z"}`
 	privLink  = `{"path":"` + privConf + `","name":"app.conf","type":"symlink","size":5,"mode":"0777","uid":0,"gid":0,"mtime":"2026-10-01T00:00:00Z","link_target":"other"}`
-	privCheck = `{"written":true,"bytes":11,"fits":true,"store_bytes":2048,"max_store_bytes":1073741824}`
+	privCheck = `{"written":true,"bytes":11,"fits":true,"store_bytes":2048,"max_store_bytes":1073741824,"owner_rule":{"verdict":"any"}}`
 	privWrote = `{"path":"` + privConf + `","sha256":"` + shaNew + `","old_sha256":"` + shaOld + `","bytes":4,"created":false,"mode":"0640",
 "lines_old":1,"lines_new":1,"owner_preserved":true,"verified":true,"uid":0,"gid":1001,"group":"example-app","backup_ids":["20261001T000000Z-0123456789abcdef"]}`
 	privCopied = `{"path":"` + privConf + `","sha256":"` + shaNew + `","old_sha256":"` + shaDest + `","bytes":4,"created":false,"mode":"0640",
@@ -528,5 +528,5 @@ func TestPrivWriteDescriptions(t *testing.T) {
 // says nothing would be backed up.
 func privAbsent(g *recordingGate, p string) {
 	g.setPath("priv_stat", p, privNotFound())
-	g.setPath("priv_backup_check", p, gateReply{data: `{"written":false,"bytes":0,"fits":true,"store_bytes":2048,"max_store_bytes":1073741824}`})
+	g.setPath("priv_backup_check", p, gateReply{data: `{"written":false,"bytes":0,"fits":true,"store_bytes":2048,"max_store_bytes":1073741824,"owner_rule":{"verdict":"any"}}`})
 }

@@ -150,6 +150,20 @@ func (f *FS) MovedInBy(chain []ChainDir, owner uint32) *ChainDir {
 	return nil
 }
 
+// OwnerVerdict is which owners a file may have under a chain (rule R):
+// any owner, only UID, or none (Any false and UID nil). Dir is the first
+// directory of the chain that is not closed, when there is one.
+type OwnerVerdict struct {
+	Any bool
+	UID *uint32
+	Dir *ChainDir
+}
+
+// OwnerVerdictOf is the verdict for chain. (Stub: not implemented yet.)
+func (f *FS) OwnerVerdictOf(chain []ChainDir) OwnerVerdict {
+	return OwnerVerdict{Any: true}
+}
+
 // MovedInWhy says why d is open to another account, for messages.
 func (f *FS) MovedInWhy(d *ChainDir, owner uint32) string {
 	var r []string
