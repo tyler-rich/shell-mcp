@@ -129,6 +129,12 @@ type Config struct {
 	// neither group- nor world-writable, since the command looks the string
 	// up again itself. The helper sets it; the gate does not.
 	GuardExecPaths bool
+	// ExplicitOwner sets the owner and group of every inode fsx creates
+	// explicitly (fchown of both ids): the ones given, else an existing
+	// file's, else the process's own, so a setgid parent never chooses the
+	// group (handoff N-8; PRIVILEGED §6). The helper sets it; the gate does
+	// not.
+	ExplicitOwner bool
 	// InjectMetaStep, when non-nil, is called at each point of ApplyMeta's
 	// pass with the logical path of the entry concerned (the target's for
 	// MetaStepAfterCompare). Tests only; production code never sets it.

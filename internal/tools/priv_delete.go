@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"reflect"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -197,6 +198,15 @@ func (d *Deps) privDeletePreview(ctx context.Context, in privDeleteIn, target st
 	backup := map[string]any{"written": x.Backup.Written, "bytes": x.Backup.Bytes}
 	if x.Backup.Kind != "" {
 		backup["kind"] = x.Backup.Kind
+	}
+	// The helper's warning that the tools could not restore this backup
+	// (handoff N-9), on the approval page and bound with it.
+	if len(env.Warnings) > 0 {
+		ws := make([]string, len(env.Warnings))
+		for i, w := range env.Warnings {
+			ws[i] = d.redactor().String(w)
+		}
+		backup["restore"] = strings.Join(ws, "; ")
 	}
 	value := map[string]any{"path": x.Path, "recursive": in.Recursive, "type": x.Type, "entries": x.Entries, "bytes": x.Bytes,
 		"first": x.First, "truncated": x.Truncated || len(x.First) < x.Entries, "backup": backup, "preview_sha256": hash}

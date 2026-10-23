@@ -75,37 +75,109 @@ func willSet(requested, otherwise string) string {
 	return otherwise
 }
 
-// backupCheckWire is priv_backup_check's data (P-11).
+// backupCheckWire is priv_backup_check's data (P-11, P-14).
 type backupCheckWire struct {
-	Written       bool  `json:"written"`
-	Bytes         int64 `json:"bytes"`
-	Fits          bool  `json:"fits"`
-	StoreBytes    int64 `json:"store_bytes"`
-	MaxStoreBytes int64 `json:"max_store_bytes"`
+	Written       bool          `json:"written"`
+	Bytes         int64         `json:"bytes"`
+	Fits          bool          `json:"fits"`
+	StoreBytes    int64         `json:"store_bytes"`
+	MaxStoreBytes int64         `json:"max_store_bytes"`
+	OwnerRule     ownerRuleWire `json:"owner_rule"`
+}
+
+// ownerRuleWire is rule R's verdict for a path (P-14): which owners a file
+// the helper leaves there may have. verdict is any, only (uid, and name
+// when it is on the privileged policy's owners.users) or none; dir and why
+// name the first directory another account could write or owns.
+type ownerRuleWire struct {
+	Verdict string  `json:"verdict"`
+	UID     *uint32 `json:"uid,omitempty"`
+	Name    string  `json:"name,omitempty"`
+	Dir     string  `json:"dir,omitempty"`
+	Why     string  `json:"why,omitempty"`
+}
+
+// allowsUID says whether a file of uid may be left there.
+func (r *ownerRuleWire) allowsUID(uid uint32) bool {
+	return r.Verdict == "any" || r.Verdict == "only" && r.UID != nil && *r.UID == uid
+}
+
+// allowsName says whether a file given the owner name may be left there.
+func (r *ownerRuleWire) allowsName(name string) bool {
+	return r.Verdict == "any" || r.Verdict == "only" && r.Name != "" && r.Name == name
+}
+
+// refuse is the preview's refusal of what the helper would refuse under
+// rule R (handoff N-8): what names the file, its owner and why.
+func (r *ownerRuleWire) refuse(what, more string) *envelope.Error {
+	hint := "root's file tools leave no file there"
+	if r.Verdict == "only" && r.UID != nil {
+		who := fmt.Sprintf("uid %d", *r.UID)
+		if r.Name != "" {
+			who = r.Name + " (" + who + ")"
+		}
+		hint = "only " + who + ", the account that owns that directory, may own a file there"
+		if r.Name != "" {
+			hint += "; give owner " + r.Name
+		}
+	}
+	return envelope.Errorf(protocol.CodePathDenied, "%s is not left there as root: the directory %s is %s, so another account could move it elsewhere "+
+		"and keep what it could not have made itself; %s%s; nothing was requested", what, r.Dir, r.Why, hint, more)
 }
 
 // backupPreview asks the helper whether an overwrite of p would write a
-// backup and whether it fits the store's cap. A backup that would not fit
-// refuses the preview (backup_failed), so no approval is requested for an
-// operation the helper would refuse; the store's moving byte counts are in
-// the message only, never in the preview (which must hash the same at the
-// re-call).
-func (d *Deps) backupPreview(ctx context.Context, target, p string, acc *policyAcc) (map[string]any, *envelope.Error) {
+// backup and whether it fits the store's cap, and which owners a file there
+// may have (P-14). A backup that would not fit refuses the preview
+// (backup_failed), so no approval is requested for an operation the helper
+// would refuse; the store's moving byte counts are in the message only,
+// never in the preview (which must hash the same at the re-call).
+func (d *Deps) backupPreview(ctx context.Context, target, p string, acc *policyAcc) (map[string]any, *ownerRuleWire, *envelope.Error) {
 	c, _, pol, e := previewFetch[backupCheckWire](ctx, d, target, protocol.OpPrivBackupCheck, pathWire{Path: p}, false)
 	acc.add(pol)
 	if e != nil {
-		return nil, e
+		return nil, nil, e
 	}
 	if c.Written && !c.Fits {
 		if c.Bytes > maxPrivBackupBytes {
-			return nil, envelope.Errorf(protocol.CodeBackupFailed,
+			return nil, nil, envelope.Errorf(protocol.CodeBackupFailed,
 				"what would be replaced exceeds the helper's %d MiB backup limit; nothing was requested", maxPrivBackupBytes>>20)
 		}
-		return nil, envelope.Errorf(protocol.CodeBackupFailed,
+		return nil, nil, envelope.Errorf(protocol.CodeBackupFailed,
 			"the backup store is full (%d of %d bytes used), so this operation's backup would not fit; nothing was requested; remove old backups on the host or raise backups.max_store_bytes",
 			c.StoreBytes, c.MaxStoreBytes)
 	}
-	return map[string]any{"written": c.Written, "bytes": c.Bytes}, nil
+	return map[string]any{"written": c.Written, "bytes": c.Bytes}, &c.OwnerRule, nil
+}
+
+// checkOwnerRule refuses, before an approval is requested, a write or copy
+// the helper would refuse under rule R (handoff N-6, N-8): cur is the
+// existing destination's stat (nil when there is none); owner and group are
+// what the request gives (a copy gives none).
+func checkOwnerRule(r *ownerRuleWire, cur *Entry, owner, group string, isCopy bool) *envelope.Error {
+	switch r.Verdict {
+	case "any":
+		return nil
+	case "only", "none":
+	default:
+		return envelope.Errorf("internal", "the helper's backup check reports no owner rule (a helper older than this server?); nothing was requested")
+	}
+	if cur != nil && !r.allowsUID(cur.UID) {
+		if isCopy {
+			return r.refuse("a copy over the destination, which keeps its current owner,", "")
+		}
+		if owner == "" || group == "" {
+			return r.refuse("the file, keeping its current owner,", "; or give both an owner and a group that may")
+		}
+	}
+	switch {
+	case isCopy && cur == nil:
+		return r.refuse("a new copy, which is root's,", "")
+	case owner != "" && !r.allowsName(owner):
+		return r.refuse("a file of "+owner, "")
+	case owner == "" && cur == nil:
+		return r.refuse("a new file without an owner, which is root's,", "")
+	}
+	return nil
 }
 
 // privFilePreview is a regular file's state with its content hash: its
@@ -353,8 +425,16 @@ func (d *Deps) privWritePreview(ctx context.Context, in *privWriteIn, target str
 			return nil, e
 		}
 	}
-	backup, e := d.backupPreview(ctx, target, in.Path, &acc)
+	backup, rule, e := d.backupPreview(ctx, target, in.Path, &acc)
 	if e != nil {
+		return nil, e
+	}
+	// Rule R (P-14): refused here what the helper would refuse.
+	var existing *Entry
+	if cur != nil {
+		existing = st
+	}
+	if e := checkOwnerRule(rule, existing, in.Owner, in.Group, false); e != nil {
 		return nil, e
 	}
 	value["backup"] = backup
@@ -522,7 +602,7 @@ func (d *Deps) privMkdirPreview(ctx context.Context, in *privMkdirIn, target str
 	if len(create) > 0 {
 		check = create[0]
 	}
-	if _, e := d.backupPreview(ctx, target, check, &acc); e != nil {
+	if _, _, e := d.backupPreview(ctx, target, check, &acc); e != nil {
 		return nil, e
 	}
 	return acc.result(map[string]any{
@@ -623,9 +703,19 @@ func (d *Deps) privSrcDstPreview(ctx context.Context, in *privSrcDstIn, target s
 		}
 		delete(cur, "lines")
 	}
-	backup, e := d.backupPreview(ctx, target, in.Destination, &acc)
+	backup, rule, e := d.backupPreview(ctx, target, in.Destination, &acc)
 	if e != nil {
 		return nil, e
+	}
+	// Rule R (P-14) for a copy; a move keeps its inode (handoff N-17).
+	if isCopy {
+		var existing *Entry
+		if cur != nil {
+			existing = dst
+		}
+		if e := checkOwnerRule(rule, existing, "", "", true); e != nil {
+			return nil, e
+		}
 	}
 	value := map[string]any{"source": entryPreview(src), "overwrite": in.Overwrite, "backup": backup}
 	if isCopy {

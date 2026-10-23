@@ -54,6 +54,7 @@ func (e *movedEnv) newFS(t *testing.T, root string, trustTest, guard bool) *FS {
 		Protected:       empty,
 		Limits:          Limits{MaxReadBytes: 1 << 20, MaxWriteBytes: 1 << 20, MaxFindResults: 100, MaxFindDepth: 8, MaxDeleteEntries: 20},
 		GuardMovedIn:    guard,
+		ExplicitOwner:   guard,
 		VerifyReplaced:  true,
 		TrustedDirOwner: func(u uint32) bool { return u == 0 || trustTest && u == uid },
 		Backup: func(src *BackupSource) error {
@@ -181,7 +182,9 @@ func TestMovedInSameParentSwap(t *testing.T) {
 // TestMovedInOverwrites: a write or copy over an existing file keeps its
 // owner and group only when it is owner-matched; otherwise a write needs both
 // an owner and a group, and a copy is refused, before anything is backed up
-// or written. A new file is not concerned (handoff N-8).
+// or written. Under a group- or world-writable directory no owner passes
+// (rule R, owner_rule_test.go), so an explicit owner and a new file are
+// refused there too.
 func TestMovedInOverwrites(t *testing.T) {
 	uid, gid := uint32(os.Getuid()), uint32(os.Getgid()) //nolint:gosec // G115: test ids fit
 	for _, c := range []struct {
@@ -228,15 +231,18 @@ func TestMovedInOverwrites(t *testing.T) {
 			wantDenied(t, err, dir)
 			_, err = e.fs.WriteFile(p, []byte("new\n"), WriteOptions{Create: true, Owner: &Owner{GID: &gid}})
 			wantDenied(t, err, dir)
-			// Both, given explicitly: written.
-			r, err := e.fs.WriteFile(p, []byte("new\n"), WriteOptions{Create: true, Owner: &Owner{UID: &uid, GID: &gid}})
-			must(t, err)
-			if r.UID != uid || r.GID != gid || read(t, p) != "new\n" || len(e.backups) != 1 {
-				t.Fatalf("an explicit owner: %+v, %q, %d backups", r, read(t, p), len(e.backups))
+			// Both, given explicitly: refused too, since no owner passes
+			// under a group- or world-writable directory (rule R, handoff N-8).
+			_, err = e.fs.WriteFile(p, []byte("new\n"), WriteOptions{Create: true, Owner: &Owner{UID: &uid, GID: &gid}})
+			wantDenied(t, err, dir)
+			if read(t, p) != "old\n" || len(e.backups) != 0 {
+				t.Fatalf("an explicit owner under an open directory changed %q or backed up %d", read(t, p), len(e.backups))
 			}
-			// A new file there is not concerned (N-8, a follow-up).
-			if _, err := e.fs.WriteFile(filepath.Join(dir, "fresh"), []byte("x"), WriteOptions{Create: true}); err != nil {
-				t.Fatalf("a new file in an open directory: %v", err)
+			// A new file there is refused too (N-8).
+			_, err = e.fs.WriteFile(filepath.Join(dir, "fresh"), []byte("x"), WriteOptions{Create: true})
+			wantDenied(t, err, dir)
+			if _, serr := os.Lstat(filepath.Join(dir, "fresh")); serr == nil {
+				t.Fatal("a refused new file was created")
 			}
 		})
 	}

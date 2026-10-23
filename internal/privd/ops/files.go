@@ -366,10 +366,21 @@ func (s *server) deletePreview(raw jsontext.Value) (data any, warns []string, fa
 	}
 	out := deletePreviewData{Path: r.Path, Type: r.Type, Entries: r.Entries, Bytes: r.Bytes, First: r.First, Truncated: len(r.First) < r.Entries,
 		PolicySHA256: s.p.SHA256, PreviewSHA256: r.PreviewSHA256}
+	var warnings []string
 	if s.p.BackupsKeep > 0 {
 		if out.Backup, err = s.store.check(r.Backup, protocol.OpPrivDelete, s.req.ID, s.o.Now()); err != nil {
 			return nil, nil, err
 		}
+		// A backup the tools could not restore is said so before the
+		// approval (handoff N-9): the delete has no chain rule, the restore
+		// has.
+		w, err := s.unrestorable(r.Backup)
+		if err != nil {
+			return nil, nil, err
+		}
+		if w != "" {
+			warnings = append(warnings, w)
+		}
 	}
-	return out, nil, nil
+	return out, warnings, nil
 }

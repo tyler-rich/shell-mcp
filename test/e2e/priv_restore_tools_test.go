@@ -241,17 +241,18 @@ func TestPrivMovedInRules(t *testing.T) {
 		}
 		wantGate(t, svcShell, "priv_restore_backup", map[string]any{"id": bRoot, "expected_preview_sha256": strings.Repeat("0", 64)}, "path_denied")
 
-		// A group-writable directory: explicit owner and group even when the
-		// owners match.
+		// A group-writable directory: no owner passes, so neither the kept
+		// owner nor an explicit one (rule R, handoff N-8).
 		sh := shared + "/app.conf"
 		rootFile(t, sh, "shared v1\n", 0o640)
 		if err := os.Chown(sh, exampleApp, exampleApp); err != nil {
 			t.Fatal(err)
 		}
 		wantGate(t, svcShell, "priv_write_file", map[string]any{"path": sh, "content_b64": b64s("shared v2\n"), "expected_sha256": sha("shared v1\n")}, "path_denied")
-		gateBackupOf(t, sh, "shared v2\n", map[string]any{"expected_sha256": sha("shared v1\n"), "owner": "example-app", "group": "example-app"})
-		if readFile(t, sh) != "shared v2\n" {
-			t.Fatal("the explicit write did not land")
+		wantGate(t, svcShell, "priv_write_file", map[string]any{"path": sh, "content_b64": b64s("shared v2\n"), "expected_sha256": sha("shared v1\n"),
+			"owner": "example-app", "group": "example-app"}, "path_denied")
+		if readFile(t, sh) != "shared v1\n" {
+			t.Fatal("a refused write changed the file")
 		}
 	})
 }

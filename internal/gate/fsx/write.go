@@ -165,14 +165,8 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 			return res, errf(protocol.CodeExists, "current content does not match expected_sha256")
 		}
 		newMode = os.FileMode(um)
-		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		if st, ok := replaced.Sys().(*syscall.Stat_t); ok {
 			oldUID, oldGID = st.Uid, st.Gid
-		}
-		// Another account could have moved the file in: its owner and group
-		// are kept only when no account but root and its owner could have
-		// (PRIVILEGED §6, handoff N-6).
-		if merr := f.movedInOverwrite(l, replaced, o); merr != nil {
-			return res, merr
 		}
 	} else {
 		if !create {
@@ -184,6 +178,12 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 			}
 			return res, errf(protocol.CodeNotFound, "file does not exist but expected_sha256 was given")
 		}
+	}
+	// Rule R (the helper): the owner the file will have must be one that
+	// could have made it there itself; nothing is backed up or written
+	// otherwise (PRIVILEGED §6, handoff N-6, N-8).
+	if rerr := f.ownerRule(l, o, exists, oldUID); rerr != nil {
+		return res, rerr
 	}
 	if mode != nil {
 		newMode = *mode
@@ -220,14 +220,31 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 		return res, mapErr(err)
 	}
 	res.OwnerPreserved = true
-	if exists && o.owner == nil {
+	switch {
+	case f.cfg.ExplicitOwner:
+		// The helper sets both ids on every new inode: those given, else the
+		// replaced file's, else its own, so a setgid parent never chooses
+		// the group (handoff N-8).
+		uid, gid := os.Geteuid(), os.Getegid()
+		if exists {
+			uid, gid = int(oldUID), int(oldGID)
+		}
+		if o.owner != nil && o.owner.UID != nil {
+			uid = int(*o.owner.UID)
+		}
+		if o.owner != nil && o.owner.GID != nil {
+			gid = int(*o.owner.GID)
+		}
+		if err = tf.Chown(uid, gid); err != nil {
+			return res, mapErr(err)
+		}
+	case exists && o.owner == nil:
 		if tfi, serr := tf.Stat(); serr == nil {
 			if st, ok := tfi.Sys().(*syscall.Stat_t); ok && (st.Uid != oldUID || st.Gid != oldGID) {
 				res.OwnerPreserved = tf.Chown(int(oldUID), int(oldGID)) == nil
 			}
 		}
-	}
-	if o.owner != nil {
+	case o.owner != nil:
 		// An explicit owner must be set; the unset half keeps the old
 		// file's id (or the process's, for a new file).
 		uid, gid := -1, -1
@@ -479,12 +496,17 @@ func (f *FS) mkdirIn(l *loc, dir *os.Root, dirReal, name string, m os.FileMode, 
 	if err = d.Chmod(m); err != nil {
 		return true, mapErr(err)
 	}
-	if owner != nil {
+	if owner != nil || f.cfg.ExplicitOwner {
 		uid, gid := -1, -1
-		if owner.UID != nil {
+		if f.cfg.ExplicitOwner {
+			// The helper sets both ids, so a setgid parent never chooses the
+			// group (handoff N-8); the chmod above cleared its setgid bit.
+			uid, gid = os.Geteuid(), os.Getegid()
+		}
+		if owner != nil && owner.UID != nil {
 			uid = int(*owner.UID)
 		}
-		if owner.GID != nil {
+		if owner != nil && owner.GID != nil {
 			gid = int(*owner.GID)
 		}
 		if err = d.Chown(uid, gid); err != nil {
