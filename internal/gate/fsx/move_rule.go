@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/tyler-rich/shell-mcp/internal/pathx"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
 )
 
@@ -256,12 +257,7 @@ func (f *FS) guardEntry(g *moveGuard, e *treeEntry, src, dst string) error {
 	if e.info.IsDir() {
 		return nil // its mode and owner are checked as the walk opens it
 	}
-	return f.moveRule(e.lp, join(dst, relTo(src, e.lp)), metaOf(e.info).UID, chainPlus(g.src, e.tree), chainPlus(g.dst, e.tree))
-}
-
-// relTo is p relative to base (p within base).
-func relTo(base, p string) string {
-	return strings.TrimPrefix(strings.TrimPrefix(p, base), "/")
+	return f.moveRule(e.lp, join(dst, pathx.Rel(src, e.lp)), metaOf(e.info).UID, chainPlus(g.src, e.tree), chainPlus(g.dst, e.tree))
 }
 
 // commitStaged commits a checked move in the helper: stage, verify, then

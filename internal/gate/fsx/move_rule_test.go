@@ -501,7 +501,7 @@ func FuzzMoveDirMode(f *testing.F) {
 }
 
 // FuzzStagedComponent: a path is refused in the helper exactly when one of
-// its components starts with the staging prefix; relTo inverts join.
+// its components starts with the staging prefix, and never in the gate.
 func FuzzStagedComponent(f *testing.F) {
 	f.Add("/srv/r/.shell-mcp-move-0123", "x")
 	f.Add("/srv/r/a/b", ".shell-mcp-move-")
@@ -523,11 +523,6 @@ func FuzzStagedComponent(f *testing.F) {
 		}
 		if New(&Config{}).stagedRefused(p) != nil {
 			t.Fatalf("%q: the gate refuses it", p)
-		}
-		if b := filepath.Clean(base); filepath.IsAbs(b) && rel != "" && !strings.HasPrefix(rel, "/") && filepath.Clean(rel) == rel && rel != "." && !strings.HasPrefix(rel, "..") {
-			if got := relTo(b, join(b, rel)); got != rel {
-				t.Fatalf("relTo(%q, join(%q, %q)) = %q", b, b, rel, got)
-			}
 		}
 	})
 }
