@@ -56,6 +56,13 @@ func TestExamplePrivilegedPolicy(t *testing.T) {
 	if core == 0 || broad == 0 {
 		t.Fatalf("the example needs core and broad commands: %d core, %d broad", core, broad)
 	}
+	// The example loads unchanged under N-13's rules (S4c-9): none of its
+	// commands is a package tool, a power binary or find with an action.
+	for _, c := range p.Commands {
+		if len(c.Findings) != 0 {
+			t.Errorf("command %s: N-13 findings %+v", c.ID, c.Findings)
+		}
+	}
 	for _, r := range append(slices.Clone(p.Paths.Read), p.Paths.WriteRoots()...) {
 		if !strings.Contains(r, "example-app") {
 			t.Errorf("non-placeholder root %s", r)

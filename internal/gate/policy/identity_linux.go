@@ -17,8 +17,10 @@ import (
 // an innocent name that the base-name check (POLICY §5) cannot see. After a
 // command's binary is resolved, it is compared by device + inode, and by
 // SHA-256 when the sizes match, with every file found under the standard
-// system binary directories (following symlinks) whose name is hard-denied.
-// A match rejects the policy, naming the denied binary. Multi-call binaries
+// system binary directories (following symlinks) whose name is hard-denied,
+// is a built-in operation's binary (systemctl, journalctl, git) or is a
+// D-Bus client (S4c-9). A match rejects the policy, naming the denied
+// binary; the privileged helper scans its own names too. Multi-call binaries
 // that a denied name links to (for example a firewall or module tool
 // reached through several names) are therefore refused under any name.
 
@@ -49,10 +51,21 @@ func fileSum(p string, size int64) (*[32]byte, error) {
 	return &s, nil
 }
 
-// scanDenied lists the hard-denied files under dirs; each real directory is
-// scanned once. Unreadable directories and entries are skipped (they cannot
-// be the command's binary either: the gate would not be able to read it).
-func scanDenied(dirs []string) []*deniedFile {
+// scanned reports whether the identity check compares binaries with files
+// of this name: a hard-denied name, a built-in operation's binary or a D-Bus
+// client (which may not be commands either), or one of extra.
+func scanned(name string, extra []string) bool {
+	if _, _, denied := hardDenied(name); denied {
+		return true
+	}
+	return notCommand(name) || slices.Contains(extra, name)
+}
+
+// scanDenied lists the files under dirs whose names are scanned; each real
+// directory is scanned once. Unreadable directories and entries are skipped
+// (they cannot be the command's binary either: the gate would not be able to
+// read it).
+func scanDenied(dirs, extra []string) []*deniedFile {
 	var out []*deniedFile
 	seen := map[string]bool{}
 	for _, d := range dirs {
@@ -69,7 +82,7 @@ func scanDenied(dirs []string) []*deniedFile {
 		_ = f.Close()
 		slices.Sort(names)
 		for _, n := range names {
-			if _, _, denied := hardDenied(n); !denied {
+			if !scanned(n, extra) {
 				continue
 			}
 			p := filepath.Join(rd, n)
@@ -91,32 +104,37 @@ func scanDenied(dirs []string) []*deniedFile {
 // directories, made lazily once per policy load and shared by every
 // command of that load.
 type IdentityScan struct {
-	dirs   []string
-	denied []*deniedFile
+	dirs, extra []string
+	denied      []*deniedFile
 }
 
-// NewIdentityScan returns a scan of dirs (nil means DefaultSystemBinDirs).
-func NewIdentityScan(dirs []string) *IdentityScan {
+// NewIdentityScan returns a scan of dirs (nil means DefaultSystemBinDirs)
+// for the hard-denied names, the built-in operations' binaries, the D-Bus
+// clients, and extra (the privileged helper's own names, N-13).
+func NewIdentityScan(dirs []string, extra ...string) *IdentityScan {
 	if dirs == nil {
 		dirs = DefaultSystemBinDirs
 	}
-	return &IdentityScan{dirs: dirs}
+	return &IdentityScan{dirs: dirs, extra: slices.Clone(extra)}
 }
 
-// DeniedMatch is the hard-denied file a command binary is identical to.
-type DeniedMatch struct {
+// IdentityMatch is a scanned file a command binary is identical to: its
+// name, its path, and its POLICY §5 group (0 when the name is not
+// hard-denied).
+type IdentityMatch struct {
 	Name, Path string
 	Group      int
 	GroupName  string
 }
 
-// Match compares the resolved command binary (fi from os.Stat) with every
-// hard-denied file. It returns nil when nothing matches, and an error when
-// a comparison is impossible (the check fails closed). Error messages name
-// local paths and are for check-policy.
-func (s *IdentityScan) Match(resolved string, fi os.FileInfo) (*DeniedMatch, error) {
+// MatchAll compares the resolved command binary (fi from os.Stat) with every
+// scanned file and returns each match, in directory and name order (a
+// multi-call binary matches every name that runs it). It returns an error
+// when a comparison is impossible (the check fails closed). Error messages
+// name local paths and are for check-policy.
+func (s *IdentityScan) MatchAll(resolved string, fi os.FileInfo) ([]IdentityMatch, error) {
 	if s.denied == nil {
-		s.denied = scanDenied(s.dirs)
+		s.denied = scanDenied(s.dirs, s.extra)
 		if s.denied == nil {
 			s.denied = []*deniedFile{}
 		}
@@ -126,6 +144,7 @@ func (s *IdentityScan) Match(resolved string, fi os.FileInfo) (*DeniedMatch, err
 		return nil, fmt.Errorf("%s has no inode information", resolved)
 	}
 	var sum *[32]byte
+	var out []IdentityMatch
 	for _, d := range s.denied {
 		same := d.dev == st.Dev && d.ino == st.Ino
 		if !same && d.size == fi.Size() {
@@ -144,25 +163,35 @@ func (s *IdentityScan) Match(resolved string, fi os.FileInfo) (*DeniedMatch, err
 		}
 		if same {
 			g, gname, _ := hardDenied(d.name)
-			return &DeniedMatch{Name: d.name, Path: d.path, Group: g, GroupName: gname}, nil
+			out = append(out, IdentityMatch{Name: d.name, Path: d.path, Group: g, GroupName: gname})
 		}
 	}
-	return nil, nil
+	return out, nil
 }
 
-// identity compares the resolved command binary with every denied file.
+// identity compares the resolved command binary with every scanned file:
+// identical to a hard-denied file, or to a built-in operation's binary or a
+// D-Bus client, it is refused as that name would be.
 func (v *validator) identity(field, resolved string, fi os.FileInfo, opts *LoadOptions) bool {
 	if v.scan == nil {
 		v.scan = NewIdentityScan(opts.SystemBinDirs)
 	}
-	m, err := v.scan.Match(resolved, fi)
+	ms, err := v.scan.MatchAll(resolved, fi)
 	if err != nil {
 		v.fail(field+".path", "%v", err)
 		return false
 	}
-	if m != nil {
-		v.fail(field+".path", "%s is a hard link to, or a copy of, the hard-denied %q (%s; group %d: %s)", resolved, m.Name, m.Path, m.Group, m.GroupName)
-		return false
+	for _, m := range ms {
+		if m.Group > 0 {
+			v.fail(field+".path", "%s is a hard link to, or a copy of, the hard-denied %q (%s; group %d: %s)", resolved, m.Name, m.Path, m.Group, m.GroupName)
+			return false
+		}
+	}
+	for _, m := range ms {
+		if notCommand(m.Name) {
+			v.fail(field+".path", "%s is a hard link to, or a copy of, %q (%s), which may not be a policy command", resolved, m.Name, m.Path)
+			return false
+		}
 	}
 	return true
 }

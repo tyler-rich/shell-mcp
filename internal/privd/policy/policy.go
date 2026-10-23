@@ -164,6 +164,21 @@ type Command struct {
 	// ListB is the POLICY §5 group (11–13) the binary belongs to, or 0.
 	ListB     int
 	Templates []template.Template
+	// Findings are the command's N-13 findings (handoff §2.1).
+	Findings []CommandFinding
+}
+
+// CommandFinding is a declared command whose program defeats a bound
+// operation, declared with an acknowledge (handoff N-13): a package tool, a
+// power binary, or find with an action in a template.
+type CommandFinding struct {
+	// Category is FindingPackage, FindingPower or FindingExec.
+	Category string
+	// Program is the listed name recognised (apt-get, reboot, find).
+	Program string
+	// Match is how: MatchWritten, MatchResolved, MatchIdentity, or for
+	// find MatchTemplate (the action in a template is what decides).
+	Match string
 }
 
 // Packages is the packages section (the apt operations, broad unit).

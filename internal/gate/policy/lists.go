@@ -2,6 +2,7 @@ package policy
 
 import (
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -51,10 +52,17 @@ var hardDeny = []struct {
 	{1, "shells", []string{"sh", "bash", "dash", "zsh", "ksh", "mksh", "csh", "tcsh", "fish", "ash", "rbash", "busybox", "toybox"}},
 	{2, "interpreters", []string{"python", "python2", "python3", "python3.*", "pypy*", "perl", "perl5.*", "ruby", "irb", "node", "nodejs", "deno", "bun", "php", "php*", "lua", "lua5.*", "luajit", "tclsh", "wish", "Rscript", "julia"}},
 	{3, "text-program languages", []string{"awk", "gawk", "mawk", "nawk"}},
-	{4, "launchers and wrappers", []string{"env", "xargs", "nohup", "setsid", "timeout", "nice", "ionice", "stdbuf", "flock", "watch", "parallel"}},
-	{5, "debuggers and tracers", []string{"strace", "ltrace", "gdb", "lldb", "valgrind"}},
+	// Everything that runs another program it is given (S4c-9, handoff
+	// N-13): such a command's argv no longer says what runs. setarch's
+	// personality aliases (linux32, linux64, i386, x86_64) are setarch.
+	{4, "launchers and wrappers", []string{"env", "xargs", "nohup", "setsid", "timeout", "nice", "ionice", "stdbuf", "flock", "watch", "parallel",
+		"systemd-run", "systemd-cat", "systemd-inhibit", "systemd-socket-activate", "run-parts", "start-stop-daemon", "taskset", "chrt",
+		"prlimit", "setarch", "linux32", "linux64", "i386", "x86_64", "numactl", "time", "logsave", "dbus-run-session", "dbus-launch",
+		"ssh-agent", "chronic", "rlwrap", "unbuffer", "xvfb-run", "fakeroot", "faketime", "daemonize", "cgexec"}},
+	{5, "debuggers and tracers", []string{"strace", "ltrace", "gdb", "lldb", "valgrind", "perf", "catchsegv"}},
 	{6, "pagers and editors", []string{"less", "more", "most", "man", "pg", "vi", "vim", "vim.*", "nvim", "view", "ex", "ed", "nano", "pico", "emacs", "joe", "mcedit"}},
-	{7, "privilege changers", []string{"su", "sudo", "doas", "pkexec", "runuser", "setpriv", "chroot", "nsenter", "unshare", "capsh", "newgrp", "sg"}},
+	{7, "privilege changers", []string{"su", "sudo", "doas", "pkexec", "runuser", "setpriv", "chroot", "nsenter", "unshare", "capsh", "newgrp", "sg",
+		"run0", "machinectl", "systemd-nspawn", "bwrap", "firejail", "schroot", "proot", "lxc-attach", "lxc-execute"}},
 	{8, "tunnels and transfer", []string{"ssh", "scp", "sftp", "rsync", "nc", "ncat", "netcat", "socat", "telnet", "ftp", "tftp"}},
 	{9, "session tools", []string{"script", "expect", "screen", "tmux"}},
 	{10, "identity and scheduling administration", []string{"useradd", "usermod", "userdel", "groupadd", "groupmod", "passwd", "chpasswd", "chage", "visudo", "vipw", "vigr", "crontab", "at", "batch"}},
@@ -66,6 +74,17 @@ var hardDeny = []struct {
 // builtinOps may not be declared as commands: their safe forms are
 // built-in operations (POLICY §5).
 var builtinOps = []string{"systemctl", "journalctl", "git"}
+
+// busClients may not be declared as commands either: a D-Bus client can
+// ask PID 1 to start any unit or logind to power off (S4c-9, handoff N-13),
+// which the built-in operations do only bounded.
+var busClients = []string{"busctl", "dbus-send", "gdbus", "qdbus", "loginctl"}
+
+// notCommand reports whether a base name may never be a policy command,
+// because it is a built-in operation's binary or a D-Bus client.
+func notCommand(base string) bool {
+	return slices.Contains(builtinOps, base) || slices.Contains(busClients, base)
+}
 
 // containerCLIs need `root_equivalent: true` (POLICY §4).
 var containerCLIs = []string{"docker", "podman", "ctr", "nerdctl", "kubectl"}
