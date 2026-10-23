@@ -112,6 +112,7 @@ func TestRouting(t *testing.T) {
 		"priv_power":                    {`{"action":"reboot"}`, "broad"},
 		"priv_power_preview":            {`{"action":"reboot"}`, "broad"},
 		"priv_power_cancel":             {`{}`, "broad"},
+		"priv_policy":                   {`{}`, "core"},
 	} {
 		t.Run(op, func(t *testing.T) {
 			f := newFixture(t, "destructive")
@@ -199,6 +200,20 @@ func TestBackupCheckIsReadTier(t *testing.T) {
 	r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"priv_backup_check","args":{"path":"/etc/example-app/x"},"timeout_ms":2000}` + "\n")
 	if !r.OK || string(r.Data) != `{"from":"core"}` || h.count(coreSock) != 1 {
 		t.Fatalf("priv_backup_check at ceiling read: %s %+v", r.Data, r.Error)
+	}
+}
+
+// TestPolicySummaryIsReadTier: priv_policy (handoff P-8) is a read op the
+// gate forwards at ceiling read under privileged.max_tier read, to the core
+// socket.
+func TestPolicySummaryIsReadTier(t *testing.T) {
+	f := newFixture(t, "read")
+	pol := "privileged:\n  enabled: true\n  socket: " + coreSock + "\n  broad_socket: " + broadSock + "\n  max_tier: read\n"
+	h := startTwoHelpers(t, f, pol)
+	f.writePolicy("read", pol)
+	r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"priv_policy","args":{},"timeout_ms":2000}` + "\n")
+	if !r.OK || string(r.Data) != `{"from":"core"}` || h.count(coreSock) != 1 || h.count(broadSock) != 0 {
+		t.Fatalf("priv_policy at ceiling read: %s %+v", r.Data, r.Error)
 	}
 }
 

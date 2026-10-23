@@ -191,7 +191,7 @@ func parse(data []byte, files []string, opts *LoadOptions) (*Policy, error) {
 	if len(files) > 0 {
 		p.File = files[0]
 	}
-	v := &validator{opts: opts, scan: gpolicy.NewIdentityScan(opts.SystemBinDirs)}
+	v := &validator{opts: opts, scan: gpolicy.NewIdentityScan(opts.SystemBinDirs, helperScanNames()...)}
 	if err := v.matchers(files); err != nil {
 		return nil, err
 	}
@@ -595,9 +595,9 @@ func (v *validator) command(field string, rc *rawCommand, maxTier Tier) (Command
 		v.fail(field+".unit", "is %q; want core or broad", rc.Unit)
 		ok = false
 	}
-	resolved, listB, rok := v.resolve(field, rc)
+	resolved, rec, rok := v.resolve(field, rc)
 	ok = ok && rok
-	c.Resolved, c.ListB = resolved, listB
+	c.Resolved = resolved
 	if !v.commandCapabilities(field, rc, &c) {
 		ok = false
 	}
@@ -618,7 +618,7 @@ func (v *validator) command(field string, rc *rawCommand, maxTier Tier) (Command
 			c.Templates = append(c.Templates, tpl)
 		}
 	}
-	if !ok {
+	if !ok || !v.review(field, &c, rec) {
 		return c, false
 	}
 	if c.Unit == UnitBroad {
@@ -651,77 +651,152 @@ func listBName(g int) string {
 	return "unknown"
 }
 
+// notCommandReason says why a built-in operation's binary or a D-Bus client
+// may not be a privileged command.
+func notCommandReason(base string) string {
+	if gpolicy.IsBusClient(base) {
+		return "a D-Bus client can ask PID 1 to start any unit or logind to power off, outside every binding"
+	}
+	return "its safe forms are built-in operations"
+}
+
 // resolve resolves the binary and applies the gate's checks with the
-// helper's lists: POLICY §5 groups 1–10 are never allowed, 11–13 only with
-// an acknowledge (by name as written, as resolved, and by identity).
-func (v *validator) resolve(field string, rc *rawCommand) (resolved string, listB int, ok bool) {
+// helper's lists, by name as written, as resolved, and by identity: POLICY
+// §5 groups 1–10 and the program-running wrappers are never allowed, nor
+// are the built-in operations' binaries and the D-Bus clients; it returns
+// every other listed program the binary was recognised as (groups 11–13,
+// package tools, find), for command to require an acknowledge and report
+// them (handoff N-13).
+func (v *validator) resolve(field string, rc *rawCommand) (resolved string, rec []recognised, ok bool) {
 	if err := pathx.CheckClean(rc.Path); err != nil {
 		v.fail(field+".path", "%v", err)
-		return "", 0, false
+		return "", nil, false
 	}
 	resolved, err := filepath.EvalSymlinks(rc.Path)
 	if err != nil {
 		v.fail(field+".path", "%s cannot be resolved: %v", rc.Path, gpolicy.ErrReason(err))
-		return "", 0, false
+		return "", nil, false
 	}
-	deniedGroup := func(g int, what string) bool {
-		if g <= 10 {
-			v.fail(field+".path", "%s is on the never list (PRIVILEGED §5.3 list A: %s)", rc.Path, what)
-			return true
+	add := func(r recognised) {
+		if !slices.ContainsFunc(rec, func(o recognised) bool { return o.name == r.name }) {
+			rec = append(rec, r)
 		}
-		listB = max(listB, g)
-		return false
 	}
-	for _, base := range []string{filepath.Base(rc.Path), filepath.Base(resolved)} {
+	for _, b := range []struct{ base, match string }{{filepath.Base(rc.Path), MatchWritten}, {filepath.Base(resolved), MatchResolved}} {
 		switch {
-		case strings.HasPrefix(base, "shell-mcp"):
-			v.fail(field+".path", "%q may not be a command: it is one of this project's binaries", base)
-			return "", 0, false
-		case gpolicy.IsBuiltinOp(base):
-			v.fail(field+".path", "%q may not be a privileged command", base)
-			return "", 0, false
-		case gpolicy.IsContainerCLI(base) && !rc.RootEquivalent:
-			v.fail(field+".root_equivalent", "%q is root-equivalent; set root_equivalent: true to acknowledge it", base)
-			return "", 0, false
+		case strings.HasPrefix(b.base, "shell-mcp"):
+			v.fail(field+".path", "%q may not be a command: it is one of this project's binaries", b.base)
+			return "", nil, false
+		case gpolicy.IsContainerCLI(b.base) && !rc.RootEquivalent:
+			v.fail(field+".root_equivalent", "%q is root-equivalent; set root_equivalent: true to acknowledge it", b.base)
+			return "", nil, false
 		}
-		if g, name, denied := gpolicy.HardDenied(base); denied && deniedGroup(g, fmt.Sprintf("%q is POLICY §5 group %d, %s", base, g, name)) {
-			return "", 0, false
+		switch class, g := Classify(b.base); class {
+		case ClassNotCommand:
+			v.fail(field+".path", "%q may not be a privileged command: %s", b.base, notCommandReason(b.base))
+			return "", nil, false
+		case ClassNever:
+			_, name, _ := gpolicy.HardDenied(b.base)
+			v.fail(field+".path", "%s is on the never list (PRIVILEGED §5.3 list A: %q is POLICY §5 group %d, %s)", rc.Path, b.base, g, name)
+			return "", nil, false
+		case ClassNone:
+		default:
+			add(recognised{class: class, group: g, name: b.base, match: b.match})
 		}
 	}
 	if resolved == v.opts.HelperExecutable || v.never.Covers(resolved) {
 		v.fail(field+".path", "%s may not be a command: it is on the never list", resolved)
-		return "", 0, false
+		return "", nil, false
 	}
 	if _, err = gpolicy.CheckChain(v.opts.Trust, resolved); err != nil {
 		v.fail(field+".path", "%v", err)
-		return "", 0, false
+		return "", nil, false
 	}
 	fi, err := os.Stat(resolved)
 	if err != nil {
 		v.fail(field+".path", "%s: %v", resolved, gpolicy.ErrReason(err))
-		return "", 0, false
+		return "", nil, false
 	}
 	if ferr := gpolicy.CheckFile(v.opts.Trust, resolved, fi); ferr != nil {
 		v.fail(field+".path", "%v", ferr)
-		return "", 0, false
+		return "", nil, false
 	}
 	if fi.Mode().Perm()&0o111 == 0 {
 		v.fail(field+".path", "%s is not executable", resolved)
-		return "", 0, false
+		return "", nil, false
 	}
-	m, err := v.scan.Match(resolved, fi)
+	ms, err := v.scan.MatchAll(resolved, fi)
 	if err != nil {
 		v.fail(field+".path", "%v", err)
-		return "", 0, false
+		return "", nil, false
 	}
-	if m != nil && deniedGroup(m.Group, fmt.Sprintf("a hard link to, or a copy of, %q (%s), POLICY §5 group %d, %s", m.Name, m.Path, m.Group, m.GroupName)) {
-		return "", 0, false
+	// A multi-call binary matches every name that runs it: the strongest
+	// class decides, never first, then may not, then the rest.
+	for _, m := range ms {
+		if class, g := Classify(m.Name); class == ClassNever {
+			v.fail(field+".path", "%s is on the never list (PRIVILEGED §5.3 list A: a hard link to, or a copy of, %q (%s), POLICY §5 group %d, %s)", rc.Path, m.Name, m.Path, g, m.GroupName)
+			return "", nil, false
+		}
 	}
-	if listB > 0 && rc.Acknowledge == "" {
-		v.fail(field+".acknowledge", "%s is on the acknowledge list (PRIVILEGED §5.3 list B, POLICY §5 group %d); declaring it needs a non-empty acknowledge", resolved, listB)
-		return "", 0, false
+	for _, m := range ms {
+		if class, _ := Classify(m.Name); class == ClassNotCommand {
+			v.fail(field+".path", "%s may not be a privileged command: it is a hard link to, or a copy of, %q (%s), and %s", rc.Path, m.Name, m.Path, notCommandReason(m.Name))
+			return "", nil, false
+		}
 	}
-	return resolved, listB, true
+	for _, m := range ms {
+		if class, g := Classify(m.Name); class != ClassNone {
+			add(recognised{class: class, group: g, name: m.Name, match: MatchIdentity})
+		}
+	}
+	return resolved, rec, true
+}
+
+// review applies N-13's acknowledge rule to a resolved command (handoff
+// §2.1): a POLICY §5 group 11–13 binary, a package tool, or find with an
+// action in any of its templates needs a non-empty acknowledge. It sets the
+// command's list B group and findings, and reports each for check-policy.
+func (v *validator) review(field string, c *Command, rec []recognised) bool {
+	var needs []string
+	for _, r := range rec {
+		switch r.class {
+		case ClassListB:
+			c.ListB = max(c.ListB, r.group)
+			needs = append(needs, fmt.Sprintf("%s is on the acknowledge list (PRIVILEGED §5.3 list B, POLICY §5 group %d)", c.Resolved, r.group))
+			if r.group == powerGroup {
+				c.Findings = append(c.Findings, CommandFinding{Category: FindingPower, Program: r.name, Match: r.match})
+			}
+		case ClassPackageTool:
+			needs = append(needs, fmt.Sprintf("%s is the package tool %q (recognised by %s name): it would change packages outside the package operations' binding to an approved transaction", c.Resolved, r.name, r.match))
+			c.Findings = append(c.Findings, CommandFinding{Category: FindingPackage, Program: r.name, Match: r.match})
+		case ClassFind:
+			for _, t := range c.Templates {
+				if a := FindAction(t.String()); a != "" {
+					needs = append(needs, fmt.Sprintf("%s is find (recognised by %s name) with %s in a template: it runs, deletes or writes as root outside any binding", c.Resolved, r.match, a))
+					c.Findings = append(c.Findings, CommandFinding{Category: FindingExec, Program: findProgram, Match: MatchTemplate})
+					break
+				}
+			}
+		}
+	}
+	if len(needs) > 0 && c.Acknowledge == "" {
+		v.fail(field+".acknowledge", "%s; declaring it needs a non-empty acknowledge", strings.Join(needs, "; "))
+		return false
+	}
+	for _, fd := range c.Findings {
+		switch fd.Category {
+		case FindingPackage:
+			v.find("package-tool", c.ID, "%s is the package tool %s (recognised by %s name); it runs outside the package operations' binding; acknowledge: %s", c.Resolved, fd.Program, fd.Match, c.Acknowledge)
+		case FindingExec:
+			for _, t := range c.Templates {
+				if a := FindAction(t.String()); a != "" {
+					v.find("find-action", c.ID, "%s is find with %s in a template; acknowledge: %s", c.Resolved, a, c.Acknowledge)
+					break
+				}
+			}
+		}
+	}
+	return true
 }
 
 func (v *validator) commandCapabilities(field string, rc *rawCommand, c *Command) bool {

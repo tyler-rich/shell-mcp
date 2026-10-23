@@ -70,6 +70,31 @@ func TestBinaryIdentity(t *testing.T) {
 	f.mustLoad(t, cmdAt("pool-status"))
 }
 
+// TestN13SharedLists (S4c-9, handoff N-13): the program-running wrappers
+// that joined POLICY §5 groups 4, 5 and 7 are hard-denied in the gate too,
+// as the D-Bus clients are refused like systemctl; and a renamed copy of a
+// built-in operation's binary or a D-Bus client is refused by identity.
+func TestN13SharedLists(t *testing.T) {
+	for _, name := range []string{"systemd-run", "run-parts", "start-stop-daemon", "taskset", "chrt", "prlimit", "setarch",
+		"numactl", "time", "logsave", "perf", "run0", "machinectl", "systemd-nspawn", "bwrap", "firejail"} {
+		f := newFixture(t)
+		gatetest.WriteFile(t, filepath.Join(f.bin, name), "invented "+name+"\n", 0o755)
+		f.mustFail(t, cmdAt(name), "hard-denied")
+	}
+	for _, name := range []string{"busctl", "dbus-send", "gdbus", "qdbus", "loginctl"} {
+		f := newFixture(t)
+		gatetest.WriteFile(t, filepath.Join(f.bin, name), "invented "+name+"\n", 0o755)
+		f.mustFail(t, cmdAt(name), "may not")
+	}
+	for _, name := range []string{"systemctl", "journalctl", "git", "busctl"} {
+		f := newFixture(t)
+		sys := f.sysBin(t)
+		gatetest.WriteFile(t, filepath.Join(sys, name), "invented system "+name+"\n", 0o755)
+		gatetest.WriteFile(t, filepath.Join(f.bin, "maint-tool"), "invented system "+name+"\n", 0o755)
+		f.mustFail(t, cmdAt("maint-tool"), "may not")
+	}
+}
+
 func TestGitRemotesHTTPSOnly(t *testing.T) {
 	f := newFixture(t)
 	repo := func(remote string) string {

@@ -34,7 +34,7 @@ Both are fixed in **S4c-0**, a standalone `fix(privd)` PR that comes before any 
 - S4c-6: exec.
 - S4c-7: packages.
 - S4c-8: power.
-- S4c-9: a minimal privileged policy summary (Q6).
+- S4c-9: a minimal privileged policy summary (Q6), with N-13 (done; every S4c session is done).
 
 Each is one PR, Opus 5.5 at High (D-022).
 
@@ -46,7 +46,7 @@ Each is one PR, Opus 5.5 at High (D-022).
 - `recursive` on chown and chmod;
 - a hash on the package previews, and an `applied` list on package results;
 - the gate forwarding the clamped `timeout_ms`;
-- `priv_policy`;
+- `priv_policy` (P-8, amended in S4c-9 with `ops`, `findings`, `deny_patterns` and `roots.persistence`; approved by the maintainer, 2026-10-22);
 - the restored mode on restore's preview and result (P-10, pre-approved after S4c-0).
 - `priv_backup_check` (P-11) and the owner in write results (P-12), approved during S4c-2.
 - the power preview's and `priv_power`'s result amended, and `priv_power_cancel` (P-13), approved during S4c-8.
@@ -242,7 +242,15 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 **N-13. Privileged command templates can call apt-get, apt or dpkg (found in S4c-7, PR #42).**
 - **What.** Neither the privileged policy's never list nor POLICY §5's groups name `apt-get`, `apt` or `dpkg`, so a command declared with one of them as its path (any unit, any tier) runs as root through `priv_exec`, outside everything S4c-7 binds: no transaction in the approval, no recompute, no pinned simulation, no dpkg-status diff, and `priv_exec`'s kill on a hang-up instead of the package operations' stop points (a killed dpkg leaves the database half-configured). The allow-lists of `packages.install` and `packages.remove` do not apply to it either.
 - **Proposed (not done here; maintainer, 2026-10-22):** S4c-9's policy check warns about, or refuses, a command whose binary (as written or resolved, and by identity, as POLICY §5's check) is apt-get, apt or dpkg, except the one fixed recovery template of N-14 if it is kept. A refusal is a privileged-policy schema change (a STOP for that session).
-- **Status:** recorded.
+- **Status: done (S4c-9, PR #44).** Decided by the maintainer (2026-10-22) from three options (check-policy warns; policy load refuses unless acknowledged; refuses outright), by category; no new schema key (the existing `commands[].acknowledge`), the acknowledge list extended (approved). Every program is recognised by written name, resolved name and identity (the identity check now also scans the built-in operations' binaries, the D-Bus clients and, in the helper, the package tools and `find`):
+  - **Package tools** (`apt-get`, `apt`, `aptitude`, `dpkg`, `unattended-upgrade`, `unattended-upgrades`): refused unless acknowledged. N-14's recovery template keeps working with an `acknowledge`.
+  - **`find`** with `-exec`, `-execdir`, `-ok`, `-okdir`, `-delete`, `-fprint`, `-fprint0`, `-fprintf` or `-fls` as a whole token of any template: refused unless acknowledged.
+  - **Program-running wrappers**: refused outright, as `env` and `xargs` are. Groups 1–10 already covered shells, interpreters, `env`, `xargs`, `sudo`, `su`, `nsenter`, `unshare` and `chroot`; S4c-9 added `systemd-run`, `systemd-cat`, `systemd-inhibit`, `systemd-socket-activate`, `run-parts`, `start-stop-daemon`, `taskset`, `chrt`, `prlimit`, `setarch` (with `linux32`, `linux64`, `i386`, `x86_64`), `numactl`, `time`, `logsave`, `dbus-run-session`, `dbus-launch`, `ssh-agent`, `chronic`, `rlwrap`, `unbuffer`, `xvfb-run`, `fakeroot`, `faketime`, `daemonize`, `cgexec` (group 4); `perf`, `catchsegv` (group 5); `run0`, `machinectl`, `systemd-nspawn`, `bwrap`, `firejail`, `schroot`, `proot`, `lxc-attach`, `lxc-execute` (group 7). POLICY §5 is shared, so gate policies refuse them too.
+  - **D-Bus clients** (`busctl`, `dbus-send`, `gdbus`, `qdbus`, `loginctl`): refused outright, as `systemctl` is (gate and helper).
+  - **Renamed copies of `systemctl`, `journalctl` and `git`**: refused by identity (before, a copy of `systemctl` matched only the power names that link to it, so it needed just an acknowledge, and a copy of `git` was not caught).
+  - **Power binaries** (group 11): already acknowledged; now also reported.
+  - Each acknowledged package tool, `find` with an action and power binary is a finding, in `check-policy` and in the policy summary.
+  - **Residual until S-MC:** a root-owned wrapper script that calls any of these programs is judged by its own name and identity only (PRIVILEGED §4).
 
 **N-14. The recovery path for an unfinished dpkg database (found in S4c-7, PR #42).**
 - **What.** A package operation killed at its limit (or any other interrupted dpkg) leaves packages half-configured; every later apt run, unattended security upgrades included, and every package preview refuses until `dpkg --configure -a` runs. No package operation does that (it would be a new op).
@@ -253,6 +261,11 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 - **What.** `Serve` returns the result of writing the answer as the instance's exit status. A package operation that finished, whose answer (or early `outcome_unknown` answer) could not be written because the gate had gone, therefore exits 1, and systemd logs the instance as failed, while the helper's journal line for the request says `ok` (or the operation's own result). The same holds for every operation, since all of them answer through the same code.
 - **Decision (maintainer, 2026-10-22):** keep exit 1: it records that the answer was not delivered. The helper's journal line is authoritative for the outcome; the instance's exit status says only whether the answer was delivered. Documented in PRIVILEGED §8.
 - **Status:** documented; no code change.
+
+**N-16. The privileged check-policy has no GTFOBins warnings (found in S4c-9).**
+- **What.** The gate's `check-policy` prints a WARN, with the technique categories and a link, for every command whose binary has documented escape techniques (POLICY §6, `internal/gate/policy/gtfobins.go`). The helper's `check-policy` prints nothing of the kind, although a root command is the more dangerous place for such a binary (for example `tar` with a `{path:write}`, or `sed`).
+- **Decision (maintainer, 2026-10-22):** recorded, not fixed in S4c-9. A follow-up would reuse the gate's list (`EscapeTechniques`) for privileged commands.
+- **Status:** recorded; no session assigned.
 
 **R-1. A restore's narrowed mode is not reported.**
 - S4c-0 clamps the restored mode but does not report it: the result has no `mode` field, and adding one was a protocol change.
@@ -637,7 +650,7 @@ Protocol v1 is amended in place before any release, as in PRs #18, #24, #25 and 
 | P-5 | `preview_sha256`, `argv`, `policy_sha256` | results of `priv_pkg_install_preview`, `priv_pkg_upgrade_preview`, `priv_pkg_remove_preview` | strings, list | D5 |
 | P-6 | `applied` | results of `priv_pkg_install`, `_upgrade`, `_remove` | `{install[], upgrade[], remove[]}` as in the previews | D5: what actually changed, from dpkg's status. |
 | P-7 | `timeout_ms` forwarded clamped | gate → helper | the gate rewrites the forwarded `timeout_ms` to the timeout it will wait for (its `limits.max_timeout_s` bound), instead of forwarding it unchanged | X-4 |
-| P-8 | `priv_policy` (Q6: yes) | new op, read, core | `{policy_sha256, max_tier, limits, roots (read, write, persistence), owners, modes_max, backups_keep, backups_max_store_bytes, commands[] (id, tier, unit, description, templates, root_equivalent, capabilities), packages (enabled, install, remove, allow_update_index, allow_upgrade), power.allowed}`; never `paths.deny` values (only their count) and never `acknowledge` text | discoverability for the model (Q6) |
+| P-8 | `priv_policy` (Q6: yes) | new op, read, core | `{policy_sha256, max_tier, limits, roots (read, write, persistence), owners, modes_max, backups_keep, backups_max_store_bytes, commands[] (id, tier, unit, description, templates, root_equivalent, capabilities), packages (enabled, install, remove, allow_update_index, allow_upgrade), power.allowed}`; never `paths.deny` values (only their count) and never `acknowledge` text. **Amended in S4c-9** (maintainer, 2026-10-22): `roots.persistence` as paths only, `deny_patterns` (the count), `power: {allowed}`, `ops[] (op, tier, unit)` (what the policy allows, by the operations' own checks; `priv_exec` with tier and unit `command`) and `findings[] (command_id, category, program, match)` (N-13) | discoverability for the model (Q6); N-13 findings visible to the client |
 | P-9 | `expected_destination_sha256` | args of `priv_copy`, `priv_move`; valid only with `overwrite: true` (otherwise `bad_request`) | 64 lowercase hex. The destination must exist as a regular file with that content when the commit is prepared; otherwise `exists` (`not_found` when it is gone), and nothing changes. It is checked through the descriptor the backup reads, and `unchangedSince` holds it to the commit, as `expected_sha256` does for writes. | Q15 (approved): an approved overwrite replaces exactly the destination the approver saw. A preview that saw no destination sends `overwrite: false` instead; one that saw a directory or symlink requests no approval. |
 | P-10 | the restored mode (pre-approved by the maintainer, 2026-10-18, R-1) | results of `priv_restore_backup`, and `priv_restore_preview` (P-2c) | S4c-5 designs the exact fields: the recorded and the resulting mode, for a file and for tree entries | A restore's narrowing to `modes.max` is never silent (S4c-0 clamps it but has no field to report it). |
 | P-11 | `priv_backup_check` (approved by the maintainer during S4c-2, 2026-10-18) | new op, read, core | args `{path}` → `{written, bytes, fits, store_bytes, max_store_bytes}` | The composed previews of write, copy and move (D2) cannot otherwise learn `backups.keep`, the store cap or its use, so they could not refuse an operation whose backup would not fit (D3 change 0). The path must be one the write ops may change, so it is also the previews' write-root check. |
@@ -918,6 +931,8 @@ S4c-1 left one exception to "the gate never answers `timeout` while the helper's
 
 ### S4c-9: privileged policy summary (Q6: yes, minimal)
 
+- **Status: done (PR #44; ARCHIVE §14, S4c-9), with N-13.** P-8 as amended (above; no other protocol, error-code, envelope, unit, Landlock or schema change). `priv_policy` is a read-tier core op built from the policy the instance enforces: its `ops` come from the operations' own checks (`within`'s tier rule, the broad unit's existence, `pkgAllowed`, `powerAllowed`), its commands state what `priv_exec_preview` resolves. The broad instance refuses it. `shell_get_policy` reports it as `privileged.policy` in the admin profile only, when the gate forwards privileged operations, with `approval` per D-006; a failure is a warning, never the tool's error. PRIVILEGED §6, "The policy summary", records the relaxation. N-13 decided and done (§2.1). N-16 recorded.
+- **Left for S4c-10 or S5:** nothing of S4c-9's scope. Recorded and open: N-8/N-9 (one rule for files root creates in open directories, before release), N-11, N-12, N-14's recovery op (if wanted), N-16, S-MC (multi-call binaries, and with it N-13's residual: wrapper scripts are judged by their own name and identity), and the deployment docs (S5), which should show the policy summary as the way to review what a host's privileged policy allows.
 - **Includes.**
   - P-8, including `backups.max_store_bytes`.
   - `shell_get_policy` gains a `privileged.policy` section when the helper answers.

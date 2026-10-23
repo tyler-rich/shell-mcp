@@ -56,10 +56,102 @@ type limitsWire struct {
 
 // PolicyData is shell_get_policy's data.
 type PolicyData struct {
-	Gate       GateHello     `json:"gate" jsonschema:"The gate that answered."`
-	Sandbox    SandboxStatus `json:"sandbox" jsonschema:"The gate's kernel sandbox for this request: Landlock ABI and what is enforced."`
-	Privileged Privileged    `json:"privileged" jsonschema:"Whether privileged operations are forwarded to the host's privileged helper, and their highest tier."`
-	Policy     Policy        `json:"policy" jsonschema:"The target's effective gate policy (never the file's bytes)."`
+	Gate       GateHello        `json:"gate" jsonschema:"The gate that answered."`
+	Sandbox    SandboxStatus    `json:"sandbox" jsonschema:"The gate's kernel sandbox for this request: Landlock ABI and what is enforced."`
+	Privileged PrivilegedStatus `json:"privileged" jsonschema:"Whether privileged operations are forwarded to the host's privileged helper, their highest tier, and the helper's policy."`
+	Policy     Policy           `json:"policy" jsonschema:"The target's effective gate policy (never the file's bytes)."`
+}
+
+// PrivilegedStatus is the forwarding status with, in the admin profile, the
+// privileged helper's policy summary.
+type PrivilegedStatus struct {
+	Enabled bool        `json:"enabled" jsonschema:"Whether privileged operations are forwarded."`
+	MaxTier string      `json:"max_tier" jsonschema:"Highest privileged tier the gate forwards."`
+	Policy  *PrivPolicy `json:"policy,omitempty" jsonschema:"The privileged helper's effective policy, from the policy it enforces (admin profile, forwarding enabled). Absent otherwise, or when the helper did not answer (a warning says why)."`
+}
+
+// PrivPolicy is the privileged policy summary (priv_policy, handoff P-8):
+// never the policy's deny patterns (only their count) or acknowledge text.
+type PrivPolicy struct {
+	PolicySHA256         string        `json:"policy_sha256" jsonschema:"SHA-256 of the privileged policy file (the helper's; the gate policy's is gate.policy_sha256)."`
+	MaxTier              string        `json:"max_tier" jsonschema:"Highest tier the privileged policy allows: read, operator or destructive."`
+	Limits               PrivLimits    `json:"limits" jsonschema:"The privileged policy's size, count and time limits."`
+	Roots                PrivRoots     `json:"roots" jsonschema:"Roots root may read and write."`
+	DenyPatterns         int           `json:"deny_patterns" jsonschema:"Number of the privileged policy's own deny patterns (their values are never shown; the built-in deny list always applies)."`
+	Owners               PrivOwners    `json:"owners" jsonschema:"The only users and groups chown may set."`
+	ModesMax             string        `json:"modes_max" jsonschema:"Octal mask no mode set as root may exceed."`
+	BackupsKeep          int           `json:"backups_keep" jsonschema:"Backups kept per file (0: none are written)."`
+	BackupsMaxStoreBytes int64         `json:"backups_max_store_bytes" jsonschema:"Size cap of the whole backup store in bytes."`
+	Commands             []PrivCommand `json:"commands" jsonschema:"Declared root commands with their unit, tier and argument templates."`
+	Packages             PrivPackages  `json:"packages" jsonschema:"The package operations' allow-lists and switches."`
+	Power                PrivPower     `json:"power" jsonschema:"The power actions the policy allows."`
+	Ops                  []PrivOp      `json:"ops" jsonschema:"Privileged operations this policy allows, with the tier and unit each runs at."`
+	Findings             []PrivFinding `json:"findings" jsonschema:"Declared commands whose program bypasses a bound operation (a package tool, a power binary, find with an action), each acknowledged by the host owner."`
+}
+
+// PrivLimits are the privileged policy's limits.
+type PrivLimits struct {
+	MaxReadBytes     int `json:"max_read_bytes" jsonschema:"File read cap in bytes."`
+	MaxWriteBytes    int `json:"max_write_bytes" jsonschema:"File write cap in bytes."`
+	MaxOutputBytes   int `json:"max_output_bytes" jsonschema:"Command output cap per stream in bytes."`
+	DefaultTimeoutS  int `json:"default_timeout_s" jsonschema:"Default operation timeout in seconds."`
+	MaxTimeoutS      int `json:"max_timeout_s" jsonschema:"Longest operation timeout in seconds."`
+	MaxDeleteEntries int `json:"max_delete_entries" jsonschema:"Most entries of a recursive delete, chown or chmod."`
+}
+
+// PrivRoots are the privileged roots.
+type PrivRoots struct {
+	Read        []string `json:"read" jsonschema:"Read roots."`
+	Write       []string `json:"write" jsonschema:"Write roots (also readable)."`
+	Persistence []string `json:"persistence" jsonschema:"Write roots inside normally protected persistence areas."`
+}
+
+// PrivOwners are the owner allow-lists.
+type PrivOwners struct {
+	Users  []string `json:"users" jsonschema:"Users chown may set."`
+	Groups []string `json:"groups" jsonschema:"Groups chown may set."`
+}
+
+// PrivCommand is one declared root command.
+type PrivCommand struct {
+	ID             string     `json:"id" jsonschema:"Command id."`
+	Tier           string     `json:"tier" jsonschema:"read, operator or destructive."`
+	Unit           string     `json:"unit" jsonschema:"The unit it runs in: core or broad."`
+	Description    string     `json:"description" jsonschema:"The host owner's description."`
+	Templates      [][]string `json:"templates" jsonschema:"Argument templates; placeholders are typed."`
+	RootEquivalent bool       `json:"root_equivalent" jsonschema:"Whether the owner acknowledged the command as root-equivalent."`
+	Capabilities   []string   `json:"capabilities" jsonschema:"Capabilities the command adds."`
+	Approval       bool       `json:"approval" jsonschema:"Whether running it needs a human approval (operator and destructive commands always do)."`
+}
+
+// PrivPackages is the packages section.
+type PrivPackages struct {
+	Enabled          bool     `json:"enabled" jsonschema:"Whether package operations are enabled."`
+	Install          []string `json:"install" jsonschema:"Packages that may be installed."`
+	Remove           []string `json:"remove" jsonschema:"Packages that may be removed."`
+	AllowUpdateIndex bool     `json:"allow_update_index" jsonschema:"Whether the package index may be updated."`
+	AllowUpgrade     bool     `json:"allow_upgrade" jsonschema:"Whether installed packages may be upgraded."`
+}
+
+// PrivPower is the power section.
+type PrivPower struct {
+	Allowed []string `json:"allowed" jsonschema:"Allowed actions: reboot, poweroff."`
+}
+
+// PrivOp is one privileged operation the policy allows.
+type PrivOp struct {
+	Op       string `json:"op" jsonschema:"Helper operation."`
+	Tier     string `json:"tier" jsonschema:"read, operator or destructive; command for priv_exec, whose tier is each command's."`
+	Unit     string `json:"unit" jsonschema:"core or broad; command for priv_exec, which runs in each command's unit."`
+	Approval bool   `json:"approval" jsonschema:"Whether it needs a human approval (privileged operator and destructive operations always do; for priv_exec see each command)."`
+}
+
+// PrivFinding is a command whose program bypasses a bound operation.
+type PrivFinding struct {
+	CommandID string `json:"command_id" jsonschema:"Command id."`
+	Category  string `json:"category" jsonschema:"package (a package tool), power (a power binary) or exec (find with an action that runs, deletes or writes)."`
+	Program   string `json:"program" jsonschema:"The program recognised."`
+	Match     string `json:"match" jsonschema:"How it was recognised: written (the path's name), resolved (the name it resolves to), identity (a copy of that program) or template (find's action in a template)."`
 }
 
 // GateHello identifies the gate.
@@ -182,7 +274,7 @@ func getPolicy(d *Deps) Tool {
 	return define(d, spec[targetArg, PolicyData]{
 		name:        "shell_get_policy",
 		title:       "Get target policy",
-		description: "Returns a target gate's version, principal, sandbox status and effective policy: roots, limits, services, repositories, commands with their templates, and privileged forwarding.",
+		description: "Returns a target gate's version, principal, sandbox status and effective policy: roots, limits, services, repositories, commands with their templates, and privileged forwarding with the privileged helper's policy summary.",
 		tier:        TierRead,
 		schema:      boundTarget,
 		audit:       func(in targetArg) map[string]any { return map[string]any{"target": in.Target} },
@@ -207,21 +299,110 @@ func getPolicy(d *Deps) Tool {
 				return envelope.Failure[PolicyData](t.Name, sum.Error)
 			}
 			h, s := hello.Data, sum.Data
+			// The privileged helper's summary, in the admin profile only (the
+			// profile that registers privileged tools) and only when this gate
+			// forwards privileged operations; a failure leaves the gate policy
+			// reported, with a warning.
+			var priv *PrivPolicy
+			var privWarn []string
+			if d.Principal.Profile == string(ProfileAdmin) && h.Privileged.Enabled {
+				priv, privWarn = d.privPolicy(ctx, t.Name)
+			}
 			out := envelope.Success(t.Name, PolicyData{
 				Gate: GateHello{Version: h.GateVersion, Protocol: h.Protocol, Principal: h.Principal,
 					PolicySHA256: h.PolicySHA256, MaxTier: h.MaxTier, Ops: h.Ops},
 				Sandbox:    h.Sandbox,
-				Privileged: h.Privileged,
+				Privileged: PrivilegedStatus{Enabled: h.Privileged.Enabled, MaxTier: h.Privileged.MaxTier, Policy: priv},
 				Policy: Policy{Version: s.Version, MaxTier: s.MaxTier, SHA256: s.SHA256, Sandbox: s.Sandbox,
 					Limits: Limits(s.Limits), Paths: s.Paths, Services: s.Services, Journal: s.Journal,
 					Git: s.Git, RedactPatterns: s.Redact, Commands: s.Commands},
 			})
 			out.Gate = sum.Gate
-			out.Warnings = slices.Concat(hello.Warnings, sum.Warnings)
+			out.Warnings = slices.Concat(hello.Warnings, sum.Warnings, privWarn)
 			if h.PolicySHA256 != s.SHA256 {
 				out.Warnings = append(out.Warnings, "the policy changed between the hello and policy requests")
 			}
 			return out
 		},
 	})
+}
+
+// privPolicyWire is the helper's priv_policy data (handoff P-8), decoded
+// strictly: a field this server does not know is a protocol mismatch.
+type privPolicyWire struct {
+	PolicySHA256         string        `json:"policy_sha256"`
+	MaxTier              string        `json:"max_tier"`
+	Limits               PrivLimits    `json:"limits"`
+	Roots                PrivRoots     `json:"roots"`
+	DenyPatterns         int           `json:"deny_patterns"`
+	Owners               PrivOwners    `json:"owners"`
+	ModesMax             string        `json:"modes_max"`
+	BackupsKeep          int           `json:"backups_keep"`
+	BackupsMaxStoreBytes int64         `json:"backups_max_store_bytes"`
+	Commands             []privCmdWire `json:"commands"`
+	Packages             PrivPackages  `json:"packages"`
+	Power                PrivPower     `json:"power"`
+	Ops                  []privOpWire  `json:"ops"`
+	Findings             []PrivFinding `json:"findings"`
+}
+
+type privCmdWire struct {
+	ID             string     `json:"id"`
+	Tier           string     `json:"tier"`
+	Unit           string     `json:"unit"`
+	Description    string     `json:"description"`
+	Templates      [][]string `json:"templates"`
+	RootEquivalent bool       `json:"root_equivalent"`
+	Capabilities   []string   `json:"capabilities"`
+}
+
+type privOpWire struct {
+	Op   string `json:"op"`
+	Tier string `json:"tier"`
+	Unit string `json:"unit"`
+}
+
+// privApproval is D-006's rule for a privileged tier: operator and
+// destructive always need a human approval, read never.
+func privApproval(tier string) bool {
+	return tier == TierOperator.String() || tier == TierDestructive.String()
+}
+
+// privPolicy asks the helper for its policy summary (priv_policy, at the
+// tool's read ceiling) and returns it, or nil and a warning saying why not:
+// a refusal, an answer without the helper's block, or a summary whose hash
+// is not that block's.
+func (d *Deps) privPolicy(ctx context.Context, target string) (summary *PrivPolicy, warnings []string) {
+	const what = "the privileged policy summary is not shown: "
+	resp, e := d.call(ctx, target, protocol.OpPrivPolicy, nil, d.budget())
+	if e != nil {
+		return nil, []string{what + e.Code + ": " + e.Message}
+	}
+	env := envelope.FromGate[privPolicyWire](target, resp)
+	if !env.OK {
+		return nil, []string{what + env.Error.Code + ": " + env.Error.Message}
+	}
+	if resp.Helper == nil || resp.Helper.PolicySHA256 == "" {
+		return nil, []string{what + "the answer carries no helper block"}
+	}
+	w := env.Data
+	if w.PolicySHA256 != resp.Helper.PolicySHA256 {
+		return nil, []string{what + "its policy hash is not the helper block's"}
+	}
+	p := &PrivPolicy{
+		PolicySHA256: w.PolicySHA256, MaxTier: w.MaxTier, Limits: w.Limits, Roots: w.Roots, DenyPatterns: w.DenyPatterns,
+		Owners: w.Owners, ModesMax: w.ModesMax, BackupsKeep: w.BackupsKeep, BackupsMaxStoreBytes: w.BackupsMaxStoreBytes,
+		Commands: []PrivCommand{}, Packages: w.Packages, Power: w.Power, Ops: []PrivOp{}, Findings: w.Findings,
+	}
+	for _, c := range w.Commands {
+		p.Commands = append(p.Commands, PrivCommand{ID: c.ID, Tier: c.Tier, Unit: c.Unit, Description: c.Description, Templates: c.Templates,
+			RootEquivalent: c.RootEquivalent, Capabilities: c.Capabilities, Approval: privApproval(c.Tier)})
+	}
+	for _, o := range w.Ops {
+		p.Ops = append(p.Ops, PrivOp{Op: o.Op, Tier: o.Tier, Unit: o.Unit, Approval: privApproval(o.Tier)})
+	}
+	if p.Findings == nil {
+		p.Findings = []PrivFinding{}
+	}
+	return p, env.Warnings
 }

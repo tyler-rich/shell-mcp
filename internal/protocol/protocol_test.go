@@ -249,8 +249,8 @@ func TestCodesClosedSet(t *testing.T) {
 	// priv_backup_check (handoff P-11), the chown and chmod previews
 	// (P-2b), the delete and restore previews (P-2a, P-2c), the exec
 	// preview (P-2d), the index update preview (P-2e), and the power preview
-	// and cancel (P-2f, P-13).
-	if len(PrivOps) != 30 {
+	// and cancel (P-2f, P-13), and the policy summary (P-8).
+	if len(PrivOps) != 31 {
 		t.Fatalf("PrivOps has %d entries", len(PrivOps))
 	}
 }

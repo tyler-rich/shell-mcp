@@ -60,6 +60,7 @@ func opTable() map[string]opSpec {
 		// priv_exec_preview checks its command's tier as priv_exec does; the
 		// core instance previews commands of either unit (handoff D6).
 		protocol.OpPrivExecPreview:   {policy.TierRead, (*server).execPreview},
+		protocol.OpPrivPolicy:        {policy.TierRead, (*server).policySummary},
 		protocol.OpPrivWriteFile:     {policy.TierOperator, (*server).writeFile},
 		protocol.OpPrivMkdir:         {policy.TierOperator, (*server).mkdir},
 		protocol.OpPrivChown:         {policy.TierOperator, (*server).chown},
