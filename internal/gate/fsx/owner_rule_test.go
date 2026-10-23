@@ -247,7 +247,7 @@ func TestOwnerRuleSwapRace(t *testing.T) {
 		}
 	})
 	const runs = 300
-	refused := 0
+	refused := map[string]int{}
 	for i := range runs {
 		_, werr := e.fs.WriteFile(filepath.Join(a, fmt.Sprintf("w%d", i)), []byte("x\n"), WriteOptions{Create: true})
 		_, cerr := e.fs.CopyExpecting(src, filepath.Join(a, fmt.Sprintf("c%d", i)), false, "")
@@ -257,8 +257,15 @@ func TestOwnerRuleSwapRace(t *testing.T) {
 				wg.Wait()
 				t.Fatalf("run %d: root created a file under a directory another account can write", i)
 			}
-			wantCode(t, err, "path_denied")
-			refused++
+			// path_denied by rule R, or not_a_directory when the symlink was
+			// in place at the lookup: refused either way.
+			var fe *Error
+			if !asError(err, &fe) || fe.Code != "path_denied" && fe.Code != "not_a_directory" {
+				close(stop)
+				wg.Wait()
+				t.Fatalf("run %d: %v, want path_denied or not_a_directory", i, err)
+			}
+			refused[fe.Code]++
 		}
 	}
 	close(stop)
@@ -271,7 +278,7 @@ func TestOwnerRuleSwapRace(t *testing.T) {
 			t.Fatalf("%s holds %d entries after the race", d, len(names))
 		}
 	}
-	t.Logf("%d creates refused while the racer made %d swaps", refused, swaps)
+	t.Logf("creates refused %v while the racer made %d swaps", refused, swaps)
 }
 
 // TestNewInodeGroupExplicit: in a setgid directory (closed, so rule R lets

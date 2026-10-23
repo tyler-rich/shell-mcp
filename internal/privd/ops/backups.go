@@ -1049,13 +1049,67 @@ func (s *server) planTreeRestore(pl *restorePlan) error {
 	if len(entries) != m.Entries {
 		return &fsx.Error{Code: protocol.CodeVerifyFailed, Msg: fmt.Sprintf("the tree backup holds %d entries, but its record says %d; nothing was restored", len(entries), m.Entries)}
 	}
-	dirs := map[string]fsx.ChainDir{"": {Path: m.Path, UID: m.UID, Mode: uint32(pl.mode)}}
-	for i := range entries {
-		e := &entries[i]
-		target := m.Path + "/" + e.name
-		if err := s.fs.CheckWritable(target); err != nil {
+	_, first, err := s.restoreOwners(m.Path, chain, m.UID, pl.mode, entries, true, func(e *archiveEntry) error {
+		if err := s.fs.CheckWritable(m.Path + "/" + e.name); err != nil {
 			return err
 		}
+		mode := s.newInodeMode(e.mode)
+		if uint32(mode) != e.mode {
+			pl.narrowed++
+		}
+		pl.modes = append(pl.modes, mode)
+		return nil
+	})
+	switch {
+	case err != nil:
+		return err
+	case first != nil:
+		return s.refuseOwner(first.path, &first.dir, first.uid)
+	}
+	pl.entries = entries
+	return nil
+}
+
+// ownerRefusal is an entry a restore would refuse under the moved-in rule:
+// its path, the first directory of its chain that fails, its recorded owner.
+type ownerRefusal struct {
+	path string
+	dir  fsx.ChainDir
+	uid  uint32
+}
+
+// restoreOwners applies the restore's moved-in rule (rule R for the
+// recorded owners, handoff N-6, N-9) to a backup restored at p: chain is
+// p's (from the root to its parent), rootUID and rootMode the file's or the
+// tree root's recorded owner and the mode it gets, entries a tree's in
+// archive order, whose restored directories, with their recorded owners
+// and the modes they get, extend the chain. It returns how many entries
+// (the file or the root included) would be refused, and the first; with
+// stop it stops there. each, when set, is called for every entry first and
+// its error returned at once (the restore's own checks).
+func (s *server) restoreOwners(p string, chain []fsx.ChainDir, rootUID uint32, rootMode os.FileMode, entries []archiveEntry, stop bool,
+	each func(e *archiveEntry) error) (int, *ownerRefusal, error) {
+	n := 0
+	var first *ownerRefusal
+	refuse := func(target string, d *fsx.ChainDir, uid uint32) bool {
+		n++
+		if first == nil {
+			first = &ownerRefusal{path: target, dir: *d, uid: uid}
+		}
+		return stop
+	}
+	if d := s.fs.MovedInBy(chain, rootUID); d != nil && refuse(p, d, rootUID) {
+		return n, first, nil
+	}
+	dirs := map[string]fsx.ChainDir{"": {Path: p, UID: rootUID, Mode: uint32(rootMode)}}
+	for i := range entries {
+		e := &entries[i]
+		if each != nil {
+			if err := each(e); err != nil {
+				return n, first, err
+			}
+		}
+		target := p + "/" + e.name
 		ec := append([]fsx.ChainDir(nil), chain...)
 		var anc []string
 		for d := path.Dir(e.name); d != "."; d = path.Dir(d) {
@@ -1065,20 +1119,48 @@ func (s *server) planTreeRestore(pl *restorePlan) error {
 		for j := len(anc) - 1; j >= 0; j-- {
 			ec = append(ec, dirs[anc[j]])
 		}
-		if d := s.fs.MovedInBy(ec, e.uid); d != nil {
-			return s.refuseOwner(target, d, e.uid)
+		if d := s.fs.MovedInBy(ec, e.uid); d != nil && refuse(target, d, e.uid) {
+			return n, first, nil
 		}
-		mode := s.newInodeMode(e.mode)
 		if e.dir {
-			dirs[e.name] = fsx.ChainDir{Path: target, UID: e.uid, Mode: uint32(mode)}
+			dirs[e.name] = fsx.ChainDir{Path: target, UID: e.uid, Mode: uint32(s.newInodeMode(e.mode))}
 		}
-		if uint32(mode) != e.mode {
-			pl.narrowed++
-		}
-		pl.modes = append(pl.modes, mode)
 	}
-	pl.entries = entries
-	return nil
+	return n, first, nil
+}
+
+// unrestorable is the warning a delete's preview gives when the restore of
+// the backup the delete would write (src) would be refused under the
+// moved-in rule, with how many entries it concerns and the first; "" when
+// the backup restores.
+func (s *server) unrestorable(src *fsx.BackupSource) (string, error) {
+	chain, err := s.fs.WriteChain(src.Path)
+	if err != nil {
+		return "", err
+	}
+	uid, _ := ownerIDs(src.Info)
+	var entries []archiveEntry
+	if src.Kind == fsx.BackupTree && src.List != nil {
+		err = src.List(func(rel string, fi fs.FileInfo) error {
+			eu, _ := ownerIDs(fi)
+			entries = append(entries, archiveEntry{name: rel, dir: fi.IsDir(), mode: unixMode(fi), uid: eu})
+			return nil
+		})
+		if err != nil {
+			return "", err
+		}
+	}
+	n, first, err := s.restoreOwners(src.Path, chain, uid, s.newInodeMode(unixMode(src.Info)), entries, false, nil)
+	if err != nil || first == nil {
+		return "", err
+	}
+	what := "1 entry"
+	if n != 1 {
+		what = strconv.Itoa(n) + " entries"
+	}
+	return fmt.Sprintf("the tools won't be able to restore %s of this backup: %s would get its recorded owner (uid %d) under the directory %s, which is %s, "+
+		"so another account could take a file it could not have made itself; a restore of this backup is refused", what, first.path, first.uid,
+		first.dir.Path, s.fs.MovedInWhy(&first.dir, first.uid)), nil
 }
 
 // restoreDomain separates restore preview hashes from any other SHA-256
@@ -1291,11 +1373,46 @@ func (s *server) restoreTree(pl *restorePlan, owner *fsx.Owner) (int, error) {
 // overwrite of the path now would write a backup, of how many bytes, and
 // whether it fits the store's cap, with the store's current use and cap.
 type backupCheckData struct {
-	Written       bool  `json:"written"`
-	Bytes         int64 `json:"bytes"`
-	Fits          bool  `json:"fits"`
-	StoreBytes    int64 `json:"store_bytes"`
-	MaxStoreBytes int64 `json:"max_store_bytes"`
+	Written       bool      `json:"written"`
+	Bytes         int64     `json:"bytes"`
+	Fits          bool      `json:"fits"`
+	StoreBytes    int64     `json:"store_bytes"`
+	MaxStoreBytes int64     `json:"max_store_bytes"`
+	OwnerRule     ownerRule `json:"owner_rule"`
+}
+
+// ownerRule is rule R's verdict for a path (handoff P-14): which owners a
+// file there may have, from the same chain the write operations check.
+// verdict is any, only (uid, and name when it is on owners.users) or none;
+// dir and why name the first directory that is not closed. Only paths,
+// uids and modes: the same in every helper instance.
+type ownerRule struct {
+	Verdict string  `json:"verdict"`
+	UID     *uint32 `json:"uid,omitempty"`
+	Name    string  `json:"name,omitempty"`
+	Dir     string  `json:"dir,omitempty"`
+	Why     string  `json:"why,omitempty"`
+}
+
+// ownerRuleOf is p's verdict (p's parent must exist).
+func (s *server) ownerRuleOf(p string) (ownerRule, error) {
+	chain, err := s.fs.WriteChain(p)
+	if err != nil {
+		return ownerRule{}, err
+	}
+	v := s.fs.OwnerVerdictOf(chain)
+	r := ownerRule{Verdict: "none"}
+	switch {
+	case v.Any:
+		return ownerRule{Verdict: "any"}, nil
+	case v.UID != nil:
+		r.Verdict, r.UID = "only", v.UID
+		r.Name = s.ownerOf(*v.UID, 0).Owner
+	}
+	// Why it is not closed: its owner (never root's, which is trusted) or
+	// its group or world write bits.
+	r.Dir, r.Why = v.Dir.Path, s.fs.MovedInWhy(v.Dir, 0)
+	return r, nil
 }
 
 // backupCheck answers priv_backup_check: the path must be one the write ops
@@ -1310,6 +1427,9 @@ func (s *server) backupCheck(raw jsontext.Value) (data any, warns []string, fail
 	out := backupCheckData{Fits: true, MaxStoreBytes: s.p.BackupsMaxStoreBytes}
 	fi, err := s.fs.WriteTarget(a.Path)
 	if err != nil {
+		return nil, nil, err
+	}
+	if out.OwnerRule, err = s.ownerRuleOf(a.Path); err != nil {
 		return nil, nil, err
 	}
 	if fi == nil || !fi.Mode().IsRegular() || s.p.BackupsKeep == 0 {

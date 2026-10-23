@@ -234,7 +234,8 @@ func TestPrivOwnerRuleRace(t *testing.T) {
 			case r.OK:
 				_ = stdin.Close()
 				t.Fatalf("run %d: %s created a file under example-app's directory", i, c.name)
-			case r.code() == "path_denied":
+			case r.code() == "path_denied" || r.code() == "not_a_directory":
+				// Rule R, or the symlink in place at the lookup.
 				refused++
 			default:
 				_ = stdin.Close()

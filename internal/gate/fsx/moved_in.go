@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"os"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -38,10 +40,15 @@ import (
 // name from the root always passes through it.
 //
 // Reads (ReadFile, a copy's source, CurrentFile) return a file only when it
-// is owner-matched or world-readable. A write or copy over an existing file
-// keeps its owner and group only when it is owner-matched: otherwise a write
-// needs both an owner and a group given, and a copy, which cannot name one,
-// is refused. Directories above the root are not checked per request
+// is owner-matched or world-readable. Rule R (handoff N-8, N-9;
+// ownerRule): root leaves a regular file (written, copied, restored) only
+// when the owner it will have is owner-matched, so another account that
+// could move the file elsewhere could have made it itself. A write or copy
+// over an existing file keeps its owner and group only when that owner
+// passes: otherwise a write needs both an owner and a group given, which
+// must pass too, and a copy, which cannot name one, is refused. A new file
+// or copy without an owner is root's, so it is created only under a closed
+// chain. Directories above the root are not checked per request
 // (check-policy reports them, CheckRootChain).
 
 // ChainDir is one directory on the chain from a root to a file's parent:
@@ -159,9 +166,110 @@ type OwnerVerdict struct {
 	Dir *ChainDir
 }
 
-// OwnerVerdictOf is the verdict for chain. (Stub: not implemented yet.)
+// OwnerVerdictOf is the verdict for chain: exactly the owners MovedInBy
+// accepts. Every directory closed: any. Otherwise, when no directory is
+// group- or world-writable and every one that is not a trusted uid's
+// belongs to one uid, only that uid; else none.
 func (f *FS) OwnerVerdictOf(chain []ChainDir) OwnerVerdict {
-	return OwnerVerdict{Any: true}
+	var v OwnerVerdict
+	none := false
+	for i := range chain {
+		d := &chain[i]
+		if d.Mode&0o022 == 0 && f.trustedOwner(d.UID) {
+			continue
+		}
+		if v.Dir == nil {
+			v.Dir = d
+		}
+		switch {
+		case d.Mode&0o022 != 0:
+			none = true
+		case v.UID == nil:
+			uid := d.UID
+			v.UID = &uid
+		case *v.UID != d.UID:
+			none = true
+		}
+	}
+	switch {
+	case v.Dir == nil:
+		v.Any = true
+	case none:
+		v.UID = nil
+	}
+	return v
+}
+
+// allows says whether a file owned by uid may be left under the verdict's
+// chain.
+func (v *OwnerVerdict) allows(uid uint32) bool {
+	return v.Any || v.UID != nil && *v.UID == uid
+}
+
+// ownerRule is rule R (handoff N-8, N-9; PRIVILEGED §6), applied by
+// writeAtomic on the parent it holds before anything is backed up or
+// written: root leaves a regular file only when the owner it will have is
+// owner-matched on the chain from the root to that parent. That owner is
+// the one given, else an existing file's (kept), else the helper's own (a
+// new file or copy). An existing file whose kept owner does not pass needs
+// both an owner and a group given (N-6); a copy, which names none, is
+// refused. A refusal names the one owner that would pass, when exactly one
+// would, and changes nothing.
+func (f *FS) ownerRule(l *loc, o *atomicOpts, exists bool, kept uint32) error {
+	if !f.cfg.GuardMovedIn {
+		return nil
+	}
+	chain, err := f.rootChain(l)
+	if err != nil {
+		return err
+	}
+	v := f.OwnerVerdictOf(chain)
+	if v.Any {
+		return nil
+	}
+	explicit := !o.copy && o.owner != nil && o.owner.UID != nil
+	both := explicit && o.owner.GID != nil
+	uid := uint32(os.Geteuid()) //nolint:gosec // G115: a uid fits
+	switch {
+	case explicit:
+		uid = *o.owner.UID
+	case exists:
+		uid = kept
+	}
+	if exists && !v.allows(kept) && !both {
+		d := f.MovedInBy(chain, kept)
+		if o.copy {
+			return unchanged(errf(protocol.CodePathDenied, "%q is not overwritten by a copy as root: the directory %s is %s, so another account could have moved it there, "+
+				"and a copy cannot name the owner and group to give the new file; %s; nothing was changed", l.p, d.Path, f.MovedInWhy(d, kept), f.ownerHint(&v)))
+		}
+		return unchanged(errf(protocol.CodePathDenied, "%q is not overwritten as root keeping its owner and group: the directory %s is %s, so another account could have moved it there; "+
+			"give both an owner and a group from the privileged policy's owners; %s; nothing was changed", l.p, d.Path, f.MovedInWhy(d, kept), f.ownerHint(&v)))
+	}
+	if v.allows(uid) {
+		return nil
+	}
+	d := f.MovedInBy(chain, uid)
+	what := "a file of uid " + strconv.FormatUint(uint64(uid), 10)
+	switch {
+	case o.copy:
+		what = "a copy, which is root's"
+	case !explicit && !exists:
+		what = "a file without an owner, which is root's"
+	}
+	return unchanged(errf(protocol.CodePathDenied, "%q is not left as %s: the directory %s is %s, so another account could move the file elsewhere and keep "+
+		"what it could not have made itself; %s; nothing was changed", l.p, what, d.Path, f.MovedInWhy(d, uid), f.ownerHint(&v)))
+}
+
+// ownerHint names the one owner that would pass, or says that none would.
+func (f *FS) ownerHint(v *OwnerVerdict) string {
+	if v.UID == nil {
+		return "no owner may be given a file there: root's file tools leave none under that directory"
+	}
+	who := "uid " + strconv.FormatUint(uint64(*v.UID), 10)
+	if n := newNames().user(*v.UID); n != "" {
+		who += " (" + n + ")"
+	}
+	return "only " + who + ", the account that owns that directory, may own a file there"
 }
 
 // MovedInWhy says why d is open to another account, for messages.
@@ -205,27 +313,6 @@ func (f *FS) movedInRead(l *loc, fi fs.FileInfo) error {
 	return errf(protocol.CodePathDenied, "%q is not read as root: the directory %s is %s, so another account could have moved it there; "+
 		"under such a directory root reads only what that account could read itself (its own file, or a world-readable one)",
 		l.p, d.Path, f.MovedInWhy(d, owner))
-}
-
-// movedInOverwrite applies the overwrite rule to the file about to be
-// replaced (fi, from its descriptor): its owner and group are kept only when
-// it is owner-matched; otherwise a write must name both, and a copy is
-// refused. The refusal comes before anything is backed up or written.
-func (f *FS) movedInOverwrite(l *loc, fi fs.FileInfo, o *atomicOpts) error {
-	if !f.cfg.GuardMovedIn || !o.copy && o.owner != nil && o.owner.UID != nil && o.owner.GID != nil {
-		return nil
-	}
-	owner := metaOf(fi).UID
-	d, err := f.movedIn(l, owner)
-	if err != nil || d == nil {
-		return err
-	}
-	if o.copy {
-		return unchanged(errf(protocol.CodePathDenied, "%q is not overwritten by a copy as root: the directory %s is %s, so another account could have moved it there, "+
-			"and a copy cannot name the owner and group to give the new file; nothing was changed", l.p, d.Path, f.MovedInWhy(d, owner)))
-	}
-	return unchanged(errf(protocol.CodePathDenied, "%q is not overwritten as root keeping its owner and group: the directory %s is %s, so another account could have moved it there; "+
-		"give both an owner and a group from the privileged policy's owners; nothing was changed", l.p, d.Path, f.MovedInWhy(d, owner)))
 }
 
 // CurrentFile is what a restore would replace at p (a path under a write

@@ -187,7 +187,7 @@ func TestPrivOwnerRuleRace(t *testing.T) {
 			}
 		}
 	})
-	refused := 0
+	refused := map[string]int{}
 	for i := range 100 {
 		for _, q := range []struct {
 			op   string
@@ -198,12 +198,14 @@ func TestPrivOwnerRuleRace(t *testing.T) {
 			{"priv_copy", m{"source": src, "destination": filepath.Join(a, fmt.Sprintf("c%d", i))}},
 		} {
 			r := f.serve(q.op, q.args)
-			if r.OK || r.Error == nil || r.Error.Code != "path_denied" {
+			// path_denied by rule R, or not_a_directory when the symlink
+			// was in place at the lookup: refused either way.
+			if r.OK || r.Error == nil || r.Error.Code != "path_denied" && r.Error.Code != "not_a_directory" {
 				close(stop)
 				wg.Wait()
-				t.Fatalf("run %d: %s %v: ok=%v %+v, want path_denied", i, q.op, q.args, r.OK, r.Error)
+				t.Fatalf("run %d: %s %v: ok=%v %+v, want path_denied or not_a_directory", i, q.op, q.args, r.OK, r.Error)
 			}
-			refused++
+			refused[r.Error.Code]++
 		}
 	}
 	close(stop)
@@ -216,5 +218,5 @@ func TestPrivOwnerRuleRace(t *testing.T) {
 			t.Fatalf("%s holds %d entries after the race", d, len(names))
 		}
 	}
-	t.Logf("%d requests refused while the racer made %d swaps", refused, swaps)
+	t.Logf("requests refused %v while the racer made %d swaps", refused, swaps)
 }
