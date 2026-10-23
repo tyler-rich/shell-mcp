@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -749,13 +750,14 @@ func (f *fixture) holdDpkgLock() (pid int, release func()) {
 	if err := c.Start(); err != nil {
 		f.t.Fatal(err)
 	}
-	done := false
+	// release is called from the test (a goroutine, in TestPkgLockHolder)
+	// and again by the cleanup: once, synchronised.
+	var once sync.Once
 	release = func() {
-		if !done {
-			done = true
+		once.Do(func() {
 			_ = in.Close()
 			_ = c.Wait()
-		}
+		})
 	}
 	f.t.Cleanup(release)
 	b := make([]byte, 7)

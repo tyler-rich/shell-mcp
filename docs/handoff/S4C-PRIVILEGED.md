@@ -483,7 +483,7 @@ Columns: create-only · preview binding · set-aside/stranded · approval and re
 
 | Option | For | Against |
 |---|---|---|
-| **R1.** A walk like `PreviewDelete`: each directory opened from its parent's handle and re-checked; a hash over every entry's path, type, device, inode, mount id, birth time, uid, gid and mode; the op recomputes it, then applies each change on a descriptor opened by name, checking its identity before the change. | The same machinery as the delete, and exact. | Code. |
+| **R1.** A walk like `PreviewDelete`: each directory opened from its parent's handle and re-checked; a hash over every entry's path, type, device, inode, mount id, birth time, uid, gid and mode (amended 2026-10-22: without the mount id, below); the op recomputes it, then applies each change on a descriptor opened by name, checking its identity before the change. | The same machinery as the delete, and exact. | Code. |
 | R2. A non-recursive walk at the server, one `priv_stat` per entry. | No new op. | Unbounded round trips, and no binding at the commit. |
 | R3. Drop `recursive` from v1 (TOOLS change). | No code. | A common root need, `chown -R` of an application directory, is missing. |
 
@@ -492,7 +492,8 @@ Columns: create-only · preview binding · set-aside/stranded · approval and re
 - **Never followed:** symlinks inside the tree are reported, and neither followed nor changed (no `lchown`).
 - **Refused for these ops:** setuid, setgid and sticky files, and non-directories with a link count above 1 (F-2; checked on the same descriptor, as S4c-0 does).
 - **Size bound:** `limits.max_delete_entries`, which avoids a schema change (Q2).
-- **At each entry, before the change:** device, inode, type, mount id and birth time.
+- **The hash** (amended by the maintainer, 2026-10-22, after a CI failure on PR #44): every entry's path, type, device, inode, birth time, uid, gid and mode, **without the mount id**. `stx_mnt_id` is local to a mount namespace, and every helper instance has its own, whose mounts get new ids (the lowest free ones); when another mount namespace came or went between two instances, an unchanged tree hashed differently and its approval or operation was refused (`approval_invalid`, `exists`). The mount id stays in the checks made within one instance: the walk's mount-crossing refusal (a mount placed into the tree after the preview is still refused) and the identity check before each change. The hash domain is v2. ARCHIVE §14, 2026-10-22, "The chown and chmod preview hash leaves out the mount id".
+- **At each entry, before the change:** device, inode, type, mount id and birth time. (Within the operation's own instance.)
 - **At the recompute only:** uid, gid and mode, because the change itself moves the change time. The change time is never compared after a change.
 - **When it stops:** a mismatch stops with `exists`, "N of M entries were changed and K were not". There is no rollback; the counts are reported, consistent with the delete and the discard.
 - **Read-back:** fstat after each change on the same descriptor (X-10).

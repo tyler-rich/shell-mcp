@@ -36,9 +36,14 @@ import (
 // the write roots, F-2). It returns the counts, the first entries with
 // their current and new values, and preview_sha256: a SHA-256 over the
 // change asked for, the caller's binding (the helper's policy hash) and
-// every entry's path, type, device, inode, mount id, birth time (where the
-// filesystem reports one), owner, group and mode. Size and change time are
-// not in it: a content change does not matter to a chown or chmod.
+// every entry's path, type, device, inode, birth time (where the filesystem
+// reports one), owner, group and mode. Size and change time are not in it:
+// a content change does not matter to a chown or chmod. Nor is the mount id:
+// stx_mnt_id is local to the mount namespace that read it, every helper
+// instance has a namespace of its own whose mounts get new ids (the lowest
+// free ones), so the preview's instance and the operation's can see
+// different ids for an unchanged tree. A mount placed into the tree is
+// refused by the walk itself, which compares mount ids within one instance.
 //
 // The chain rule (N-1). An account that can write a directory under the
 // write root and the directory of a file elsewhere on the same filesystem
@@ -135,7 +140,8 @@ type MetaPlan struct {
 }
 
 // metaDomain separates metadata preview hashes from any other SHA-256 input.
-const metaDomain = "shell-mcp metadata preview v1\x00"
+// v2: the mount id left out of every entry (handoff D4, as amended).
+const metaDomain = "shell-mcp metadata preview v2\x00"
 
 // statxMeta is what the chain rule and the pass need beyond a delete's.
 const statxMeta = unix.STATX_UID | unix.STATX_GID | unix.STATX_MODE | unix.STATX_NLINK
@@ -583,16 +589,16 @@ func metaHash(pl *metaPlan, bind string) string {
 }
 
 // appendMetaEntry appends one entry's hash input: its path (length first),
-// type, device, inode, mount id, owner, group, mode, and birth time when
-// the filesystem reports one. Every field has a fixed width or a length,
-// so different entries never encode alike (FuzzMetaEntryEncoding).
+// type, device, inode, owner, group, mode, and birth time when the
+// filesystem reports one; never the mount id, which differs between
+// helper instances (see the file comment). Every field has a fixed width or
+// a length, so different entries never encode alike (FuzzMetaEntryEncoding).
 func appendMetaEntry(b []byte, path string, id *ident) []byte {
 	b = binary.AppendUvarint(b, uint64(len(path)))
 	b = append(b, path...)
 	b = binary.BigEndian.AppendUint32(b, id.typ)
 	b = binary.BigEndian.AppendUint64(b, id.dev)
 	b = binary.BigEndian.AppendUint64(b, id.ino)
-	b = binary.BigEndian.AppendUint64(b, id.mnt)
 	b = binary.BigEndian.AppendUint32(b, id.uid)
 	b = binary.BigEndian.AppendUint32(b, id.gid)
 	b = binary.BigEndian.AppendUint32(b, id.perm)
