@@ -30,7 +30,7 @@ import (
 // page returns the approval page of id, as an approver would see it.
 func (s *approvalServer) page(t *testing.T, id string) string {
 	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, s.origin()+"/approvals/"+id, nil)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, s.origin()+"/approvals/"+id, http.NoBody)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestPrivOwnerRuleRace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.CommandContext(t.Context(), self)
+	cmd := exec.CommandContext(t.Context(), self) //nolint:gosec // G204: this test binary itself, in client mode
 	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, exampleApp)}
 	cmd.Env = append(runner.Env(), "E2E_CLIENT=swap", "E2E_SWAP_NAME="+d, "E2E_SWAP_ALT="+d+".alt", "E2E_SWAP_TO="+vault)
 	stdin, err := cmd.StdinPipe()

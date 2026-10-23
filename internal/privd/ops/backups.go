@@ -1050,8 +1050,8 @@ func (s *server) planTreeRestore(pl *restorePlan) error {
 		return &fsx.Error{Code: protocol.CodeVerifyFailed, Msg: fmt.Sprintf("the tree backup holds %d entries, but its record says %d; nothing was restored", len(entries), m.Entries)}
 	}
 	_, first, err := s.restoreOwners(m.Path, chain, m.UID, pl.mode, entries, true, func(e *archiveEntry) error {
-		if err := s.fs.CheckWritable(m.Path + "/" + e.name); err != nil {
-			return err
+		if werr := s.fs.CheckWritable(m.Path + "/" + e.name); werr != nil {
+			return werr
 		}
 		mode := s.newInodeMode(e.mode)
 		if uint32(mode) != e.mode {

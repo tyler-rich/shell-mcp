@@ -182,8 +182,8 @@ func (f *FS) writeAtomic(l *loc, content []byte, o *atomicOpts) (WriteResult, er
 	// Rule R (the helper): the owner the file will have must be one that
 	// could have made it there itself; nothing is backed up or written
 	// otherwise (PRIVILEGED §6, handoff N-6, N-8).
-	if err := f.ownerRule(l, o, exists, oldUID); err != nil {
-		return res, err
+	if rerr := f.ownerRule(l, o, exists, oldUID); rerr != nil {
+		return res, rerr
 	}
 	if mode != nil {
 		newMode = *mode
