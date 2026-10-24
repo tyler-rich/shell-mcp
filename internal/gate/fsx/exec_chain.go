@@ -67,16 +67,38 @@ type pathOwner struct {
 }
 
 // readOpen says why a directory (named name in refusals) is open for a
-// {path:read}, or "" when it passes, recording its owner in o.
+// {path:read} under OwnerMatchedReads, or "" when it passes: a closed one,
+// or one neither group- nor world-writable nor sticky whose owner is the
+// one other account seen on the path so far (recorded in o). A second
+// account is refused: either could rename the other's directory away.
 func (f *FS) readOpen(id *ident, name string, o *pathOwner) string {
-	return f.execOpen(id)
+	why := f.execOpen(id)
+	switch {
+	case why == "" || id.perm&0o1022 != 0:
+		return why
+	case !o.set:
+		o.set, o.uid, o.dir = true, id.uid, name
+		return ""
+	case o.uid == id.uid:
+		return ""
+	}
+	return fmt.Sprintf("owned by uid %d, while %s is owned by uid %d: two accounts other than root and the service account, either of which could "+
+		"rename the other's directory away", id.uid, o.dir, o.uid)
 }
 
 // execChain applies the rule to l's target, opened as target (nil for a
-// {path:write} that does not exist yet).
-func (f *FS) execChain(l *loc, target *os.File) error {
+// {path:write} that does not exist yet); read is set for a {path:read},
+// which OwnerMatchedReads relaxes (readOpen).
+func (f *FS) execChain(l *loc, target *os.File, read bool) error {
 	if !f.cfg.GuardExecPaths {
 		return nil
+	}
+	var o pathOwner
+	open := func(id *ident, name string) string {
+		if read && f.cfg.OwnerMatchedReads {
+			return f.readOpen(id, name, &o)
+		}
+		return f.execOpen(id)
 	}
 	held, dir := l.parent, l.parentReal
 	if held == nil {
@@ -96,7 +118,7 @@ func (f *FS) execChain(l *loc, target *os.File) error {
 			if l.parent == nil && cur == dir {
 				return nil // the root itself: checked below as the target
 			}
-			if why := f.execOpen(id); why != "" {
+			if why := open(id, l.chainDirName(cur)); why != "" {
 				return errf(protocol.CodePathDenied, "%q is not given to a command%s: %s on its path is %s, so another account could replace "+
 					"a directory or file on the path (with a symlink, for example) before the command looks the path up itself; nothing was run",
 					l.p, f.asRoot(), l.chainDirName(cur), why)
@@ -125,7 +147,7 @@ func (f *FS) execChain(l *loc, target *os.File) error {
 		if !id.isDir() {
 			return nil
 		}
-		if why := f.execOpen(&id); why != "" {
+		if why := open(&id, "the directory itself"); why != "" {
 			return errf(protocol.CodePathDenied, "%q is not given to a command%s: it is a directory that is %s, so another account could change "+
 				"what is inside it (plant a symlink, for example) before or while the command works in it; nothing was run", l.p, f.asRoot(), why)
 		}

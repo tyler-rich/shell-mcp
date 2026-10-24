@@ -893,7 +893,7 @@ func (f *FS) ResolveWrite(p string) (string, error) {
 		}
 		defer func() { _ = file.Close() }()
 	}
-	if err := f.execChain(l, file); err != nil {
+	if err := f.execChain(l, file, false); err != nil {
 		return "", err
 	}
 	return l.targetReal(), nil

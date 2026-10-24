@@ -273,7 +273,7 @@ func FuzzExecPreviewMatchesExec(f *testing.F) {
 		}
 		open := opens[int(openSel)%len(opens)]
 		if open != "" {
-			if err := os.Chmod(open, modes[int(modeSel)%len(modes)]); err != nil { //nolint:gosec // G302: another account's write access, simulated
+			if err := os.Chmod(open, modes[int(modeSel)%len(modes)]); err != nil {
 				t.Fatal(err)
 			}
 			defer func() { _ = os.Chmod(open, 0o755) }() //nolint:gosec // G302: a directory, closed again

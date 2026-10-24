@@ -286,6 +286,11 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 	ec := cfg
 	ec.GuardExecPaths = true
 	ec.TrustedDirOwner = commandTrust(o.Trust, install.ID(os.Geteuid()))
+	// A {path:read} may also lie under directories of one other account
+	// that it alone can write (an application's own tree): that account
+	// controls the content anyway, and a swap there only redirects the read
+	// to something the service account can read (POLICY §4).
+	ec.OwnerMatchedReads = true
 	s.execFS = fsx.New(&ec)
 	s.red = redact.New(p.Redact)
 
