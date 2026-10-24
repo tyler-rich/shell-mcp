@@ -66,7 +66,9 @@ func appTree(t *testing.T, p string) {
 	}
 }
 
-// rootDir makes p, root's, with mode.
+// rootDir makes p, root's, with mode, and checks the mode on disk: os.Chmod
+// takes the special bits only as os.ModeSetuid, os.ModeSetgid and
+// os.ModeSticky and drops raw octal ones.
 func rootDir(t *testing.T, p string, mode os.FileMode) {
 	t.Helper()
 	if err := os.Mkdir(p, 0o700); err != nil {
@@ -74,6 +76,10 @@ func rootDir(t *testing.T, p string, mode os.FileMode) {
 	}
 	if err := os.Chmod(p, mode); err != nil {
 		t.Fatal(err)
+	}
+	const bits = os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+	if got, _, _, _ := statOwner(t, p); got&bits != mode&bits {
+		t.Fatalf("%s has mode %v, want %v", p, got&bits, mode)
 	}
 }
 

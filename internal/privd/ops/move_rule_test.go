@@ -74,6 +74,7 @@ func TestPrivMoveRule(t *testing.T) {
 		if err := os.Chmod(d, c.mode); err != nil {
 			t.Fatal(err)
 		}
+		gatetest.ExactMode(t, d, c.mode)
 		f.failMsg("priv_move", m{"source": d, "destination": filepath.Join(f.write, "wide2")}, "path_denied", c.want)
 		if present(filepath.Join(f.write, "wide2")) {
 			t.Fatal("a refused directory was moved")
@@ -88,6 +89,7 @@ func TestPrivMoveRule(t *testing.T) {
 	if err := os.Chmod(filepath.Join(outer, "in"), 0o777); err != nil { //nolint:gosec // G302: the mode under test
 		t.Fatal(err)
 	}
+	gatetest.ExactMode(t, filepath.Join(outer, "in"), 0o777)
 	f.failMsg("priv_move", m{"source": outer, "destination": filepath.Join(f.write, "outer2")}, "path_denied", filepath.Join(outer, "in"))
 	// Closed to closed: moved.
 	f.ok("priv_move", m{"source": own, "destination": filepath.Join(f.write, "moved.conf")}, nil)

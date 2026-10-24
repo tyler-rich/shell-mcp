@@ -242,6 +242,8 @@ func TestMoveDirectoryModes(t *testing.T) {
 			mkdirMode(t, inner, 0o700)
 			must(t, os.Chmod(inner, c.inner))
 			must(t, os.Chmod(src, c.top))
+			exactMode(t, inner, c.inner)
+			exactMode(t, src, c.top)
 			_, err := e.fs.Move(src, dst, false)
 			if c.ok {
 				must(t, err)
