@@ -611,9 +611,11 @@ func (f *FS) Move(src, dst string, overwrite bool) (MoveResult, error) {
 
 // MoveExpecting renames src to dst. Both must be under the same write
 // root; a directory is moved only if no entry in it is denied or protected
-// at its old or new path. A rename within one directory goes through that
-// directory's verified os.Root; otherwise through the root's, and the moved
-// entry is then re-identified by device and inode. With overwrite and
+// at its old or new path, nor a staging entry. The commit is staged in the
+// destination's directory (commitStaged, move_rule.go): the source is
+// renamed there under a staging name, checked to be the entry that was
+// checked, and only then committed, so a replaced file never passes
+// through the source's directory (handoff N-18). With overwrite and
 // expected (expected_destination_sha256, P-9), the destination must be a
 // regular file with that content: otherwise exists (not_found when it is
 // gone), and nothing changes.
@@ -649,13 +651,12 @@ func (f *FS) MoveExpecting(src, dst string, overwrite bool, expected string) (Mo
 		return res, errf(protocol.CodePathDenied, "final path component is a symlink")
 	}
 	res.Type = typeOf(sfi.Mode())
-	// In the helper, the move rule (handoff N-17, move_rule.go): checked
-	// before anything is backed up or moved, and the commit staged.
-	var g *moveGuard
-	if f.cfg.GuardMovedIn {
-		if g, err = f.guardMove(ls, ld, sfi); err != nil {
-			return res, err
-		}
+	// The source's identity, and in the helper the move rule (handoff
+	// N-17, move_rule.go): checked before anything is backed up or moved,
+	// for the staged commit.
+	g, err := f.guardMove(ls, ld, sfi)
+	if err != nil {
+		return res, err
 	}
 	if sfi.IsDir() {
 		if pathx.Within(src, dst) {
@@ -665,12 +666,10 @@ func (f *FS) MoveExpecting(src, dst string, overwrite bool, expected string) (Mo
 		if serr != nil {
 			return res, serr
 		}
-		var tree []ChainDir
-		if g != nil {
-			if tree, serr = f.guardTree(g, sub, src); serr != nil {
-				_ = sub.Close()
-				return res, serr
-			}
+		tree, serr := f.guardTree(g, sub, src)
+		if serr != nil {
+			_ = sub.Close()
+			return res, serr
 		}
 		count := 0
 		werr := f.walkTree(ls, sub, src, subReal, 1, tree, func(e *treeEntry) error {
@@ -681,10 +680,7 @@ func (f *FS) MoveExpecting(src, dst string, overwrite bool, expected string) (Mo
 			if ce := f.checkPath(join(dst, pathx.Rel(src, e.lp)), true); ce != nil {
 				return ce
 			}
-			if g != nil {
-				return f.guardEntry(g, e, src, dst)
-			}
-			return nil
+			return f.guardEntry(g, e, src, dst)
 		})
 		_ = sub.Close()
 		if werr != nil {
@@ -734,43 +730,24 @@ func (f *FS) MoveExpecting(src, dst string, overwrite bool, expected string) (Mo
 	if f.cfg.InjectBeforeCommit != nil {
 		f.cfg.InjectBeforeCommit()
 	}
-	if g != nil {
-		if e := f.commitStaged(ls, ld, g, res.Replaced, replaced); e != nil {
-			return res, e
-		}
-		return res, nil
-	}
+	commit := commitRename // the gate's unconditional replace
 	switch {
 	case res.Replaced && (f.cfg.VerifyReplaced || expected != ""):
 		// The helper, and in the gate a replace bound to the content it
 		// hashed (expected): an exchange checked afterwards
 		// (exchangeVerified), which also refuses a destination changed
 		// since it was hashed.
-		if e := f.exchangeVerified(ls.parent, ls.base, ld.parent, ld.base, replaced); e != nil {
-			return res, e
-		}
+		commit = commitExchange
 	case !overwrite || f.cfg.VerifyReplaced:
 		// (In the helper, a destination that was absent when checked is
 		// committed create-only: overwrite replaces only what it checked.)
 		// Without overwrite the rename itself refuses an existing
 		// destination (RENAME_NOREPLACE), so one that appeared after the
 		// check above is never replaced.
-		if e := f.renameNoReplace(ls.parent, ls.base, ld.parent, ld.base); e != nil {
-			return res, e
-		}
-		err = nil // err still holds the destination's not-found Lstat
-	case ls.parentReal == ld.parentReal:
-		err = ls.parent.Rename(ls.base, ld.base)
-	default:
-		err = ls.top.Rename(ls.rel, ld.rel)
+		commit = commitNoReplace
 	}
-	if err != nil {
-		return res, mapErr(err)
-	}
-	f.commit()
-	nfi, err := ld.parent.Lstat(ld.base)
-	if err != nil || !os.SameFile(sfi, nfi) {
-		return res, errf(protocol.CodeInternal, "the moved entry could not be verified at its destination")
+	if e := f.commitStaged(ls, ld, g, commit, replaced); e != nil {
+		return res, e
 	}
 	return res, nil
 }
@@ -916,7 +893,7 @@ func (f *FS) ResolveWrite(p string) (string, error) {
 		}
 		defer func() { _ = file.Close() }()
 	}
-	if err := f.execChain(l, file); err != nil {
+	if err := f.execChain(l, file, false); err != nil {
 		return "", err
 	}
 	return l.targetReal(), nil

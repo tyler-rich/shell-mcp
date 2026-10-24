@@ -372,7 +372,7 @@ func (f *FS) ResolveRead(p string) (string, error) {
 		return "", err
 	}
 	defer func() { _ = file.Close() }()
-	if err := f.execChain(l, file); err != nil {
+	if err := f.execChain(l, file, true); err != nil {
 		return "", err
 	}
 	return l.targetReal(), nil
@@ -399,7 +399,7 @@ func (f *FS) ResolveDir(p string) (string, error) {
 		return "", mapErr(err)
 	}
 	defer func() { _ = df.Close() }()
-	if err := f.execChain(l, df); err != nil {
+	if err := f.execChain(l, df, false); err != nil {
 		return "", err
 	}
 	return rp, nil

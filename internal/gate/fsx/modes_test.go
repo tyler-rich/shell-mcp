@@ -127,7 +127,8 @@ func TestChmodRefusesHardLinks(t *testing.T) {
 
 // With VerifyMetadata, Chmod re-reads the inode through the descriptor it
 // changed and refuses a mismatch with verify_failed; the result carries the
-// values before the change. Without it (the gate) nothing is re-read.
+// values before the change. Without it nothing is re-read (both the gate,
+// since N-4, and the helper set it).
 // (ApplyMeta, the helper's, always reads back: TestApplyMetaReadBack.)
 func TestChmodReadBack(t *testing.T) {
 	e := newEnv(t)
@@ -135,7 +136,7 @@ func TestChmodReadBack(t *testing.T) {
 	p := filepath.Join(e.write, "app.yaml") // 0600
 	e.fs.cfg.InjectMetadataReadBackFault = func(m Meta) Meta { m.Mode ^= 0o004; return m }
 	_, err := e.fs.Chmod(p, 0o640)
-	must(t, err) // the gate: not re-read
+	must(t, err) // not re-read without VerifyMetadata
 	e.fs.cfg.VerifyMetadata = true
 	_, err = e.fs.Chmod(p, 0o600)
 	wantCode(t, err, protocol.CodeVerifyFailed)

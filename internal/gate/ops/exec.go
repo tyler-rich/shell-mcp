@@ -43,14 +43,15 @@ type execData struct {
 }
 
 // resolver resolves template placeholders against this gate's roots and
-// services.status patterns.
+// services.status patterns. Paths go through execFS, under the chain rule
+// (handoff N-11): the command looks the resolved string up again itself.
 type resolver struct{ s *server }
 
 func (r resolver) ResolvePath(v string, write bool) (string, error) {
 	if write {
-		return r.s.fs.ResolveWrite(v)
+		return r.s.execFS.ResolveWrite(v)
 	}
-	return r.s.fs.ResolveRead(v)
+	return r.s.execFS.ResolveRead(v)
 }
 
 func (r resolver) MatchUnit(v string) bool {
@@ -195,7 +196,7 @@ func (s *server) resolveExec(id string, args []string, cwd string) (*resolvedExe
 	}
 	dir := "/"
 	if cwd != "" {
-		if dir, err = s.fs.ResolveDir(cwd); err != nil {
+		if dir, err = s.execFS.ResolveDir(cwd); err != nil {
 			return nil, err
 		}
 	}

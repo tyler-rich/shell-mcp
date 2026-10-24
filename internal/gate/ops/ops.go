@@ -54,6 +54,9 @@ type Options struct {
 	InjectNoReplaceFault func() error
 	// InjectDeleteStep is passed to fsx; tests only.
 	InjectDeleteStep func(step fsx.DeleteStep, path string)
+	// InjectMetadataReadBackFault is passed to fsx (chmod's read-back);
+	// tests only.
+	InjectMetadataReadBackFault func(fsx.Meta) fsx.Meta
 	// InjectDiscardStep is called at the points of a git_discard; tests only.
 	InjectDiscardStep func(step fsx.DiscardStep, path string)
 
@@ -132,15 +135,18 @@ func ValidPrincipal(s string) bool { return principalRE.MatchString(s) }
 
 // server holds one request's state.
 type server struct {
-	o      Options
-	gate   *protocol.GateInfo
-	p      *policy.Policy
-	fs     *fsx.FS
+	o    Options
+	gate *protocol.GateInfo
+	p    *policy.Policy
+	fs   *fsx.FS
+	// execFS resolves commands' path placeholders and cwd: s.fs's
+	// confinement plus the chain rule (handoff N-11, POLICY §4).
+	execFS *fsx.FS
 	red    *redact.Redactor
 	report sandbox.Report
 	req    *protocol.Request
-	// setAside is the path of an entry a delete set aside and could not
-	// put back, for the audit line.
+	// setAside is the path of an entry a delete set aside, or a move
+	// staged, and could not put back, for the audit line.
 	setAside string
 }
 
@@ -249,7 +255,7 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 		return Failure("", protocol.CodeSandboxUnavailable, sandboxRefusal(&rep, err))
 	}
 	s.report = rep
-	s.fs = fsx.New(&fsx.Config{
+	cfg := fsx.Config{
 		ReadRoots:  p.Paths.Read,
 		WriteRoots: p.Paths.Write,
 		Deny:       p.Paths.Deny,
@@ -263,11 +269,29 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 			MaxFindDepth:     p.Limits.MaxFindDepth,
 			MaxDeleteEntries: p.Limits.MaxDeleteEntries,
 		},
-		InjectReadBackFault:  o.InjectReadBackFault,
-		InjectBeforeCommit:   o.InjectBeforeCommit,
-		InjectNoReplaceFault: o.InjectNoReplaceFault,
-		InjectDeleteStep:     o.InjectDeleteStep,
-	})
+		// chmod reads back the mode, owner and group it set (handoff N-4).
+		VerifyMetadata:              true,
+		InjectReadBackFault:         o.InjectReadBackFault,
+		InjectBeforeCommit:          o.InjectBeforeCommit,
+		InjectNoReplaceFault:        o.InjectNoReplaceFault,
+		InjectDeleteStep:            o.InjectDeleteStep,
+		InjectMetadataReadBackFault: o.InjectMetadataReadBackFault,
+	}
+	s.fs = fsx.New(&cfg)
+	// A command is given a path (a placeholder, its cwd) only when no
+	// account but root and the service account can change what it names
+	// before the command looks the string up itself (handoff N-11, POLICY
+	// §4). The built-in git operations resolve their repository through
+	// s.fs, unchanged.
+	ec := cfg
+	ec.GuardExecPaths = true
+	ec.TrustedDirOwner = commandTrust(o.Trust, install.ID(os.Geteuid()))
+	// A {path:read} may also lie under directories of one other account
+	// that it alone can write (an application's own tree): that account
+	// controls the content anyway, and a swap there only redirects the read
+	// to something the service account can read (POLICY §4).
+	ec.OwnerMatchedReads = true
+	s.execFS = fsx.New(&ec)
 	s.red = redact.New(p.Redact)
 
 	req, err := protocol.DecodeRequest(stdin)
@@ -282,6 +306,13 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 	resp := s.dispatch()
 	resp.ID = req.ID
 	return resp
+}
+
+// commandTrust is whose directories the chain rule for commands' paths
+// trusts: the trust set's (root) and the service account's, which runs the
+// commands and gains nothing by changing its own directories.
+func commandTrust(t policy.Trust, self uint32) func(uint32) bool {
+	return func(uid uint32) bool { return uid == self || t.Owns(uid) }
 }
 
 // timeout is the request's timeout, defaulted and clamped by the policy.

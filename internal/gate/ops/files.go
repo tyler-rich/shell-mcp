@@ -204,6 +204,10 @@ func (s *server) move(raw jsontext.Value) (data any, warns []string, failure err
 		return nil, nil, err
 	}
 	r, err := s.fs.MoveExpecting(a.Source, a.Destination, a.Overwrite, a.ExpectedDestinationSHA256)
+	var fe *fsx.Error
+	if errors.As(err, &fe) {
+		s.setAside = fe.SetAside
+	}
 	return r, nil, err
 }
 

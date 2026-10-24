@@ -305,12 +305,20 @@ func TestNoReplaceUnsupported(t *testing.T) {
 		absent(t, n)
 		noTemp(t, e.write)
 	}
-	// Writes and moves that may replace never need the atomic refusal.
+	// Writes that may replace never need the atomic refusal. Every move
+	// does, also one with overwrite: it stages its source in the
+	// destination's directory with RENAME_NOREPLACE (handoff N-18).
 	e.fs.cfg.InjectNoReplaceFault = func() error { return syscall.EINVAL }
 	_, err := e.fs.WriteFile(filepath.Join(e.write, "plain.txt"), []byte("plain\n"), WriteOptions{Create: true})
 	must(t, err)
 	_, err = e.fs.Move(src, filepath.Join(e.write, "app.yaml"), true)
-	must(t, err)
+	wantCode(t, err, protocol.CodeBadRequest)
+	if !strings.Contains(err.Error(), "RENAME_NOREPLACE") || !strings.Contains(err.Error(), "stage its source") {
+		t.Fatalf("an overwrite move: the message does not name the filesystem limitation: %v", err)
+	}
+	if read(t, src) != "source\n" || read(t, filepath.Join(e.write, "app.yaml")) != "key: value\n" {
+		t.Fatal("an overwrite move changed something on a filesystem without RENAME_NOREPLACE")
+	}
 }
 
 func absent(t *testing.T, p string) {

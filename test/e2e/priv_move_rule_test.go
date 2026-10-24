@@ -142,11 +142,13 @@ func exchangeClient() int {
 	}
 }
 
-// grabClient is a racer: run as another account, it takes any root-owned
-// entry that appears under E2E_GRAB, renaming it to E2E_GRAB.grab.<n> in
-// the same directory, until its stdin closes, then prints how many it took.
+// grabClient is a racer: run as another account, it takes any entry owned
+// by E2E_GRAB_UID (root when unset) that appears under E2E_GRAB, renaming it
+// to E2E_GRAB.grab.<n> in the same directory, until its stdin closes, then
+// prints how many it took.
 func grabClient() int {
 	name := os.Getenv("E2E_GRAB")
+	owner, _ := strconv.ParseUint(os.Getenv("E2E_GRAB_UID"), 10, 32)
 	done := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(io.Discard, os.Stdin)
@@ -161,7 +163,7 @@ func grabClient() int {
 		default:
 		}
 		var st unix.Stat_t
-		if unix.Lstat(name, &st) != nil || st.Uid != 0 {
+		if unix.Lstat(name, &st) != nil || uint64(st.Uid) != owner {
 			continue
 		}
 		if unix.Rename(name, fmt.Sprintf("%s.grab.%d", name, n)) == nil {

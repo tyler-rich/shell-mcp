@@ -245,7 +245,8 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust
 		for _, w := range p.Warnings {
 			pr("WARN %s", w)
 		}
-		// delete, and move without overwrite, need RENAME_NOREPLACE, and a
+		// delete and every move (its stage, and without overwrite its commit)
+		// need RENAME_NOREPLACE, and a
 		// write with expected_sha256 or a copy or move with a bound
 		// destination RENAME_EXCHANGE (verified replaces); each is refused
 		// on a filesystem without its flag (POLICY §3): probe each write
@@ -256,7 +257,7 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust
 				probe       func(string) error
 				unsupported error
 			}{
-				{"RENAME_NOREPLACE", "delete, and move without overwrite,", probeNoReplace, fsx.ErrNoReplaceUnsupported},
+				{"RENAME_NOREPLACE", "delete and move", probeNoReplace, fsx.ErrNoReplaceUnsupported},
 				{"RENAME_EXCHANGE", "write_file with expected_sha256, and copy and move with expected_destination_sha256,", probeExchange, fsx.ErrExchangeUnsupported},
 			} {
 				switch err := pb.probe(root); {
