@@ -238,7 +238,7 @@ func (f *FS) locate(p string, write bool) (*loc, error) {
 	l.base = path.Base(l.rel)
 	f.cfg.at("parent")
 	if f.cfg.layerOff(layerDescriptor) {
-		l.parent, err = os.OpenRoot(path.Join(root, path.Dir(l.rel)))
+		l.parent, err = f.cfg.rootByPath(path.Join(root, path.Dir(l.rel)))
 	} else {
 		l.parent, err = top.OpenRoot(path.Dir(l.rel))
 	}
@@ -320,7 +320,7 @@ func (f *FS) openTarget(l *loc) (*os.File, error) {
 	f.cfg.at("target")
 	switch {
 	case l.parent == nil && f.cfg.layerOff(layerDescriptor):
-		file, err = os.OpenFile(l.root, flags, 0)
+		file, err = f.cfg.fileByPath(l.root, flags)
 	case l.parent == nil:
 		file, err = l.top.OpenFile(".", flags, 0)
 	default:
@@ -333,7 +333,7 @@ func (f *FS) openTarget(l *loc) (*os.File, error) {
 		}
 		f.cfg.at("open")
 		if f.cfg.layerOff(layerDescriptor) {
-			file, err = os.OpenFile(l.p, flags, 0)
+			file, err = f.cfg.fileByPath(l.p, flags)
 		} else {
 			file, err = l.parent.OpenFile(l.base, flags, 0)
 		}
@@ -383,7 +383,7 @@ func (f *FS) openDirRoot(l *loc) (dir *os.Root, rp string, owned bool, err error
 // to be exactly want.
 func (f *FS) openSubdir(l *loc, dir *os.Root, want, name string) (sub *os.Root, rp string, owned bool, err error) {
 	if f.cfg.layerOff(layerDescriptor) && want == l.targetReal() {
-		sub, err = os.OpenRoot(l.p)
+		sub, err = f.cfg.rootByPath(l.p)
 	} else {
 		sub, err = dir.OpenRoot(name)
 	}
