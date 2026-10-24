@@ -319,11 +319,11 @@ func mergeGitlinks(ents, links []gitx.Entry, truncated bool) ([]gitx.Entry, bool
 		}
 	}
 	slices.SortStableFunc(tracked, func(a, b gitx.Entry) int { return strings.Compare(a.Path, b.Path) })
-	out := append(tracked, rest...)
-	if len(out) > maxGitEntries {
-		return out[:maxGitEntries], true
+	tracked = append(tracked, rest...)
+	if len(tracked) > maxGitEntries {
+		return tracked[:maxGitEntries], true
 	}
-	return out, truncated
+	return tracked, truncated
 }
 
 // head returns HEAD's commit, or "" for a repository without commits.

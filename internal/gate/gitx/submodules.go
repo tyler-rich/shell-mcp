@@ -175,7 +175,7 @@ func ParseStagedGitlinks(b []byte, maxEntries int) (entries []Entry, truncated b
 		if !strings.HasPrefix(head, ":") || len(f) != 5 || !isMode(f[0]) || !isMode(f[1]) || !isOID(f[2]) || !isOID(f[3]) || path == "" {
 			return nil, false, bad("staged gitlinks: record")
 		}
-		if len(f[4]) != 1 || !strings.Contains("ADMTU", f[4]) {
+		if len(f[4]) != 1 || strings.IndexByte("ADMTU", f[4][0]) < 0 {
 			return nil, false, bad("staged gitlinks: status")
 		}
 		if f[0] != "160000" && f[1] != "160000" {
