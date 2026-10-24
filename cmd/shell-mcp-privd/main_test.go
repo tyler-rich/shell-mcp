@@ -436,7 +436,7 @@ func TestCheckPolicyStickyIsOpen(t *testing.T) {
 			t.Errorf("report lacks %q:\n%s", want, out)
 		}
 	}
-	for _, unwanted := range []string{"ok   privileged write root " + drop + ":", "ok   privileged read root " + filepath.Join(spool, "logs") + ":"} {
+	for _, unwanted := range []string{"ok   privileged write root " + drop + ": every directory", "ok   privileged read root " + filepath.Join(spool, "logs") + ": every directory"} {
 		if strings.Contains(out, unwanted) {
 			t.Errorf("a root under a sticky directory got an ok line:\n%s", out)
 		}

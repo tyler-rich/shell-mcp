@@ -249,12 +249,15 @@ func broadUsers(p *policy.Policy) []string {
 // item that needs review: list B binaries, persistence roots, capabilities
 // added to the core unit, root-equivalent commands, and warnings. The exit
 // code is 1 if serve would refuse the policy.
-// probeNoReplace and probeExchange are fsx's rename-flag probes, and
-// checkRootChain its chain rule for a write root; tests may replace them.
+// probeNoReplace and probeExchange are fsx's rename-flag probes,
+// checkRootChain its chain rule for a write root, and checkClosedChain the
+// rule for root commands' paths, under which a sticky directory is open too;
+// tests may replace them.
 var (
-	probeNoReplace = fsx.ProbeNoReplace
-	probeExchange  = fsx.ProbeExchange
-	checkRootChain = fsx.CheckRootChain
+	probeNoReplace   = fsx.ProbeNoReplace
+	probeExchange    = fsx.ProbeExchange
+	checkRootChain   = fsx.CheckRootChain
+	checkClosedChain = fsx.CheckClosedChain
 )
 
 func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int {
@@ -345,11 +348,25 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 	// /, and a directory given to one must be closed itself, so an open
 	// directory at or above a root refuses the root and everything under it.
 	const execNote = "root commands are given no path (placeholder or cwd) at or under it"
+	// A root whose path passes the chain rule can still hold a sticky
+	// directory, which root commands' paths count as open, writable or not
+	// (handoff N-24); chmod and chown ignore the sticky bit.
+	closed := func(kind, root string) {
+		var ce *fsx.ChainError
+		switch err := checkClosedChain(root, env.trust.Owns); {
+		case err == nil:
+			pr("ok   privileged %s root %s: every directory from / to it is root's and not group- or world-writable, nor sticky", kind, root)
+		case errors.As(err, &ce):
+			pr("WARN privileged %s root %s: %v; %s (chmod, chown and the moved-in checks do not look at the sticky bit)", kind, root, ce, execNote)
+		default:
+			pr("WARN privileged %s root %s: could not check the directories on its path for a sticky bit (%v); root commands' paths are refused under it unless they pass", kind, root, err)
+		}
+	}
 	for _, root := range p.Paths.WriteRoots() {
 		var ce *fsx.ChainError
 		switch err := checkRootChain(root, env.trust.Owns); {
 		case err == nil:
-			pr("ok   privileged write root %s: every directory from / to it is root's and not group- or world-writable", root)
+			closed("write", root)
 		case errors.As(err, &ce):
 			pr("WARN privileged write root %s: %v; chmod and chown are refused under it (another account could move files in and out again); %s; %s", root, ce, movedIn(root, ce), execNote)
 		default:
@@ -360,7 +377,7 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 		var ce *fsx.ChainError
 		switch err := checkRootChain(root, env.trust.Owns); {
 		case err == nil:
-			pr("ok   privileged read root %s: every directory from / to it is root's and not group- or world-writable", root)
+			closed("read", root)
 		case errors.As(err, &ce):
 			pr("WARN privileged read root %s: %v; %s; %s", root, ce, movedIn(root, ce), execNote)
 		default:
