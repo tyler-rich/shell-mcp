@@ -3400,7 +3400,7 @@ CI before (PR #40's last run, `e580253`): `internal/privd/ops` 456.2 s (ubuntu-2
 
 **Findings:**
 - **N-23 (recorded, for the maintainer):** a submodule's own configuration runs in the gate's git operations. The submodule status process reads `<gitlink dir>/.git`'s configuration, which neither the allowlist nor the closed repository rule covers, and repository-named keys (`filter.<driver>.clean`) are not overridden. Shown on git 2.47.3 with the gate's argv and environment: `status`, `diff` and the discard's status ran a filter from a repository placed in a gitlink's directory, as the service account, with a superproject configuration the allowlist accepts. Needs an account that can write the gitlink's directory inside a listed repository's work tree. Options in the handoff; recommended: refuse repositories with gitlinks.
-- **N-24 (recorded, low):** the helper's per-root check-policy WARN does not count a sticky directory as open, while root commands' paths (N-10) do.
+- **N-24 (low):** the helper's per-root check-policy WARN does not count a sticky directory as open, while root commands' paths (N-10) do. Fixed in this PR (follow-up below).
 - **N-12's layers, what the tests show:** the descriptor is the parent's own `os.Root`, so it refuses a final symlink that leaves the parent directory even inside the root; checkReal is the last line for a directory symlink inside the root to a denied or protected directory, and, with the descriptor gone, for a directory swapped out of the root before the parent is opened; the real-path check is never the last line for an escape but alone binds the opened object to the located path inside the root.
 
 **Tests (committed failing first, `86a36c5`; output in the PR body).**
@@ -3413,11 +3413,11 @@ CI before (PR #40's last run, `e580253`): `internal/privd/ops` 456.2 s (ubuntu-2
 
 **Fuzzing (60 s each, golang container, no crashers):** `FuzzLeftEntry` (new) about 24.5 M execs; `FuzzClosedChainDir` (new) about 19.6 M; `FuzzStagedComponent` (the move walk) about 22.5 M; `FuzzParse` (privileged policy; the command validator changed) about 1.3 M.
 
-**Phase 1, awaiting the maintainer:** N-19 (optional `owner` and `group` on `priv_copy`, P-15; recommended before release, its own PR) and N-5 (a hash-only read op for destination previews; recommended to defer past release). Both in the handoff.
+**Phase 1:** N-19 (optional `owner` and `group` on `priv_copy`, P-15; recommended before release, its own PR) and N-5 (a hash-only read op for destination previews; recommended to defer past release). Both in the handoff; decided in the follow-up below.
 
 **Alternatives rejected:** the N-12 hooks as ordinary `Config` fields set to nil in production (reachable in a release build; the prompt asked for a build tag the release check proves absent); attributing refusals by error code (all three layers answer `path_denied`; the messages differ); fixing N-23 here (a behaviour change for listed repositories, beyond the prompt).
 
-**Deferred / follow-ups:** N-23 (decide), N-24, N-19 and N-5 (decide), N-22 (post-release), S-MC, the deployment docs (S5).
+**Deferred / follow-ups:** N-23 (must fix before release, its own PR), N-19 (approved, its own PR), N-5 (deferred past release), N-22 (post-release), S-MC, the deployment docs (S5).
 
 **Versions:**
 - **Go:** 1.27.3, the newest stable Go with a published `golang:1.27.3-trixie` image (`deps-current`, 2026-10-24).
@@ -3426,3 +3426,8 @@ CI before (PR #40's last run, `e580253`): `internal/privd/ops` 456.2 s (ubuntu-2
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
 - **`scripts/ci-local.sh`:** the first run on `2e9ef25` failed only at the two lint steps (an unused `nolint`, a shadowed builtin, `layerNone` unused in a release build, a range copy and a tagged switch, all in this PR's new code; fixed in `eff4a50`, `layerNone` now defined in the tagged build only); on `eff4a50` every step passed, race step at default parallelism: `cmd/shell-mcp-gate` 12.6 s, `internal/gate/execx` 5.1 s, `internal/gate/fsx` 28.4 s, `internal/gate/ops` 93.5 s, `internal/privd/ops` 110.8 s, `internal/tools` 24.2 s; the read-confinement hook build step passed; govulncheck: no vulnerabilities reached.
+
+**2026-10-24 — PR #50 follow-up: the maintainer's decisions, and N-24.**
+- **Decisions (maintainer, 2026-10-24):** N-19 approved, before release, as its own PR after this one (not implemented here; the write-up stays in the handoff, marked approved). N-5 deferred past release; the workaround (delete first, then copy or move create-only) is recorded in the handoff. N-23 is release-blocking and gets its own PR next session; the maintainer's preferred fix, recorded beside the options: git is told never to enter a submodule in any gate operation (`--ignore-submodules=all`, or `diff.ignoreSubmodules=all`, `status.submoduleSummary=false`, `submodule.recurse=false` and `fetch.recurseSubmodules=false` through the shared table), rather than refusing repositories with gitlinks. The N-12 and submodule pushback was accepted. N-24 fixed here.
+- **N-24 (helper check-policy).** A privileged root whose path passes the chain rule (`CheckRootChain`) is checked again with `fsx.CheckClosedChain`, under which a sticky directory is open, writable or not, as for root commands' paths (N-10): a WARN names the sticky directory and that root commands are given no path at or under the root, and says that chmod, chown and the moved-in checks do not look at the sticky bit; the `ok` line now ends "nor sticky". A root that already fails the chain rule keeps its single WARN, which names root commands already. PRIVILEGED §6 ("Commands") says so.
+- **Test (committed failing first, `5804cc7`):** `TestCheckPolicyStickyIsOpen` (a read root under a sticky `1755` directory and a sticky write root: a WARN each, no `ok` chain line, no claim that chmod and chown are refused; the closed roots keep `ok`). On `5804cc7` it failed: both WARN lines were missing and both roots got the `ok` line. One test-side fix with the implementation (`9bb3544`): the "no ok line" check matched the rename-probe `ok` lines too; it now matches the chain line only.
