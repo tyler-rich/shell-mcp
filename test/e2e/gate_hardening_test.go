@@ -313,6 +313,10 @@ func TestGateMoveReplacedRace(t *testing.T) {
 	oldSHA := hex.EncodeToString(sum[:])
 	for _, verified := range []bool{true, false} {
 		t.Run(fmt.Sprintf("verified=%v", verified), func(t *testing.T) {
+			// Each case starts from empty directories: what an earlier case
+			// left (a taken file) is not this one's.
+			clearDir(t, shared)
+			clearDir(t, vault)
 			y := shared + "/y"
 			stop := startRacer(t, "GRABS", "E2E_CLIENT=grab", "E2E_GRAB="+y, "E2E_GRAB_UID="+strconv.Itoa(svcShell))
 			got := map[string]int{}
@@ -348,8 +352,6 @@ func TestGateMoveReplacedRace(t *testing.T) {
 				t.Fatalf("no move succeeded: %v", got)
 			}
 			t.Logf("moves %v; the racer took nothing", got)
-			clearDir(t, shared)
-			clearDir(t, vault)
 		})
 	}
 }
