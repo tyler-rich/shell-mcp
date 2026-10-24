@@ -30,15 +30,24 @@ import (
 // hook.<event>.enabled=false. A git that adds a hook event or a key the rule
 // recognises fails here until gitx's table covers it.
 
-// programKeyGaps returns what is not covered, for git's keys and hook
-// events, the gate's -c values and its environment.
-func programKeyGaps(keys, events, cvals, env []string) []string {
+// programKeyGaps returns what table does not cover, for git's keys and hook
+// events, the gate's -c values and its environment. A key whose name holds
+// a part the repository chooses (<driver>, <name>, <url>, *) can never be
+// forced with -c, so unless it is forced for each of git's fixed values
+// (gpg.<format>.program) or per hook event, it must be marked as covered by
+// the closed repository chain (Chain).
+func programKeyGaps(table []gitx.ProgramKey, keys, events, cvals, env []string) []string {
 	var gaps []string
 	for _, k := range keys {
 		if !gitx.ProgramKeyName(k) {
 			continue
 		}
-		e := gitx.LookupProgramKey(k)
+		var e *gitx.ProgramKey
+		for i := range table {
+			if strings.EqualFold(table[i].Key, k) {
+				e = &table[i]
+			}
+		}
 		if e == nil {
 			gaps = append(gaps, k+": names a program or command to run, and gitx.ProgramKeys neither covers it nor says why it cannot run")
 			continue
@@ -55,6 +64,9 @@ func programKeyGaps(keys, events, cvals, env []string) []string {
 		}
 		if len(e.Args) == 0 && len(e.Env) == 0 && !e.PerEvent && e.Why == "" {
 			gaps = append(gaps, k+": gitx.ProgramKeys lists it without an override or a reason")
+		}
+		if (strings.Contains(k, "<") || strings.Contains(k, "*")) && len(e.Args) == 0 && !e.PerEvent && !e.Chain {
+			gaps = append(gaps, k+": its name holds a part the repository chooses, which no -c can override, and gitx.ProgramKeys does not mark it as covered by the closed repository chain")
 		}
 	}
 	for _, ev := range events {
@@ -140,7 +152,7 @@ func TestGitProgramKeysCovered(t *testing.T) {
 	if len(keys) < 500 || len(events) < 20 {
 		t.Fatalf("%s: %d configuration keys and %d hook events; that is not the whole list", ver, len(keys), len(events))
 	}
-	if gaps := programKeyGaps(keys, events, gateCValues(), ops.GitEnv("/home/svc", "/srv/app/deploy")); len(gaps) > 0 {
+	if gaps := programKeyGaps(gitx.ProgramKeys, keys, events, gateCValues(), ops.GitEnv("/home/svc", "/srv/app/deploy")); len(gaps) > 0 {
 		t.Fatalf("%s: what could run a program is not covered by the gate's git argv or environment:\n%s", ver, strings.Join(gaps, "\n"))
 	}
 	matched := 0
@@ -157,7 +169,7 @@ func TestGitProgramKeysCovered(t *testing.T) {
 // for a table entry whose override is missing from the gate's argv.
 func TestGitProgramKeyGapsFound(t *testing.T) {
 	cvals, env := gateCValues(), ops.GitEnv("/home/svc", "/srv/app/deploy")
-	if g := programKeyGaps([]string{"core.editor", "user.name"}, gitx.HookEvents, cvals, env); len(g) != 0 {
+	if g := programKeyGaps(gitx.ProgramKeys, []string{"core.editor", "user.name", "filter.<driver>.clean"}, gitx.HookEvents, cvals, env); len(g) != 0 {
 		t.Fatalf("covered keys reported: %q", g)
 	}
 	for _, c := range []struct {
@@ -170,12 +182,23 @@ func TestGitProgramKeyGapsFound(t *testing.T) {
 		{nil, append(slices.Clone(gitx.HookEvents), "post-new-event"), cvals, "hook event post-new-event"},
 		{[]string{"core.editor"}, nil, slices.DeleteFunc(slices.Clone(cvals), func(v string) bool { return v == "core.editor=/bin/false" }), "-c core.editor=/bin/false"},
 	} {
-		if g := programKeyGaps(c.keys, c.events, c.cvals, env); len(g) != 1 || !strings.Contains(g[0], c.want) {
+		if g := programKeyGaps(gitx.ProgramKeys, c.keys, c.events, c.cvals, env); len(g) != 1 || !strings.Contains(g[0], c.want) {
 			t.Fatalf("keys %q events %d: gaps %q, want one naming %s", c.keys, len(c.events), g, c.want)
 		}
 	}
 	noEnv := slices.DeleteFunc(slices.Clone(env), func(v string) bool { return v == "GIT_PROXY_COMMAND=" })
-	if g := programKeyGaps([]string{"core.gitProxy"}, nil, cvals, noEnv); len(g) != 1 || !strings.Contains(g[0], "GIT_PROXY_COMMAND") {
+	if g := programKeyGaps(gitx.ProgramKeys, []string{"core.gitProxy"}, nil, cvals, noEnv); len(g) != 1 || !strings.Contains(g[0], "GIT_PROXY_COMMAND") {
 		t.Fatalf("a missing variable: gaps %q", g)
+	}
+	// A key the repository names, not marked as covered by the closed
+	// repository chain.
+	noChain := slices.Clone(gitx.ProgramKeys)
+	for i := range noChain {
+		if noChain[i].Key == "remote.<name>.vcs" {
+			noChain[i].Chain = false
+		}
+	}
+	if g := programKeyGaps(noChain, []string{"remote.<name>.vcs"}, nil, cvals, env); len(g) != 1 || !strings.Contains(g[0], "closed repository chain") {
+		t.Fatalf("a repository-named key without Chain: gaps %q", g)
 	}
 }

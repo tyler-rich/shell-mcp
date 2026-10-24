@@ -9,7 +9,9 @@ import "strings"
 // TestGitProgramKeysCovered checks against the installed git's own list of
 // keys (`git help --config`) and hook events (githooks(5)), so that a git
 // that adds a hook event or a program-running key the gate does not cover
-// fails the test.
+// fails the test. A key whose name holds a part the repository chooses can
+// never be forced with -c; it is marked Chain: covered by the closed
+// repository chain.
 //
 // Which keys run programs: a key is treated as naming a program or command
 // to run when its last component (its variable name, lowercased) ends in
@@ -28,21 +30,27 @@ import "strings"
 // ProgramKey is one such key, as `git help --config` prints it, and how it
 // is covered: forced with -c (Args), overridden by environment variables
 // that take precedence over it (Env), forced for every hook event
-// (PerEvent), or neither, for the reason Why.
+// (PerEvent), covered by the closed repository chain (Chain), and why
+// (Why) where no override applies.
 type ProgramKey struct {
 	Key      string
 	Args     []string // "key=value", passed as -c on every git process
 	Env      []string // "NAME=value", set on every git process
 	PerEvent bool     // hook.<event>.enabled=false for every HookEvents entry
-	Why      string
+	// Chain: covered by the closed repository chain (fsx.CheckGitRepo):
+	// the key's name holds a part the repository chooses (<driver>,
+	// <name>, <url>, *), which no -c can target. Set for every such key.
+	Chain bool
+	Why   string
 }
 
 // Why a key needs no override.
 const (
-	// The repository chooses the name, so no -c can target it: gitx's
-	// allowlist refuses it, and the closed repository rule keeps it from
-	// appearing after the check.
-	whyNamed = "named by the repository: refused by the allowlist, and kept out after the check by the closed repository rule"
+	// The repository chooses the name, so no -c can target it: covered by
+	// the closed repository chain (Chain), which keeps any other account
+	// from adding it between the configuration check and git's use of it;
+	// the allowlist refuses it at the check.
+	whyNamed = "named by the repository, so no -c can override it: covered by the closed repository chain, which keeps every other account from adding it after the configuration check, and refused by the allowlist at the check"
 	// Read only by commands the gate never runs (the gate runs status,
 	// log, diff, config, rev-parse, ls-remote, pull, merge-base, ls-tree,
 	// read-tree, checkout-index, update-index and clean).
@@ -73,38 +81,38 @@ var ProgramKeys = []ProgramKey{
 	{Key: "core.gitProxy", Env: []string{"GIT_PROXY_COMMAND="}},
 	// Hooks defined in configuration, whatever core.hooksPath says.
 	{Key: "hook.<event>.enabled", PerEvent: true},
-	{Key: "hook.<friendly-name>.command", PerEvent: true, Why: whyNamed},
-	{Key: "pager.<cmd>", Why: "covered by --no-pager on every git command"},
+	{Key: "hook.<friendly-name>.command", PerEvent: true, Chain: true, Why: whyNamed},
+	{Key: "pager.<cmd>", Chain: true, Why: "covered by --no-pager on every git command"},
 
 	// Named by the repository.
-	{Key: "alias.*", Why: whyNamed + "; an alias never replaces a built-in command"},
-	{Key: "alias.*.command", Why: whyNamed + "; an alias never replaces a built-in command"},
-	{Key: "diff.<driver>.command", Why: whyNamed},
-	{Key: "diff.<driver>.textconv", Why: whyNamed},
-	{Key: "filter.<driver>.clean", Why: whyNamed},
-	{Key: "filter.<driver>.smudge", Why: whyNamed},
-	{Key: "filter.<driver>.process", Why: whyNamed},
-	{Key: "merge.<driver>.driver", Why: whyNamed},
-	{Key: "credential.<url>.helper", Why: whyNamed},
-	{Key: "remote.<name>.uploadpack", Why: whyNamed},
-	{Key: "remote.<name>.receivepack", Why: whyNamed},
-	{Key: "remote.<name>.vcs", Why: whyNamed},
-	{Key: "hook.<friendly-name>.event", Why: whyNamed},
-	{Key: "hook.<friendly-name>.enabled", Why: whyNamed},
-	{Key: "hook.<friendly-name>.parallel", Why: whyNamed},
-	{Key: "trailer.<key-alias>.cmd", Why: whyNamed},
-	{Key: "trailer.<key-alias>.command", Why: whyNamed},
+	{Key: "alias.*", Chain: true, Why: whyNamed + "; an alias never replaces a built-in command"},
+	{Key: "alias.*.command", Chain: true, Why: whyNamed + "; an alias never replaces a built-in command"},
+	{Key: "diff.<driver>.command", Chain: true, Why: whyNamed},
+	{Key: "diff.<driver>.textconv", Chain: true, Why: whyNamed},
+	{Key: "filter.<driver>.clean", Chain: true, Why: whyNamed},
+	{Key: "filter.<driver>.smudge", Chain: true, Why: whyNamed},
+	{Key: "filter.<driver>.process", Chain: true, Why: whyNamed},
+	{Key: "merge.<driver>.driver", Chain: true, Why: whyNamed},
+	{Key: "credential.<url>.helper", Chain: true, Why: whyNamed},
+	{Key: "remote.<name>.uploadpack", Chain: true, Why: whyNamed},
+	{Key: "remote.<name>.receivepack", Chain: true, Why: whyNamed},
+	{Key: "remote.<name>.vcs", Chain: true, Why: whyNamed},
+	{Key: "hook.<friendly-name>.event", Chain: true, Why: whyNamed},
+	{Key: "hook.<friendly-name>.enabled", Chain: true, Why: whyNamed},
+	{Key: "hook.<friendly-name>.parallel", Chain: true, Why: whyNamed},
+	{Key: "trailer.<key-alias>.cmd", Chain: true, Why: whyNamed},
+	{Key: "trailer.<key-alias>.command", Chain: true, Why: whyNamed},
 
 	// Never read by the gate's commands.
-	{Key: "browser.<tool>.cmd", Why: whyNotRun},
-	{Key: "browser.<tool>.path", Why: whyNotRun},
-	{Key: "difftool.<tool>.cmd", Why: whyNotRun},
-	{Key: "difftool.<tool>.path", Why: whyNotRun},
-	{Key: "mergetool.<tool>.cmd", Why: whyNotRun},
-	{Key: "mergetool.<tool>.path", Why: whyNotRun},
-	{Key: "guitool.<name>.cmd", Why: whyNotRun},
-	{Key: "man.<tool>.cmd", Why: whyNotRun},
-	{Key: "man.<tool>.path", Why: whyNotRun},
+	{Key: "browser.<tool>.cmd", Chain: true, Why: whyNotRun},
+	{Key: "browser.<tool>.path", Chain: true, Why: whyNotRun},
+	{Key: "difftool.<tool>.cmd", Chain: true, Why: whyNotRun},
+	{Key: "difftool.<tool>.path", Chain: true, Why: whyNotRun},
+	{Key: "mergetool.<tool>.cmd", Chain: true, Why: whyNotRun},
+	{Key: "mergetool.<tool>.path", Chain: true, Why: whyNotRun},
+	{Key: "guitool.<name>.cmd", Chain: true, Why: whyNotRun},
+	{Key: "man.<tool>.cmd", Chain: true, Why: whyNotRun},
+	{Key: "man.<tool>.path", Chain: true, Why: whyNotRun},
 	{Key: "man.viewer", Why: whyNotRun},
 	{Key: "help.browser", Why: whyNotRun},
 	{Key: "web.browser", Why: whyNotRun},
@@ -125,8 +133,8 @@ var ProgramKeys = []ProgramKey{
 	{Key: "color.pager", Why: whyNotProgram},
 	{Key: "column.clean", Why: whyNotProgram},
 	{Key: "gitcvs.dbDriver", Why: whyNotProgram},
-	{Key: "diff.<driver>.cachetextconv", Why: whyNotProgram},
-	{Key: "hook.<event>.jobs", Why: whyNotProgram},
+	{Key: "diff.<driver>.cachetextconv", Chain: true, Why: whyNotProgram},
+	{Key: "hook.<event>.jobs", Chain: true, Why: whyNotProgram},
 	{Key: "hook.jobs", Why: whyNotProgram},
 }
 
@@ -193,15 +201,4 @@ func ProgramKeyName(key string) bool {
 		}
 	}
 	return false
-}
-
-// LookupProgramKey returns the table's entry for key (compared without
-// case), or nil.
-func LookupProgramKey(key string) *ProgramKey {
-	for i := range ProgramKeys {
-		if strings.EqualFold(ProgramKeys[i].Key, key) {
-			return &ProgramKeys[i]
-		}
-	}
-	return nil
 }
