@@ -141,6 +141,11 @@ type Config struct {
 	// group (handoff N-8; PRIVILEGED §6). The helper sets it; the gate does
 	// not.
 	ExplicitOwner bool
+	// Privileged marks the privileged helper's FS: refusals then say that
+	// it acts as root and point to its documentation (PRIVILEGED.md) rather
+	// than the gate's (POLICY.md). Only messages depend on it. The helper
+	// sets it; the gate does not.
+	Privileged bool
 	// InjectMetaStep, when non-nil, is called at each point of ApplyMeta's
 	// pass with the logical path of the entry concerned (the target's for
 	// MetaStepAfterCompare). Tests only; production code never sets it.

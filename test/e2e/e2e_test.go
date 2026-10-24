@@ -229,10 +229,16 @@ func gate(t *testing.T, uid uint32, op string, args any) (resp response, request
 // gateAt is gate with the request's tier ceiling.
 func gateAt(t *testing.T, uid uint32, ceiling, op string, args any) (resp response, requestID string) {
 	t.Helper()
+	return gatePolicyAt(t, gatePolicy, uid, ceiling, op, args)
+}
+
+// gatePolicyAt is gateAt with another gate policy.
+func gatePolicyAt(t *testing.T, policy string, uid uint32, ceiling, op string, args any) (resp response, requestID string) {
+	t.Helper()
 	id := newID()
 	a, _ := json.Marshal(args)
 	req := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":%q,"op":%q,"args":%s,"timeout_ms":30000}`+"\n", id, ceiling, op, a)
-	cmd := exec.CommandContext(t.Context(), gateBin, "serve", "--policy", gatePolicy, "--principal", "e2e")
+	cmd := exec.CommandContext(t.Context(), gateBin, "serve", "--policy", policy, "--principal", "e2e") //nolint:gosec // G204: the installed gate with one of setup.sh's policies
 	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, uid)}
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin"}
 	cmd.Dir = "/"

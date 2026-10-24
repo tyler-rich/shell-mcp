@@ -403,7 +403,7 @@ func TestMovePutBackTaken(t *testing.T) {
 // that directory is refused naming the entry, every path through such a
 // name is refused (read, stat, write, delete, move), and a delete of a
 // tree holding it is refused; once the entry is moved back by hand, moves
-// work again. The gate is unchanged.
+// work again. The gate refuses such a name as well.
 func TestMoveStoppedAfterStage(t *testing.T) {
 	e := newMovedEnv(t, true)
 	sd, dd := filepath.Join(e.root, "s"), filepath.Join(e.root, "d")
@@ -459,11 +459,10 @@ func TestMoveStoppedAfterStage(t *testing.T) {
 	if read(t, staged) != "precious\n" {
 		t.Fatal("the staged entry changed")
 	}
-	// The gate reads it as any other name.
+	// The gate refuses it too (handoff N-18; TestGateMoveStoppedAfterStage).
 	gate := e.newFS(t, e.root, true, false)
-	if _, err := gate.ReadFile(staged, ReadOptions{MaxBytes: 1024}); err != nil {
-		t.Fatalf("the gate's read changed: %v", err)
-	}
+	_, err = gate.ReadFile(staged, ReadOptions{MaxBytes: 1024})
+	stranded(t, err)
 	// Recovered by hand: moves work again.
 	must(t, os.Rename(staged, src))
 	if _, err := e.fs.Move(src, dst, false); err != nil {
@@ -502,8 +501,9 @@ func FuzzMoveDirMode(f *testing.F) {
 	})
 }
 
-// FuzzStagedComponent: a path is refused in the helper exactly when one of
-// its components starts with the staging prefix, and never in the gate.
+// FuzzStagedComponent: a path is refused, in the helper and in the gate
+// (handoff N-18), exactly when one of its components starts with the
+// staging prefix.
 func FuzzStagedComponent(f *testing.F) {
 	f.Add("/srv/r/.shell-mcp-move-0123", "x")
 	f.Add("/srv/r/a/b", ".shell-mcp-move-")
@@ -523,8 +523,8 @@ func FuzzStagedComponent(f *testing.F) {
 		if (helper.stagedRefused(p) != nil) != want {
 			t.Fatalf("%q: the helper's refusal disagrees", p)
 		}
-		if New(&Config{}).stagedRefused(p) != nil {
-			t.Fatalf("%q: the gate refuses it", p)
+		if (New(&Config{}).stagedRefused(p) != nil) != want {
+			t.Fatalf("%q: the gate's refusal disagrees", p)
 		}
 	})
 }

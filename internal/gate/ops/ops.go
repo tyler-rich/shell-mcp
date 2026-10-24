@@ -54,6 +54,9 @@ type Options struct {
 	InjectNoReplaceFault func() error
 	// InjectDeleteStep is passed to fsx; tests only.
 	InjectDeleteStep func(step fsx.DeleteStep, path string)
+	// InjectMetadataReadBackFault is passed to fsx (chmod's read-back);
+	// tests only.
+	InjectMetadataReadBackFault func(fsx.Meta) fsx.Meta
 	// InjectDiscardStep is called at the points of a git_discard; tests only.
 	InjectDiscardStep func(step fsx.DiscardStep, path string)
 

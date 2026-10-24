@@ -298,6 +298,35 @@ EOF
 chmod 0644 /etc/shell-mcp/gate-operator.yaml
 /usr/local/bin/shell-mcp-gate check-policy --policy /etc/shell-mcp/gate-operator.yaml >/dev/null
 
+# The gate hardening tests' policy (gate_hardening_test.go, handoff N-11 and
+# N-18), run with --policy straight from the tests (no SSH key): commands
+# given a {path:read}, a {path:write} and a cwd under /srv/e2e-gate, whose
+# write root the service account owns, and moves within that write root.
+# The tests make every directory and file beneath it.
+rm -rf /srv/e2e-gate
+install -o root -g root -m 0755 -d /srv/e2e-gate
+install -o svc-shell -g svc-shell -m 0755 -d /srv/e2e-gate/work
+cat >/etc/shell-mcp/gate-hardening.yaml <<EOF
+version: 1
+max_tier: destructive
+sandbox:
+  landlock: $landlock
+paths:
+  read: [/srv/e2e-gate]
+  write: [/srv/e2e-gate/work]
+commands:
+  - id: probe-cat
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["cat", "{path:read}"], ["cat", "t"], ["echo", "{path:read}"], ["pwd"]]
+  - id: probe-put
+    path: /usr/local/bin/example-probe
+    tier: operator
+    templates: [["write", "{path:write}"], ["echo", "{path:write}"]]
+EOF
+chmod 0644 /etc/shell-mcp/gate-hardening.yaml
+/usr/local/bin/shell-mcp-gate check-policy --policy /etc/shell-mcp/gate-hardening.yaml >/dev/null
+
 # Static read-tool fixtures: a tree with a directory symlink whose target is
 # absolute (os.Root refuses to follow it), a file on the built-in deny list
 # and one under the policy's deny pattern. Fixtures with token- or key-shaped
