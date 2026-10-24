@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	github.com/google/jsonschema-go v0.4.3
-	github.com/landlock-lsm/go-landlock v0.10.1
+	github.com/landlock-lsm/go-landlock v0.11.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/crypto v0.58.0

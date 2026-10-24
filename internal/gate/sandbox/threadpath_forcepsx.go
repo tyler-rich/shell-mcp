@@ -3,7 +3,7 @@
 package sandbox
 
 // The landlock_forcepsx test build. Every hosted runner now reports Landlock
-// ABI 8, where go-landlock v0.10.1 always takes the TSYNC path and offers no
+// ABI 8, where go-landlock v0.11.0 always takes the TSYNC path and offers no
 // way to choose psx, so this build makes the sandbox behave as on an ABI 7
 // kernel: it plans as at ABI 7 (capABI) and applies the ruleset the way
 // go-landlock's psx branch does (restrict.go, !useTsync). It is never a
