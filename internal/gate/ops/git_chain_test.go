@@ -34,7 +34,8 @@ var gitHookEvents = gitx.HookEvents
 // gitOverrides are the -c values every git process must carry, in order:
 // the hardening flags of #26 and before, then N-20's program-running keys
 // and hook events from gitx's table (TestGitProgramKeysCovered checks the
-// table against the installed git), each once. safe.directory is not among
+// table against the installed git), then N-23's submodule keys from
+// gitx.SubmoduleKeys (TestGitSubmoduleKeysCovered), each once. safe.directory is not among
 // them: git applies no ownership check to a repository GIT_DIR names, the
 // gate's or a submodule's, so it did nothing (POLICY §7).
 func gitOverrides() []string {
@@ -44,6 +45,13 @@ func gitOverrides() []string {
 	for _, p := range gitx.ProgramOverrides() {
 		if !slices.Contains(o, p) {
 			o = append(o, p)
+		}
+	}
+	for _, k := range gitx.SubmoduleKeys {
+		for _, p := range k.Args {
+			if !slices.Contains(o, p) {
+				o = append(o, p)
+			}
 		}
 	}
 	return o

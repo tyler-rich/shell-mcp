@@ -28,7 +28,10 @@ import (
 //	    -c maintenance.auto=false -c gc.auto=0
 //	    -c gc.autoDetach=false -c core.ignorecase=false
 //	    -c <every program-running key with a fixed name>=/bin/false
-//	    -c hook.<every event>.enabled=false <subcommand> …
+//	    -c hook.<every event>.enabled=false
+//	    -c diff.ignoreSubmodules=all -c diff.submodule=short
+//	    -c status.submoduleSummary=false -c submodule.recurse=false
+//	    -c fetch.recurseSubmodules=false <subcommand> …
 //
 // with GIT_CONFIG_NOSYSTEM=1, GIT_CONFIG_GLOBAL=/dev/null, GIT_DIR=<repo>/.git,
 // GIT_WORK_TREE=<repo> and the program-naming variables (GitEnv) added to
@@ -50,6 +53,16 @@ import (
 // names, as the gate's always is, and the git processes it starts in a
 // submodule get GIT_DIR=.git explicitly too (prepare_other_repo_env,
 // run-command.c), so safe.directory=<repo> did nothing (POLICY §7).
+//
+// No git process enters a submodule (handoff N-23): such a process would
+// run under the submodule's own configuration, which nothing above covers.
+// Every run that can read the work tree carries --ignore-submodules=all
+// (status, the work-tree diff), --ignore-submodules (update-index
+// --refresh) or --no-recurse-submodules (pull), or takes no such flag and
+// starts no process in a submodule (clean, checkout-index); runs that
+// compare only the index or commits pass =dirty or =none, so that gitlink
+// commit changes still show; the submodule -c values above are a second
+// layer (gitx.GitCommands, gitx.SubmoduleKeys).
 
 const (
 	maxGitEntries   = 1000
@@ -83,6 +96,13 @@ func GitArgs(repo, caFile string, sub ...string) []string {
 		if !slices.Contains(a, o) {
 			a = append(a, "-c", o)
 		}
+	}
+	// The submodule keys (handoff N-23): a second layer under the
+	// --ignore-submodules and --no-recurse-submodules flags of every
+	// command that can read the work tree (gitx.GitCommands), and the only
+	// one for pull's merge, which takes no such flag.
+	for _, o := range gitx.SubmoduleOverrides() {
+		a = append(a, "-c", o)
 	}
 	if caFile != "" {
 		a = append(a, "-c", "http.sslCAInfo="+caFile)
@@ -231,8 +251,13 @@ func (r *gitRepo) checkConfig() ([]gitx.KV, error) {
 }
 
 // status parses porcelain v2 status; untracked selects --untracked-files.
+// Status never enters a submodule (--ignore-submodules=all, handoff N-23),
+// which also hides staged gitlink changes, so those, the repository's own
+// index, are added from stagedGitlinks, in path order among the tracked
+// entries. A submodule's own work tree (its commits, edits and untracked
+// files) is never reported.
 func (r *gitRepo) status(untracked string, branch bool) (gitx.Status, bool, error) {
-	args := []string{"status", "--porcelain=v2", "-z", "--untracked-files=" + untracked}
+	args := []string{"status", "--porcelain=v2", "-z", "--untracked-files=" + untracked, "--ignore-submodules=all"}
 	if branch {
 		args = append(args, "--branch")
 	}
@@ -244,7 +269,61 @@ func (r *gitRepo) status(untracked string, branch bool) (gitx.Status, bool, erro
 	if err != nil {
 		return gitx.Status{}, false, errf(protocol.CodeExecFailed, "git status output could not be parsed")
 	}
+	links, cut, err := r.stagedGitlinks()
+	if err != nil {
+		return gitx.Status{}, false, err
+	}
+	st.Entries, truncated = mergeGitlinks(st.Entries, links, truncated || cut)
 	return st, truncated, nil
+}
+
+// stagedGitlinks lists the gitlinks whose index entry differs from HEAD's
+// (added, removed, moved to another commit or changed type), from a
+// comparison of the index with HEAD (the empty tree in a repository without
+// commits) that never looks at the work tree, so it enters no submodule;
+// =dirty makes the command line, not a submodule.<name>.ignore, decide that
+// gitlink commit changes are shown.
+func (r *gitRepo) stagedGitlinks() ([]gitx.Entry, bool, error) {
+	out, err := r.output("diff", "--cached", "--raw", "-z", "--no-renames", "--no-abbrev", "--no-ext-diff", "--no-textconv", "--ignore-submodules=dirty")
+	if err != nil {
+		return nil, false, err
+	}
+	links, truncated, err := gitx.ParseStagedGitlinks(out, maxGitEntries)
+	if err != nil {
+		return nil, false, errf(protocol.CodeExecFailed, "git diff output could not be parsed")
+	}
+	return links, truncated, nil
+}
+
+// mergeGitlinks adds the staged gitlink entries status did not report
+// (status reports a type change from or to a gitlink itself) to its
+// tracked entries, which stay in path order before the untracked and
+// ignored ones, keeping at most maxGitEntries.
+func mergeGitlinks(ents, links []gitx.Entry, truncated bool) ([]gitx.Entry, bool) {
+	if len(links) == 0 {
+		return ents, truncated
+	}
+	seen := map[string]bool{}
+	var tracked, rest []gitx.Entry
+	for _, e := range ents {
+		seen[e.Path] = true
+		if e.Kind == "untracked" || e.Kind == "ignored" {
+			rest = append(rest, e)
+		} else {
+			tracked = append(tracked, e)
+		}
+	}
+	for _, l := range links {
+		if !seen[l.Path] {
+			tracked = append(tracked, l)
+		}
+	}
+	slices.SortStableFunc(tracked, func(a, b gitx.Entry) int { return strings.Compare(a.Path, b.Path) })
+	tracked = append(tracked, rest...)
+	if len(tracked) > maxGitEntries {
+		return tracked[:maxGitEntries], true
+	}
+	return tracked, truncated
 }
 
 // head returns HEAD's commit, or "" for a repository without commits.
@@ -379,9 +458,13 @@ func (s *server) gitDiff(raw jsontext.Value) (data any, warns []string, failure 
 	if _, err = r.checkConfig(); err != nil {
 		return nil, nil, err
 	}
-	args := []string{"diff", "--no-color", "--no-ext-diff", "--no-textconv"}
+	// A gitlink shows as the two commit ids at most (--submodule=short),
+	// never a submodule's history or diff. The work-tree diff never enters
+	// a submodule (=all); the staged diff compares the index with HEAD only,
+	// so it still shows staged gitlink changes (=dirty; handoff N-23).
+	args := []string{"diff", "--no-color", "--no-ext-diff", "--no-textconv", "--submodule=short", "--ignore-submodules=all"}
 	if a.Staged {
-		args = append(args, "--cached")
+		args = append(args[:len(args)-1], "--cached", "--ignore-submodules=dirty")
 	}
 	res, err := r.run(maxOut, args...)
 	if err != nil {
@@ -465,7 +548,9 @@ func (s *server) gitPull(raw jsontext.Value) (data any, warns []string, failure 
 		if old == "" {
 			names, err = r.output("ls-tree", "-r", "-z", "--name-only", nw)
 		} else {
-			names, err = r.output("diff", "--name-only", "-z", "--no-ext-diff", "--no-textconv", old, nw)
+			// Two commits, no work tree: a gitlink the pull moved counts
+			// (=none, whatever diff.ignoreSubmodules says).
+			names, err = r.output("diff", "--name-only", "-z", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none", old, nw)
 		}
 		if err != nil {
 			return nil, nil, err

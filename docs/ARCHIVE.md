@@ -3438,3 +3438,63 @@ CI before (PR #40's last run, `e580253`): `internal/privd/ops` 456.2 s (ubuntu-2
 - **CodeQL's code-scanning check failed** with one new high alert, `go/zipslip` (#6): a tar entry name from `parseTreeArchive` (`internal/privd/ops/backups.go`) through the restore to `os.OpenFile(l.p, …)` in `fsx.openTarget`, the N-12 hook's "descriptor off" branch. Unreachable in a release build (`layerOff` is constant false there, and the archive's names are checked to be safe relative names), but CodeQL analyses the source as written. **Fixed (`66361e1`):** the three lookups by path (the parent's path, the target file's, the target directory's) moved into the tagged `confine_hook.go` (`rootByPath`, `fileByPath`); the release build's `confine.go` has stubs that open nothing and are never called (the linker drops them: their text is absent from the release gate and helper). Release behaviour is unchanged; `release-binary-check_test.sh` passed (21 of 21: both tagged binaries refused and carry the hook's text, both release binaries free of the tag). The stubs' error text first named the tag, which would have made the check refuse the release binaries; it was reworded before any build.
 - **Layer-removal runs, per test (correcting the counts above, which were per package):** with the descriptor removed from the code all four `TestConfineLayers*` failed (15 subtests), with checkReal removed all four (11). With the real-path check removed, `FileRead` and `DirectoryTarget` failed but `Write` and `SwapRace` passed: a write creates its file through the parent it holds and never uses the real-path check, so no write case can see it go, and the race only required some refusal from a layer still on. **`SwapRace` now requires, per layer turned off, every layer that takes over to refuse at least once** (`328218a`; descriptor off: real path and checkReal; real path off: the descriptor; checkReal off: the descriptor and real path, each hundreds of times in two seconds in every run so far; five consecutive local runs passed); with the real-path check removed it now fails too (13 subtests). `Write` with the real-path check removed is the one pair that passes, by construction.
 - **`scripts/ci-local.sh`:** the run on `328218a` failed only the tagged lint step (gosec G304 on the tagged `fileByPath`, whose lookup by path is its purpose; a justified `nolint` in `d1f97b5`); on `d1f97b5` every step passed, race step at default parallelism: `cmd/shell-mcp-gate` 11.7 s, `cmd/shell-mcp-privd` 1.1 s, `internal/gate/execx` 5.0 s, `internal/gate/fsx` 28.9 s, `internal/gate/ops` 91.4 s, `internal/privd/ops` 115.6 s, `internal/tools` 24.1 s; govulncheck: no vulnerabilities reached.
+
+### 2026-10-24 — No git process of the gate enters a submodule (N-23) (PR #51, branch fix/gate-git-submodules)
+**Decision (maintainer, 2026-10-24):** git is told never to enter a submodule in any gate operation, instead of refusing repositories that contain gitlinks. For the discard, option B: refuse a staged gitlink change, found by comparing the index with HEAD (which never reads the work tree), and otherwise discard only the superproject's entries. Refinement: every command that can read the work tree gets `--ignore-submodules=all`; commands that compare only the index with HEAD, or two trees, may use `=dirty` or `=none`, so gitlink commit changes still show. Items 3–5 as recommended. The FIFO stall is recorded as N-25 and not fixed here.
+- **Flags, per command (`gitx.GitCommands`):**
+  - `status` gets `--ignore-submodules=all`: `git_status`, the pull's check, the discard's plan and its verification.
+  - The work-tree `diff` gets `--ignore-submodules=all --submodule=short`. `diff --cached` (staged) gets `--ignore-submodules=dirty --submodule=short`.
+  - The new staged-gitlink check is `diff --cached --raw -z --no-renames --no-abbrev --no-ext-diff --no-textconv --ignore-submodules=dirty`, parsed by `gitx.ParseStagedGitlinks`. It's used by `git_status` (merged into the tracked entries in path order), by the pull (through status) and by the discard.
+  - The pull's `diff --name-only old new` gets `--ignore-submodules=none`.
+  - The discard's `update-index -q --refresh` gets `--ignore-submodules`.
+  - `pull` keeps `--no-recurse-submodules`.
+  - `clean` and `checkout-index` take no such flag; the table records why.
+  - `log`, `config`, `rev-parse`, `ls-remote`, `merge-base`, `ls-tree` and `read-tree` (without `-u`) read no work tree.
+- **Configuration layer (`gitx.SubmoduleKeys`, `-c` on every git process, after the program overrides):** `diff.ignoreSubmodules=all`, `diff.submodule=short`, `status.submoduleSummary=false`, `submodule.recurse=false`, `fetch.recurseSubmodules=false`. Every other key whose name holds "submodule" is listed with the flag that beats it or the reason it is never read.
+- **Behaviour changes:**
+  - `git_status` no longer shows a submodule's own work-tree state (its checked-out commit, edits, untracked files). It still reports staged gitlink changes as `A.`, `D.`, `M.` or `T.`.
+  - The work-tree `git_diff` shows nothing for a submodule. `git_diff --cached` keeps its `Subproject commit` lines.
+  - `git_pull` refuses a staged gitlink change (`policy_denied`, as an uncommitted change) and no longer refuses for a submodule's own work tree. `changed_files` still counts gitlinks.
+  - The discard refuses a staged gitlink change (`policy_denied`, naming the gitlink). It no longer refuses a submodule that is checked out at another commit or has local changes: it never touched those, and `clean_after` ignores them.
+  - The discard's other refusal message now says "a discard never changes a submodule".
+  - Not changed: the protocol, the error codes, the envelope, either policy schema, Landlock, the units, any locked decision.
+
+**Verified at the source (git v2.55.0, read through the GitHub API):**
+- **The finding.** `run_diff_files` → `match_stat_with_submodule` (`diff-lib.c:88`) → `is_submodule_modified` (`submodule.c:1880`) starts `git status --porcelain=2` in every gitlink whose `<path>/.git` is a git directory. No `.gitmodules` is needed. It runs unless `ignore_submodules` (`=all`) or `ignore_dirty_submodules` (`=dirty`) is set.
+- **Precedence.**
+  - The command-line `--ignore-submodules` sets `override_submodule_config` (`diff_opt_ignore_submodules`, `diff.c`; `wt_status_collect_changes_worktree`, `wt-status.c`), so `set_diffopt_flags_from_submodule_config` never consults `submodule.<name>.ignore`.
+  - `diff.ignoreSubmodules` is read only by `git_diff_ui_config`, which status reads, and sets only `default_diff_options`. A `submodule.<name>.ignore` from `.gitmodules` or the configuration therefore overrides it.
+  - Status's index side always sets `override_submodule_config`, with `dirty` unless the flag says otherwise.
+- **`--cached` never stats.** `get_stat_data` (`diff-lib.c:324`) calls `match_stat_with_submodule` only when not cached. `git diff --cached` without a HEAD compares with the empty tree (`builtin/diff.c`).
+- **Pull.** `--no-recurse-submodules` reaches the fetch as `--recurse-submodules=no`, which overrides its configuration (`builtin/fetch.c`); `fetch_submodules` and `check_for_new_submodule_commits` run only when recursion is not off. Pull's `run_merge` passes no recursion flag. `unpack_trees` enters a submodule only through `submodule_from_ce` → `should_update_submodules`, i.e. `submodule.recurse` as read by `git_default_submodule_config`.
+- **What `=all` still reads.** `ie_match_stat` → `ce_match_stat_basic` → `ce_compare_gitlink` (`read-cache.c`) runs before the flag is checked and resolves the submodule's HEAD inside git's own process (`repo_get_submodule_ref_store`, `repo_submodule_init`). It starts no process and runs nothing from the submodule's configuration. Its one remaining effect is N-25.
+
+**Alternatives rejected:**
+- Refusing every repository with a gitlink (the maintainer preferred never entering).
+- `=dirty` for the discard's own status (option A). It starts no process either, but it is a status run without `=all`.
+- Refusing any discard in a repository with a gitlink (option C).
+- `ls-files -s` with `ls-tree` for the gitlink check: it is bounded by `max_output_bytes` for the whole index; `diff --cached --raw` prints only what differs.
+- `--full-index` for the raw ids. Porcelain `diff --raw` still abbreviates with it (seen on git 2.47.3), so the gate passes `--no-abbrev`.
+
+**Tests (committed failing first, `eb681ca`; output in the PR body):**
+- `TestGitNeverEntersSubmodule`: every operation, with and without a `.gitmodules` setting `ignore = none`. A clean filter in the submodule's own configuration only touches a marker. On `eb681ca` it ran for status, diff, pull, discard preview and discard.
+- `TestGitSubmoduleFlagBeatsConfig`: two-sided. With only the key, git enters the submodule; with the flag, it doesn't.
+- `TestGitWithSubmodules`: every operation still works, minus the submodule's own state.
+- `TestGitWorkTreeCommandsIgnoreSubmodules`: every recorded git process, checked against `gitx.GitCommands` and `gitx.SubmoduleKeys`. `TestGitWorkTreeGapsFound` proves the check finds what it should.
+- `TestGitSubmoduleKeysCovered` and `TestGitSubmoduleKeyGapsFound`: the installed git's keys, checked against the table.
+- `TestGitEveryProcessIsolated` is extended. `TestParseStagedGitlinks` and `FuzzParseStagedGitlinks` are new.
+- e2e `TestGateGitNeverEntersSubmodule`: the gitlink's directory belongs to example-app, the marker is in svc-shell's directory, and the real gate runs with Landlock.
+
+- **CI on the tests-only head (`eb681ca`, run `40082478984`), both Go jobs on git 2.55.0:** ubuntu-24.04 (`LANDLOCK_PATH=psx kernel_abi=7 effective_abi=7`) and ubuntu-26.04 (`LANDLOCK_PATH=tsync kernel_abi=8 effective_abi=8`) failed only on the new or extended tests: gitx `TestParseStagedGitlinks`; gate ops `TestGitNeverEntersSubmodule` (status, diff, pull, discard preview and discard, with and without the `.gitmodules`; log and the staged diff passed), `TestGitWithSubmodules`, `TestGitWorkTreeCommandsIgnoreSubmodules`, `TestGitSubmoduleKeysCovered`, `TestGitEveryProcessIsolated` and `TestGitEnvironment` (the argv lacked the submodule `-c` values). Race step, 24.04 / 26.04: `internal/gate/ops` 289.3 / 340.2 s (failed), `internal/privd/ops` 216.0 / 224.1 s, `cmd/shell-mcp-gate` 61.7 / 36.2 s, `internal/gate/fsx` 58.3 / 60.7 s, `internal/gate/execx` 26.1 / 25.6 s. e2e-host (git 2.55.0): 117 passed, 1 failed, none skipped: `TestGateGitNeverEntersSubmodule`. For status, diff, pull, discard preview and discard, the real gate as svc-shell, under Landlock, answered `ok` and ran the filter named by example-app's repository configuration.
+- **`scripts/ci-local.sh`:** the run on `15e3980` failed only at the two lint steps (two gocritic findings in the new code, fixed in `27fc4ec`). On `27fc4ec` every step passed. Race step at default parallelism: `cmd/shell-mcp-gate` 12.2 s, `cmd/shell-mcp-privd` 1.1 s, `internal/gate/execx` 5.1 s, `internal/gate/fsx` 29.9 s, `internal/gate/gitx` 1.0 s, `internal/gate/ops` 100.7 s, `internal/privd/ops` 110.1 s, `internal/tools` 24.5 s. govulncheck: no vulnerabilities reached.
+
+**Fuzzing (60 s, golang container, no crashers):** `FuzzParseStagedGitlinks` (new), about 76 M execs.
+
+**Deferred:** N-25 (low; recorded), N-19 (next PR), N-5 and N-22 (post-release), S-MC, the deployment docs (S5).
+
+**Versions:**
+- **Go:** 1.27.3 (newest stable with a published `golang:1.27.3-trixie`). `deps-current`: 13 modules in scope, all current. `go get -u` changed nothing.
+- **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+- **git:** 2.47.3 (local image), 2.55.0 (CI).
