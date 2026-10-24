@@ -301,8 +301,10 @@ chmod 0644 /etc/shell-mcp/gate-operator.yaml
 # The gate hardening tests' policy (gate_hardening_test.go, handoff N-11 and
 # N-18), run with --policy straight from the tests (no SSH key): commands
 # given a {path:read}, a {path:write} and a cwd under /srv/e2e-gate, whose
-# write root the service account owns, and moves within that write root.
-# The tests make every directory and file beneath it.
+# write root the service account owns, and moves within that write root;
+# probe-compose has the shape of POLICY §4's `compose -f {path:read}`
+# example (the probe echoes it). The tests make every directory and file
+# beneath it.
 rm -rf /srv/e2e-gate
 install -o root -g root -m 0755 -d /srv/e2e-gate
 install -o svc-shell -g svc-shell -m 0755 -d /srv/e2e-gate/work
@@ -314,7 +316,12 @@ sandbox:
 paths:
   read: [/srv/e2e-gate]
   write: [/srv/e2e-gate/work]
+  deny: ["/srv/e2e-gate/work/denied/**"]
 commands:
+  - id: probe-compose
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["echo", "compose", "-f", "{path:read}", "ps", "--format", "json"]]
   - id: probe-cat
     path: /usr/local/bin/example-probe
     tier: read

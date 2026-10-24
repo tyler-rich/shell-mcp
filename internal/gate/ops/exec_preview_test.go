@@ -223,9 +223,11 @@ func TestExecPreviewTier(t *testing.T) {
 // prints its cwd). One directory of the write root's tree (above the roots,
 // the read root, the write root, an intermediate directory, a parent, or a
 // directory given as a placeholder or the cwd) may be open for the
-// iteration (handoff N-11): then no path placeholder and no cwd whose chain
-// from / to its parent holds it ever resolves, and no directory target is
-// it.
+// iteration (handoff N-11): world-writable, group-writable, or sticky and
+// writable by its owner alone. Then no path placeholder and no cwd whose
+// chain from / to its parent holds it ever resolves, and no directory
+// target is it: the owner-matched exception for {path:read} never covers a
+// group- or world-writable or sticky directory.
 func FuzzExecPreviewMatchesExec(f *testing.F) {
 	fx := execPreviewFixture(f, "operator")
 	b := filepath.Join(fx.write, "a", "b")
@@ -234,20 +236,23 @@ func FuzzExecPreviewMatchesExec(f *testing.F) {
 	gatetest.Mkdir(f, filepath.Join(b, "c"), 0o755)
 	gatetest.WriteFile(f, filepath.Join(b, "t"), "t\n", 0o644)
 	opens := []string{"", filepath.Dir(fx.read), fx.read, fx.write, filepath.Join(fx.write, "a"), b, filepath.Join(b, "c")}
+	modes := []os.FileMode{0o777, 0o775, os.ModeSticky | 0o755}
 	for _, o := range []uint8{0, 1, 2, 3, 4, 5, 6} {
-		f.Add("probe-echo", "echo", "hello", "", "", o)
-		f.Add("probe-echo", "echo", "path", "hello.txt", "", o)
-		f.Add("probe-echo", "echo", "path", "config/a/b/t", "", o)
-		f.Add("probe-echo", "echo", "path", "config/a/b/c", "", o)
-		f.Add("probe-echo", "echo", "path", "config", "", o)
-		f.Add("probe-io", "pwd", "", "", "config", o)
-		f.Add("probe-io", "pwd", "", "", "config/a/b/c", o)
+		for _, md := range []uint8{0, 1, 2} {
+			f.Add("probe-echo", "echo", "hello", "", "", o, md)
+			f.Add("probe-echo", "echo", "path", "hello.txt", "", o, md)
+			f.Add("probe-echo", "echo", "path", "config/a/b/t", "", o, md)
+			f.Add("probe-echo", "echo", "path", "config/a/b/c", "", o, md)
+			f.Add("probe-echo", "echo", "path", "config", "", o, md)
+			f.Add("probe-io", "pwd", "", "", "config", o, md)
+			f.Add("probe-io", "pwd", "", "", "config/a/b/c", o, md)
+		}
 	}
-	f.Add("probe-echo", "echo", "unit", "example-app.service", "", uint8(0))
-	f.Add("probe-io", "exit", "255", "", "", uint8(0))
-	f.Add("probe-op", "write", "config/x", "", "", uint8(0))
-	f.Add("probe-echo", "echo", "-x", "", "../etc", uint8(0))
-	f.Fuzz(func(t *testing.T, id, a0, a1, a2, cwd string, openSel uint8) {
+	f.Add("probe-echo", "echo", "unit", "example-app.service", "", uint8(0), uint8(0))
+	f.Add("probe-io", "exit", "255", "", "", uint8(0), uint8(0))
+	f.Add("probe-op", "write", "config/x", "", "", uint8(0), uint8(0))
+	f.Add("probe-echo", "echo", "-x", "", "../etc", uint8(0), uint8(0))
+	f.Fuzz(func(t *testing.T, id, a0, a1, a2, cwd string, openSel, modeSel uint8) {
 		fx.t = t
 		args := []string{}
 		for _, a := range []string{a0, a1, a2} {
@@ -268,7 +273,7 @@ func FuzzExecPreviewMatchesExec(f *testing.F) {
 		}
 		open := opens[int(openSel)%len(opens)]
 		if open != "" {
-			if err := os.Chmod(open, 0o777); err != nil { //nolint:gosec // G302: another account's write access, simulated
+			if err := os.Chmod(open, modes[int(modeSel)%len(modes)]); err != nil { //nolint:gosec // G302: another account's write access, simulated
 				t.Fatal(err)
 			}
 			defer func() { _ = os.Chmod(open, 0o755) }() //nolint:gosec // G302: a directory, closed again

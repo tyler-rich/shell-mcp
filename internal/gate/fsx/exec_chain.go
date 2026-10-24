@@ -58,6 +58,20 @@ func (f *FS) execOpen(id *ident) string {
 	return r
 }
 
+// pathOwner is the one account other than a trusted one that owns
+// directories on a {path:read}'s path (OwnerMatchedReads), once one is seen.
+type pathOwner struct {
+	set bool
+	uid uint32
+	dir string
+}
+
+// readOpen says why a directory (named name in refusals) is open for a
+// {path:read}, or "" when it passes, recording its owner in o.
+func (f *FS) readOpen(id *ident, name string, o *pathOwner) string {
+	return f.execOpen(id)
+}
+
 // execChain applies the rule to l's target, opened as target (nil for a
 // {path:write} that does not exist yet).
 func (f *FS) execChain(l *loc, target *os.File) error {

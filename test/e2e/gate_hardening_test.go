@@ -102,12 +102,14 @@ func ownFile(t *testing.T, p, content string, uid int, mode os.FileMode) {
 // TestGateExecPathChain (N-11): with every directory from / to the parent
 // root's or the service account's and closed, the gate's {path:read},
 // {path:write} and cwd resolve and run. With any one of them (the read
-// root, the write root, an intermediate directory, the parent) owned by
-// example-app, group-writable, world-writable or sticky, exec_preview and
-// exec refuse with path_denied naming it, and nothing runs. A directory
-// given as the cwd, {path:read} or {path:write} is refused the same way
-// when it is open itself (sticky counting as open), and runs when it is
-// closed.
+// root, the write root, an intermediate directory, the parent)
+// group-writable, world-writable or sticky, exec_preview and exec refuse
+// with path_denied naming it, and nothing runs; owned by example-app (one
+// other account, and closed otherwise), a {path:read} still runs (the
+// owner-matched exception) while {path:write} and the cwd are refused. A
+// directory given as the cwd, {path:read} or {path:write} is refused the
+// same way when it is open itself (sticky counting as open), except a
+// {path:read} directory owned by example-app, and runs when it is closed.
 func TestGateExecPathChain(t *testing.T) {
 	a := hardWork + "/chain"
 	b := a + "/b"
@@ -168,12 +170,20 @@ func TestGateExecPathChain(t *testing.T) {
 				}
 				setDir(t, lvl.dir, uid, uid, o.mode)
 				defer setDir(t, lvl.dir, lvl.uid, lvl.uid, 0o755)
+				pr, er := hardExec(t, "probe-cat", []string{"cat", file}, "")
+				if o.app {
+					// An owner-matched read: example-app's directory, closed otherwise.
+					if out := stdoutOf(t, &er); !pr.OK || out != "READ:original\n\n" {
+						t.Fatalf("an owner-matched read: preview %+v, read %q", pr.Error, out)
+					}
+				} else if pr.code() != "path_denied" || !strings.Contains(pr.Error.Message, lvl.dir) || er.code() != "path_denied" || er.Error.Message != pr.Error.Message {
+					t.Fatalf("cat: preview %s %+v, exec %s %+v, want path_denied naming %s", pr.code(), pr.Error, er.code(), er.Error, lvl.dir)
+				}
 				for _, c := range []struct {
 					command string
 					args    []string
 					cwd     string
 				}{
-					{"probe-cat", []string{"cat", file}, ""},
 					{"probe-cat", []string{"pwd"}, sub},
 					{"probe-put", []string{"write", newFile}, ""},
 					{"probe-put", []string{"write", file}, ""},
@@ -212,7 +222,7 @@ func TestGateExecPathChain(t *testing.T) {
 			}
 			setDir(t, sub, uid, uid, o.mode)
 			defer setDir(t, sub, svcShell, svcShell, 0o755)
-			for _, c := range []struct {
+			reqs := []struct {
 				command string
 				args    []string
 				cwd     string
@@ -220,7 +230,17 @@ func TestGateExecPathChain(t *testing.T) {
 				{"probe-cat", []string{"pwd"}, sub},
 				{"probe-cat", []string{"echo", sub}, ""},
 				{"probe-put", []string{"echo", sub}, ""},
-			} {
+			}
+			if o.app {
+				// An owner-matched {path:read} directory runs; the cwd and
+				// {path:write} stay strict.
+				_, r := hardExec(t, "probe-cat", []string{"echo", sub}, "")
+				if out := stdoutOf(t, &r); out != sub+"\n" {
+					t.Fatalf("an owner-matched read directory: %q", out)
+				}
+				reqs = append(reqs[:1], reqs[2])
+			}
+			for _, c := range reqs {
 				pr, er := hardExec(t, c.command, c.args, c.cwd)
 				if pr.code() != "path_denied" || !strings.Contains(pr.Error.Message, sub) {
 					t.Fatalf("%s %v cwd %q: preview %s %+v, want path_denied naming %s", c.command, c.args, c.cwd, pr.code(), pr.Error, sub)
@@ -393,5 +413,156 @@ func TestGateMoveStagingEntry(t *testing.T) {
 	var st unix.Stat_t
 	if err := unix.Lstat(dir+"/out.conf", &st); err == nil {
 		t.Fatal("a file was moved into the directory holding the staging entry")
+	}
+}
+
+// TestGateExecOwnerMatchedRead (N-11, the owner-matched exception for
+// {path:read}): a file in a directory one other account owns (example-app's
+// application directory, as in POLICY §4's compose example) and that
+// directory itself are given to a read command; {path:write} and the cwd
+// there are refused. A group-writable application directory, and a path
+// holding directories of two other accounts (svc-other's holding
+// example-app's), refuse a read, naming why.
+func TestGateExecOwnerMatchedRead(t *testing.T) {
+	app := hardRoot + "/app"
+	ownDir(t, app, exampleApp, exampleApp, 0o755)
+	compose := app + "/compose.yaml"
+	ownFile(t, compose, "services: {}\n", exampleApp, 0o644)
+
+	t.Run("POLICY's compose example", func(t *testing.T) {
+		pr, r := hardExec(t, "probe-compose", []string{"compose", "-f", compose, "ps", "--format", "json"}, "")
+		if out := stdoutOf(t, &r); !pr.OK || out != "compose\n-f\n"+compose+"\nps\n--format\njson\n" {
+			t.Fatalf("preview %+v, ran %q", pr.Error, out)
+		}
+		_, r = hardExec(t, "probe-cat", []string{"cat", compose}, "")
+		if out := stdoutOf(t, &r); out != "READ:services: {}\n\n" {
+			t.Fatalf("read %q", out)
+		}
+		_, r = hardExec(t, "probe-cat", []string{"echo", app}, "")
+		if out := stdoutOf(t, &r); out != app+"\n" {
+			t.Fatalf("the application directory as a {path:read}: %q", out)
+		}
+	})
+
+	t.Run("write and cwd stay strict", func(t *testing.T) {
+		for _, c := range []struct {
+			command string
+			args    []string
+			cwd     string
+		}{
+			{"probe-cat", []string{"pwd"}, app},
+			{"probe-put", []string{"echo", app}, ""},
+		} {
+			pr, er := hardExec(t, c.command, c.args, c.cwd)
+			if pr.code() != "path_denied" || !strings.Contains(pr.Error.Message, "uid "+strconv.Itoa(exampleApp)) || er.code() != "path_denied" {
+				t.Fatalf("%s %v cwd %q: preview %s %+v, exec %s", c.command, c.args, c.cwd, pr.code(), pr.Error, er.code())
+			}
+		}
+	})
+
+	t.Run("group-writable", func(t *testing.T) {
+		setDir(t, app, exampleApp, exampleApp, 0o775)
+		defer setDir(t, app, exampleApp, exampleApp, 0o755)
+		for _, args := range [][]string{{"cat", compose}, {"echo", app}} {
+			pr, er := hardExec(t, "probe-cat", args, "")
+			if pr.code() != "path_denied" || !strings.Contains(pr.Error.Message, app) || !strings.Contains(pr.Error.Message, "group- or world-writable") ||
+				er.code() != "path_denied" || er.Error.Message != pr.Error.Message {
+				t.Fatalf("%v: preview %s %+v, exec %s %+v", args, pr.code(), pr.Error, er.code(), er.Error)
+			}
+		}
+	})
+
+	t.Run("two other accounts", func(t *testing.T) {
+		outer := hardRoot + "/two"
+		ownDir(t, outer, svcOther, svcOther, 0o755)
+		inner := outer + "/app"
+		if err := os.Mkdir(inner, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		setDir(t, inner, exampleApp, exampleApp, 0o755)
+		f := inner + "/compose.yaml"
+		ownFile(t, f, "services: {}\n", exampleApp, 0o644)
+		for _, args := range [][]string{{"cat", f}, {"echo", inner}} {
+			pr, er := hardExec(t, "probe-cat", args, "")
+			if pr.code() != "path_denied" || !strings.Contains(pr.Error.Message, inner) || !strings.Contains(pr.Error.Message, "while the directory "+outer+" is owned by uid "+strconv.Itoa(svcOther)) ||
+				er.code() != "path_denied" || er.Error.Message != pr.Error.Message {
+				t.Fatalf("%v: preview %s %+v, exec %s %+v", args, pr.code(), pr.Error, er.code(), er.Error)
+			}
+		}
+	})
+}
+
+// TestGateExecOwnerMatchedReadRace (the accepted residual of the
+// owner-matched exception): example-app, which owns the directory of a
+// read command's target, exchanges the target (or a directory above it,
+// within its own directory) with a symlink, again and again, while the
+// gate previews and runs the read with the fresh hash. The swap redirects
+// the read, so the command reads what the link names, as the service
+// account: a file only the service account can read, or one the gate's
+// deny list covers, can be read and returned to the client (the residual
+// POLICY §4 documents); a file the service account cannot read (root's,
+// 0600) never is.
+func TestGateExecOwnerMatchedReadRace(t *testing.T) {
+	vault := hardWork + "/vault-read"
+	ownDir(t, vault, svcShell, svcShell, 0o700)
+	ownFile(t, vault+"/t", "SERVICE-ONLY\n", svcShell, 0o600)
+	denied := hardWork + "/denied"
+	ownDir(t, denied, svcShell, svcShell, 0o755)
+	ownFile(t, denied+"/t", "DENIED\n", svcShell, 0o644)
+	rootVault := hardWork + "/root-only"
+	ownDir(t, rootVault, 0, 0, 0o700)
+	rootFile(t, rootVault+"/t", "ROOT-ONLY\n", 0o600)
+	race := hardRoot + "/race"
+	for _, c := range []struct {
+		name, target, swap, to string
+		readable               bool
+	}{
+		{"the target, to the service account's file", "t", "t", vault + "/t", true},
+		{"the target, to a denied file", "t", "t", denied + "/t", true},
+		{"a directory above the target, to the service account's directory", "sub/t", "sub", vault, true},
+		{"the target, to root's file", "t", "t", rootVault + "/t", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ownDir(t, race, exampleApp, exampleApp, 0o755)
+			if err := os.Mkdir(race+"/sub", 0o700); err != nil {
+				t.Fatal(err)
+			}
+			setDir(t, race+"/sub", exampleApp, exampleApp, 0o755)
+			ownFile(t, race+"/t", "decoy\n", exampleApp, 0o644)
+			ownFile(t, race+"/sub/t", "decoy\n", exampleApp, 0o644)
+			stop := startRacer(t, "SWAPS", "E2E_CLIENT=swap", "E2E_SWAP_NAME="+filepath.Join(race, c.swap),
+				"E2E_SWAP_ALT="+filepath.Join(race, c.swap+".alt"), "E2E_SWAP_TO="+c.to)
+			target := filepath.Join(race, c.target)
+			got := map[string]int{}
+			for i := range 60 {
+				pr, er := hardExec(t, "probe-cat", []string{"cat", target}, "")
+				out := ""
+				if er.OK {
+					var d struct {
+						Stdout string `json:"stdout"`
+					}
+					_ = json.Unmarshal(er.Data, &d)
+					out = d.Stdout
+				}
+				switch {
+				case strings.Contains(string(pr.Data)+string(er.Data), "ROOT-ONLY"):
+					stop()
+					t.Fatalf("run %d: the read reached root's file: %s", i, er.Data)
+				case out == "READ:decoy\n\n":
+					got["decoy"]++
+				case strings.HasPrefix(out, "READ:") && c.readable:
+					got["redirected"]++
+				case er.OK:
+					got["not read"]++
+				default:
+					got[er.code()]++
+				}
+			}
+			n := stop()
+			if n == 0 {
+				t.Fatal("the racer did not swap")
+			}
+			t.Logf("reads %v; the racer made %d exchanges", got, n)
+		})
 	}
 }

@@ -406,3 +406,120 @@ func TestGateMoveReplacedNeverInSource(t *testing.T) {
 		})
 	}
 }
+
+// readFSAt is the gate's command FS (gateFSAt) with the owner-matched
+// exception for {path:read} (OwnerMatchedReads).
+func readFSAt(t *testing.T, root string, trusted func(uint32) bool) *FS {
+	t.Helper()
+	fs := gateFSAt(t, root, trusted)
+	fs.cfg.OwnerMatchedReads = true
+	return fs
+}
+
+func rootOnly(u uint32) bool { return u == 0 }
+
+// TestGateReadOwnerMatched: with OwnerMatchedReads, a {path:read} whose
+// path holds directories of one account other than root and the service
+// account (the test's uid, left out of the trust), none group- or
+// world-writable nor sticky, resolves, and so does such a directory as the
+// target; {path:write} and the cwd stay strict and refuse naming the
+// owner. A group-writable or sticky directory on the path, or as the
+// target, is refused for a read too, and without OwnerMatchedReads (the
+// helper) every read there is refused.
+func TestGateReadOwnerMatched(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("needs an unprivileged uid")
+	}
+	e := newExecChainEnv(t)
+	a := filepath.Join(e.root, "a")
+	b := filepath.Join(a, "b")
+	c := filepath.Join(b, "c")
+	mkdirMode(t, c, 0o755)
+	must(t, os.Chmod(a, 0o755)) //nolint:gosec // G302: a directory, closed
+	must(t, os.Chmod(b, 0o755)) //nolint:gosec // G302: a directory, closed
+	file := filepath.Join(b, "t")
+	putMode(t, file, "t\n", 0o644)
+	gate := readFSAt(t, e.root, rootOnly)
+	for name, err := range map[string]error{"file": second(gate.ResolveRead(file)), "directory": second(gate.ResolveRead(c)), "root": second(gate.ResolveRead(e.root))} {
+		if err != nil {
+			t.Fatalf("an owner-matched read, %s: %v", name, err)
+		}
+	}
+	owner := fmt.Sprintf("owned by uid %d", os.Getuid())
+	for name, err := range map[string]error{"write": second(gate.ResolveWrite(file)), "new": second(gate.ResolveWrite(filepath.Join(b, "new"))),
+		"cwd": second(gate.ResolveDir(c)), "write directory": second(gate.ResolveWrite(c))} {
+		wantCode(t, err, protocol.CodePathDenied)
+		if !strings.Contains(err.Error(), owner) {
+			t.Fatalf("%s: the refusal does not name the owner: %v", name, err)
+		}
+	}
+	strict := gateFSAt(t, e.root, rootOnly)
+	_, err := strict.ResolveRead(file)
+	wantCode(t, err, protocol.CodePathDenied)
+	for _, mode := range []os.FileMode{0o775, 0o757, os.ModeSticky | 0o755} {
+		for _, d := range []string{b, c} {
+			must(t, os.Chmod(d, mode))
+			p := file
+			if d == c {
+				p = c
+			}
+			_, err := gate.ResolveRead(p)
+			wantCode(t, err, protocol.CodePathDenied)
+			if !strings.Contains(err.Error(), d) || !strings.Contains(err.Error(), "(mode ") {
+				t.Fatalf("%s %v: the refusal does not name it and why: %v", d, mode, err)
+			}
+			must(t, os.Chmod(d, 0o755)) //nolint:gosec // G302: closed again
+		}
+	}
+}
+
+// FuzzReadOwnerMatched: under OwnerMatchedReads, a {path:read}'s directories
+// (owner and mode bits, in order from / down) pass exactly when each is
+// closed (a trusted owner, neither group- nor world-writable, not sticky)
+// or neither group- nor world-writable nor sticky and owned by the first
+// untrusted owner on the path; a refusal of a second owner names both
+// directories.
+func FuzzReadOwnerMatched(f *testing.F) {
+	// Pairs of (owner, mode byte): owner 0 is trusted; the mode byte's low
+	// six bits are the group and other bits (0x2d: r-x r-x), 0x40 the
+	// sticky bit; the owner's bits are rwx.
+	f.Add([]byte{0, 0x2d, 1, 0x2d, 2, 0x2d})
+	f.Add([]byte{0, 0x2d, 1, 0x2d, 1, 0x2d})
+	f.Add([]byte{1, 0x3d, 0, 0x2d})
+	f.Add([]byte{2, 0x2d, 0, 0x2d, 2, 0x2d, 3, 0x2d})
+	f.Add([]byte{0, 0x6d, 1, 0x2d})
+	f.Add([]byte{0, 0x3f})
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		fs := New(&Config{TrustedDirOwner: func(u uint32) bool { return u == 0 }, GuardExecPaths: true, OwnerMatchedReads: true})
+		var o pathOwner
+		first, firstDir, have := uint32(0), "", false
+		for i := 0; i+1 < len(raw) && i < 64; i += 2 {
+			id := ident{uid: uint32(raw[i] % 4), perm: 0o700 | uint32(raw[i+1])&0o77}
+			if raw[i+1]&0x40 != 0 {
+				id.perm |= 0o1000
+			}
+			name := fmt.Sprintf("/d%d", i/2)
+			got := fs.readOpen(&id, name, &o)
+			var want bool
+			switch {
+			case id.uid == 0 && id.perm&0o1022 == 0:
+				want = true
+			case id.perm&0o1022 != 0:
+				want = false
+			case !have:
+				want, first, firstDir, have = true, id.uid, name, true
+			default:
+				want = id.uid == first
+			}
+			if (got == "") != want {
+				t.Fatalf("directory %d (uid %d, mode %04o), first other owner %d (%v): readOpen %q", i/2, id.uid, id.perm, first, have, got)
+			}
+			if got != "" {
+				if have && id.uid != first && id.perm&0o1022 == 0 && !strings.Contains(got, firstDir+" is owned by uid") {
+					t.Fatalf("a second owner's refusal does not name the first owner's directory %s: %q", firstDir, got)
+				}
+				return
+			}
+		}
+	})
+}

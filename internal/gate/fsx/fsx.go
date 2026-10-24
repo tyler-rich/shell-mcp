@@ -140,6 +140,13 @@ type Config struct {
 	// helper sets it; the gate sets it on the FS that resolves its commands'
 	// paths, not on the one its built-in git operations use.
 	GuardExecPaths bool
+	// OwnerMatchedReads relaxes GuardExecPaths for a {path:read}
+	// (ResolveRead) only: a directory on its path, or the target directory
+	// itself, that is not closed passes when it is neither group- nor
+	// world-writable nor sticky and every such directory on the path belongs
+	// to the same one account (exec_chain.go). The gate sets it on the FS
+	// that resolves its commands' paths (handoff N-11); the helper does not.
+	OwnerMatchedReads bool
 	// ExplicitOwner sets the owner and group of every inode fsx creates
 	// explicitly (fchown of both ids): the ones given, else an existing
 	// file's, else the process's own, so a setgid parent never chooses the
