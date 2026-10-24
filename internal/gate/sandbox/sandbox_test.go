@@ -48,7 +48,7 @@ func needABI(t *testing.T, n int) {
 // path it must exercise: "psx" (no_new_privs and landlock_restrict_self on
 // every thread through libcap/psx, one domain per thread) or "tsync" (one
 // landlock_restrict_self with LANDLOCK_RESTRICT_SELF_TSYNC). go-landlock
-// v0.10.1 chooses by the kernel's ABI after the signal-scoping errata check
+// v0.11.0 chooses by the kernel's ABI after the signal-scoping errata check
 // that sandbox.KernelABI mirrors (restrict.go: useTsync := abi.version >= 8).
 // The runners' kernels all report ABI 8 now, so the psx entry runs the
 // landlock_forcepsx test build, which plans as at ABI 7 and applies through

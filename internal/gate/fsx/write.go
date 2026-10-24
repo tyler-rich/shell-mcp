@@ -106,8 +106,7 @@ type atomicOpts struct {
 	// destination: expected is a copy's expected_destination_sha256 (P-9):
 	// a destination that is not a regular file is then exists.
 	destination bool
-	// copy: the content is a copy's, which cannot name an owner (the
-	// moved-in rule refuses it over a file whose owner it may not keep).
+	// copy: the content is a copy's (only rule R's messages differ).
 	copy bool
 }
 
@@ -532,6 +531,14 @@ func (f *FS) mkdirIn(l *loc, dir *os.Root, dirReal, name string, m os.FileMode, 
 // regular file with that content: otherwise exists (not_found when it is
 // gone), and nothing changes.
 func (f *FS) CopyExpecting(src, dst string, overwrite bool, expected string) (WriteResult, error) {
+	return f.CopyAs(src, dst, overwrite, expected, nil)
+}
+
+// CopyAs is CopyExpecting giving the copy an owner, the helper's priv_copy
+// (handoff N-19, P-15): as for a write, its ids are set on the new inode,
+// the unset half the replaced file's or the helper's own, and under rule R
+// the owner given must itself pass.
+func (f *FS) CopyAs(src, dst string, overwrite bool, expected string, owner *Owner) (WriteResult, error) {
 	if e := checkExpectedDestination(overwrite, expected); e != nil {
 		return WriteResult{}, e
 	}
@@ -582,7 +589,7 @@ func (f *FS) CopyExpecting(src, dst string, overwrite bool, expected string) (Wr
 		return WriteResult{}, errf(protocol.CodeIsADirectory, "destination is a directory")
 	}
 	srcMode := os.FileMode(unixMode(fi)) &^ 0o7002
-	return f.writeAtomic(ld, data, &atomicOpts{newMode: srcMode, create: true, overwrite: overwrite, expected: expected, destination: expected != "", copy: true})
+	return f.writeAtomic(ld, data, &atomicOpts{newMode: srcMode, create: true, overwrite: overwrite, expected: expected, owner: owner, destination: expected != "", copy: true})
 }
 
 // Copy copies src to dst (CopyExpecting without a destination hash).

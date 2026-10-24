@@ -45,7 +45,10 @@ const (
 	// ABIUnixSocket governs connect(2)/sendmsg(2) on pathname Unix sockets
 	// (LANDLOCK_ACCESS_FS_RESOLVE_UNIX).
 	ABIUnixSocket = 9
-	// ABIHighest is the highest ABI go-landlock v0.10.1 knows (landlock.V10).
+	// ABIHighest is the highest ABI the gate plans for (landlock.V10).
+	// go-landlock v0.11.0 also knows V11, which adds no access rights over
+	// V10, only LANDLOCK_RESTRICT_SELF_NO_NEW_PRIVS (the gate sets
+	// no_new_privs on every thread itself, ApplyRules).
 	ABIHighest = 10
 	// RequiredMinABI is what `landlock: required` needs for every policy:
 	// the network rule (no TCP bind; connect only to listed ports) is always
@@ -53,7 +56,7 @@ const (
 	RequiredMinABI = ABINet
 )
 
-// abiTSync is where go-landlock v0.10.1 moves from psx to
+// abiTSync is where go-landlock v0.11.0 moves from psx to
 // LANDLOCK_RESTRICT_SELF_TSYNC (restrict.go: useTsync := abi.version >= 8).
 const abiTSync = 8
 

@@ -76,9 +76,9 @@
       "readOnlyHint": false,
       "title": "Discard git changes"
     },
-    "description": "Restores a repository's tracked files and index to HEAD and, with include_untracked, removes untracked files, exactly as its approved preview listed them.",
+    "description": "Restores a repository's tracked files and index to HEAD and, with include_untracked, removes untracked files, exactly as its approved preview listed them. Superproject only: submodule work trees are never inspected (not their changes or checked-out commit); staged gitlink changes are seen.",
     "input_schema_sha256": "76ce33b205462563dcfae49620d38682f7d74b2faa1cab4edd80e9558b0864b2",
-    "output_schema_sha256": "55d7f92280f08337714421e8101180b7b196cd54caaca41b66899172838764f2",
+    "output_schema_sha256": "ec4d58b1acfcefac470a42f5e68e2c3d01653bbfb2091460dfaa5566d597745f",
     "requires_user_interaction": true
   },
   {
@@ -186,7 +186,7 @@
       "readOnlyHint": true,
       "title": "Get git status"
     },
-    "description": "Returns a repository's branch, HEAD, upstream, ahead/behind counts and changed or untracked paths.",
+    "description": "Returns a repository's branch, HEAD, upstream, ahead/behind counts and changed or untracked paths. Superproject only: submodule work trees are never inspected (not their changes or checked-out commit); staged gitlink changes are seen.",
     "input_schema_sha256": "9dbc919b9fd8c5ff28d099b276495e716a9eae82e94cef40aba0a8dd4b5a5f72",
     "output_schema_sha256": "6cb85b5189474e20cb62473113e99187a4d9d5d3a3941ef4171405edf9d1a85e",
     "requires_user_interaction": false
@@ -552,7 +552,7 @@
       "title": "Copy file as root"
     },
     "description": "Copies a regular file as root to a destination within the host's privileged write roots, backing up a replaced destination and verifying by read-back; returns the hashes, mode, owner and backup ids.",
-    "input_schema_sha256": "768c0a0fec28cefbc42b397ced2df84eb5be904e427fa3ebc4bad8582c69d28a",
+    "input_schema_sha256": "af7cc3e40c792f2a50360e106da0b32cf7d59e3449a7e1621e0a6bd05f786b71",
     "output_schema_sha256": "91a89c0cffa31374ed95432354eb9f756275c57538e792850d1b617502abf1b1",
     "requires_user_interaction": true
   },

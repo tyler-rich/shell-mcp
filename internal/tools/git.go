@@ -56,7 +56,7 @@ func getGitStatus(d *Deps) Tool {
 	return define(d, spec[repoIn, GitStatus]{
 		name:        "shell_get_git_status",
 		title:       "Get git status",
-		description: "Returns a repository's branch, HEAD, upstream, ahead/behind counts and changed or untracked paths.",
+		description: "Returns a repository's branch, HEAD, upstream, ahead/behind counts and changed or untracked paths. Superproject only: submodule work trees are never inspected (not their changes or checked-out commit); staged gitlink changes are seen.",
 		tier:        TierRead,
 		schema:      boundRepo,
 		audit:       func(in repoIn) map[string]any { return map[string]any{"target": in.Target, "repo": in.Repo} },
