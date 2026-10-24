@@ -254,12 +254,14 @@ func TestGateExecPathChain(t *testing.T) {
 }
 
 // TestGateExecPathChainRace (N-11): example-app, which owns a directory
-// under the gate's write root, exchanges a command's target (in that
-// directory), a directory above it, or the name the command reads relative
-// to a cwd it owns, with a symlink to a file only the service account can
-// read, again and again, while the gate previews and runs the command with
-// each fresh preview's hash. Every request is refused at the resolution,
-// and the file is never read or written.
+// under the gate's write root, exchanges a command's {path:write} target
+// (in that directory), a directory above it, or the name a command reads
+// relative to a cwd it owns, with a symlink to a file only the service
+// account can read, again and again, while the gate previews and runs the
+// command with each fresh preview's hash. Every request is refused at the
+// resolution, and the file is never read or written. (A {path:read} there
+// is the owner-matched exception, whose residual
+// TestGateExecOwnerMatchedReadRace shows.)
 func TestGateExecPathChainRace(t *testing.T) {
 	vault := hardWork + "/vault"
 	race := hardWork + "/race"
@@ -286,7 +288,7 @@ func TestGateExecPathChainRace(t *testing.T) {
 				command string
 				args    []string
 			}
-			reqs := []req{{"probe-cat", []string{"cat", target}}, {"probe-put", []string{"write", target}}}
+			reqs := []req{{"probe-put", []string{"write", target}}}
 			if c.cwd != "" {
 				reqs = []req{{"probe-cat", []string{"cat", c.target}}}
 			}
@@ -419,8 +421,8 @@ func TestGateMoveStagingEntry(t *testing.T) {
 // TestGateExecOwnerMatchedRead (N-11, the owner-matched exception for
 // {path:read}): a file in a directory one other account owns (example-app's
 // application directory, as in POLICY §4's compose example) and that
-// directory itself are given to a read command; {path:write} and the cwd
-// there are refused. A group-writable application directory, and a path
+// directory itself are given to a read command; the cwd there, and a
+// {path:write} in such a directory under the write root, are refused. A group-writable application directory, and a path
 // holding directories of two other accounts (svc-other's holding
 // example-app's), refuse a read, naming why.
 func TestGateExecOwnerMatchedRead(t *testing.T) {
@@ -430,7 +432,7 @@ func TestGateExecOwnerMatchedRead(t *testing.T) {
 	ownFile(t, compose, "services: {}\n", exampleApp, 0o644)
 
 	t.Run("POLICY's compose example", func(t *testing.T) {
-		pr, r := hardExec(t, "probe-compose", []string{"compose", "-f", compose, "ps", "--format", "json"}, "")
+		pr, r := hardExec(t, "probe-compose", []string{"echo", "compose", "-f", compose, "ps", "--format", "json"}, "")
 		if out := stdoutOf(t, &r); !pr.OK || out != "compose\n-f\n"+compose+"\nps\n--format\njson\n" {
 			t.Fatalf("preview %+v, ran %q", pr.Error, out)
 		}
@@ -445,18 +447,28 @@ func TestGateExecOwnerMatchedRead(t *testing.T) {
 	})
 
 	t.Run("write and cwd stay strict", func(t *testing.T) {
+		// The same layout under the write root, for {path:write}.
+		appW := hardWork + "/app"
+		ownDir(t, appW, exampleApp, exampleApp, 0o755)
+		ownFile(t, appW+"/compose.yaml", "services: {}\n", exampleApp, 0o644)
 		for _, c := range []struct {
 			command string
 			args    []string
 			cwd     string
 		}{
 			{"probe-cat", []string{"pwd"}, app},
-			{"probe-put", []string{"echo", app}, ""},
+			{"probe-put", []string{"echo", appW}, ""},
+			{"probe-put", []string{"write", appW + "/compose.yaml"}, ""},
+			{"probe-put", []string{"write", appW + "/new.yaml"}, ""},
 		} {
 			pr, er := hardExec(t, c.command, c.args, c.cwd)
 			if pr.code() != "path_denied" || !strings.Contains(pr.Error.Message, "uid "+strconv.Itoa(exampleApp)) || er.code() != "path_denied" {
 				t.Fatalf("%s %v cwd %q: preview %s %+v, exec %s", c.command, c.args, c.cwd, pr.code(), pr.Error, er.code())
 			}
+		}
+		fileIs(t, appW+"/compose.yaml", "services: {}\n")
+		if _, err := os.Lstat(appW + "/new.yaml"); err == nil {
+			t.Fatal("a refused write created its file")
 		}
 	})
 
