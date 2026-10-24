@@ -35,7 +35,8 @@ func (h confineHooks) layerOff(l confineLayer) bool { return l != layerNone && h
 func (confineHooks) rootByPath(p string) (*os.Root, error) { return os.OpenRoot(p) }
 
 func (confineHooks) fileByPath(p string, flags int) (*os.File, error) {
-	return os.OpenFile(p, flags, 0)
+	return os.OpenFile(p, flags, 0) //nolint:gosec // G304: the test build's stand-in for the descriptor layer opens by path on purpose
+
 }
 
 func (h confineHooks) at(point string) {
