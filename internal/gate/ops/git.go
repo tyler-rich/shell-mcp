@@ -70,20 +70,17 @@ func GitArgs(repo, caFile string, sub ...string) []string {
 		// the request. Case sensitivity is pinned: a repo-local
 		// core.ignorecase=true would hide untracked files from status and
 		// clean on a case-sensitive filesystem.
-		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "gc.autoDetach=false", "-c", "core.ignorecase=false",
-		// Every key with a fixed name that names a program git would run
-		// (git 2.55 git-config(1)), so that none the repository sets after
-		// the configuration check runs anything (handoff N-20). The
-		// command line is read last and wins for each of them.
-		"-c", "core.editor=/bin/false", "-c", "sequence.editor=/bin/false", "-c", "core.askPass=/bin/false",
-		"-c", "core.alternateRefsCommand=/bin/false", "-c", "diff.external=/bin/false",
-		"-c", "gpg.program=/bin/false", "-c", "gpg.openpgp.program=/bin/false", "-c", "gpg.x509.program=/bin/false",
-		"-c", "gpg.ssh.program=/bin/false", "-c", "gpg.ssh.defaultKeyCommand=/bin/false"}
-	// Hooks defined in configuration (hook.<name>.command and .event) run
-	// whatever core.hooksPath says; hook.<event>.enabled=false turns every
-	// hook of that event off.
-	for _, e := range gitHookEvents {
-		a = append(a, "-c", "hook."+e+".enabled=false")
+		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "gc.autoDetach=false", "-c", "core.ignorecase=false"}
+	// Every program-running key with a fixed name, and
+	// hook.<event>.enabled=false for every hook event (hooks defined in
+	// configuration run whatever core.hooksPath says), from gitx's table,
+	// so that none the repository sets after the configuration check runs
+	// anything (handoff N-20). The command line is read last and wins for
+	// each of them. Those on the first lines above are not repeated.
+	for _, o := range gitx.ProgramOverrides() {
+		if !slices.Contains(a, o) {
+			a = append(a, "-c", o)
+		}
 	}
 	if caFile != "" {
 		a = append(a, "-c", "http.sslCAInfo="+caFile)
@@ -91,23 +88,13 @@ func GitArgs(repo, caFile string, sub ...string) []string {
 	return append(a, sub...)
 }
 
-// gitHookEvents are the hook events of githooks(5) in git 2.55.
-var gitHookEvents = []string{
-	"applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "pre-merge-commit", "prepare-commit-msg", "commit-msg",
-	"post-commit", "pre-rebase", "post-checkout", "post-merge", "pre-push", "pre-receive", "update", "proc-receive", "post-receive",
-	"post-update", "reference-transaction", "push-to-checkout", "pre-auto-gc", "post-rewrite", "sendemail-validate",
-	"fsmonitor-watchman", "p4-changelist", "p4-prepare-changelist", "p4-post-changelist", "p4-pre-submit", "post-index-change",
-}
-
 // GitEnv returns git's exact environment for the repository at repo. The
-// variables that would name a program are set to ones that run nothing
-// (they take precedence over the matching configuration keys, and
-// GIT_PROXY_COMMAND, set even empty, over every core.gitProxy).
+// variables that would name a program (gitx.ProgramEnv) are set to ones
+// that run nothing: they take precedence over the matching configuration
+// keys, and GIT_PROXY_COMMAND, set even empty, over every core.gitProxy.
 func GitEnv(home, repo string) []string {
-	return append(execx.Environment(home), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
-		"GIT_DIR="+repo+"/.git", "GIT_WORK_TREE="+repo,
-		"GIT_ASKPASS=/bin/false", "SSH_ASKPASS=/bin/false", "GIT_EDITOR=/bin/false", "GIT_SEQUENCE_EDITOR=/bin/false",
-		"GIT_EXTERNAL_DIFF=/bin/false", "GIT_PAGER=cat", "GIT_PROXY_COMMAND=", "GIT_SSH=/bin/false", "GIT_SSH_COMMAND=/bin/false")
+	return append(append(execx.Environment(home), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_DIR="+repo+"/.git", "GIT_WORK_TREE="+repo), gitx.ProgramEnv()...)
 }
 
 // gitRepo is a validated repository and the request's deadline.

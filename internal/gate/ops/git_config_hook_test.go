@@ -5,9 +5,11 @@ package ops_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
+	"github.com/tyler-rich/shell-mcp/internal/gate/gitx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/ops"
 )
 
@@ -20,12 +22,19 @@ import (
 // writes a marker in the test's directory. Every git operation must then
 // still answer without running any of them. Everything is invented.
 
-// programKeys are the keys set after the check, each to the marker script.
-var programKeys = []string{
-	"core.fsmonitor", "core.pager", "core.sshCommand", "core.editor", "sequence.editor", "core.askPass", "core.alternateRefsCommand",
-	"diff.external", "gpg.program", "gpg.openpgp.program", "gpg.x509.program", "gpg.ssh.program", "gpg.ssh.defaultKeyCommand",
-	"hook.marker.command",
-}
+// programKeys are the keys set after the check, each to the marker script:
+// every key gitx's table forces on the command line (core.hooksPath is set
+// again below, to a directory of hooks), and a configured hook.
+var programKeys = func() []string {
+	out := []string{"hook.marker.command"}
+	for i := range gitx.ProgramKeys {
+		for _, a := range gitx.ProgramKeys[i].Args {
+			k, _, _ := strings.Cut(a, "=")
+			out = append(out, k)
+		}
+	}
+	return out
+}()
 
 func TestGitConfigChangedAfterCheck(t *testing.T) {
 	for _, op := range []string{"git_status", "git_log", "git_diff", "git_pull", "git_discard_preview", "git_discard"} {

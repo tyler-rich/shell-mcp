@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
+	"github.com/tyler-rich/shell-mcp/internal/gate/gitx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/ops"
 )
 
@@ -27,33 +28,28 @@ import (
 // account, so here "another account can write it" is an open mode; e2e-host
 // runs the owners. Repositories, paths and contents are invented.
 
-// gitHookEvents are the hook events of githooks(5) in git 2.55.
-var gitHookEvents = []string{
-	"applypatch-msg", "pre-applypatch", "post-applypatch", "pre-commit", "pre-merge-commit", "prepare-commit-msg", "commit-msg",
-	"post-commit", "pre-rebase", "post-checkout", "post-merge", "pre-push", "pre-receive", "update", "proc-receive", "post-receive",
-	"post-update", "reference-transaction", "push-to-checkout", "pre-auto-gc", "post-rewrite", "sendemail-validate",
-	"fsmonitor-watchman", "p4-changelist", "p4-prepare-changelist", "p4-post-changelist", "p4-pre-submit", "post-index-change",
-}
+// gitHookEvents are gitx's hook events (githooks(5)), each disabled.
+var gitHookEvents = gitx.HookEvents
 
 // gitOverrides are the -c values every git process must carry, in order:
-// the hardening flags of #26 and before, then N-20's program-running keys.
+// the hardening flags of #26 and before, then N-20's program-running keys
+// and hook events from gitx's table (TestGitProgramKeysCovered checks the
+// table against the installed git), each once.
 func gitOverrides(repo string) []string {
 	o := []string{"core.fsmonitor=false", "core.hooksPath=/dev/null", "core.pager=cat", "core.sshCommand=/bin/false", "credential.helper=",
 		"protocol.file.allow=never", "protocol.ext.allow=never", "safe.directory=" + repo, "maintenance.auto=false", "gc.auto=0",
-		"gc.autoDetach=false", "core.ignorecase=false",
-		"core.editor=/bin/false", "sequence.editor=/bin/false", "core.askPass=/bin/false", "core.alternateRefsCommand=/bin/false",
-		"diff.external=/bin/false", "gpg.program=/bin/false", "gpg.openpgp.program=/bin/false", "gpg.x509.program=/bin/false",
-		"gpg.ssh.program=/bin/false", "gpg.ssh.defaultKeyCommand=/bin/false"}
-	for _, e := range gitHookEvents {
-		o = append(o, "hook."+e+".enabled=false")
+		"gc.autoDetach=false", "core.ignorecase=false"}
+	for _, p := range gitx.ProgramOverrides() {
+		if !slices.Contains(o, p) {
+			o = append(o, p)
+		}
 	}
 	return o
 }
 
 // gitProgramEnv are the environment variables every git process must get,
-// so that none can name a program (N-20).
-var gitProgramEnv = []string{"GIT_ASKPASS=/bin/false", "GIT_EDITOR=/bin/false", "GIT_EXTERNAL_DIFF=/bin/false", "GIT_PAGER=cat",
-	"GIT_PROXY_COMMAND=", "GIT_SEQUENCE_EDITOR=/bin/false", "GIT_SSH=/bin/false", "GIT_SSH_COMMAND=/bin/false", "SSH_ASKPASS=/bin/false"}
+// so that none can name a program (N-20; gitx's table).
+var gitProgramEnv = gitx.ProgramEnv()
 
 // gitOps is every git operation with arguments that pass its own checks.
 func gitOps(repo string) []struct {
