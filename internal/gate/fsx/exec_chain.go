@@ -11,21 +11,25 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
 )
 
-// The chain rule for root commands' paths (handoff
-// docs/handoff/S4C-PRIVILEGED.md N-10; PRIVILEGED §6, "Commands"), applied
-// when Config.GuardExecPaths is set (the helper). ResolveRead, ResolveWrite
-// and ResolveDir find a path by descriptor and return its real path as a
-// string; the command then looks that string up again itself, as root,
-// from /, following symlinks. An account that can change the entries of any
-// directory on that path could replace the next component with a symlink in
-// between: a rename within one parent needs write access to that parent
-// only, so this holds for a directory above the root too, which can replace
-// the root itself. So the path is returned only when every directory from /
-// down to the target's parent is closed for commands: owned by a trusted
-// uid (root unless Config.TrustedDirOwner says otherwise), neither group-
-// nor world-writable, and not sticky (a sticky directory counts as open,
-// writable or not). Then only root can change what the string names between
-// the resolution and the command's lookup. The directories are checked by
+// The chain rule for commands' paths (handoff
+// docs/handoff/S4C-PRIVILEGED.md N-10, N-11; PRIVILEGED §6, "Commands";
+// POLICY §4), applied when Config.GuardExecPaths is set: by the helper for
+// root commands, and by the gate for its own commands, which run as the
+// service account. ResolveRead, ResolveWrite and ResolveDir find a path by
+// descriptor and return its real path as a string; the command then looks
+// that string up again itself, from /, following symlinks. An account that
+// can change the entries of any directory on that path could replace the
+// next component with a symlink in between: a rename within one parent
+// needs write access to that parent only, so this holds for a directory
+// above the root too, which can replace the root itself. So the path is
+// returned only when every directory from / down to the target's parent is
+// closed for commands: owned by a trusted uid (Config.TrustedDirOwner: root
+// in the helper; root and the service account in the gate, whose commands
+// run as that account, which gains nothing by changing its own
+// directories), neither group- nor world-writable, and not sticky (a sticky
+// directory counts as open, writable or not). Then only a trusted account
+// can change what the string names between the resolution and the
+// command's lookup. The directories are checked by
 // descriptor, each opened from the previous one with O_PATH|O_NOFOLLOW
 // (chainCheck), and the last must be the parent fsx holds; for the root
 // itself, the chain is its ancestors, ending at the root fsx opened.
@@ -79,9 +83,9 @@ func (f *FS) execChain(l *loc, target *os.File) error {
 				return nil // the root itself: checked below as the target
 			}
 			if why := f.execOpen(id); why != "" {
-				return errf(protocol.CodePathDenied, "%q is not given to a command as root: %s on its path is %s, so another account could replace "+
+				return errf(protocol.CodePathDenied, "%q is not given to a command%s: %s on its path is %s, so another account could replace "+
 					"a directory or file on the path (with a symlink, for example) before the command looks the path up itself; nothing was run",
-					l.p, l.chainDirName(cur), why)
+					l.p, f.asRoot(), l.chainDirName(cur), why)
 			}
 			return nil
 		})
@@ -108,8 +112,8 @@ func (f *FS) execChain(l *loc, target *os.File) error {
 			return nil
 		}
 		if why := f.execOpen(&id); why != "" {
-			return errf(protocol.CodePathDenied, "%q is not given to a command as root: it is a directory that is %s, so another account could change "+
-				"what is inside it (plant a symlink, for example) before or while the command works in it; nothing was run", l.p, why)
+			return errf(protocol.CodePathDenied, "%q is not given to a command%s: it is a directory that is %s, so another account could change "+
+				"what is inside it (plant a symlink, for example) before or while the command works in it; nothing was run", l.p, f.asRoot(), why)
 		}
 		return nil
 	})

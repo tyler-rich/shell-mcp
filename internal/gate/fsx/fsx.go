@@ -70,11 +70,11 @@ type Config struct {
 	// path that stops unexpectedly would. Tests only; production code never
 	// sets it.
 	InjectStopAfterSetAside func(path string) error
-	// InjectAfterStage, when non-nil, is called right after a move in the
-	// helper (GuardMovedIn) staged its source under a temporary name in the
-	// destination's directory (that name); an error it returns stops the
-	// move there, leaving the staged entry, as a helper that dies there
-	// would. Tests only; production code never sets it.
+	// InjectAfterStage, when non-nil, is called right after a move staged
+	// its source under a temporary name in the destination's directory
+	// (that name); an error it returns stops the move there, leaving the
+	// staged entry, as a gate or helper that dies there would. Tests only;
+	// production code never sets it.
 	InjectAfterStage func(tmp string) error
 	// Backup, when non-nil, is called before every overwrite, move-over and
 	// delete; its error aborts the operation. The gate never sets it.
@@ -85,9 +85,9 @@ type Config struct {
 	// §4); the gate leaves it nil.
 	ModesMax *os.FileMode
 	// VerifyMetadata makes Chmod re-read the mode, owner and group through
-	// the descriptor it changed; a mismatch is verify_failed. The helper sets
-	// it; the gate does not. (The helper's chown and chmod, ApplyMeta, always
-	// read back.)
+	// the descriptor it changed; a mismatch is verify_failed. The gate (its
+	// chmod, handoff N-4) and the helper set it. (The helper's chown and
+	// chmod, ApplyMeta, always read back.)
 	VerifyMetadata bool
 	// InjectMetadataReadBackFault, when non-nil, transforms what Chmod and
 	// ApplyMeta read back before it is compared. Tests only; production code
@@ -114,11 +114,13 @@ type Config struct {
 	// failed operation that changed nothing from one that did; the gate
 	// leaves it nil.
 	OnCommit func()
-	// TrustedDirOwner decides whose directories PreviewMeta and ApplyMeta
-	// trust on the path to an entry and inside a tree: a directory must be
-	// owned by a uid it accepts and be neither group- nor world-writable
-	// (PRIVILEGED §6, handoff N-1). nil trusts uid 0 only. The helper sets
-	// it from its trust (root); the gate does not use those functions.
+	// TrustedDirOwner decides whose directories the chain rules trust
+	// (PreviewMeta and ApplyMeta on the path to an entry and inside a tree,
+	// the moved-in rule, GuardExecPaths): a directory must be owned by a uid
+	// it accepts and be neither group- nor world-writable (PRIVILEGED §6,
+	// handoff N-1). nil trusts uid 0 only. The helper sets it from its trust
+	// (root); the gate, for its commands' paths only, to root and the
+	// service account (handoff N-11).
 	TrustedDirOwner func(uid uint32) bool
 	// GuardMovedIn applies the moved-in rule (PRIVILEGED §6, "Files another
 	// account could have moved in"; handoff N-6, N-7; moved_in.go): a file
@@ -128,12 +130,14 @@ type Config struct {
 	// owner and group only when owner-matched. The helper sets it; the gate
 	// does not.
 	GuardMovedIn bool
-	// GuardExecPaths applies the chain rule to the paths a root command is
-	// given (handoff N-10; exec_chain.go): ResolveRead, ResolveWrite and
+	// GuardExecPaths applies the chain rule to the paths a command is given
+	// (handoff N-10, N-11; exec_chain.go): ResolveRead, ResolveWrite and
 	// ResolveDir return a path only when every directory from / to its
 	// parent, by descriptor, is owned by a uid TrustedDirOwner accepts and is
-	// neither group- nor world-writable, since the command looks the string
-	// up again itself. The helper sets it; the gate does not.
+	// neither group- nor world-writable nor sticky, and a directory target
+	// is so itself, since the command looks the string up again itself. The
+	// helper sets it; the gate sets it on the FS that resolves its commands'
+	// paths, not on the one its built-in git operations use.
 	GuardExecPaths bool
 	// ExplicitOwner sets the owner and group of every inode fsx creates
 	// explicitly (fchown of both ids): the ones given, else an existing
@@ -161,6 +165,29 @@ type Meta struct {
 // FS performs confined operations.
 type FS struct {
 	cfg Config
+}
+
+// asRoot, who and docs word a refusal for the program the FS serves: the
+// privileged helper (Config.Privileged), which acts as root, or the gate.
+func (f *FS) asRoot() string {
+	if f.cfg.Privileged {
+		return " as root"
+	}
+	return ""
+}
+
+func (f *FS) who() string {
+	if f.cfg.Privileged {
+		return "the helper"
+	}
+	return "the gate"
+}
+
+func (f *FS) docs() string {
+	if f.cfg.Privileged {
+		return "the privileged helper's documentation"
+	}
+	return "the policy documentation"
 }
 
 // New returns an FS for cfg.

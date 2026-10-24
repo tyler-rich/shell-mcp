@@ -102,8 +102,9 @@ func singleComponent(name string) bool {
 // unchecked.
 
 // exchangeVerified commits a replace of dstName in dstDir by srcName in
-// srcDir (the new file: a temp file, or a move's source), verified against
-// want, the destination as last checked.
+// srcDir (the new file: a write's or copy's temp file, or a move's staged
+// source, both in the destination's directory, so the replaced file never
+// leaves it), verified against want, the destination as last checked.
 func (f *FS) exchangeVerified(srcDir *os.Root, srcName string, dstDir *os.Root, dstName string, want fs.FileInfo) *Error {
 	if !singleComponent(srcName) || !singleComponent(dstName) {
 		return errf(protocol.CodeInternal, "rename names must be single path components")
@@ -129,13 +130,13 @@ func (f *FS) exchangeVerified(srcDir *os.Root, srcName string, dstDir *os.Root, 
 		if berr := renameat2(srcDir, srcName, dstDir, dstName, unix.RENAME_EXCHANGE); berr != nil {
 			f.commit() // the new file stays at the destination
 			return errf(protocol.CodeInternal, "the destination changed after it was checked, and could not be put back: the new file is at the "+
-				"destination and the other one is under the name %q beside the source", srcName)
+				"destination and the other one is under the name %q beside it", srcName)
 		}
 		return unchanged(errf(protocol.CodeExists, "the destination changed after it was checked; it was not replaced, and nothing was changed"))
 	}
 	f.commit()
 	if err := srcDir.Remove(srcName); err != nil {
-		return errf(protocol.CodeInternal, "the destination was replaced, but its previous version could not be removed from the name %q beside the source", srcName)
+		return errf(protocol.CodeInternal, "the destination was replaced, but its previous version could not be removed from the name %q beside it", srcName)
 	}
 	return nil
 }

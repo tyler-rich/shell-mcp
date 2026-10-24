@@ -554,7 +554,10 @@ func (s *server) run(nc net.Conn) *protocol.Response {
 		// A root command is given a path (a placeholder, its cwd) only when
 		// no account but root can change what it names before the command
 		// looks it up itself (handoff N-10, PRIVILEGED §6).
-		GuardExecPaths:              true,
+		GuardExecPaths: true,
+		// Refusals say the helper acts as root and point to its
+		// documentation.
+		Privileged:                  true,
 		InjectBeforeBackup:          o.InjectBeforeBackup,
 		InjectExchangeFault:         o.InjectExchangeFault,
 		InjectReadBackFault:         o.InjectReadBackFault,
