@@ -403,3 +403,47 @@ func TestCheckPolicyWarnsGTFOBins(t *testing.T) {
 		t.Fatalf("check-policy:\n%s", out)
 	}
 }
+
+// TestCheckPolicyStickyIsOpen (handoff N-24): root commands' paths (N-10)
+// count a sticky directory on a root's path as open, writable or not, so
+// check-policy reports a root under one, as it does an open one, naming the
+// directory, instead of an ok line; chmod and chown, which ignore the
+// sticky bit, are not named as refused.
+func TestCheckPolicyStickyIsOpen(t *testing.T) {
+	y := strings.Replace(validPolicy, "read: [{D}/srv/app]", "read: [{D}/srv/app, {D}/srv/spool/logs]", 1)
+	y = strings.Replace(y, "write: [{D}/etc/example-app]", "write: [{D}/etc/example-app, {D}/srv/drop]", 1)
+	env, p := testEnv(t, y)
+	d := filepath.Dir(filepath.Dir(filepath.Dir(p)))
+	spool, drop := filepath.Join(d, "srv", "spool"), filepath.Join(d, "srv", "drop")
+	gatetest.Mkdir(t, filepath.Join(spool, "logs"), 0o755)
+	gatetest.Mkdir(t, drop, 0o755)
+	for _, dir := range []string{spool, drop} {
+		if err := os.Chmod(dir, os.ModeSticky|0o755); err != nil {
+			t.Fatal(err)
+		}
+		gatetest.ExactMode(t, dir, os.ModeSticky|0o755)
+	}
+	var so, se bytes.Buffer
+	_ = checkPolicyWith([]string{"--policy", p}, &so, &se, env)
+	out := so.String()
+	for _, want := range []string{
+		"WARN privileged read root " + filepath.Join(spool, "logs") + ": " + spool + " is sticky (mode 1755); root commands are given no path (placeholder or cwd) at or under it",
+		"WARN privileged write root " + drop + ": " + drop + " is sticky (mode 1755); root commands are given no path (placeholder or cwd) at or under it",
+		"ok   privileged write root " + filepath.Join(d, "etc", "example-app") + ": every directory from / to it is root's",
+		"ok   privileged read root " + filepath.Join(d, "srv", "app") + ": every directory from / to it is root's",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report lacks %q:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{"ok   privileged write root " + drop + ":", "ok   privileged read root " + filepath.Join(spool, "logs") + ":"} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("a root under a sticky directory got an ok line:\n%s", out)
+		}
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, " is sticky ") && strings.Contains(line, "chmod and chown are refused") {
+			t.Errorf("a sticky directory is reported as refusing chmod and chown: %s", line)
+		}
+	}
+}
