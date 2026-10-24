@@ -25,7 +25,7 @@ import (
 //	git -C <repo> --no-pager --no-optional-locks -c core.fsmonitor=false
 //	    -c core.hooksPath=/dev/null -c core.pager=cat -c core.sshCommand=/bin/false
 //	    -c credential.helper= -c protocol.file.allow=never -c protocol.ext.allow=never
-//	    -c safe.directory=<repo> -c maintenance.auto=false -c gc.auto=0
+//	    -c maintenance.auto=false -c gc.auto=0
 //	    -c gc.autoDetach=false -c core.ignorecase=false
 //	    -c <every program-running key with a fixed name>=/bin/false
 //	    -c hook.<every event>.enabled=false <subcommand> …
@@ -45,8 +45,11 @@ import (
 // change it after that check, and the -c overrides and variables are a
 // second layer for the keys whose names are fixed. fsx never writes under a
 // .git component (POLICY §3), so a caller cannot plant such configuration
-// either. git applies no safe.directory ownership check to a repository
-// GIT_DIR names, so safe.directory=<repo> does nothing for it.
+// either. There is no safe.directory: git applies its ownership check only
+// to a repository it discovers (setup.c, git 2.55), never to one GIT_DIR
+// names, as the gate's always is, and the git processes it starts in a
+// submodule get GIT_DIR=.git explicitly too (prepare_other_repo_env,
+// run-command.c), so safe.directory=<repo> did nothing (POLICY §7).
 
 const (
 	maxGitEntries   = 1000
@@ -63,7 +66,6 @@ func GitArgs(repo, caFile string, sub ...string) []string {
 		"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "core.pager=cat",
 		"-c", "core.sshCommand=/bin/false", "-c", "credential.helper=",
 		"-c", "protocol.file.allow=never", "-c", "protocol.ext.allow=never",
-		"-c", "safe.directory=" + repo,
 		// No automatic maintenance or gc: git would otherwise start
 		// `git maintenance run --auto --detach` after a pull, which
 		// daemonizes (setsid) out of the gate's process group and outlives
