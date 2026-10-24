@@ -41,8 +41,8 @@ import (
 // the temporary index onto .git/index. A path that does not verify is not
 // restored: what was set aside is put back, the index is left unchanged,
 // and the discard stops with exists. Nothing outside the preview is ever
-// discarded, and no hook runs (core.hooksPath=/dev/null on every git
-// command, as for every git op).
+// discarded, and no hook runs (core.hooksPath=/dev/null and every
+// hook.<event>.enabled=false on every git command, as for every git op).
 
 const discardPreviewDomain = "shell-mcp git discard preview v1\x00"
 

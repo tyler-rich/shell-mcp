@@ -75,21 +75,23 @@ jobs:
         run: |
           go vet ./...
           # Files built only with a tag: the e2e suite, the helper's e2e
-          # bypass build, the server's elicitation diagnostic build and the
-          # Landlock forced-psx test build (none ever released).
+          # bypass build, the server's elicitation diagnostic build, the
+          # Landlock forced-psx test build and the gate's git-configuration
+          # hook build (none ever released).
           go vet -tags e2e ./test/e2e/
           go vet -tags shellmcp_e2e_bypass ./internal/privd/... ./cmd/shell-mcp-privd/
           go vet -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/
           go vet -tags landlock_forcepsx ./...
+          go vet -tags shellmcp_gitconfig_hook ./internal/gate/... ./cmd/shell-mcp-gate/
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
-      - name: golangci-lint (e2e, bypass, diagnostic and forced-psx build tags)
+      - name: golangci-lint (e2e, bypass, diagnostic, forced-psx and git-configuration hook build tags)
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
-          args: --build-tags=e2e,shellmcp_e2e_bypass,shellmcp_diag,landlock_forcepsx
+          args: --build-tags=e2e,shellmcp_e2e_bypass,shellmcp_diag,landlock_forcepsx,shellmcp_gitconfig_hook
       # SHELL_MCP_REQUIRE_SECURE_TMP: tests fail (never skip) without a
       # trustworthy TMPDIR. SHELL_MCP_REQUIRE_LANDLOCK_ABI: each entry's
       # kernel ABI, so every sandbox test up to it (network rules from 4,
@@ -132,6 +134,16 @@ jobs:
         env:
           SHELL_MCP_REQUIRE_SECURE_TMP: "1"
         run: go test -race -timeout 20m -count=1 -v -tags shellmcp_e2e_bypass ./internal/gate/fsx/
+      # The gate's git-configuration hook build changes a repository's
+      # configuration between the gate's check and its next git process, so
+      # these tests prove git then runs nothing that configuration names
+      # (handoff N-20). Never released (scripts/release-binary-check.sh).
+      - name: go test -race (git-configuration hook build, gate ops)
+        env:
+          SHELL_MCP_REQUIRE_SECURE_TMP: "1"
+        run: |
+          git --version
+          go test -race -timeout 20m -count=1 -v -tags shellmcp_gitconfig_hook -run 'TestGitConfigChangedAfterCheck|TestProductionOptionsHaveNoGitConfigHook' ./internal/gate/ops/
       # The end-to-end entry points refuse to run anywhere but a GitHub-hosted
       # runner, before doing anything (each case runs under env -i, so this
       # runner's own variables do not leak in).

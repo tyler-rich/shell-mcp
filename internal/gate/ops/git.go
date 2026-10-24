@@ -26,18 +26,27 @@ import (
 //	    -c core.hooksPath=/dev/null -c core.pager=cat -c core.sshCommand=/bin/false
 //	    -c credential.helper= -c protocol.file.allow=never -c protocol.ext.allow=never
 //	    -c safe.directory=<repo> -c maintenance.auto=false -c gc.auto=0
-//	    -c gc.autoDetach=false -c core.ignorecase=false <subcommand> …
+//	    -c gc.autoDetach=false -c core.ignorecase=false
+//	    -c <every program-running key with a fixed name>=/bin/false
+//	    -c hook.<every event>.enabled=false <subcommand> …
 //
-// with GIT_CONFIG_NOSYSTEM=1, GIT_CONFIG_GLOBAL=/dev/null, GIT_DIR=<repo>/.git
-// and GIT_WORK_TREE=<repo> added to the gate's fixed environment (nothing
-// else reaches git: execx inherits no variable). <repo>/.git must be a real
-// directory inside the root (no gitfile, no symlink, no commondir), and
-// before anything else the repository-local configuration is read with
+// with GIT_CONFIG_NOSYSTEM=1, GIT_CONFIG_GLOBAL=/dev/null, GIT_DIR=<repo>/.git,
+// GIT_WORK_TREE=<repo> and the program-naming variables (GitEnv) added to
+// the gate's fixed environment (nothing else reaches git: execx inherits no
+// variable). Before any git process the repository must be closed
+// (fsx.CheckGitRepo, handoff N-20): every directory from / to it, it, .git
+// and .git/config root's or the service account's and neither group- nor
+// world-writable nor sticky, .git a real directory, no commondir or
+// config.worktree. Then the repository-local configuration is read with
 // `git config --local --no-includes --list -z` and refused unless every key
 // is on gitx's allowlist: repository-local configuration can otherwise make
 // git run commands (filters, textconv, external diff, askPass) or talk to
-// another host (url.*.insteadOf). fsx never writes under a .git component
-// (POLICY §3), so a caller cannot plant such configuration either.
+// another host (url.*.insteadOf). In a closed repository no other account can
+// change it after that check, and the -c overrides and variables are a
+// second layer for the keys whose names are fixed. fsx never writes under a
+// .git component (POLICY §3), so a caller cannot plant such configuration
+// either. git applies no safe.directory ownership check to a repository
+// GIT_DIR names, so safe.directory=<repo> does nothing for it.
 
 const (
 	maxGitEntries   = 1000
@@ -62,16 +71,30 @@ func GitArgs(repo, caFile string, sub ...string) []string {
 		// core.ignorecase=true would hide untracked files from status and
 		// clean on a case-sensitive filesystem.
 		"-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "gc.autoDetach=false", "-c", "core.ignorecase=false"}
+	// Every program-running key with a fixed name, and
+	// hook.<event>.enabled=false for every hook event (hooks defined in
+	// configuration run whatever core.hooksPath says), from gitx's table,
+	// so that none the repository sets after the configuration check runs
+	// anything (handoff N-20). The command line is read last and wins for
+	// each of them. Those on the first lines above are not repeated.
+	for _, o := range gitx.ProgramOverrides() {
+		if !slices.Contains(a, o) {
+			a = append(a, "-c", o)
+		}
+	}
 	if caFile != "" {
 		a = append(a, "-c", "http.sslCAInfo="+caFile)
 	}
 	return append(a, sub...)
 }
 
-// GitEnv returns git's exact environment for the repository at repo.
+// GitEnv returns git's exact environment for the repository at repo. The
+// variables that would name a program (gitx.ProgramEnv) are set to ones
+// that run nothing: they take precedence over the matching configuration
+// keys, and GIT_PROXY_COMMAND, set even empty, over every core.gitProxy.
 func GitEnv(home, repo string) []string {
-	return append(execx.Environment(home), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
-		"GIT_DIR="+repo+"/.git", "GIT_WORK_TREE="+repo)
+	return append(append(execx.Environment(home), "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_DIR="+repo+"/.git", "GIT_WORK_TREE="+repo), gitx.ProgramEnv()...)
 }
 
 // gitRepo is a validated repository and the request's deadline.
@@ -106,26 +129,14 @@ func (s *server) gitRepo(p string, write bool) (*gitRepo, error) {
 			return nil, err
 		}
 	}
-	e, err := s.fs.Stat(p + "/.git")
-	if err != nil {
-		if notFound(err) {
-			return nil, errf(protocol.CodeNotFound, "repo has no .git directory")
-		}
+	// The repository is closed (handoff N-20): no account but root and the
+	// service account can change any directory from / to it, it, .git or
+	// .git/config, so none can change what git reads between checkConfig
+	// and the operation's git processes; .git is a real directory, and
+	// neither a commondir nor a config.worktree points git elsewhere. One
+	// check, by descriptor, before any git process, for every operation.
+	if err := s.gitFS.CheckGitRepo(p); err != nil {
 		return nil, err
-	}
-	if e.Type != "dir" {
-		return nil, errf(protocol.CodePolicyDenied, "repo/.git must be a real directory (a gitfile or a symlink is refused)")
-	}
-	if gd, gerr := s.fs.ResolveDir(p + "/.git"); gerr != nil || gd != realPath+"/.git" {
-		return nil, errf(protocol.CodePolicyDenied, "repo/.git must be a real directory inside the root")
-	}
-	// A commondir redirects git to another repository's configuration and
-	// objects. Anything but "not found" is refused (fail closed).
-	switch _, cerr := s.fs.Stat(p + "/.git/commondir"); {
-	case cerr == nil:
-		return nil, errf(protocol.CodePolicyDenied, "repo/.git has a commondir (a linked worktree); only plain repositories are allowed")
-	case !notFound(cerr):
-		return nil, cerr
 	}
 	return &gitRepo{path: p, real: realPath, remote: s.p.Git.Repos[i].Remote, deadline: time.Now().Add(s.timeout()), s: s}, nil
 }
@@ -213,6 +224,7 @@ func (r *gitRepo) checkConfig() ([]gitx.KV, error) {
 			"(only the data-only keys listed in POLICY §7); remove it on the host with `%s` in the repository. "+
 			"Git LFS repositories are not supported in v1: LFS works through filter programs", safeKey(key), safeKey(gitx.RemovalHint(key)))
 	}
+	r.s.o.afterGitConfigCheck(r.real)
 	return kvs, nil
 }
 

@@ -17,10 +17,16 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // logPath is set with -ldflags "-X main.logPath=…".
 var logPath = ""
+
+// realGit, when set (-ldflags "-X main.realGit=…"), makes the git stand-in
+// a recorder: it logs its argv and environment as below, then executes the
+// real git with both unchanged.
+var realGit = ""
 
 func main() {
 	if logPath != "" {
@@ -47,6 +53,11 @@ func main() {
 				_, _ = f.Write(append(b, '\n'))
 				_ = f.Close()
 			}
+		}
+		if realGit != "" {
+			err := syscall.Exec(realGit, append([]string{realGit}, args...), os.Environ()) //nolint:gosec // G204: the test's own git, baked in by the test
+			fmt.Fprintln(os.Stderr, "fakesys: exec git:", err)
+			os.Exit(1)
 		}
 		fmt.Fprintln(os.Stderr, "fakesys: git stand-in")
 		os.Exit(1)

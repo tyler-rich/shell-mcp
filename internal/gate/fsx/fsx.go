@@ -117,11 +117,12 @@ type Config struct {
 	OnCommit func()
 	// TrustedDirOwner decides whose directories the chain rules trust
 	// (PreviewMeta and ApplyMeta on the path to an entry and inside a tree,
-	// the moved-in rule, GuardExecPaths): a directory must be owned by a uid
-	// it accepts and be neither group- nor world-writable (PRIVILEGED §6,
-	// handoff N-1). nil trusts uid 0 only. The helper sets it from its trust
-	// (root); the gate, for its commands' paths only, to root and the
-	// service account (handoff N-11).
+	// the moved-in rule, GuardExecPaths, CheckGitRepo): a directory must be
+	// owned by a uid it accepts and be neither group- nor world-writable
+	// (PRIVILEGED §6, handoff N-1). nil trusts uid 0 only. The helper sets it
+	// from its trust (root); the gate, for its commands' paths and its git
+	// repositories only, to root and the service account (handoff N-11,
+	// N-20).
 	TrustedDirOwner func(uid uint32) bool
 	// GuardMovedIn applies the moved-in rule (PRIVILEGED §6, "Files another
 	// account could have moved in"; handoff N-6, N-7; moved_in.go): a file
