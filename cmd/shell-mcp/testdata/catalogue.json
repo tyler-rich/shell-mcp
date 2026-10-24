@@ -552,7 +552,7 @@
       "title": "Copy file as root"
     },
     "description": "Copies a regular file as root to a destination within the host's privileged write roots, backing up a replaced destination and verifying by read-back; returns the hashes, mode, owner and backup ids.",
-    "input_schema_sha256": "768c0a0fec28cefbc42b397ced2df84eb5be904e427fa3ebc4bad8582c69d28a",
+    "input_schema_sha256": "af7cc3e40c792f2a50360e106da0b32cf7d59e3449a7e1621e0a6bd05f786b71",
     "output_schema_sha256": "91a89c0cffa31374ed95432354eb9f756275c57538e792850d1b617502abf1b1",
     "requires_user_interaction": true
   },

@@ -150,9 +150,10 @@ func (d *Deps) backupPreview(ctx context.Context, target, p string, acc *policyA
 }
 
 // checkOwnerRule refuses, before an approval is requested, a write or copy
-// the helper would refuse under rule R (handoff N-6, N-8): cur is the
+// the helper would refuse under rule R (handoff N-6, N-8, N-19): cur is the
 // existing destination's stat (nil when there is none); owner and group are
-// what the request gives (a copy gives none).
+// what the request gives. A copy is checked as a write; isCopy only words
+// the refusal.
 func checkOwnerRule(r *ownerRuleWire, cur *Entry, owner, group string, isCopy bool) *envelope.Error {
 	switch r.Verdict {
 	case "any":
@@ -161,21 +162,18 @@ func checkOwnerRule(r *ownerRuleWire, cur *Entry, owner, group string, isCopy bo
 	default:
 		return envelope.Errorf("internal", "the helper's backup check reports no owner rule (a helper older than this server?); nothing was requested")
 	}
-	if cur != nil && !r.allowsUID(cur.UID) {
-		if isCopy {
-			return r.refuse("a copy over the destination, which keeps its current owner,", "")
-		}
-		if owner == "" || group == "" {
-			return r.refuse("the file, keeping its current owner,", "; or give both an owner and a group that may")
-		}
+	file, given, fresh := "the file, keeping its current owner,", "a file of ", "a new file without an owner, which is root's,"
+	if isCopy {
+		file, given, fresh = "a copy over the destination, keeping its current owner,", "a copy of ", "a new copy without an owner, which is root's,"
+	}
+	if cur != nil && !r.allowsUID(cur.UID) && (owner == "" || group == "") {
+		return r.refuse(file, "; or give both an owner and a group that may")
 	}
 	switch {
-	case isCopy && cur == nil:
-		return r.refuse("a new copy, which is root's,", "")
 	case owner != "" && !r.allowsName(owner):
-		return r.refuse("a file of "+owner, "")
+		return r.refuse(given+owner, "")
 	case owner == "" && cur == nil:
-		return r.refuse("a new file without an owner, which is root's,", "")
+		return r.refuse(fresh, "")
 	}
 	return nil
 }
@@ -695,7 +693,8 @@ func (in *privSrcDstIn) precondition(p *preview) {
 // to, and the backup. A destination that would not be replaced (a
 // directory, a symlink, or any file without overwrite) refuses the
 // preview.
-func (d *Deps) privSrcDstPreview(ctx context.Context, in *privSrcDstIn, target string, isCopy bool) (*preview, *envelope.Error) {
+// For a copy, own is the owner and group the request gives (N-19).
+func (d *Deps) privSrcDstPreview(ctx context.Context, in *privSrcDstIn, own ownerArgs, target string, isCopy bool) (*preview, *envelope.Error) {
 	var acc policyAcc
 	src, _, pol, e := previewFetch[Entry](ctx, d, target, protocol.OpPrivStat, pathWire{Path: in.Source}, false)
 	acc.add(pol)
@@ -737,7 +736,7 @@ func (d *Deps) privSrcDstPreview(ctx context.Context, in *privSrcDstIn, target s
 		if cur != nil {
 			existing = dst
 		}
-		if e := checkOwnerRule(rule, existing, "", "", true); e != nil {
+		if e := checkOwnerRule(rule, existing, own.Owner, own.Group, true); e != nil {
 			return nil, e
 		}
 	} else if src.Type == "file" {
@@ -757,10 +756,10 @@ func (d *Deps) privSrcDstPreview(ctx context.Context, in *privSrcDstIn, target s
 	}
 	if isCopy {
 		if cur == nil {
-			value["set"] = map[string]any{"owner": "root (a new copy is root's)", "group": "root (a new copy is root's)",
+			value["set"] = map[string]any{"owner": willSet(own.Owner, "root (a new copy is root's)"), "group": willSet(own.Group, "root (a new copy is root's)"),
 				"mode": "the source's mode, without setuid, setgid, sticky and world-write, masked by the host's modes.max"}
 		} else {
-			value["set"] = map[string]any{"owner": "kept: the destination's current owner", "group": "kept: the destination's current group",
+			value["set"] = map[string]any{"owner": willSet(own.Owner, "kept: the destination's current owner"), "group": willSet(own.Group, "kept: the destination's current group"),
 				"mode": "the destination's current mode, masked by the host's modes.max"}
 		}
 	}
@@ -789,21 +788,58 @@ type PrivCopyPath struct {
 	BackupIDs   []string `json:"backup_ids" jsonschema:"Ids of the backups written of what was replaced."`
 }
 
+// privCopyIn is shell_priv_copy_path's input: a copy may name its owner and
+// group as a write does (handoff N-19, P-15).
+type privCopyIn struct {
+	privSrcDstIn
+	ownerArgs
+}
+
+func (in *privCopyIn) validate() *envelope.Error {
+	if e := in.privSrcDstIn.validate(); e != nil {
+		return e
+	}
+	return in.ownerArgs.validate()
+}
+
+// privCopyWire is priv_copy's args: owner and group are sent only when
+// given, so a copy without them reaches a helper older than P-15 unchanged.
+type privCopyWire struct {
+	srcDstWire
+	Owner string `json:"owner,omitzero"`
+	Group string `json:"group,omitzero"`
+}
+
+func (in *privCopyIn) wire() privCopyWire {
+	return privCopyWire{srcDstWire: in.privSrcDstIn.wire(), Owner: in.Owner, Group: in.Group}
+}
+
 func privCopyPath(d *Deps) Tool {
-	canon, describe, audit := privSrcDstSpec("copy")
-	return define(d, spec[privSrcDstIn, PrivCopyPath]{
+	_, describe, audit := privSrcDstSpec("copy")
+	return define(d, spec[privCopyIn, PrivCopyPath]{
 		name:        "shell_priv_copy_path",
 		title:       "Copy file as root",
 		description: "Copies a regular file as root to a destination within the host's privileged write roots, backing up a replaced destination and verifying by read-back; returns the hashes, mode, owner and backup ids.",
 		tier:        TierOperator,
 		privileged:  true,
 		idempotent:  true,
-		schema:      boundSrcDst,
-		audit:       audit,
+		schema: func(s *jsonschema.Schema) {
+			boundSrcDst(s)
+			boundOwner(s)
+		},
+		audit: func(in privCopyIn) map[string]any {
+			m := audit(in.privSrcDstIn)
+			for k, v := range map[string]string{"owner": in.Owner, "group": in.Group} {
+				if v != "" {
+					m[k] = v
+				}
+			}
+			return m
+		},
 		summary: func(c *PrivCopyPath) string {
 			return "copied as root, " + plural(c.Bytes, "byte", "bytes") + ", " + plural(len(c.BackupIDs), "backup", "backups") + ", verified"
 		},
-		run: func(ctx context.Context, _ *mcp.CallToolRequest, in privSrcDstIn) envelope.Envelope[PrivCopyPath] {
+		run: func(ctx context.Context, _ *mcp.CallToolRequest, in privCopyIn) envelope.Envelope[PrivCopyPath] {
 			r := fetch[privWriteResultWire](ctx, d, in.Target, protocol.OpPrivCopy, in.wire(), d.budget())
 			if !r.OK {
 				return envelope.Failure[PrivCopyPath](r.Target, r.Error)
@@ -812,12 +848,20 @@ func privCopyPath(d *Deps) Tool {
 			return verifiedPriv(r, PrivCopyPath{Source: in.Source, Destination: x.Path, Created: x.Created, Bytes: x.Bytes, Mode: x.Mode,
 				UID: x.UID, GID: x.GID, Owner: x.Owner, Group: x.Group, SHA256: x.SHA256, OldSHA256: x.OldSHA256, BackupIDs: backupIDs(x.BackupIDs)})
 		},
-		approvalArgs: canon,
-		describe:     describe,
-		preview: func(ctx context.Context, in privSrcDstIn, target string) (*preview, *envelope.Error) {
-			return d.privSrcDstPreview(ctx, &in, target, true)
+		approvalArgs: func(in privCopyIn) any {
+			return struct {
+				Source      string `json:"source"`
+				Destination string `json:"destination"`
+				Overwrite   bool   `json:"overwrite"`
+				Owner       string `json:"owner"`
+				Group       string `json:"group"`
+			}{in.Source, in.Destination, in.Overwrite, in.Owner, in.Group}
 		},
-		precondition: func(in *privSrcDstIn, p *preview) { in.precondition(p) },
+		describe: func(in privCopyIn, target string) string { return describe(in.privSrcDstIn, target) },
+		preview: func(ctx context.Context, in privCopyIn, target string) (*preview, *envelope.Error) {
+			return d.privSrcDstPreview(ctx, &in.privSrcDstIn, in.ownerArgs, target, true)
+		},
+		precondition: func(in *privCopyIn, p *preview) { in.precondition(p) },
 	})
 }
 
@@ -868,7 +912,7 @@ func privMovePath(d *Deps) Tool {
 		approvalArgs: canon,
 		describe:     describe,
 		preview: func(ctx context.Context, in privSrcDstIn, target string) (*preview, *envelope.Error) {
-			return d.privSrcDstPreview(ctx, &in, target, false)
+			return d.privSrcDstPreview(ctx, &in, ownerArgs{}, target, false)
 		},
 		precondition: func(in *privSrcDstIn, p *preview) { in.precondition(p) },
 	})

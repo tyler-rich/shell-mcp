@@ -64,6 +64,15 @@ type srcDstArgs struct {
 	ExpectedDestinationSHA256 string `json:"expected_destination_sha256"`
 }
 
+// copyArgs are priv_copy's: srcDstArgs with the copy's optional owner and
+// group (handoff N-19, P-15), names on the owners lists as for
+// priv_write_file.
+type copyArgs struct {
+	srcDstArgs `json:",inline"`
+	Owner      string `json:"owner"`
+	Group      string `json:"group"`
+}
+
 type deleteArgs struct {
 	Path      string `json:"path"`
 	Recursive bool   `json:"recursive"`
@@ -278,12 +287,16 @@ func (s *server) mkdir(raw jsontext.Value) (data any, warns []string, failure er
 }
 
 func (s *server) copy(raw jsontext.Value) (data any, warns []string, failure error) {
-	var a srcDstArgs
+	var a copyArgs
 	if err := decode(raw, &a); err != nil {
 		return nil, nil, err
 	}
+	owner, err := s.owner(a.Owner, a.Group)
+	if err != nil {
+		return nil, nil, err
+	}
 	s.precondition = a.ExpectedDestinationSHA256
-	r, err := s.fs.CopyExpecting(a.Source, a.Destination, a.Overwrite, a.ExpectedDestinationSHA256)
+	r, err := s.fs.CopyAs(a.Source, a.Destination, a.Overwrite, a.ExpectedDestinationSHA256, owner)
 	if err != nil {
 		return nil, nil, err
 	}

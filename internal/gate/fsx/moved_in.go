@@ -211,10 +211,10 @@ func (v *OwnerVerdict) allows(uid uint32) bool {
 // written: root leaves a regular file only when the owner it will have is
 // owner-matched on the chain from the root to that parent. That owner is
 // the one given, else an existing file's (kept), else the helper's own (a
-// new file or copy). An existing file whose kept owner does not pass needs
-// both an owner and a group given (N-6); a copy, which names none, is
-// refused. A refusal names the one owner that would pass, when exactly one
-// would, and changes nothing.
+// new file or copy). A copy may name its owner as a write does (N-19). An
+// existing file whose kept owner does not pass needs both an owner and a
+// group given (N-6). A refusal names the one owner that would pass, when
+// exactly one would, and changes nothing.
 func (f *FS) ownerRule(l *loc, o *atomicOpts, exists bool, kept uint32) error {
 	if !f.cfg.GuardMovedIn {
 		return nil
@@ -227,7 +227,7 @@ func (f *FS) ownerRule(l *loc, o *atomicOpts, exists bool, kept uint32) error {
 	if v.Any {
 		return nil
 	}
-	explicit := !o.copy && o.owner != nil && o.owner.UID != nil
+	explicit := o.owner != nil && o.owner.UID != nil
 	both := explicit && o.owner.GID != nil
 	uid := uint32(os.Geteuid()) //nolint:gosec // G115: a uid fits
 	switch {
@@ -238,12 +238,12 @@ func (f *FS) ownerRule(l *loc, o *atomicOpts, exists bool, kept uint32) error {
 	}
 	if exists && !v.allows(kept) && !both {
 		d := f.MovedInBy(chain, kept)
+		by := ""
 		if o.copy {
-			return unchanged(errf(protocol.CodePathDenied, "%q is not overwritten by a copy as root: the directory %s is %s, so another account could have moved it there, "+
-				"and a copy cannot name the owner and group to give the new file; %s; nothing was changed", l.p, d.Path, f.MovedInWhy(d, kept), f.ownerHint(&v)))
+			by = " by a copy"
 		}
-		return unchanged(errf(protocol.CodePathDenied, "%q is not overwritten as root keeping its owner and group: the directory %s is %s, so another account could have moved it there; "+
-			"give both an owner and a group from the privileged policy's owners; %s; nothing was changed", l.p, d.Path, f.MovedInWhy(d, kept), f.ownerHint(&v)))
+		return unchanged(errf(protocol.CodePathDenied, "%q is not overwritten%s as root keeping its owner and group: the directory %s is %s, so another account could have moved it there; "+
+			"give both an owner and a group from the privileged policy's owners; %s; nothing was changed", l.p, by, d.Path, f.MovedInWhy(d, kept), f.ownerHint(&v)))
 	}
 	if v.allows(uid) {
 		return nil
@@ -251,8 +251,10 @@ func (f *FS) ownerRule(l *loc, o *atomicOpts, exists bool, kept uint32) error {
 	d := f.MovedInBy(chain, uid)
 	what := "a file of uid " + strconv.FormatUint(uint64(uid), 10)
 	switch {
-	case o.copy:
-		what = "a copy, which is root's"
+	case o.copy && explicit:
+		what = "a copy of uid " + strconv.FormatUint(uint64(uid), 10)
+	case o.copy && !exists:
+		what = "a copy without an owner, which is root's"
 	case !explicit && !exists:
 		what = "a file without an owner, which is root's"
 	}
