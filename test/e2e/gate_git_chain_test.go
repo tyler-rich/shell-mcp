@@ -201,9 +201,9 @@ func TestGateGitRepoChain(t *testing.T) {
 			}
 		}},
 		{"commondir", func(t *testing.T) { ownFile(t, gitDir+"/commondir", opsBare+"\n", svcShell, 0o644) },
-			func(t *testing.T) { _ = os.Remove(gitDir + "/commondir") }},
+			func(*testing.T) { _ = os.Remove(gitDir + "/commondir") }},
 		{"config.worktree", func(t *testing.T) { ownFile(t, gitDir+"/config.worktree", "[core]\n\tbare = false\n", svcShell, 0o644) },
-			func(t *testing.T) { _ = os.Remove(gitDir + "/config.worktree") }},
+			func(*testing.T) { _ = os.Remove(gitDir + "/config.worktree") }},
 	} {
 		t.Run(s.name, func(t *testing.T) {
 			s.make(t)
