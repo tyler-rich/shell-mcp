@@ -386,8 +386,21 @@ func TestConfineLayersSwapRace(t *testing.T) {
 			if by[layerName(off)] != 0 {
 				t.Fatalf("a refusal came from the layer turned off: %v", by)
 			}
-			if by["descriptor"]+by["real path"]+by["checkReal"] == 0 {
-				t.Fatalf("no refusal from the layers still on: %v", by)
+			// Which layers take over, from the deterministic cases above: the
+			// descriptor off, the real-path check (a swap after the parent is
+			// held) and checkReal (one before); the real-path check off, the
+			// descriptor alone (checkReal sees nothing once the descriptor
+			// has refused); checkReal off, the descriptor and the real-path
+			// check. Each refuses hundreds of times in two seconds, so a
+			// layer missing from the code shows here as one that never does.
+			for _, l := range map[confineLayer][]string{
+				layerDescriptor: {"real path", "checkReal"},
+				layerRealPath:   {"descriptor"},
+				layerCheckReal:  {"descriptor", "real path"},
+			}[off] {
+				if by[l] == 0 {
+					t.Fatalf("no refusal from %s, which takes over with %s off: %v", l, layerName(off), by)
+				}
 			}
 		})
 	}
