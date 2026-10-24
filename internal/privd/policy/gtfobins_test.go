@@ -37,9 +37,9 @@ func TestGTFOBinsWarnings(t *testing.T) {
 	f := newFixture(t)
 	tar := f.exe(t, "tar", "invented tar\n")
 	zpool := f.exe(t, "zpool", "invented zpool\n")
-	real := filepath.Join(f.dir, "real")
-	gatetest.Mkdir(t, real, 0o755)
-	sed := filepath.Join(real, "sed")
+	realDir := filepath.Join(f.dir, "real")
+	gatetest.Mkdir(t, realDir, 0o755)
+	sed := filepath.Join(realDir, "sed")
 	gatetest.WriteFile(t, sed, "invented sed\n", 0o755)
 	link := filepath.Join(f.bin, "edit-config")
 	if err := os.Symlink(sed, link); err != nil {

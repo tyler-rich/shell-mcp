@@ -110,11 +110,10 @@ func realPathOfRoot(r *os.Root) (string, error) {
 type confineLayer int
 
 const (
-	layerNone confineLayer = iota
 	// layerDescriptor: the parent is opened from the root's os.Root and
 	// held, and the target is opened from it (locate, openTarget,
 	// openDirRoot); os.Root refuses a symlink that leaves the root.
-	layerDescriptor
+	layerDescriptor confineLayer = iota + 1
 	// layerRealPath: the object opened must be exactly the located one, by
 	// its real path (openTarget, openSubdir).
 	layerRealPath

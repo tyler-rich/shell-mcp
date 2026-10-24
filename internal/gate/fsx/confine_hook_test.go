@@ -142,8 +142,8 @@ func listOp(p string) func(fs *FS) (string, error) {
 	return func(fs *FS) (string, error) {
 		r, err := fs.ListDir(p, true, 100)
 		var names []string
-		for _, en := range r.Entries {
-			names = append(names, en.Name)
+		for i := range r.Entries {
+			names = append(names, r.Entries[i].Name)
 		}
 		return strings.Join(names, " "), err
 	}
@@ -356,16 +356,15 @@ func TestConfineLayersSwapRace(t *testing.T) {
 			deadline := time.Now().Add(2 * time.Second)
 			for time.Now().Before(deadline) {
 				r, err := e.fs.ReadFile(filepath.Join(sub, "f"), ReadOptions{MaxBytes: 64})
-				switch {
-				case err == nil:
+				if err != nil {
+					by[refusedBy(err)]++
+				} else {
 					reads++
 					if strings.Contains(r.Content, "OUTSIDE") {
 						stop.Store(true)
 						wg.Wait()
 						t.Fatal("read content from outside the root")
 					}
-				default:
-					by[refusedBy(err)]++
 				}
 				if _, err := e.fs.WriteFile(filepath.Join(sub, "w"), []byte("W"), WriteOptions{Create: true}); err == nil {
 					writes++

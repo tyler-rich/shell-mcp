@@ -250,7 +250,7 @@ func TestCheckPolicyChecksRootChains(t *testing.T) {
 		dir  string
 		mode os.FileMode
 	}{{drop, 0o777}, {shared, 0o775}, {sticky, os.ModeSticky | 0o755}} {
-		if err := os.Chmod(c.dir, c.mode); err != nil { //nolint:gosec // G302: another account's access, simulated
+		if err := os.Chmod(c.dir, c.mode); err != nil {
 			t.Fatal(err)
 		}
 		gatetest.ExactMode(t, c.dir, c.mode)

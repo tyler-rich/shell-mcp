@@ -22,6 +22,9 @@ type confineHooks struct {
 	confineAt func(build, point string)
 }
 
+// layerNone is confineOff's zero value: every layer on.
+const layerNone confineLayer = 0
+
 func (h confineHooks) layerOff(l confineLayer) bool { return l != layerNone && h.confineOff == l }
 
 func (h confineHooks) at(point string) {
