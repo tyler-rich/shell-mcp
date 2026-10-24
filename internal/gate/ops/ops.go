@@ -260,30 +260,14 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 		return Failure("", protocol.CodeSandboxUnavailable, sandboxRefusal(&rep, err))
 	}
 	s.report = rep
-	cfg := fsx.Config{
-		ReadRoots:  p.Paths.Read,
-		WriteRoots: p.Paths.Write,
-		Deny:       p.Paths.Deny,
-		// The policy's deny matcher starts with the built-in list (parse.go).
-		BuiltinDeny: len(policy.BuiltinDeny()),
-		Protected:   p.Paths.Protected,
-		Limits: fsx.Limits{
-			MaxReadBytes:     p.Limits.MaxReadBytes,
-			MaxWriteBytes:    p.Limits.MaxWriteBytes,
-			MaxFindResults:   p.Limits.MaxFindResults,
-			MaxFindDepth:     p.Limits.MaxFindDepth,
-			MaxDeleteEntries: p.Limits.MaxDeleteEntries,
-		},
-		// chmod reads back the mode, owner and group it set (handoff N-4).
-		VerifyMetadata:              true,
-		InjectReadBackFault:         o.InjectReadBackFault,
-		InjectBeforeCommit:          o.InjectBeforeCommit,
-		InjectNoReplaceFault:        o.InjectNoReplaceFault,
-		InjectDeleteStep:            o.InjectDeleteStep,
-		InjectMetadataReadBackFault: o.InjectMetadataReadBackFault,
-	}
+	cfg := fsConfig(p)
+	cfg.InjectReadBackFault = o.InjectReadBackFault
+	cfg.InjectBeforeCommit = o.InjectBeforeCommit
+	cfg.InjectNoReplaceFault = o.InjectNoReplaceFault
+	cfg.InjectDeleteStep = o.InjectDeleteStep
+	cfg.InjectMetadataReadBackFault = o.InjectMetadataReadBackFault
 	s.fs = fsx.New(&cfg)
-	trust := commandTrust(o.Trust, install.ID(os.Geteuid()))
+	trust := CommandTrust(o.Trust, install.ID(os.Geteuid()))
 	// The built-in git operations run git only in a repository that no
 	// account but root and the service account can change (handoff N-20,
 	// POLICY §7; fsx.CheckGitRepo). They resolve the repository through
@@ -320,11 +304,49 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 	return resp
 }
 
-// commandTrust is whose directories the chain rule for commands' paths
-// trusts: the trust set's (root) and the service account's, which runs the
-// commands and gains nothing by changing its own directories.
-func commandTrust(t policy.Trust, self uint32) func(uint32) bool {
+// fsConfig is the gate's fsx configuration for policy p, without test hooks.
+func fsConfig(p *policy.Policy) fsx.Config {
+	return fsx.Config{
+		ReadRoots:  p.Paths.Read,
+		WriteRoots: p.Paths.Write,
+		Deny:       p.Paths.Deny,
+		// The policy's deny matcher starts with the built-in list (parse.go).
+		BuiltinDeny: len(policy.BuiltinDeny()),
+		Protected:   p.Paths.Protected,
+		Limits: fsx.Limits{
+			MaxReadBytes:     p.Limits.MaxReadBytes,
+			MaxWriteBytes:    p.Limits.MaxWriteBytes,
+			MaxFindResults:   p.Limits.MaxFindResults,
+			MaxFindDepth:     p.Limits.MaxFindDepth,
+			MaxDeleteEntries: p.Limits.MaxDeleteEntries,
+		},
+		// chmod reads back the mode, owner and group it set (handoff N-4).
+		VerifyMetadata: true,
+	}
+}
+
+// CommandTrust is whose directories the chain rules for commands' paths and
+// git repositories trust: the trust set's (root) and the service account's
+// (self), which runs the commands and git and gains nothing by changing its
+// own directories.
+func CommandTrust(t policy.Trust, self uint32) func(uint32) bool {
 	return func(uid uint32) bool { return uid == self || t.Owns(uid) }
+}
+
+// CheckGitRepos applies the closed repository rule (fsx.CheckGitRepo,
+// handoff N-20) to every repository in p's git.repos, as the built-in git
+// operations do, trusting t and self: for check-policy, so that an operator
+// learns of a repository the git tools would refuse before one is asked
+// for. The result has one entry per repository, nil where it passes.
+func CheckGitRepos(p *policy.Policy, t policy.Trust, self uint32) []error {
+	cfg := fsConfig(p)
+	cfg.TrustedDirOwner = CommandTrust(t, self)
+	gfs := fsx.New(&cfg)
+	out := make([]error, len(p.Git.Repos))
+	for i, r := range p.Git.Repos {
+		out[i] = gfs.CheckGitRepo(r.Path)
+	}
+	return out
 }
 
 // timeout is the request's timeout, defaulted and clamped by the policy.

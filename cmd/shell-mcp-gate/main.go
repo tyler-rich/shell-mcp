@@ -218,7 +218,8 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust
 		failf("install: cannot read own identity: %v", err)
 	case id.UID == 0:
 		pr("NOTE install: running as root, so the uid and group checks describe root, not the service account;")
-		pr("     run check-policy as the service account to check its identity and home directory")
+		pr("     run check-policy as the service account to check its identity and home directory;")
+		pr("     the roots' paths and git.repos are checked trusting root only")
 		if _, err = policy.CheckChain(policy.RootTrust(), exe); err != nil {
 			failf("install: gate binary: %v", err)
 		}
@@ -270,6 +271,42 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust
 				}
 			}
 		}
+		// Commands' paths (handoff N-11) and git repositories (N-20) are
+		// checked from / on every request, trusting root and the service
+		// account (POLICY §4, §7): report each root whose own path another
+		// account could change, as the helper's check-policy does for its
+		// roots, and each listed repository the git operations would refuse.
+		self := install.ID(os.Geteuid())
+		trusted := ops.CommandTrust(trust, self)
+		for _, r := range []struct {
+			kind    string
+			roots   []string
+			refused string
+		}{
+			{"read", p.Paths.Read, "commands get no cwd at or under it"},
+			{"write", p.Paths.Write, "commands get no {path:write} or cwd at or under it"},
+		} {
+			for _, root := range r.roots {
+				var ce *fsx.ChainError
+				switch err := fsx.CheckClosedChain(root, trusted); {
+				case err == nil:
+					pr("ok   paths.%s %s: every directory from / to it is root's or the service account's and neither group- nor world-writable nor sticky", r.kind, root)
+				case errors.As(err, &ce):
+					pr("WARN paths.%s %s: %v; %s, and a {path:read} only where the directories open on its path are one other account's that only it can write (POLICY §4); "+
+						"git runs in no repository under it (POLICY §7)", r.kind, root, ce, r.refused)
+				default:
+					pr("WARN paths.%s %s: could not check the directories on its path (%v); commands' paths and git repositories under it are refused unless they pass", r.kind, root, err)
+				}
+			}
+		}
+		for i, err := range ops.CheckGitRepos(p, trust, self) {
+			repo := p.Git.Repos[i].Path
+			if err == nil {
+				pr("ok   git.repos[%d] %s: closed (every directory from / to it, it, .git and .git/config are root's or the service account's and neither group- nor world-writable nor sticky)", i, repo)
+				continue
+			}
+			pr("WARN git.repos[%d] %s: %s; every git operation on it is refused", i, repo, gitRefusal(repo, err))
+		}
 	}
 
 	abi := sandbox.KernelABI()
@@ -296,4 +333,15 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust
 	}
 	pr("ok: serve would accept this install and policy")
 	return 0
+}
+
+// gitRefusal is the reason the git operations would refuse repo (err, from
+// fsx.CheckGitRepo), without what only a refused request says.
+func gitRefusal(repo string, err error) string {
+	var fe *fsx.Error
+	if !errors.As(err, &fe) {
+		return err.Error()
+	}
+	msg := strings.TrimPrefix(fe.Msg, fmt.Sprintf("git is not run in the repository %q: ", repo))
+	return strings.TrimSuffix(msg, "; nothing was run")
 }
