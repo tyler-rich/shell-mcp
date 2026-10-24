@@ -163,6 +163,9 @@ type Config struct {
 	// pass with the logical path of the entry concerned (the target's for
 	// MetaStepAfterCompare). Tests only; production code never sets it.
 	InjectMetaStep func(step MetaStep, path string)
+	// confineHooks is empty in a release build; the shellmcp_confine_hook
+	// test build's hooks turn off one read-confinement layer (handoff N-12).
+	confineHooks
 }
 
 // Meta is an inode's mode (permission and special bits), owner and group.

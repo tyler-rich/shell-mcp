@@ -385,3 +385,21 @@ func TestCheckPolicyChecksTheChain(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckPolicyWarnsGTFOBins (handoff N-16): the helper's check-policy
+// prints a WARN line for a command whose binary has documented escape
+// techniques, as the gate's does, naming the command, the categories and
+// that it runs as root.
+func TestCheckPolicyWarnsGTFOBins(t *testing.T) {
+	y := validPolicy + "commands:\n  - id: list-archive\n    path: {D}/bin/tar\n    tier: read\n    templates: [[\"-tf\", \"{path:read}\"]]\n"
+	env, p := testEnv(t, y)
+	d := filepath.Dir(filepath.Dir(filepath.Dir(p)))
+	gatetest.WriteFile(t, filepath.Join(d, "bin", "tar"), "invented binary\n", 0o755)
+	var so, se bytes.Buffer
+	_ = checkPolicyWith([]string{"--policy", p}, &so, &se, env)
+	out := so.String()
+	if !strings.Contains(out, "WARN commands[list-archive]: tar has documented escape techniques (GTFOBins: command execution, file read, file write)") ||
+		!strings.Contains(out, "as root") || !strings.Contains(out, "https://gtfobins.org/gtfobins/tar/") {
+		t.Fatalf("check-policy:\n%s", out)
+	}
+}

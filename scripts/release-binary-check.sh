@@ -10,6 +10,9 @@
 #   - Not the gate's git-configuration hook test build
 #     (shellmcp_gitconfig_hook): neither in the build settings nor in the
 #     code, whose hook passes the tag's name to the test.
+#   - Not fsx's read-confinement hook test build (shellmcp_confine_hook),
+#     in the gate or the helper: neither in the build settings nor in the
+#     code, whose hook passes the tag's name to the test.
 #
 #   bash scripts/release-binary-check.sh BINARY...
 # Needs go (for go version -m). release-binary-check_test.sh is its test.
@@ -30,7 +33,7 @@ for bin in "$@"; do
 		echo "$bin was built with cgo" >&2
 		status=1
 	fi
-	for tag in shellmcp_e2e_bypass shellmcp_diag landlock_forcepsx shellmcp_gitconfig_hook; do
+	for tag in shellmcp_e2e_bypass shellmcp_diag landlock_forcepsx shellmcp_gitconfig_hook shellmcp_confine_hook; do
 		if grep -q "$tag" <<<"$info"; then
 			echo "$bin was built with the $tag tag" >&2
 			status=1
@@ -42,6 +45,10 @@ for bin in "$@"; do
 	fi
 	if grep -aq shellmcp_gitconfig_hook "$bin"; then
 		echo "$bin contains the shellmcp_gitconfig_hook test build" >&2
+		status=1
+	fi
+	if grep -aq shellmcp_confine_hook "$bin"; then
+		echo "$bin contains the shellmcp_confine_hook test build" >&2
 		status=1
 	fi
 	if [[ $status -eq 0 ]]; then

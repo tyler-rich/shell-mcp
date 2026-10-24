@@ -3,7 +3,8 @@
 # and the helper built as releases are, and fail each test-only build (cgo,
 # the helper's e2e bypass, the server's diagnostic build, the Landlock
 # forced-psx build of the gate and of the helper, the gate's git-configuration
-# hook build). The forced-psx and hook code must be visible in the binary
+# hook build, the read-confinement hook build of the gate and of the
+# helper). The forced-psx and hook code must be visible in the binary
 # itself, not only in its build settings. Needs go and a C compiler (the
 # golang image has both).
 set -euo pipefail
@@ -43,6 +44,8 @@ build server-diag 0 shell-mcp -tags shellmcp_diag
 build gate-forcepsx 0 shell-mcp-gate -tags landlock_forcepsx
 build privd-forcepsx 0 shell-mcp-privd -tags landlock_forcepsx
 build gate-gitconfig-hook 0 shell-mcp-gate -tags shellmcp_gitconfig_hook
+build gate-confine-hook 0 shell-mcp-gate -tags shellmcp_confine_hook
+build privd-confine-hook 0 shell-mcp-privd -tags shellmcp_confine_hook
 
 expect "release gate passes" 0 "release build: $work/gate" gate
 expect "release helper passes" 0 "release build: $work/privd" privd
@@ -52,6 +55,8 @@ expect "diagnostic server fails" 1 "shellmcp_diag" server-diag
 expect "forced-psx gate fails" 1 "landlock_forcepsx" gate-forcepsx
 expect "forced-psx helper fails" 1 "landlock_forcepsx" privd-forcepsx
 expect "git-configuration hook gate fails" 1 "shellmcp_gitconfig_hook" gate-gitconfig-hook
+expect "read-confinement hook gate fails" 1 "shellmcp_confine_hook" gate-confine-hook
+expect "read-confinement hook helper fails" 1 "shellmcp_confine_hook" privd-confine-hook
 
 # The forced-psx code itself is in the tagged binaries and not in the release
 # ones, so the check holds even without the build settings.
@@ -66,6 +71,14 @@ done
 if grep -aq 'shellmcp_gitconfig_hook test build' "$work/gate-gitconfig-hook"; then ok "gate-gitconfig-hook carries the hook code"; else bad "gate-gitconfig-hook carries the hook code"; fi
 for b in gate privd; do
 	if grep -aq shellmcp_gitconfig_hook "$work/$b"; then bad "$b is free of shellmcp_gitconfig_hook"; else ok "$b is free of shellmcp_gitconfig_hook"; fi
+done
+
+# The same for the read-confinement hooks (fsx, in both programs).
+for b in gate-confine-hook privd-confine-hook; do
+	if grep -aq 'shellmcp_confine_hook test build' "$work/$b"; then ok "$b carries the hook code"; else bad "$b carries the hook code"; fi
+done
+for b in gate privd; do
+	if grep -aq shellmcp_confine_hook "$work/$b"; then bad "$b is free of shellmcp_confine_hook"; else ok "$b is free of shellmcp_confine_hook"; fi
 done
 
 echo "release-binary-check self-test: $pass passed, $fail failed"

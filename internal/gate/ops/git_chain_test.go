@@ -34,10 +34,12 @@ var gitHookEvents = gitx.HookEvents
 // gitOverrides are the -c values every git process must carry, in order:
 // the hardening flags of #26 and before, then N-20's program-running keys
 // and hook events from gitx's table (TestGitProgramKeysCovered checks the
-// table against the installed git), each once.
-func gitOverrides(repo string) []string {
+// table against the installed git), each once. safe.directory is not among
+// them: git applies no ownership check to a repository GIT_DIR names, the
+// gate's or a submodule's, so it did nothing (POLICY §7).
+func gitOverrides() []string {
 	o := []string{"core.fsmonitor=false", "core.hooksPath=/dev/null", "core.pager=cat", "core.sshCommand=/bin/false", "credential.helper=",
-		"protocol.file.allow=never", "protocol.ext.allow=never", "safe.directory=" + repo, "maintenance.auto=false", "gc.auto=0",
+		"protocol.file.allow=never", "protocol.ext.allow=never", "maintenance.auto=false", "gc.auto=0",
 		"gc.autoDetach=false", "core.ignorecase=false"}
 	for _, p := range gitx.ProgramOverrides() {
 		if !slices.Contains(o, p) {
@@ -268,8 +270,11 @@ func TestGitEveryProcessIsolated(t *testing.T) {
 			t.Fatalf("%s started no git process (%v)", op, counts)
 		}
 	}
-	want := gitOverrides(g.repo)
+	want := gitOverrides()
 	for i, r := range recordedGits(t, logp) {
+		if slices.ContainsFunc(r.argv, func(a string) bool { return strings.Contains(a, "safe.directory") }) {
+			t.Fatalf("git run %d carries safe.directory, which does nothing for a repository GIT_DIR names: %q", i, r.argv)
+		}
 		var got []string
 		for j := 0; j+1 < len(r.argv); j++ {
 			if r.argv[j] == "-c" {

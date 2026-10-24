@@ -102,6 +102,27 @@ func realPathOfRoot(r *os.Root) (string, error) {
 	return realPathOfFile(f)
 }
 
+// confineLayer is one of the three layers that keep a lookup inside its
+// root when a directory or the target is swapped for a symlink (handoff
+// N-12). Each alone refuses the swaps TestSwapRace makes; the
+// shellmcp_confine_hook test build turns one off at a time to show which
+// refuses when another is gone (confine_hook_test.go).
+type confineLayer int
+
+const (
+	layerNone confineLayer = iota
+	// layerDescriptor: the parent is opened from the root's os.Root and
+	// held, and the target is opened from it (locate, openTarget,
+	// openDirRoot); os.Root refuses a symlink that leaves the root.
+	layerDescriptor
+	// layerRealPath: the object opened must be exactly the located one, by
+	// its real path (openTarget, openSubdir).
+	layerRealPath
+	// layerCheckReal: every real path must be inside its root and neither
+	// denied nor, for a write, protected (checkReal).
+	layerCheckReal
+)
+
 // loc is a located target: its root (opened), and for anything but the root
 // itself, its parent directory opened as a sub-root and verified.
 type loc struct {
@@ -163,6 +184,9 @@ func (f *FS) checkPath(p string, write bool) *Error {
 // is and translated back under the configured root name (a root may itself
 // be a symlink, and policy patterns name configured paths).
 func (f *FS) checkReal(l *loc, rp string, write bool) *Error {
+	if f.cfg.layerOff(layerCheckReal) {
+		return nil
+	}
 	if !pathx.Within(l.rootReal, rp) {
 		return errf(protocol.CodePathDenied, "path resolves outside its root")
 	}
@@ -213,7 +237,13 @@ func (f *FS) locate(p string, write bool) (*loc, error) {
 		return l, nil
 	}
 	l.base = path.Base(l.rel)
-	if l.parent, err = top.OpenRoot(path.Dir(l.rel)); err != nil {
+	f.cfg.at("parent")
+	if f.cfg.layerOff(layerDescriptor) {
+		l.parent, err = os.OpenRoot(path.Join(root, path.Dir(l.rel)))
+	} else {
+		l.parent, err = top.OpenRoot(path.Dir(l.rel))
+	}
+	if err != nil {
 		e := absoluteSymlink(top, path.Dir(l.rel))
 		l.close()
 		if e != nil {
@@ -288,9 +318,13 @@ func (f *FS) openTarget(l *loc) (*os.File, error) {
 	const flags = os.O_RDONLY | syscall.O_NONBLOCK // never block on a FIFO
 	var file *os.File
 	var err error
-	if l.parent == nil {
+	f.cfg.at("target")
+	switch {
+	case l.parent == nil && f.cfg.layerOff(layerDescriptor):
+		file, err = os.OpenFile(l.root, flags, 0)
+	case l.parent == nil:
 		file, err = l.top.OpenFile(".", flags, 0)
-	} else {
+	default:
 		fi, lerr := l.parent.Lstat(l.base)
 		if lerr != nil {
 			return nil, mapErr(lerr)
@@ -298,7 +332,12 @@ func (f *FS) openTarget(l *loc) (*os.File, error) {
 		if fi.Mode()&fs.ModeSymlink != 0 {
 			return nil, errf(protocol.CodePathDenied, "final path component is a symlink")
 		}
-		file, err = l.parent.OpenFile(l.base, flags, 0)
+		f.cfg.at("open")
+		if f.cfg.layerOff(layerDescriptor) {
+			file, err = os.OpenFile(l.p, flags, 0)
+		} else {
+			file, err = l.parent.OpenFile(l.base, flags, 0)
+		}
 	}
 	if err != nil {
 		return nil, mapErr(err)
@@ -308,7 +347,7 @@ func (f *FS) openTarget(l *loc) (*os.File, error) {
 		_ = file.Close()
 		return nil, mapErr(err)
 	}
-	if rp != l.targetReal() {
+	if rp != l.targetReal() && !f.cfg.layerOff(layerRealPath) {
 		_ = file.Close()
 		return nil, errf(protocol.CodePathDenied, "path changed while opening, or its final component is a symlink")
 	}
@@ -326,6 +365,7 @@ func (f *FS) openDirRoot(l *loc) (dir *os.Root, rp string, owned bool, err error
 	if l.parent == nil {
 		return l.top, l.rootReal, false, nil
 	}
+	f.cfg.at("target")
 	fi, err := l.parent.Lstat(l.base)
 	if err != nil {
 		return nil, "", false, mapErr(err)
@@ -336,13 +376,18 @@ func (f *FS) openDirRoot(l *loc) (dir *os.Root, rp string, owned bool, err error
 	if !fi.IsDir() {
 		return nil, "", false, errf(protocol.CodeNotADirectory, "not a directory")
 	}
+	f.cfg.at("open")
 	return f.openSubdir(l, l.parent, l.targetReal(), l.base)
 }
 
 // openSubdir opens name inside dir as an os.Root and requires its real path
 // to be exactly want.
 func (f *FS) openSubdir(l *loc, dir *os.Root, want, name string) (sub *os.Root, rp string, owned bool, err error) {
-	sub, err = dir.OpenRoot(name)
+	if f.cfg.layerOff(layerDescriptor) && want == l.targetReal() {
+		sub, err = os.OpenRoot(l.p)
+	} else {
+		sub, err = dir.OpenRoot(name)
+	}
 	if err != nil {
 		return nil, "", false, mapErr(err)
 	}
@@ -351,7 +396,7 @@ func (f *FS) openSubdir(l *loc, dir *os.Root, want, name string) (sub *os.Root, 
 		_ = sub.Close()
 		return nil, "", false, mapErr(err)
 	}
-	if rp != want {
+	if rp != want && !f.cfg.layerOff(layerRealPath) {
 		_ = sub.Close()
 		return nil, "", false, errf(protocol.CodePathDenied, "directory changed while opening, or is a symlink")
 	}
