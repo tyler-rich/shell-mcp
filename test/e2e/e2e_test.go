@@ -87,10 +87,16 @@ func TestMain(m *testing.M) {
 // shuts down its sending side (a gate that stopped waiting) and then prints
 // what the helper writes.
 // "swap" connects nowhere: it is the racer of priv_exec_chain_test.go
-// (swapClient).
+// (swapClient); so are "exchange" and "grab", the racers of
+// priv_move_rule_test.go (exchangeClient, grabClient).
 func client() int {
-	if os.Getenv("E2E_CLIENT") == "swap" {
+	switch os.Getenv("E2E_CLIENT") {
+	case "swap":
 		return swapClient()
+	case "exchange":
+		return exchangeClient()
+	case "grab":
+		return grabClient()
 	}
 	sock := os.Getenv("E2E_SOCKET")
 	if sock == "" {

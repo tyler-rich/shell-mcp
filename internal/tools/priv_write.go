@@ -180,6 +180,28 @@ func checkOwnerRule(r *ownerRuleWire, cur *Entry, owner, group string, isCopy bo
 	return nil
 }
 
+// checkMoveRule refuses, before an approval is requested, the move of a
+// file the helper would refuse (handoff N-17): its owner must be one the
+// source's directories allow (another account could not have put it
+// there) and one the destination's allow (rule R).
+func checkMoveRule(srcRule, dstRule *ownerRuleWire, src *Entry) *envelope.Error {
+	for _, r := range []*ownerRuleWire{srcRule, dstRule} {
+		switch r.Verdict {
+		case "any", "only", "none":
+		default:
+			return envelope.Errorf("internal", "the helper's backup check reports no owner rule (a helper older than this server?); nothing was requested")
+		}
+	}
+	if !srcRule.allowsUID(src.UID) {
+		return envelope.Errorf(protocol.CodePathDenied, "the source (uid %d) is not moved as root: the directory %s is %s, so another account could have put it there; "+
+			"root moves only what no account but root and the file's owner could have put there; nothing was requested", src.UID, srcRule.Dir, srcRule.Why)
+	}
+	if !dstRule.allowsUID(src.UID) {
+		return dstRule.refuse(fmt.Sprintf("the moved file (uid %d), which keeps its owner,", src.UID), "")
+	}
+	return nil
+}
+
 // privFilePreview is a regular file's state with its content hash: its
 // stat and the helper's whole-file SHA-256 (nil when it was removed between
 // the two reads). A file the helper gives no hash for (above 256 MiB)
@@ -707,7 +729,9 @@ func (d *Deps) privSrcDstPreview(ctx context.Context, in *privSrcDstIn, target s
 	if e != nil {
 		return nil, e
 	}
-	// Rule R (P-14) for a copy; a move keeps its inode (handoff N-17).
+	// Rule R (P-14) for a copy; for a move, the move rule (handoff N-17)
+	// for a file, at both ends. A directory's contents are the helper's to
+	// check when it runs.
 	if isCopy {
 		var existing *Entry
 		if cur != nil {
@@ -716,8 +740,21 @@ func (d *Deps) privSrcDstPreview(ctx context.Context, in *privSrcDstIn, target s
 		if e := checkOwnerRule(rule, existing, "", "", true); e != nil {
 			return nil, e
 		}
+	} else if src.Type == "file" {
+		sr, _, pol, e := previewFetch[backupCheckWire](ctx, d, target, protocol.OpPrivBackupCheck, pathWire{Path: in.Source}, false)
+		acc.add(pol)
+		if e != nil {
+			return nil, e
+		}
+		if e := checkMoveRule(&sr.OwnerRule, rule, src); e != nil {
+			return nil, e
+		}
 	}
 	value := map[string]any{"source": entryPreview(src), "overwrite": in.Overwrite, "backup": backup}
+	if !isCopy && src.Type == "dir" {
+		value["contents"] = "checked as root when the move runs: every file's owner against the directories at both ends, and every directory's mode; " +
+			"the move can still be refused then, changing nothing"
+	}
 	if isCopy {
 		if cur == nil {
 			value["set"] = map[string]any{"owner": "root (a new copy is root's)", "group": "root (a new copy is root's)",

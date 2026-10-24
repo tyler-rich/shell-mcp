@@ -43,7 +43,7 @@ func TestOwnerRuleNewFiles(t *testing.T) {
 		{"a closed chain", 0o755, true},
 		{"a world-writable directory", 0o777, false},
 		{"a group-writable directory", 0o770, false},
-		{"a sticky world-writable directory", 0o1777, false},
+		{"a sticky world-writable directory", os.ModeSticky | 0o777, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e := newMovedEnv(t, true)

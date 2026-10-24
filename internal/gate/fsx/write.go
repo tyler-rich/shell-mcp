@@ -649,6 +649,14 @@ func (f *FS) MoveExpecting(src, dst string, overwrite bool, expected string) (Mo
 		return res, errf(protocol.CodePathDenied, "final path component is a symlink")
 	}
 	res.Type = typeOf(sfi.Mode())
+	// In the helper, the move rule (handoff N-17, move_rule.go): checked
+	// before anything is backed up or moved, and the commit staged.
+	var g *moveGuard
+	if f.cfg.GuardMovedIn {
+		if g, err = f.guardMove(ls, ld, sfi); err != nil {
+			return res, err
+		}
+	}
 	if sfi.IsDir() {
 		if pathx.Within(src, dst) {
 			return res, errf(protocol.CodeBadRequest, "cannot move a directory into itself")
@@ -657,13 +665,26 @@ func (f *FS) MoveExpecting(src, dst string, overwrite bool, expected string) (Mo
 		if serr != nil {
 			return res, serr
 		}
+		var tree []ChainDir
+		if g != nil {
+			if tree, serr = f.guardTree(g, sub, src); serr != nil {
+				_ = sub.Close()
+				return res, serr
+			}
+		}
 		count := 0
-		werr := f.walkTree(ls, sub, src, subReal, 1, func(e *treeEntry) error {
+		werr := f.walkTree(ls, sub, src, subReal, 1, tree, func(e *treeEntry) error {
 			count++
 			if count > f.cfg.Limits.MaxDeleteEntries {
 				return errf(protocol.CodeTooLarge, "directory has more than %d entries", f.cfg.Limits.MaxDeleteEntries)
 			}
-			return f.checkPath(join(dst, pathx.Rel(src, e.lp)), true).orNil()
+			if ce := f.checkPath(join(dst, pathx.Rel(src, e.lp)), true); ce != nil {
+				return ce
+			}
+			if g != nil {
+				return f.guardEntry(g, e, src, dst)
+			}
+			return nil
 		})
 		_ = sub.Close()
 		if werr != nil {
@@ -712,6 +733,12 @@ func (f *FS) MoveExpecting(src, dst string, overwrite bool, expected string) (Mo
 	}
 	if f.cfg.InjectBeforeCommit != nil {
 		f.cfg.InjectBeforeCommit()
+	}
+	if g != nil {
+		if e := f.commitStaged(ls, ld, g, res.Replaced, replaced); e != nil {
+			return res, e
+		}
+		return res, nil
 	}
 	switch {
 	case res.Replaced && (f.cfg.VerifyReplaced || expected != ""):

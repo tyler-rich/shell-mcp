@@ -515,6 +515,9 @@ func (f *FS) walkMetaDir(pl *metaPlan, dir *os.Root, dfd int, top *ident, node *
 		if strings.HasPrefix(name, deleteTempPrefix) {
 			return errSetAsideMeta()
 		}
+		if serr := f.stagedRefused(name); serr != nil {
+			return serr
+		}
 		if err := f.checkPath(e.lp, true); err != nil {
 			return err
 		}

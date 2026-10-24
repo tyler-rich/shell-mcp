@@ -403,7 +403,8 @@ func TestProductionOptionsHaveNoTestHooks(t *testing.T) {
 	t.Parallel()
 	o := ops.ProductionOptions("v", "/etc/shell-mcp/privileged.yaml")
 	if o.InjectReadBackFault != nil || o.InjectBeforeCommit != nil || o.InjectNoReplaceFault != nil || o.InjectMetadataReadBackFault != nil ||
-		o.InjectBeforeBackup != nil || o.InjectExchangeFault != nil || o.PkgLockRetry != 0 || o.InjectDeleteStep != nil || o.InjectStopAfterSetAside != nil {
+		o.InjectBeforeBackup != nil || o.InjectExchangeFault != nil || o.PkgLockRetry != 0 || o.InjectDeleteStep != nil || o.InjectStopAfterSetAside != nil ||
+		o.InjectAfterStage != nil {
 		t.Fatalf("production options carry a test hook: %+v", o)
 	}
 }

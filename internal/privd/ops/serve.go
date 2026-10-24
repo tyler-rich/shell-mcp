@@ -124,6 +124,8 @@ type Options struct {
 	InjectDeleteStep func(fsx.DeleteStep, string)
 	// InjectStopAfterSetAside is passed to fsx; tests only.
 	InjectStopAfterSetAside func(string) error
+	// InjectAfterStage is passed to fsx (a move's staging); tests only.
+	InjectAfterStage func(string) error
 	// DisableCommitReport leaves fsx's OnCommit unset, as a mutating site
 	// that never reports would; tests only.
 	DisableCommitReport bool
@@ -217,7 +219,8 @@ type server struct {
 	removedTotal     int
 	removedBytes     int
 	removedTruncated bool
-	// setAside is the entry a delete left set aside (fsx.Error.SetAside).
+	// setAside is the entry a delete left set aside, or a move left staged
+	// (fsx.Error.SetAside).
 	setAside string
 	// conn is the connection the request was read from; priv_exec watches it
 	// for the gate's hang-up while the command runs.
@@ -560,6 +563,7 @@ func (s *server) run(nc net.Conn) *protocol.Response {
 		InjectMetadataReadBackFault: o.InjectMetadataReadBackFault,
 		InjectDeleteStep:            o.InjectDeleteStep,
 		InjectStopAfterSetAside:     o.InjectStopAfterSetAside,
+		InjectAfterStage:            o.InjectAfterStage,
 	}
 	if p.BackupsKeep > 0 {
 		cfg.Backup = s.backup

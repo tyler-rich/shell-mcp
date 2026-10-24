@@ -246,10 +246,15 @@ func TestWriteRules(t *testing.T) {
 		wantCode(t, err, protocol.CodePathDenied)
 	}
 	// Mode rules.
-	for _, m := range []os.FileMode{0o4755, 0o2755, 0o1755, 0o646, 0o777} {
+	// Special bits as Go spells them (os.ModeSetuid, os.ModeSetgid,
+	// os.ModeSticky) and as raw octal (outside os.ModePerm, so refused too).
+	for _, m := range []os.FileMode{os.ModeSetuid | 0o755, os.ModeSetgid | 0o755, os.ModeSticky | 0o755, 0o4755, 0o2755, 0o1755, 0o646, 0o777} {
 		m := m
 		_, err = e.fs.WriteFile(filepath.Join(e.write, "m"), []byte("x"), WriteOptions{Create: true, Mode: &m})
 		wantCode(t, err, protocol.CodePolicyDenied)
+		if _, serr := os.Lstat(filepath.Join(e.write, "m")); serr == nil {
+			t.Fatalf("a refused mode %v created the file", m)
+		}
 	}
 	// An existing setuid file is not rewritten with its bits preserved.
 	suid := filepath.Join(e.write, "suid")
@@ -451,8 +456,11 @@ func TestMkdirCopyMoveChmod(t *testing.T) {
 	if fi, _ := os.Stat(filepath.Join(e.write, "b")); fi.Mode().Perm() != 0o640 || ch.OldMode != "0600" {
 		t.Fatalf("chmod %+v", ch)
 	}
-	_, err = e.fs.Chmod(filepath.Join(e.write, "b"), 0o4755)
-	wantCode(t, err, protocol.CodePolicyDenied)
+	for _, m := range []os.FileMode{os.ModeSetuid | 0o755, os.ModeSetgid | 0o755, os.ModeSticky | 0o755, 0o4755} {
+		_, err = e.fs.Chmod(filepath.Join(e.write, "b"), m)
+		wantCode(t, err, protocol.CodePolicyDenied)
+		exactMode(t, filepath.Join(e.write, "b"), 0o640)
+	}
 	_, err = e.fs.Chmod(filepath.Join(e.read, "hello.txt"), 0o600)
 	wantCode(t, err, protocol.CodePathDenied)
 }

@@ -70,6 +70,12 @@ type Config struct {
 	// path that stops unexpectedly would. Tests only; production code never
 	// sets it.
 	InjectStopAfterSetAside func(path string) error
+	// InjectAfterStage, when non-nil, is called right after a move in the
+	// helper (GuardMovedIn) staged its source under a temporary name in the
+	// destination's directory (that name); an error it returns stops the
+	// move there, leaving the staged entry, as a helper that dies there
+	// would. Tests only; production code never sets it.
+	InjectAfterStage func(tmp string) error
 	// Backup, when non-nil, is called before every overwrite, move-over and
 	// delete; its error aborts the operation. The gate never sets it.
 	Backup BackupFunc

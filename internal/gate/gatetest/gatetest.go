@@ -90,6 +90,26 @@ func WriteFile(t testing.TB, path, data string, mode os.FileMode) {
 	if err := os.Chmod(path, mode); err != nil { // exact mode: not subject to umask
 		t.Fatal(err)
 	}
+	ExactMode(t, path, mode)
+}
+
+// specialAndPerm are the mode bits a fixture's mode is compared on.
+const specialAndPerm = os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+
+// ExactMode fails unless path has exactly mode's permission, setuid,
+// setgid and sticky bits. os.Chmod, os.Mkdir and os.WriteFile take the
+// special bits only as os.ModeSetuid, os.ModeSetgid and os.ModeSticky and
+// silently drop them when given as raw octal (0o1777 sets 0777), so a
+// fixture written that way is not what its test says it is.
+func ExactMode(t testing.TB, path string, mode os.FileMode) {
+	t.Helper()
+	fi, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fi.Mode()&specialAndPerm, mode&specialAndPerm; got != want || mode&^(specialAndPerm|os.ModeDir) != 0 {
+		t.Fatalf("%s has mode %v, want %v (given as %#o: special bits must be os.ModeSetuid, os.ModeSetgid or os.ModeSticky, not raw octal)", path, got, mode&^os.ModeDir, uint32(mode))
+	}
 }
 
 // moduleRoot finds the module root from the test's working directory.
@@ -148,6 +168,7 @@ func Mkdir(t testing.TB, path string, mode os.FileMode) {
 	if err := os.Chmod(path, mode); err != nil {
 		t.Fatal(err)
 	}
+	ExactMode(t, path, mode)
 }
 
 // BuildFakeSys builds the fake systemctl/journalctl (testdata/fakesys) as
