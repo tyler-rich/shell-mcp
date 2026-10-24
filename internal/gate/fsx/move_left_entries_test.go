@@ -57,3 +57,23 @@ func TestMoveTreeHoldingLeftEntries(t *testing.T) {
 		}
 	}
 }
+
+// FuzzLeftEntry: a name is a left entry exactly when it starts with one of
+// the two prefixes, and the one it starts with is returned.
+func FuzzLeftEntry(f *testing.F) {
+	for _, s := range []string{".shell-mcp-move-0123", ".shell-mcp-delete-", "x.shell-mcp-move-", ".shell-mcp-delet", ".shell-mcp-", "", "keep.conf"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, name string) {
+		want := ""
+		switch {
+		case strings.HasPrefix(name, ".shell-mcp-move-"):
+			want = moveTempPrefix
+		case strings.HasPrefix(name, ".shell-mcp-delete-"):
+			want = deleteTempPrefix
+		}
+		if got := leftEntry(name); got != want {
+			t.Fatalf("leftEntry(%q) = %q, want %q", name, got, want)
+		}
+	})
+}

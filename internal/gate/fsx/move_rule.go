@@ -259,15 +259,34 @@ func (f *FS) treeDir(sub *os.Root, lp string, tree []ChainDir) ([]ChainDir, erro
 }
 
 // guardEntry checks one entry the walk of a moved tree visits (src and dst
-// are the move's paths): no staging entry, and in the helper the rule.
+// are the move's paths): no entry a stopped move left or a delete set aside
+// (handoff N-21: it would move with its tree, and the path its refusal named
+// would go stale), and in the helper the rule.
 func (f *FS) guardEntry(g *moveGuard, e *treeEntry, src, dst string) error {
-	if strings.HasPrefix(e.name, moveTempPrefix) {
-		return f.errStaged()
+	switch leftEntry(e.name) {
+	case moveTempPrefix:
+		return unchanged(errf(protocol.CodePathDenied, "the tree holds %s, left by a move%s that did not finish (a name starting with %s), "+
+			"which %s never moves; recover it first (see %s); nothing was moved", e.lp, f.asRoot(), moveTempPrefix, f.who(), f.docs()))
+	case deleteTempPrefix:
+		return unchanged(errf(protocol.CodePathDenied, "the tree holds %s, set aside by an earlier delete%s (a name starting with %s), "+
+			"which %s never moves, so that the path its delete named still holds it; recover it first (see %s); nothing was moved",
+			e.lp, f.asRoot(), deleteTempPrefix, f.who(), f.docs()))
 	}
 	if !g.rule || e.info.IsDir() {
 		return nil // a directory's mode and owner are checked as the walk opens it
 	}
 	return f.moveRule(e.lp, join(dst, pathx.Rel(src, e.lp)), metaOf(e.info).UID, chainPlus(g.src, e.tree), chainPlus(g.dst, e.tree))
+}
+
+// leftEntry is the prefix of the name of an entry a stopped move left
+// (moveTempPrefix) or a delete set aside (deleteTempPrefix), or "".
+func leftEntry(name string) string {
+	for _, p := range []string{moveTempPrefix, deleteTempPrefix} {
+		if strings.HasPrefix(name, p) {
+			return p
+		}
+	}
+	return ""
 }
 
 // moveCommit is how a staged move is committed.
