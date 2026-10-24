@@ -7,7 +7,7 @@ import (
 )
 
 // Inputs are invented; the format is `git diff --cached --raw -z
-// --no-renames --full-index` (git 2.47.3 and 2.55).
+// --no-renames --no-abbrev` (git 2.47.3 and 2.55).
 
 // rawRec is one raw record: ":<src mode> <dst mode> <src oid> <dst oid> <status>" and the path.
 func rawRec(src, dst, srcOID, dstOID, status, path string) string {

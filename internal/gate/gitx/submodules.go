@@ -133,9 +133,62 @@ func SubmoduleKeyName(key string) bool {
 	return strings.Contains(strings.ToLower(key), "submodule")
 }
 
-// ParseStagedGitlinks parses `git diff --cached --raw -z --no-renames`
-// and returns the staged gitlink changes. Not implemented yet.
+// SubmoduleOverrides returns every -c value of SubmoduleKeys, in its order.
+func SubmoduleOverrides() []string {
+	var out []string
+	for i := range SubmoduleKeys {
+		out = append(out, SubmoduleKeys[i].Args...)
+	}
+	return out
+}
+
+// ParseStagedGitlinks parses `git diff --cached --raw -z --no-renames
+// --no-abbrev` and returns its gitlink records (a source or destination
+// mode of 160000) as status entries: kind changed, XY the status letter
+// (A, D, M or T) and ".", since the work tree is never compared. Records of
+// other files are skipped (git_status reports them itself). A renamed or
+// copied record is an error (the command never asks for them), as is any
+// field of the wrong shape. At most maxEntries entries are kept and the
+// rest are reported as truncated.
 func ParseStagedGitlinks(b []byte, maxEntries int) (entries []Entry, truncated bool, err error) {
-	_, _ = b, maxEntries
-	return nil, false, bad("staged gitlinks: not implemented")
+	entries = []Entry{}
+	if len(b) == 0 {
+		return entries, false, nil
+	}
+	if b[len(b)-1] != 0 {
+		return nil, false, bad("staged gitlinks: missing terminator")
+	}
+	recs := strings.Split(string(b[:len(b)-1]), "\x00")
+	if len(recs) > maxRecords {
+		return nil, false, bad("staged gitlinks: too many records")
+	}
+	if len(recs)%2 != 0 {
+		return nil, false, bad("staged gitlinks: a record without its path")
+	}
+	for i := 0; i < len(recs); i += 2 {
+		head, path := recs[i], recs[i+1]
+		if len(head) > maxField || len(path) > maxField {
+			return nil, false, bad("staged gitlinks: record too long")
+		}
+		// :<src mode> <dst mode> <src oid> <dst oid> <status>
+		f := strings.Split(strings.TrimPrefix(head, ":"), " ")
+		if !strings.HasPrefix(head, ":") || len(f) != 5 || !isMode(f[0]) || !isMode(f[1]) || !isOID(f[2]) || !isOID(f[3]) || path == "" {
+			return nil, false, bad("staged gitlinks: record")
+		}
+		if len(f[4]) != 1 || !strings.Contains("ADMTU", f[4]) {
+			return nil, false, bad("staged gitlinks: status")
+		}
+		if f[0] != "160000" && f[1] != "160000" {
+			continue
+		}
+		if f[4] == "U" {
+			return nil, false, bad("staged gitlinks: unmerged gitlink")
+		}
+		if len(entries) == maxEntries {
+			truncated = true
+			continue
+		}
+		entries = append(entries, Entry{Kind: "changed", XY: f[4] + ".", Path: path})
+	}
+	return entries, truncated, nil
 }

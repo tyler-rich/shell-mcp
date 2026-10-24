@@ -24,7 +24,9 @@ import (
 // deletion and an addition), what is in the work tree at each (observed by
 // fsx, following nothing), and, with include_untracked, every untracked
 // path git clean -d would remove (never ignored files; nested repositories
-// are skipped), each walked as a delete preview. Its preview_sha256 covers
+// are skipped), each walked as a delete preview. Submodules are never
+// entered: a staged gitlink change refuses the discard, and a submodule's
+// own work tree is neither listed nor touched. Its preview_sha256 covers
 // HEAD, every listed path's HEAD and index modes and object ids, its
 // work-tree identity and content hash, and every untracked path's delete
 // preview hash.
@@ -148,9 +150,21 @@ func (r *gitRepo) plan(include bool) (*discardPlan, error) {
 	if head == "" {
 		return nil, errf(protocol.CodeBadRequest, "the repository has no commits, so there is no HEAD to restore to")
 	}
-	out, err := r.output("status", "--porcelain=v2", "-z", "--no-renames", "--untracked-files=no", "--ignore-submodules=none")
+	// Never into a submodule (handoff N-23): the status skips every gitlink,
+	// and the index is compared with HEAD for gitlinks on its own, which
+	// never looks at the work tree. A staged gitlink change is refused: the
+	// new index is HEAD's, so the discard would otherwise undo it without
+	// listing it. A submodule's own work tree is never looked at or touched.
+	out, err := r.output("status", "--porcelain=v2", "-z", "--no-renames", "--untracked-files=no", "--ignore-submodules=all")
 	if err != nil {
 		return nil, err
+	}
+	links, _, err := r.stagedGitlinks()
+	if err != nil {
+		return nil, err
+	}
+	if len(links) > 0 {
+		return nil, errf(protocol.CodePolicyDenied, "%s is a submodule whose recorded commit is staged to change; a discard never changes a submodule, so unstage it on the host first", shown(links[0].Path))
 	}
 	ents, truncated, err := gitx.ParseDiscardStatus(out, r.entryLimit())
 	if err != nil {
@@ -184,7 +198,7 @@ func (r *gitRepo) plan(include bool) (*discardPlan, error) {
 		case e.Kind == "unmerged":
 			return nil, errf(protocol.CodePolicyDenied, "the repository has an unmerged entry (%s); resolve or abort on the host first", shown(e.Path))
 		case e.Sub != "N..." || e.ModeHead == "160000" || e.ModeIndex == "160000" || e.ModeWorktree == "160000":
-			return nil, errf(protocol.CodePolicyDenied, "%s is a submodule with changes; repositories with submodule changes are refused", shown(e.Path))
+			return nil, errf(protocol.CodePolicyDenied, "%s is a submodule with changes; a discard never changes a submodule", shown(e.Path))
 		}
 		t := discardTracked{e: *e, abs: r.path + "/" + e.Path, restore: e.ModeHead != "000000"}
 		if t.wt, err = s.fs.ObserveWorktree(t.abs, &budget); err != nil {
@@ -468,10 +482,10 @@ func (d *discardRun) apply() (data any, warns []string, failure error) {
 	}
 	s.discardStep(fsx.DiscardStepAfterCheckout, pl.repo)
 	// 4. Verify with git: every restored path matches HEAD's index entry.
-	if _, err := d.r.outputWith(env, "update-index", "-q", "--refresh"); err != nil {
+	if _, err := d.r.outputWith(env, "update-index", "-q", "--refresh", "--ignore-submodules"); err != nil {
 		return d.stop(err)
 	}
-	out, err := d.r.outputWith(env, "status", "--porcelain=v2", "-z", "--no-renames", "--untracked-files=no", "--ignore-submodules=none")
+	out, err := d.r.outputWith(env, "status", "--porcelain=v2", "-z", "--no-renames", "--untracked-files=no", "--ignore-submodules=all")
 	if err != nil {
 		return d.stop(err)
 	}
