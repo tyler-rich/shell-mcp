@@ -104,6 +104,10 @@ func FindAction(tokens []string) string {
 	return ""
 }
 
+// ProgramAction returns the first token that is one of program's arguments
+// that run another program (sort, split, install), or "".
+func ProgramAction(_ string, _ []string) string { return "" }
+
 // recognised is a program a command's binary was recognised as.
 type recognised struct {
 	class Class
