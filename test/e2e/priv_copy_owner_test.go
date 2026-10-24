@@ -69,9 +69,23 @@ func TestPrivCopyOwner(t *testing.T) {
 		}
 	})
 
-	t.Run("over root's file in the account's directory: both needed, then the account's", func(t *testing.T) {
-		p := appDir + "/root.bin"
+	t.Run("over root's 0640 file in the account's directory: the read rule refuses its preview", func(t *testing.T) {
+		// The preview hashes the destination through priv_read_file, which
+		// reads a file under the account's directory only when it is the
+		// account's own or world-readable (PRIVILEGED §6, "Through the tools").
+		p := appDir + "/closed.bin"
 		rootFile(t, p, "root's\n", 0o640)
+		env := srv.callTool(t, "shell_priv_copy_path", withArgsE2E(map[string]any{"source": src, "destination": p, "overwrite": true}, app))
+		refusal(t, env, "path_denied", "is not read as root")
+		noApproval(t, env)
+		if _, uid, _, _ := statOwner(t, p); uid != 0 || readFile(t, p) != "root's\n" {
+			t.Fatalf("a refused copy changed the file (uid %d)", uid)
+		}
+	})
+
+	t.Run("over root's world-readable file in the account's directory: both needed, then the account's", func(t *testing.T) {
+		p := appDir + "/root.bin"
+		rootFile(t, p, "root's\n", 0o644)
 		env := srv.callTool(t, "shell_priv_copy_path", map[string]any{"source": src, "destination": p, "overwrite": true, "owner": "example-app"})
 		refusal(t, env, "path_denied", "group")
 		noApproval(t, env)
