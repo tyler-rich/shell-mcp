@@ -5,12 +5,14 @@ package ops_test
 import (
 	"encoding/json"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
+	"github.com/tyler-rich/shell-mcp/internal/pathx"
 )
 
 // exec_preview (ARCHITECTURE §4.3): the command resolved exactly as exec
@@ -216,18 +218,36 @@ func TestExecPreviewTier(t *testing.T) {
 }
 
 // FuzzExecPreviewMatchesExec: for any command id, arguments and cwd,
-// exec_preview and exec agree: the same refusal code, or the same resolved
-// argv (exec runs the probe, which only echoes, exits or prints its cwd).
+// exec_preview and exec agree: the same refusal code and message, or the
+// same resolved argv (exec runs the probe, which only echoes, exits or
+// prints its cwd). One directory of the write root's tree (above the roots,
+// the read root, the write root, an intermediate directory, a parent, or a
+// directory given as a placeholder or the cwd) may be open for the
+// iteration (handoff N-11): then no path placeholder and no cwd whose chain
+// from / to its parent holds it ever resolves, and no directory target is
+// it.
 func FuzzExecPreviewMatchesExec(f *testing.F) {
-	f.Add("probe-echo", "echo", "hello", "", "")
-	f.Add("probe-echo", "echo", "path", "hello.txt", "")
-	f.Add("probe-echo", "echo", "unit", "example-app.service", "")
-	f.Add("probe-io", "exit", "255", "", "")
-	f.Add("probe-io", "pwd", "", "", "config")
-	f.Add("probe-op", "write", "config/x", "", "")
-	f.Add("probe-echo", "echo", "-x", "", "../etc")
 	fx := execPreviewFixture(f, "operator")
-	f.Fuzz(func(t *testing.T, id, a0, a1, a2, cwd string) {
+	b := filepath.Join(fx.write, "a", "b")
+	gatetest.Mkdir(f, filepath.Join(fx.write, "a"), 0o755)
+	gatetest.Mkdir(f, b, 0o755)
+	gatetest.Mkdir(f, filepath.Join(b, "c"), 0o755)
+	gatetest.WriteFile(f, filepath.Join(b, "t"), "t\n", 0o644)
+	opens := []string{"", filepath.Dir(fx.read), fx.read, fx.write, filepath.Join(fx.write, "a"), b, filepath.Join(b, "c")}
+	for _, o := range []uint8{0, 1, 2, 3, 4, 5, 6} {
+		f.Add("probe-echo", "echo", "hello", "", "", o)
+		f.Add("probe-echo", "echo", "path", "hello.txt", "", o)
+		f.Add("probe-echo", "echo", "path", "config/a/b/t", "", o)
+		f.Add("probe-echo", "echo", "path", "config/a/b/c", "", o)
+		f.Add("probe-echo", "echo", "path", "config", "", o)
+		f.Add("probe-io", "pwd", "", "", "config", o)
+		f.Add("probe-io", "pwd", "", "", "config/a/b/c", o)
+	}
+	f.Add("probe-echo", "echo", "unit", "example-app.service", "", uint8(0))
+	f.Add("probe-io", "exit", "255", "", "", uint8(0))
+	f.Add("probe-op", "write", "config/x", "", "", uint8(0))
+	f.Add("probe-echo", "echo", "-x", "", "../etc", uint8(0))
+	f.Fuzz(func(t *testing.T, id, a0, a1, a2, cwd string, openSel uint8) {
 		fx.t = t
 		args := []string{}
 		for _, a := range []string{a0, a1, a2} {
@@ -235,7 +255,7 @@ func FuzzExecPreviewMatchesExec(f *testing.F) {
 				break
 			}
 			// Paths in the corpus are relative to the fixture's read root.
-			if strings.HasSuffix(a, ".txt") || strings.HasPrefix(a, "config/") {
+			if strings.HasSuffix(a, ".txt") || a == "config" || strings.HasPrefix(a, "config/") {
 				a = filepath.Join(fx.read, a)
 			}
 			args = append(args, a)
@@ -245,6 +265,13 @@ func FuzzExecPreviewMatchesExec(f *testing.F) {
 		}
 		if a0 == "write" && id == "probe-op" {
 			return // writes on success
+		}
+		open := opens[int(openSel)%len(opens)]
+		if open != "" {
+			if err := os.Chmod(open, 0o777); err != nil { //nolint:gosec // G302: another account's write access, simulated
+				t.Fatal(err)
+			}
+			defer func() { _ = os.Chmod(open, 0o755) }() //nolint:gosec // G302: a directory, closed again
 		}
 		req := m{"command_id": id, "args": args}
 		if cwd != "" {
@@ -259,14 +286,25 @@ func FuzzExecPreviewMatchesExec(f *testing.F) {
 		case p.OK != e.OK:
 			t.Fatalf("%v: preview ok=%v (%+v), exec ok=%v (%+v)", req, p.OK, p.Error, e.OK, e.Error)
 		case !p.OK:
-			if p.Error.Code != e.Error.Code {
-				t.Fatalf("%v: preview %s, exec %s", req, p.Error.Code, e.Error.Code)
+			if p.Error.Code != e.Error.Code || p.Error.Message != e.Error.Message {
+				t.Fatalf("%v: preview %+v, exec %+v", req, p.Error, e.Error)
 			}
 		default:
 			var pv execPreview
 			var d execData
 			if json.Unmarshal(p.Data, &pv) != nil || json.Unmarshal(e.Data, &d) != nil || !slices.Equal(pv.Argv, d.Argv) {
 				t.Fatalf("%v: preview argv %v, exec argv %v", req, pv.Argv, d.Argv)
+			}
+			if open == "" {
+				return
+			}
+			for _, x := range append(slices.Clone(pv.Argv[1:]), pv.Cwd) {
+				if strings.HasPrefix(x, "/") && pathx.Within(open, path.Dir(x)) && x != "/" {
+					t.Fatalf("%q resolved with the directory %s on its chain open", x, open)
+				}
+				if fi, err := os.Stat(x); x == open && err == nil && fi.IsDir() {
+					t.Fatalf("the open directory %s resolved as a directory target", x)
+				}
 			}
 		}
 	})
