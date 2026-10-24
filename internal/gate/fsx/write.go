@@ -585,6 +585,12 @@ func (f *FS) CopyExpecting(src, dst string, overwrite bool, expected string) (Wr
 	return f.writeAtomic(ld, data, &atomicOpts{newMode: srcMode, create: true, overwrite: overwrite, expected: expected, destination: expected != "", copy: true})
 }
 
+// CopyAs is CopyExpecting giving the copy an owner (the helper; handoff
+// N-19, P-15). Inert stub: the owner is not used yet.
+func (f *FS) CopyAs(src, dst string, overwrite bool, expected string, _ *Owner) (WriteResult, error) {
+	return f.CopyExpecting(src, dst, overwrite, expected)
+}
+
 // Copy copies src to dst (CopyExpecting without a destination hash).
 func (f *FS) Copy(src, dst string, overwrite bool) (WriteResult, error) {
 	return f.CopyExpecting(src, dst, overwrite, "")
