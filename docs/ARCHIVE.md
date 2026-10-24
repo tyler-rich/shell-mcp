@@ -3425,3 +3425,4 @@ CI before (PR #40's last run, `e580253`): `internal/privd/ops` 456.2 s (ubuntu-2
 - **Direct modules:** go-landlock v0.10.1, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+- **`scripts/ci-local.sh`:** the first run on `2e9ef25` failed only at the two lint steps (an unused `nolint`, a shadowed builtin, `layerNone` unused in a release build, a range copy and a tagged switch, all in this PR's new code; fixed in `eff4a50`, `layerNone` now defined in the tagged build only); on `eff4a50` every step passed, race step at default parallelism: `cmd/shell-mcp-gate` 12.6 s, `internal/gate/execx` 5.1 s, `internal/gate/fsx` 28.4 s, `internal/gate/ops` 93.5 s, `internal/privd/ops` 110.8 s, `internal/tools` 24.2 s; the read-confinement hook build step passed; govulncheck: no vulnerabilities reached.
