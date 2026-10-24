@@ -202,3 +202,88 @@ func TestGitProgramKeyGapsFound(t *testing.T) {
 		t.Fatalf("a repository-named key without Chain: gaps %q", g)
 	}
 }
+
+// submoduleKeyGaps returns what table does not cover among git's keys that
+// can make a command enter a submodule (gitx.SubmoduleKeyName; handoff
+// N-23): a key the table does not list, a -c value not on the gate's
+// command line, and an entry with neither an override, a flag nor a
+// reason. A key whose name the repository chooses can never be forced with
+// -c, so it needs the flag that beats it or the reason it is never read.
+func submoduleKeyGaps(table []gitx.SubmoduleKey, keys, cvals []string) []string {
+	var gaps []string
+	for _, k := range keys {
+		if !gitx.SubmoduleKeyName(k) {
+			continue
+		}
+		i := slices.IndexFunc(table, func(e gitx.SubmoduleKey) bool { return strings.EqualFold(e.Key, k) })
+		if i < 0 {
+			gaps = append(gaps, k+": can make a command enter a submodule, and gitx.SubmoduleKeys neither covers it nor says why it cannot")
+			continue
+		}
+		e := &table[i]
+		for _, a := range e.Args {
+			if !slices.Contains(cvals, a) {
+				gaps = append(gaps, k+": -c "+a+" is not on the gate's command line")
+			}
+		}
+		if len(e.Args) == 0 && e.Flag == "" && e.Why == "" {
+			gaps = append(gaps, k+": gitx.SubmoduleKeys lists it without an override, a flag or a reason")
+		}
+	}
+	return gaps
+}
+
+// TestGitSubmoduleKeysCovered: every key the installed git knows that can
+// make a command enter a submodule is covered by gitx.SubmoduleKeys, and
+// every -c value of the table is on the gate's command line.
+func TestGitSubmoduleKeysCovered(t *testing.T) {
+	ver := strings.TrimSpace(installedGit(t, "version"))
+	keys := strings.Fields(installedGit(t, "help", "--config"))
+	matched := 0
+	for _, k := range keys {
+		if gitx.SubmoduleKeyName(k) {
+			matched++
+		}
+	}
+	// git 2.47 and later know at least these many; fewer is not the whole list.
+	if len(keys) < 500 || matched < 18 {
+		t.Fatalf("%s: %d configuration keys, %d about submodules; that is not the whole list", ver, len(keys), matched)
+	}
+	if gaps := submoduleKeyGaps(gitx.SubmoduleKeys, keys, gateCValues()); len(gaps) > 0 {
+		t.Fatalf("%s: what could make git enter a submodule is not covered by the gate's git argv:\n%s", ver, strings.Join(gaps, "\n"))
+	}
+	t.Logf("%s: %d configuration keys, %d about submodules: all covered", ver, len(keys), matched)
+}
+
+// TestGitSubmoduleKeyGapsFound: the check fails for a key a future git
+// could add and for a table override missing from the gate's argv.
+func TestGitSubmoduleKeyGapsFound(t *testing.T) {
+	var cvals []string
+	for _, k := range gitx.SubmoduleKeys {
+		cvals = append(cvals, k.Args...)
+	}
+	if g := submoduleKeyGaps(gitx.SubmoduleKeys, []string{"submodule.recurse", "diff.ignoreSubmodules", "core.editor"}, cvals); len(g) != 0 {
+		t.Fatalf("covered keys reported: %q", g)
+	}
+	for _, c := range []struct {
+		keys, cvals []string
+		want        string
+	}{
+		{[]string{"status.newSubmoduleMode"}, cvals, "status.newSubmoduleMode"},
+		{[]string{"submodule.<name>.newSetting"}, cvals, "submodule.<name>.newSetting"},
+		{[]string{"submodule.recurse"}, slices.DeleteFunc(slices.Clone(cvals), func(v string) bool { return v == "submodule.recurse=false" }), "-c submodule.recurse=false"},
+	} {
+		if g := submoduleKeyGaps(gitx.SubmoduleKeys, c.keys, c.cvals); len(g) != 1 || !strings.Contains(g[0], c.want) {
+			t.Fatalf("keys %q: gaps %q, want one naming %s", c.keys, g, c.want)
+		}
+	}
+	empty := slices.Clone(gitx.SubmoduleKeys)
+	for i := range empty {
+		if empty[i].Key == "submodule.fetchJobs" {
+			empty[i].Why = ""
+		}
+	}
+	if g := submoduleKeyGaps(empty, []string{"submodule.fetchJobs"}, cvals); len(g) != 1 || !strings.Contains(g[0], "without an override") {
+		t.Fatalf("an entry without an override, a flag or a reason: gaps %q", g)
+	}
+}
