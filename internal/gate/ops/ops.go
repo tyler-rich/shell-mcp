@@ -59,6 +59,8 @@ type Options struct {
 	InjectMetadataReadBackFault func(fsx.Meta) fsx.Meta
 	// InjectDiscardStep is called at the points of a git_discard; tests only.
 	InjectDiscardStep func(step fsx.DiscardStep, path string)
+	// testHooks is empty except in a test build (testhooks_gitconfig.go).
+	testHooks
 
 	// Systemctl, Journalctl and Git are the absolute paths of the binaries
 	// the built-in service, journal and git operations run. Production uses

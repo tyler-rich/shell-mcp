@@ -303,8 +303,10 @@ chmod 0644 /etc/shell-mcp/gate-operator.yaml
 # given a {path:read}, a {path:write} and a cwd under /srv/e2e-gate, whose
 # write root the service account owns, and moves within that write root;
 # probe-compose has the shape of POLICY §4's `compose -f {path:read}`
-# example (the probe echoes it). The tests make every directory and file
-# beneath it.
+# example (the probe echoes it). The listed repository is for the closed
+# repository rule (gate_git_chain_test.go, handoff N-20); its origin is the
+# operator tests' local HTTPS server. The tests make every directory and
+# file beneath it.
 rm -rf /srv/e2e-gate
 install -o root -g root -m 0755 -d /srv/e2e-gate
 install -o svc-shell -g svc-shell -m 0755 -d /srv/e2e-gate/work
@@ -313,10 +315,15 @@ version: 1
 max_tier: destructive
 sandbox:
   landlock: $landlock
+  tcp_connect_ports: [44443]
 paths:
   read: [/srv/e2e-gate]
   write: [/srv/e2e-gate/work]
   deny: ["/srv/e2e-gate/work/denied/**"]
+git:
+  repos:
+    - path: /srv/e2e-gate/work/git/repo
+      remote: https://127.0.0.1:44443/example-ops.git
 commands:
   - id: probe-compose
     path: /usr/local/bin/example-probe

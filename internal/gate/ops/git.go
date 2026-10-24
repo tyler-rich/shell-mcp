@@ -213,6 +213,7 @@ func (r *gitRepo) checkConfig() ([]gitx.KV, error) {
 			"(only the data-only keys listed in POLICY §7); remove it on the host with `%s` in the repository. "+
 			"Git LFS repositories are not supported in v1: LFS works through filter programs", safeKey(key), safeKey(gitx.RemovalHint(key)))
 	}
+	r.s.o.afterGitConfigCheck(r.real)
 	return kvs, nil
 }
 

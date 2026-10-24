@@ -152,9 +152,11 @@ func TestGitStatusLogDiff(t *testing.T) {
 }
 
 // TestGitEnvironment: the exact argv prefix and environment the gate gives
-// git (POLICY §7), observed by a stand-in binary: the hardening flags, the
+// git (POLICY §7), observed by a stand-in binary: the hardening flags and
+// the overrides of every program-running key with a fixed name, the
 // repository pinned with GIT_DIR/GIT_WORK_TREE, no system or global config,
-// and no other GIT_CONFIG_* variable.
+// no other GIT_CONFIG_* variable, and every program-naming variable set to
+// a value that runs nothing (N-20).
 func TestGitEnvironment(t *testing.T) {
 	g := newGitFixture(t, "read")
 	logp := filepath.Join(g.dir, "fakegit.log")
@@ -170,16 +172,15 @@ func TestGitEnvironment(t *testing.T) {
 	if len(lines) != 2 || json.Unmarshal([]byte(lines[0]), &argv) != nil || json.Unmarshal([]byte(lines[1]), &env) != nil {
 		t.Fatalf("log %q", b)
 	}
-	want := []string{"-C", g.repo, "--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
-		"-c", "core.pager=cat", "-c", "core.sshCommand=/bin/false", "-c", "credential.helper=", "-c", "protocol.file.allow=never",
-		"-c", "protocol.ext.allow=never", "-c", "safe.directory=" + g.repo, "-c", "maintenance.auto=false", "-c", "gc.auto=0",
-		"-c", "gc.autoDetach=false", "-c", "core.ignorecase=false", "config", "--local", "--no-includes", "--list", "-z"}
+	want := append(append([]string{"-C", g.repo, "--no-pager", "--no-optional-locks"}, interleave(gitOverrides(g.repo))...),
+		"config", "--local", "--no-includes", "--list", "-z")
 	if !slices.Equal(argv, want) {
 		t.Fatalf("argv\n got %q\nwant %q", argv, want)
 	}
-	wantEnv := []string{"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_DIR=" + g.repo + "/.git", "GIT_TERMINAL_PROMPT=0",
+	wantEnv := append([]string{"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_DIR=" + g.repo + "/.git", "GIT_TERMINAL_PROMPT=0",
 		"GIT_WORK_TREE=" + g.repo, "HOME=" + g.home, "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "NO_COLOR=1", "PAGER=cat",
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "SYSTEMD_COLORS=0", "SYSTEMD_PAGER=", "TERM=dumb"}
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "SYSTEMD_COLORS=0", "SYSTEMD_PAGER=", "TERM=dumb"}, gitProgramEnv...)
+	slices.Sort(wantEnv)
 	if !slices.Equal(env, wantEnv) {
 		t.Fatalf("env\n got %q\nwant %q", env, wantEnv)
 	}

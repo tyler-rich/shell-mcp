@@ -179,6 +179,14 @@ func BuildFakeSys(t testing.TB, dir, name, logPath string) string {
 	return Build(t, "internal/gate/gatetest/testdata/fakesys", dir, name, nil, "-ldflags", "-X main.logPath="+logPath)
 }
 
+// BuildGitRecorder builds the fake git (testdata/fakesys) as dir/git in its
+// recording mode: each run appends its argv and then its sorted environment
+// as JSON lines to logPath, then executes realGit with both unchanged.
+func BuildGitRecorder(t testing.TB, dir, logPath, realGit string) string {
+	t.Helper()
+	return Build(t, "internal/gate/gatetest/testdata/fakesys", dir, "git", nil, "-ldflags", "-X main.logPath="+logPath+" -X main.realGit="+realGit)
+}
+
 // Self returns this test binary's resolved path. Every binary that imports
 // execx can serve as its exec trampoline, test binaries included.
 func Self(t testing.TB) string {

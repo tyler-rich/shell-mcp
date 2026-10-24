@@ -2,9 +2,10 @@
 # Proves release-binary-check.sh cannot pass vacuously: it must pass the gate
 # and the helper built as releases are, and fail each test-only build (cgo,
 # the helper's e2e bypass, the server's diagnostic build, the Landlock
-# forced-psx build of the gate and of the helper). The forced-psx code must be
-# visible in the binary itself, not only in its build settings. Needs go and
-# a C compiler (the golang image has both).
+# forced-psx build of the gate and of the helper, the gate's git-configuration
+# hook build). The forced-psx and hook code must be visible in the binary
+# itself, not only in its build settings. Needs go and a C compiler (the
+# golang image has both).
 set -euo pipefail
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
@@ -41,6 +42,7 @@ build privd-bypass 0 shell-mcp-privd -tags shellmcp_e2e_bypass
 build server-diag 0 shell-mcp -tags shellmcp_diag
 build gate-forcepsx 0 shell-mcp-gate -tags landlock_forcepsx
 build privd-forcepsx 0 shell-mcp-privd -tags landlock_forcepsx
+build gate-gitconfig-hook 0 shell-mcp-gate -tags shellmcp_gitconfig_hook
 
 expect "release gate passes" 0 "release build: $work/gate" gate
 expect "release helper passes" 0 "release build: $work/privd" privd
@@ -49,6 +51,7 @@ expect "e2e bypass helper fails" 1 "shellmcp_e2e_bypass" privd-bypass
 expect "diagnostic server fails" 1 "shellmcp_diag" server-diag
 expect "forced-psx gate fails" 1 "landlock_forcepsx" gate-forcepsx
 expect "forced-psx helper fails" 1 "landlock_forcepsx" privd-forcepsx
+expect "git-configuration hook gate fails" 1 "shellmcp_gitconfig_hook" gate-gitconfig-hook
 
 # The forced-psx code itself is in the tagged binaries and not in the release
 # ones, so the check holds even without the build settings.
@@ -57,6 +60,12 @@ for b in gate-forcepsx privd-forcepsx; do
 done
 for b in gate privd; do
 	if grep -aq landlock_forcepsx "$work/$b"; then bad "$b is free of landlock_forcepsx"; else ok "$b is free of landlock_forcepsx"; fi
+done
+# The same for the git-configuration hook: in the tagged gate, and nowhere
+# in a release binary.
+if grep -aq 'shellmcp_gitconfig_hook test build' "$work/gate-gitconfig-hook"; then ok "gate-gitconfig-hook carries the hook code"; else bad "gate-gitconfig-hook carries the hook code"; fi
+for b in gate privd; do
+	if grep -aq shellmcp_gitconfig_hook "$work/$b"; then bad "$b is free of shellmcp_gitconfig_hook"; else ok "$b is free of shellmcp_gitconfig_hook"; fi
 done
 
 echo "release-binary-check self-test: $pass passed, $fail failed"
