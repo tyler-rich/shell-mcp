@@ -292,7 +292,13 @@ const (
 // staged when it is not what was checked or the commit is refused.
 func (f *FS) commitStaged(ls, ld *loc, g *moveGuard, commit moveCommit, replaced fs.FileInfo) error {
 	tmp := moveTempPrefix + randHex(16)
-	if err := renameat2(ls.parent, ls.base, ld.parent, tmp, unix.RENAME_NOREPLACE); err != nil {
+	var err error
+	if f.cfg.InjectNoReplaceFault != nil {
+		err = f.cfg.InjectNoReplaceFault()
+	} else {
+		err = renameat2(ls.parent, ls.base, ld.parent, tmp, unix.RENAME_NOREPLACE)
+	}
+	if err != nil {
 		switch {
 		case errors.Is(err, syscall.ENOENT):
 			return unchanged(errf(protocol.CodeNotFound, "the source disappeared before it was moved; nothing was moved"))
@@ -303,9 +309,9 @@ func (f *FS) commitStaged(ls, ld *loc, g *moveGuard, commit moveCommit, replaced
 		return unchanged(mapErr(err))
 	}
 	if f.cfg.InjectAfterStage != nil {
-		if err := f.cfg.InjectAfterStage(tmp); err != nil {
+		if ierr := f.cfg.InjectAfterStage(tmp); ierr != nil {
 			f.commit() // an entry is left staged
-			return err
+			return ierr
 		}
 	}
 	got, err := f.identIn(ld.parent, tmp)

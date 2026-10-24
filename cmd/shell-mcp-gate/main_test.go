@@ -173,7 +173,7 @@ func TestCheckPolicyProbesNoReplace(t *testing.T) {
 	}
 	out := run()
 	if !strings.Contains(out, "WARN paths.write "+w2+": the filesystem does not support RENAME_NOREPLACE") ||
-		strings.Contains(out, "WARN paths.write "+w1) || !strings.Contains(out, "delete") {
+		strings.Contains(out, "WARN paths.write "+w1) || !strings.Contains(out, "delete and move are refused") {
 		t.Fatalf("check-policy:\n%s", out)
 	}
 	probeNoReplace = func(string) error { return errors.New("permission denied") }

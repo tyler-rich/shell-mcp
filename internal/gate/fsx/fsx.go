@@ -56,8 +56,9 @@ type Config struct {
 	InjectBeforeCommit func()
 	// InjectNoReplaceFault, when non-nil, is called instead of the system
 	// call of a create-only commit (link for write and copy, renameat2 with
-	// RENAME_NOREPLACE for move), and its error is that call's result. Tests
-	// only; production code never sets it.
+	// RENAME_NOREPLACE for move) and of a move's stage (renameat2 with
+	// RENAME_NOREPLACE), and its error is that call's result. Tests only;
+	// production code never sets it.
 	InjectNoReplaceFault func() error
 	// InjectDeleteStep, when non-nil, is called at each point of
 	// DeleteExact's deletion pass with the logical path of the entry
