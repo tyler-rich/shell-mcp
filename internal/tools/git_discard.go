@@ -61,7 +61,7 @@ type GitDiscard struct {
 	Untracked  int    `json:"untracked" jsonschema:"Untracked files and directories removed."`
 	Entries    int    `json:"entries" jsonschema:"restore + remove + untracked."`
 	Discarded  bool   `json:"discarded" jsonschema:"True: everything the approved preview listed was discarded and the index is HEAD's."`
-	CleanAfter bool   `json:"clean_after" jsonschema:"True when git status shows nothing afterwards (untracked files left without include_untracked, or nested repositories, make it false)."`
+	CleanAfter bool   `json:"clean_after" jsonschema:"True when git status shows nothing afterwards in the superproject (untracked files left without include_untracked, or nested repositories, make it false); submodule work trees are never inspected, so true does not mean a submodule's work tree is clean."`
 }
 
 // gitDiscardWire is the gate's git_discard_preview and git_discard data.
@@ -140,7 +140,7 @@ func discardGitChanges(d *Deps) Tool {
 	return define(d, spec[discardIn, GitDiscard]{
 		name:        "shell_discard_git_changes",
 		title:       "Discard git changes",
-		description: "Restores a repository's tracked files and index to HEAD and, with include_untracked, removes untracked files, exactly as its approved preview listed them.",
+		description: "Restores a repository's tracked files and index to HEAD and, with include_untracked, removes untracked files, exactly as its approved preview listed them. Superproject only: submodule work trees are never inspected (not their changes or checked-out commit); staged gitlink changes are seen.",
 		tier:        TierDestructive,
 		schema:      boundDiscard,
 		audit:       discardAudit,

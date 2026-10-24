@@ -76,9 +76,9 @@
       "readOnlyHint": false,
       "title": "Discard git changes"
     },
-    "description": "Restores a repository's tracked files and index to HEAD and, with include_untracked, removes untracked files, exactly as its approved preview listed them.",
+    "description": "Restores a repository's tracked files and index to HEAD and, with include_untracked, removes untracked files, exactly as its approved preview listed them. Superproject only: submodule work trees are never inspected (not their changes or checked-out commit); staged gitlink changes are seen.",
     "input_schema_sha256": "52d752fcc661b680b03e3d7b4d27c7eade35558f3021b0cb8d8a684cbab8cbef",
-    "output_schema_sha256": "55d7f92280f08337714421e8101180b7b196cd54caaca41b66899172838764f2",
+    "output_schema_sha256": "ec4d58b1acfcefac470a42f5e68e2c3d01653bbfb2091460dfaa5566d597745f",
     "requires_user_interaction": true
   },
   {
@@ -186,7 +186,7 @@
       "readOnlyHint": true,
       "title": "Get git status"
     },
-    "description": "Returns a repository's branch, HEAD, upstream, ahead/behind counts and changed or untracked paths.",
+    "description": "Returns a repository's branch, HEAD, upstream, ahead/behind counts and changed or untracked paths. Superproject only: submodule work trees are never inspected (not their changes or checked-out commit); staged gitlink changes are seen.",
     "input_schema_sha256": "9dbc919b9fd8c5ff28d099b276495e716a9eae82e94cef40aba0a8dd4b5a5f72",
     "output_schema_sha256": "6cb85b5189474e20cb62473113e99187a4d9d5d3a3941ef4171405edf9d1a85e",
     "requires_user_interaction": false
