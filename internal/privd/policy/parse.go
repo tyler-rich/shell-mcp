@@ -621,6 +621,11 @@ func (v *validator) command(field string, rc *rawCommand, maxTier Tier) (Command
 	if !ok || !v.review(field, &c, rec) {
 		return c, false
 	}
+	// The gate's GTFOBins list and warning (POLICY §6), for a command that
+	// runs as root (handoff N-16).
+	if w := gpolicy.EscapeWarning(field, true, filepath.Base(rc.Path), filepath.Base(resolved)); w != "" {
+		v.warn("%s", w)
+	}
 	if c.Unit == UnitBroad {
 		// The broad unit has network and full root capabilities: whatever the
 		// command does, it does as unconfined root (PRIVILEGED §4, §5.2).

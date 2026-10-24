@@ -22,7 +22,7 @@ import (
 func gtfoWarnings(ws []string) []string {
 	var out []string
 	for _, w := range ws {
-		if strings.Contains(w, "GTFOBins") {
+		if strings.Contains(w, "(GTFOBins: ") { // the temp dir's name holds the test's name
 			out = append(out, w)
 		}
 	}
