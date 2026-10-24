@@ -227,8 +227,10 @@ func TestGitConfigAllowlist(t *testing.T) {
 	marker := filepath.Join(g.dir, "MARKER")
 	gatetest.WriteFile(t, filepath.Join(g.repo, ".gitattributes"), "*.conf diff=x filter=x\n", 0o644)
 	gatetest.WriteFile(t, filepath.Join(g.repo, "app.conf"), "port=9090\n", 0o644)
+	// The textconv control passes --no-ext-diff: GitEnv's
+	// GIT_EXTERNAL_DIFF=/bin/false would otherwise take the diff over.
 	cases := []struct{ key, value, op, control string }{
-		{"diff.x.textconv", "touch " + marker + "; cat", "git_diff", "diff"},
+		{"diff.x.textconv", "touch " + marker + "; cat", "git_diff", "diff --no-ext-diff"},
 		{"filter.x.clean", "touch " + marker + "; cat", "git_diff", "diff --no-ext-diff --no-textconv"},
 	}
 	for _, c := range cases {

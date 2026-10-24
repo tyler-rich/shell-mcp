@@ -144,6 +144,9 @@ type server struct {
 	// execFS resolves commands' path placeholders and cwd: s.fs's
 	// confinement plus the chain rule (handoff N-11, POLICY §4).
 	execFS *fsx.FS
+	// gitFS checks the built-in git operations' repositories under the
+	// closed-repository rule (handoff N-20, POLICY §7).
+	gitFS  *fsx.FS
 	red    *redact.Redactor
 	report sandbox.Report
 	req    *protocol.Request
@@ -280,14 +283,21 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 		InjectMetadataReadBackFault: o.InjectMetadataReadBackFault,
 	}
 	s.fs = fsx.New(&cfg)
+	trust := commandTrust(o.Trust, install.ID(os.Geteuid()))
+	// The built-in git operations run git only in a repository that no
+	// account but root and the service account can change (handoff N-20,
+	// POLICY §7; fsx.CheckGitRepo). They resolve the repository through
+	// s.fs.
+	gc := cfg
+	gc.TrustedDirOwner = trust
+	s.gitFS = fsx.New(&gc)
 	// A command is given a path (a placeholder, its cwd) only when no
 	// account but root and the service account can change what it names
 	// before the command looks the string up itself (handoff N-11, POLICY
-	// §4). The built-in git operations resolve their repository through
-	// s.fs, unchanged.
+	// §4).
 	ec := cfg
 	ec.GuardExecPaths = true
-	ec.TrustedDirOwner = commandTrust(o.Trust, install.ID(os.Geteuid()))
+	ec.TrustedDirOwner = trust
 	// A {path:read} may also lie under directories of one other account
 	// that it alone can write (an application's own tree): that account
 	// controls the content anyway, and a swap there only redirects the read
