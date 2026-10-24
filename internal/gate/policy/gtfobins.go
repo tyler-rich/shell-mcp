@@ -1,8 +1,10 @@
 package policy
 
 import (
+	"fmt"
 	"slices"
 	"sort"
+	"strings"
 )
 
 // GTFOBins warnings (POLICY §6). check-policy warns about every policy
@@ -123,6 +125,25 @@ func EscapeTechniques(base string) []string {
 		return nil
 	}
 	return slices.Clone(cats)
+}
+
+// EscapeWarning is check-policy's warning for the command at field whose
+// binary, by the first of names on the list (the name as written, then as
+// resolved), has documented escape techniques, or "" when none is listed.
+// The gate's and the privileged policy share it and this list (handoff
+// N-16); asRoot says the command runs as root.
+func EscapeWarning(field string, asRoot bool, names ...string) string {
+	for _, base := range names {
+		if cats := EscapeTechniques(base); cats != nil {
+			who := ""
+			if asRoot {
+				who = "it runs as root: "
+			}
+			return fmt.Sprintf("%s: %s has documented escape techniques (GTFOBins: %s); %sreview its templates and never pass {path:write} to it (%s)",
+				field, base, strings.Join(cats, ", "), who, gtfobinsURL(base))
+		}
+	}
+	return ""
 }
 
 // GTFOBinsNames returns the listed names, sorted.

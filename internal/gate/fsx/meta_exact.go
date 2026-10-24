@@ -285,6 +285,7 @@ type ChainError struct {
 	Mode     uint32
 	Owner    bool // owned by an untrusted uid
 	Writable bool // group- or world-writable
+	Sticky   bool // sticky (CheckClosedChain only)
 }
 
 func (e *ChainError) Error() string {
@@ -295,6 +296,9 @@ func (e *ChainError) Error() string {
 	if e.Writable {
 		r = append(r, fmt.Sprintf("is group- or world-writable (mode %04o)", e.Mode))
 	}
+	if e.Sticky {
+		r = append(r, fmt.Sprintf("is sticky (mode %04o)", e.Mode))
+	}
 	return e.Dir + " " + strings.Join(r, " and ")
 }
 
@@ -304,6 +308,18 @@ func (e *ChainError) Error() string {
 // root) and be neither group- nor world-writable. A failing directory is a
 // *ChainError; anything else that stops the check is returned as is.
 func CheckRootChain(dir string, trusted func(uint32) bool) error {
+	return checkRootChain(dir, trusted, false)
+}
+
+// CheckClosedChain is CheckRootChain under the rule for the gate's commands'
+// paths and git repositories (exec_chain.go, git_chain.go; check-policy, for
+// each of the gate's roots): a sticky directory counts as open too,
+// writable or not.
+func CheckClosedChain(dir string, trusted func(uint32) bool) error {
+	return checkRootChain(dir, trusted, true)
+}
+
+func checkRootChain(dir string, trusted func(uint32) bool, sticky bool) error {
 	if trusted == nil {
 		trusted = func(uid uint32) bool { return uid == 0 }
 	}
@@ -327,8 +343,7 @@ func CheckRootChain(dir string, trusted func(uint32) bool) error {
 			return err
 		}
 		last, err := chainCheck(rp, func(cur string, id *ident) error {
-			ce := &ChainError{Dir: cur, UID: id.uid, Mode: id.perm, Owner: !trusted(id.uid), Writable: id.perm&0o022 != 0}
-			if ce.Owner || ce.Writable {
+			if ce := chainDirError(cur, id, trusted, sticky); ce != nil {
 				return ce
 			}
 			return nil
@@ -341,6 +356,18 @@ func CheckRootChain(dir string, trusted func(uint32) bool) error {
 		}
 		return nil
 	})
+}
+
+// chainDirError is the ChainError for the directory cur (id), or nil when
+// it passes: owned by a trusted uid and neither group- nor world-writable,
+// nor, with sticky, sticky.
+func chainDirError(cur string, id *ident, trusted func(uint32) bool, sticky bool) *ChainError {
+	ce := &ChainError{Dir: cur, UID: id.uid, Mode: id.perm, Owner: !trusted(id.uid), Writable: id.perm&0o022 != 0,
+		Sticky: sticky && id.perm&unix.S_ISVTX != 0}
+	if ce.Owner || ce.Writable || ce.Sticky {
+		return ce
+	}
+	return nil
 }
 
 // checkChange validates what is asked for.

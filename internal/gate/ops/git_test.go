@@ -172,7 +172,7 @@ func TestGitEnvironment(t *testing.T) {
 	if len(lines) != 2 || json.Unmarshal([]byte(lines[0]), &argv) != nil || json.Unmarshal([]byte(lines[1]), &env) != nil {
 		t.Fatalf("log %q", b)
 	}
-	want := append(append([]string{"-C", g.repo, "--no-pager", "--no-optional-locks"}, interleave(gitOverrides(g.repo))...),
+	want := append(append([]string{"-C", g.repo, "--no-pager", "--no-optional-locks"}, interleave(gitOverrides())...),
 		"config", "--local", "--no-includes", "--list", "-z")
 	if !slices.Equal(argv, want) {
 		t.Fatalf("argv\n got %q\nwant %q", argv, want)

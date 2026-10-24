@@ -730,12 +730,8 @@ func (v *validator) resolveCommand(field string, rc *rawCommand, opts *LoadOptio
 	if !v.identity(field, resolved, fi, opts) {
 		return "", false
 	}
-	for _, base := range []string{filepath.Base(rc.Path), filepath.Base(resolved)} {
-		if cats := EscapeTechniques(base); cats != nil {
-			v.warn("%s: %s has documented escape techniques (GTFOBins: %s); review its templates and never pass {path:write} to it (%s)",
-				field, base, strings.Join(cats, ", "), gtfobinsURL(base))
-			break
-		}
+	if w := EscapeWarning(field, false, filepath.Base(rc.Path), filepath.Base(resolved)); w != "" {
+		v.warn("%s", w)
 	}
 	return resolved, true
 }

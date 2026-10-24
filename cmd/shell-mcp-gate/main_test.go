@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -226,5 +227,114 @@ func TestCheckPolicyProbesExchange(t *testing.T) {
 	if out := run(); !strings.Contains(out, "WARN paths.write "+w1+": could not probe RENAME_EXCHANGE") ||
 		!strings.Contains(out, "WARN paths.write "+w2+": could not probe RENAME_EXCHANGE") {
 		t.Fatalf("check-policy:\n%s", out)
+	}
+}
+
+// TestCheckPolicyChecksRootChains: check-policy checks every read and write
+// root's path from / by descriptor, as the rules for commands' paths
+// (handoff N-11) and git repositories (N-20) do, trusting root and the
+// account it runs as: a root with a directory on its path that another
+// account could change, or a sticky one, gets a WARN naming that directory
+// and what the gate then refuses under the root; a closed one an ok line.
+// An unprivileged test cannot give a directory to another account, so
+// "another account" is an open mode here.
+func TestCheckPolicyChecksRootChains(t *testing.T) {
+	d := gatetest.SecureDir(t)
+	app, drop, shared, sticky := filepath.Join(d, "srv", "app"), filepath.Join(d, "srv", "drop"), filepath.Join(d, "srv", "shared"), filepath.Join(d, "srv", "sticky")
+	gatetest.Mkdir(t, app, 0o755)
+	gatetest.Mkdir(t, filepath.Join(drop, "logs"), 0o755)
+	gatetest.Mkdir(t, shared, 0o755)
+	gatetest.Mkdir(t, sticky, 0o755)
+	gatetest.Mkdir(t, filepath.Join(d, "home"), 0o755)
+	for _, c := range []struct {
+		dir  string
+		mode os.FileMode
+	}{{drop, 0o777}, {shared, 0o775}, {sticky, os.ModeSticky | 0o755}} {
+		if err := os.Chmod(c.dir, c.mode); err != nil {
+			t.Fatal(err)
+		}
+		gatetest.ExactMode(t, c.dir, c.mode)
+	}
+	p := filepath.Join(d, "etc", "policy.yaml")
+	gatetest.WriteFile(t, p, "version: 1\nmax_tier: destructive\nsandbox:\n  landlock: best-effort\npaths:\n  read: ["+app+", "+filepath.Join(drop, "logs")+"]\n"+
+		"  write: ["+shared+", "+sticky+"]\n", 0o644)
+	var out, errb bytes.Buffer
+	checkPolicyWith([]string{"--policy", p}, &out, &errb, gatetest.Trust(), filepath.Join(d, "home"))
+	got := out.String()
+	for _, want := range []string{
+		"ok   paths.read " + app + ": every directory from / to it is root's or the service account's and neither group- nor world-writable nor sticky",
+		"WARN paths.read " + filepath.Join(drop, "logs") + ": " + drop + " is group- or world-writable (mode 0777); commands get no cwd at or under it, " +
+			"and a {path:read} only where the directories open on its path are one other account's that only it can write (POLICY §4); " +
+			"git runs in no repository under it (POLICY §7)",
+		"WARN paths.write " + shared + ": " + shared + " is group- or world-writable (mode 0775); commands get no {path:write} or cwd at or under it",
+		"WARN paths.write " + sticky + ": " + sticky + " is sticky (mode 1755); commands get no {path:write} or cwd at or under it",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("report lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "WARN paths.read "+app+":") {
+		t.Errorf("a closed root got a WARN:\n%s", got)
+	}
+}
+
+// TestCheckPolicyChecksGitRepos: check-policy applies the closed repository
+// rule (fsx.CheckGitRepo, handoff N-20) to every repository in git.repos,
+// as the git operations would, so an operator learns before a git tool is
+// refused: a WARN naming the repository and the entry with its owner and
+// mode, or what else would refuse it; an ok line for a closed one.
+func TestCheckPolicyChecksGitRepos(t *testing.T) {
+	d := gatetest.SecureDir(t)
+	repos := filepath.Join(d, "srv", "repos")
+	gatetest.Mkdir(t, repos, 0o755)
+	gatetest.Mkdir(t, filepath.Join(d, "home"), 0o755)
+	names := []string{"closed", "openconfig", "opendir", "nogit"}
+	for _, n := range names {
+		dir := filepath.Join(repos, n)
+		gatetest.Mkdir(t, dir, 0o755)
+		if n == "nogit" {
+			continue
+		}
+		gatetest.Git(t, dir, "init", "-q")
+		for _, c := range []struct {
+			p    string
+			mode os.FileMode
+		}{{filepath.Join(dir, ".git"), 0o755}, {filepath.Join(dir, ".git", "config"), 0o644}} {
+			if err := os.Chmod(c.p, c.mode); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := os.Chmod(filepath.Join(repos, "openconfig", ".git", "config"), 0o666); err != nil { //nolint:gosec // G302: another account's access, simulated
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(repos, "opendir"), 0o775); err != nil { //nolint:gosec // G302: another account's access, simulated
+		t.Fatal(err)
+	}
+	y := "version: 1\nmax_tier: read\nsandbox:\n  landlock: best-effort\npaths:\n  read: [" + repos + "]\ngit:\n  repos:\n"
+	for _, n := range names {
+		y += "    - path: " + filepath.Join(repos, n) + "\n      remote: https://git.example.test/org/" + n + ".git\n"
+	}
+	p := filepath.Join(d, "etc", "policy.yaml")
+	gatetest.WriteFile(t, p, y, 0o644)
+	var out, errb bytes.Buffer
+	checkPolicyWith([]string{"--policy", p}, &out, &errb, gatetest.Trust(), filepath.Join(d, "home"))
+	got := out.String()
+	uid := strconv.Itoa(os.Getuid())
+	for _, want := range []string{
+		"ok   git.repos[0] " + filepath.Join(repos, "closed") + ": closed",
+		"WARN git.repos[1] " + filepath.Join(repos, "openconfig") + ": the file " + filepath.Join(repos, "openconfig", ".git", "config") +
+			" is group- or world-writable (owner uid " + uid + ", mode 0666)",
+		"WARN git.repos[2] " + filepath.Join(repos, "opendir") + ": the directory " + filepath.Join(repos, "opendir") +
+			" is group- or world-writable (owner uid " + uid + ", mode 0775)",
+		"WARN git.repos[3] " + filepath.Join(repos, "nogit") + ": repo has no .git directory",
+		"every git operation on it is refused",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("report lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "nothing was run") {
+		t.Errorf("check-policy repeats the operation's \"nothing was run\":\n%s", got)
 	}
 }

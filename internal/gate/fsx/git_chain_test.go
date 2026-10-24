@@ -200,3 +200,38 @@ func FuzzGitOpen(f *testing.F) {
 		}
 	})
 }
+
+// FuzzClosedChainDir: the predicate of CheckRootChain and CheckClosedChain
+// against an oracle over owners and modes. A directory passes exactly when
+// its owner is trusted and it is neither group- nor world-writable, nor,
+// for CheckClosedChain, sticky; a failure names the directory and, for each
+// reason, the owner or the mode.
+func FuzzClosedChainDir(f *testing.F) {
+	for _, s := range []struct {
+		uid    uint32
+		perm   uint32
+		sticky bool
+	}{{0, 0o755, false}, {0, 0o1755, true}, {0, 0o1755, false}, {1000, 0o775, true}, {1001, 0o755, true}, {0, 0o1777, false}} {
+		f.Add(s.uid, s.perm, s.sticky)
+	}
+	trusted := func(u uint32) bool { return u == 0 || u == 1000 }
+	f.Fuzz(func(t *testing.T, uid, perm uint32, sticky bool) {
+		perm &= 0o7777
+		id := &ident{typ: unix.S_IFDIR, uid: uid, perm: perm}
+		open := !trusted(uid) || perm&0o022 != 0 || sticky && perm&unix.S_ISVTX != 0
+		ce := chainDirError("/srv/x", id, trusted, sticky)
+		if open != (ce != nil) {
+			t.Fatalf("uid %d mode %04o sticky %v: open %v, error %v", uid, perm, sticky, open, ce)
+		}
+		if ce == nil {
+			return
+		}
+		msg := ce.Error()
+		if !strings.HasPrefix(msg, "/srv/x ") ||
+			ce.Owner && !strings.Contains(msg, fmt.Sprintf("owned by uid %d", uid)) ||
+			(ce.Writable || ce.Sticky) && !strings.Contains(msg, fmt.Sprintf("mode %04o", perm)) ||
+			ce.Sticky != (sticky && perm&unix.S_ISVTX != 0) {
+			t.Fatalf("uid %d mode %04o sticky %v: %+v %q", uid, perm, sticky, ce, msg)
+		}
+	})
+}
