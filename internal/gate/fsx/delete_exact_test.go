@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
 	"github.com/tyler-rich/shell-mcp/internal/pathx"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
 )
@@ -686,100 +687,23 @@ func mkRacerTree(t *testing.T, dir string) []string {
 	return files
 }
 
-// racerWrites records every file a racer put into a tree, by path, in the
-// order it put them: each later one at a path replaced the one before.
-type racerWrites map[string][]string
+// racerWrites and racerPut are gatetest's, shared with the helper's racer.
+type racerWrites = gatetest.RacerWrites
 
-// racerPut puts content at p as a new inode, staged in staging, as the
-// racer does: it creates p or replaces what is there, and is recorded in w
-// only when its rename succeeded. An error means it could not stage it.
 func racerPut(staging, p, content string, w racerWrites) error {
-	tmp := filepath.Join(staging, "racer-"+randHex(8))
-	if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
-		return err
-	}
-	if os.Rename(tmp, p) != nil {
-		_ = os.Remove(tmp)
-		return nil
-	}
-	w[p] = append(w[p], content)
-	return nil
+	return gatetest.RacerPut(staging, p, content, w)
 }
 
-// tempNames lists every entry under dir whose name has the set-aside
-// prefix.
-func tempNames(dir string) []string {
-	var out []string
-	_ = filepath.WalkDir(dir, func(p string, _ fs.DirEntry, err error) error {
-		if err == nil && strings.HasPrefix(filepath.Base(p), ".shell-mcp-delete-") {
-			out = append(out, p)
-		}
-		return nil
-	})
-	return out
-}
-
-// racerRunProblem checks one racer run, after DeleteExact returned err:
-// every file the racer put into the tree is still there with the content
-// it put last (each earlier one was replaced by the racer itself), and no
-// entry is left set aside anywhere under root, with one exception, the
-// documented one (POLICY §3, "Entries set aside and not removed"). The
-// racer replaced a listed file after its check under its name and before
-// it was set aside, so what was set aside failed its check; and it took
-// the name again before the put-back. The racer's earlier file then stays
-// under its temporary name. That is accepted only when it is the one
-// entry left set aside under root; the refusal is exists, not unchanged,
-// and names it (Error.SetAside, and the message with the listed file it
-// was set aside from); that file is one of the tree's, in the same
-// directory; and the entry is a regular file holding one of the racer's
-// earlier writes at that file, not its last (which holds the name). It
-// returns the path of the entry it accepted ("" when there is none).
+// racerRunProblem is gatetest.RacerRunProblem (every racer file kept, and
+// no entry left set aside but the documented, reported one) for the gate's
+// delete, which reports through err (Error.SetAside, Error.Unchanged).
 func racerRunProblem(root string, files []string, w racerWrites, err error) (string, error) {
-	for p, cs := range w {
-		if got, rerr := os.ReadFile(p); rerr != nil || string(got) != cs[len(cs)-1] { //nolint:gosec // G304: test fixture
-			return "", fmt.Errorf("the racer's file %s was deleted or changed (%s): the deletion removed something it never saw", p, errText(rerr))
-		}
-	}
-	left := tempNames(root)
+	rep := gatetest.DeleteReport{Refused: err != nil}
 	var fe *Error
-	reported := errors.As(err, &fe) && fe.SetAside != ""
-	switch {
-	case len(left) == 0 && !reported:
-		return "", nil
-	case len(left) == 0:
-		return "", fmt.Errorf("the refusal names %s as set aside, but no temporary name was left", fe.SetAside)
-	case len(left) > 1:
-		return "", fmt.Errorf("%d temporary names were left behind: %v", len(left), left)
-	case !reported:
-		return "", fmt.Errorf("a temporary name was left behind without being reported: %s (%s)", left[0], errText(err))
+	if errors.As(err, &fe) {
+		rep.Code, rep.Message, rep.SetAside, rep.Unchanged = fe.Code, fe.Msg, fe.SetAside, fe.Unchanged
 	}
-	aside := left[0]
-	if fe.SetAside != aside || fe.Code != protocol.CodeExists || fe.Unchanged || !strings.Contains(fe.Msg, "it was left, not deleted, as "+aside) {
-		return "", fmt.Errorf("the entry left as %s is not the one the refusal reports (code %s, unchanged %t, set aside %q): %s", aside, fe.Code, fe.Unchanged, fe.SetAside, fe.Msg)
-	}
-	from := ""
-	for _, p := range files {
-		if strings.Contains(fe.Msg, "the entry set aside from "+p+" could not be put back") {
-			from = p
-		}
-	}
-	if from == "" || filepath.Dir(from) != filepath.Dir(aside) {
-		return "", fmt.Errorf("the entry left as %s was not set aside from a file of the tree in its directory: %s", aside, fe.Msg)
-	}
-	fi, lerr := os.Lstat(aside)
-	got, rerr := os.ReadFile(aside) //nolint:gosec // G304: test fixture
-	if cs := w[from]; lerr != nil || rerr != nil || !fi.Mode().IsRegular() || len(cs) < 2 || !slices.Contains(cs[:len(cs)-1], string(got)) {
-		return "", fmt.Errorf("the entry left as %s is not one of the racer's earlier files at %s (%q, %s)", aside, from, got, errText(errors.Join(lerr, rerr)))
-	}
-	return aside, nil
-}
-
-// errText is err's text for a check's message, "no error" for nil.
-func errText(err error) string {
-	if err == nil {
-		return "no error"
-	}
-	return err.Error()
+	return gatetest.RacerRunProblem(root, files, w, rep)
 }
 
 // putBackTaken deletes the racer's tree under dir while its victim

@@ -665,8 +665,10 @@ func TestPrivDeleteWindows(t *testing.T) {
 // delay of up to a whole request's measured duration and then, until the
 // helper answers, keeps creating files in random directories of the tree
 // and replacing random files of the tree by other inodes. Every file it
-// managed to create survives, in every run; the outcomes are counted. Each
-// run starts with an empty backup store, so that a request takes as long as
+// managed to create survives, in every run, at its path or, in the one
+// documented case, reported under a temporary name (the gate's racer's
+// rules, gatetest.RacerRunProblem); the outcomes are counted. Each run
+// starts with an empty backup store, so that a request takes as long as
 // the calibration measured.
 func TestPrivDeleteConcurrentRacer(t *testing.T) {
 	t.Parallel()
@@ -674,21 +676,10 @@ func TestPrivDeleteConcurrentRacer(t *testing.T) {
 	f := newFixture(t, replace("max_delete_entries: 20", "max_delete_entries: 200"))
 	staging := filepath.Join(f.write, "staging")
 	gatetest.Mkdir(t, staging, 0o755)
-	mk := func(dir string) []string {
-		var files []string
-		for _, s := range []string{"s1", "s2", "s3"} {
-			for j := range 4 {
-				p := fmt.Sprintf("%s/%s/f%d", dir, s, j)
-				gatetest.WriteFile(t, p, "data", 0o600)
-				files = append(files, p)
-			}
-		}
-		return files
-	}
 	var durs []time.Duration
 	for i := range 9 {
 		cal := filepath.Join(f.write, fmt.Sprintf("calibrate%d", i))
-		mk(cal)
+		privRacerTree(t, cal)
 		pv := f.previewDelete(cal, true)
 		start := time.Now()
 		f.ok("priv_delete", m{"path": cal, "recursive": true, "expected_preview_sha256": pv.PreviewSHA256}, nil)
@@ -701,9 +692,9 @@ func TestPrivDeleteConcurrentRacer(t *testing.T) {
 	for i := range runs {
 		f.clearStore()
 		dir := filepath.Join(f.write, fmt.Sprintf("r%d", i))
-		files := mk(dir)
+		files := privRacerTree(t, dir)
 		pv := f.previewDelete(dir, true)
-		made := map[string]string{}
+		w := gatetest.RacerWrites{}
 		done := make(chan struct{})
 		var wg sync.WaitGroup
 		wg.Go(func() {
@@ -720,15 +711,8 @@ func TestPrivDeleteConcurrentRacer(t *testing.T) {
 				} else {
 					p = files[rand.IntN(len(files))] //nolint:gosec // G404: test choice
 				}
-				content := fmt.Sprintf("racer %d.%d", i, k)
-				tmp := filepath.Join(staging, fmt.Sprintf("racer-%d-%d", i, k))
-				if os.WriteFile(tmp, []byte(content), 0o600) != nil {
+				if gatetest.RacerPut(staging, p, fmt.Sprintf("racer %d.%d", i, k), w) != nil {
 					return
-				}
-				if os.Rename(tmp, p) == nil {
-					made[p] = content
-				} else {
-					_ = os.Remove(tmp)
 				}
 				time.Sleep(time.Duration(rand.Int64N(int64(dur/32) + 1))) //nolint:gosec // G404: test jitter
 			}
@@ -752,13 +736,23 @@ func TestPrivDeleteConcurrentRacer(t *testing.T) {
 		default:
 			counts["stopped during deletion, part removed"]++
 		}
-		if kept := len(f.metas()) - before; (len(a.Removed) > 0) != (kept == 1) {
-			t.Fatalf("run %d: %d removed, %d backups kept", i, len(a.Removed), kept)
+		kept := len(f.metas()) - before
+		planted += len(w)
+		aside, problem := gatetest.RacerRunProblem(f.write, files, w, privDeleteReport(&r, &a, kept))
+		if problem != nil {
+			t.Fatalf("run %d: %v", i, problem)
 		}
-		for p, content := range made {
-			planted++
-			if got, err := os.ReadFile(p); err != nil || string(got) != content { //nolint:gosec // G304: test fixture
-				t.Fatalf("run %d: the racer's file %s was deleted or changed (%v)", i, p, err)
+		// The backup is kept exactly when the tree changed: an entry removed,
+		// or the racer's earlier file left set aside.
+		if (len(a.Removed) > 0 || aside != "") != (kept == 1) {
+			t.Fatalf("run %d: %d removed, set aside %q, %d backups kept", i, len(a.Removed), aside, kept)
+		}
+		if aside != "" {
+			counts["of those, the racer's earlier file left set aside, reported"]++
+			// Recovered as an operator would (POLICY §3), so that every
+			// later run is checked for temporary names of its own.
+			if err := os.Remove(aside); err != nil {
+				t.Fatal(err)
 			}
 		}
 	}
@@ -770,6 +764,85 @@ func TestPrivDeleteConcurrentRacer(t *testing.T) {
 	slices.Sort(keys)
 	for _, k := range keys {
 		t.Logf("| %-46s | %3d |", k, counts[k])
+	}
+}
+
+// privRacerTree makes the racer's tree under dir (s1, s2 and s3, each with
+// the files f0 to f3) and returns its files.
+func privRacerTree(t *testing.T, dir string) []string {
+	t.Helper()
+	var files []string
+	for _, s := range []string{"s1", "s2", "s3"} {
+		for j := range 4 {
+			p := fmt.Sprintf("%s/%s/f%d", dir, s, j)
+			gatetest.WriteFile(t, p, "data", 0o600)
+			files = append(files, p)
+		}
+	}
+	return files
+}
+
+// privDeleteReport is what the helper told about a priv_delete: its
+// refusal, the entry its audit line names as set aside, and whether it
+// reported the tree unchanged, which for the helper is its backup
+// discarded (kept is how many backups the request left in the store).
+func privDeleteReport(r *response, a *auditDelete, kept int) gatetest.DeleteReport {
+	rep := gatetest.DeleteReport{Refused: !r.OK, SetAside: a.SetAside, Unchanged: kept == 0 || len(a.Discarded) > 0}
+	if r.Error != nil {
+		rep.Code, rep.Message = r.Error.Code, r.Error.Message
+	}
+	return rep
+}
+
+// TestPrivDeleteRacerPutBackTaken: the sequence the racer can reach under
+// load (the gate's TestDeleteRacerPutBackTaken), through the helper. A
+// listed file is replaced after its check under its name and before it is
+// set aside, and its name is taken again before the put-back: the racer's
+// first file stays under its temporary name, which the refusal and the
+// audit line name, the backup is kept, and the racer's checks accept it.
+func TestPrivDeleteRacerPutBackTaken(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, replace("max_delete_entries: 20", "max_delete_entries: 200"))
+	staging := filepath.Join(f.write, "staging")
+	gatetest.Mkdir(t, staging, 0o755)
+	dir := filepath.Join(f.write, "tree")
+	files := privRacerTree(t, dir)
+	pv := f.previewDelete(dir, true)
+	victim := dir + "/s2/f1"
+	w := gatetest.RacerWrites{}
+	f.opts.InjectDeleteStep = func(s fsx.DeleteStep, p string) {
+		if p != victim {
+			return
+		}
+		switch s {
+		case fsx.DeleteStepBeforeRename: // the object set aside is not the listed one
+			mustOK(t, gatetest.RacerPut(staging, victim, "racer 0.1", w))
+		case fsx.DeleteStepAfterRename: // and its name is taken again before the put-back
+			mustOK(t, gatetest.RacerPut(staging, victim, "racer 0.3", w))
+		default:
+		}
+	}
+	before := len(f.metas())
+	r := f.serve("priv_delete", m{"path": dir, "recursive": true, "expected_preview_sha256": pv.PreviewSHA256})
+	f.opts.InjectDeleteStep = nil
+	a, _ := f.lastAuditDelete()
+	kept := len(f.metas()) - before
+	aside, problem := gatetest.RacerRunProblem(f.write, files, w, privDeleteReport(&r, &a, kept))
+	if problem != nil {
+		t.Fatal(problem)
+	}
+	if aside == "" || readFile(t, aside) != "racer 0.1" || readFile(t, victim) != "racer 0.3" || kept != 1 {
+		t.Fatalf("set aside %q, %d backups kept; refusal %+v audit %+v", aside, kept, r.Error, a)
+	}
+	if len(a.Removed) != 6 || !strings.Contains(r.Error.Message, "6 of 16 entries were deleted") {
+		t.Fatalf("removed %v; refusal %+v", a.Removed, r.Error)
+	}
+}
+
+func mustOK(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
