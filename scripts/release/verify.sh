@@ -98,7 +98,8 @@ check "provenance: image index" gh attestation verify "oci://$image" "${att[@]}"
 for d in "${platform_digests[@]}"; do
 	check "SBOM attestation: platform image $d" gh attestation verify "oci://${image%@*}@$d" "${att[@]}" --predicate-type https://cyclonedx.org/bom
 done
-refuse "provenance of SHA256SUMS for another ref" gh attestation verify SHA256SUMS --repo "$repo" \
+# A file whose provenance verified above, so the refusal is the ref's.
+refuse "provenance of ${binaries[0]} for another ref" gh attestation verify "${binaries[0]}" --repo "$repo" \
 	--signer-workflow "$repo/$workflow" --source-ref refs/heads/never-a-release-ref
 
 if [[ $fail -ne 0 ]]; then

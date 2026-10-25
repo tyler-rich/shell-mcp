@@ -96,7 +96,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          env_json="$(gh api "repos/$GITHUB_REPOSITORY/environments/release")"
+          env_json="$(gh api "repos/$GITHUB_REPOSITORY/environments/release")" ||
+            { echo "the release environment does not exist (or cannot be read); create it with a required reviewer first" >&2; exit 1; }
           jq -e '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length > 0' <<<"$env_json" >/dev/null ||
             { echo "the release environment has no required reviewer" >&2; exit 1; }
           jq -e '.deployment_branch_policy.custom_branch_policies == true' <<<"$env_json" >/dev/null ||

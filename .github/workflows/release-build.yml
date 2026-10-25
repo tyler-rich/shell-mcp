@@ -188,6 +188,8 @@ jobs:
           diff <(printf '%s\n' "$SUMS") <(cat dist/SHA256SUMS; cd image && sha256sum shell-mcp-image.oci.tar)
           (cd dist && sha256sum --strict -c SHA256SUMS)
           test "$(cd dist && ls -1 | grep -v '^SHA256SUMS$' | LC_ALL=C sort)" = "$(awk '{ print $2 }' dist/SHA256SUMS | LC_ALL=C sort)"
+          # Workflow artifacts do not keep file modes.
+          chmod 0755 dist/*_linux_amd64 dist/*_linux_arm64
       - name: release-binary-check (every binary)
         run: bash scripts/release-binary-check.sh dist/*_linux_amd64 dist/*_linux_arm64
       - name: version stamps
