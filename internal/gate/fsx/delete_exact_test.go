@@ -737,7 +737,7 @@ func tempNames(dir string) []string {
 func racerRunProblem(root string, files []string, w racerWrites, err error) (string, error) {
 	for p, cs := range w {
 		if got, rerr := os.ReadFile(p); rerr != nil || string(got) != cs[len(cs)-1] { //nolint:gosec // G304: test fixture
-			return "", fmt.Errorf("the racer's file %s was deleted or changed (%v): the deletion removed something it never saw", p, rerr)
+			return "", fmt.Errorf("the racer's file %s was deleted or changed (%s): the deletion removed something it never saw", p, errText(rerr))
 		}
 	}
 	left := tempNames(root)
@@ -751,11 +751,11 @@ func racerRunProblem(root string, files []string, w racerWrites, err error) (str
 	case len(left) > 1:
 		return "", fmt.Errorf("%d temporary names were left behind: %v", len(left), left)
 	case !reported:
-		return "", fmt.Errorf("a temporary name was left behind without being reported: %s (%v)", left[0], err)
+		return "", fmt.Errorf("a temporary name was left behind without being reported: %s (%s)", left[0], errText(err))
 	}
 	aside := left[0]
 	if fe.SetAside != aside || fe.Code != protocol.CodeExists || fe.Unchanged || !strings.Contains(fe.Msg, "it was left, not deleted, as "+aside) {
-		return "", fmt.Errorf("the entry left as %s is not the one the refusal reports: %+v", aside, fe)
+		return "", fmt.Errorf("the entry left as %s is not the one the refusal reports (code %s, unchanged %t, set aside %q): %s", aside, fe.Code, fe.Unchanged, fe.SetAside, fe.Msg)
 	}
 	from := ""
 	for _, p := range files {
@@ -769,9 +769,17 @@ func racerRunProblem(root string, files []string, w racerWrites, err error) (str
 	fi, lerr := os.Lstat(aside)
 	got, rerr := os.ReadFile(aside) //nolint:gosec // G304: test fixture
 	if cs := w[from]; lerr != nil || rerr != nil || !fi.Mode().IsRegular() || len(cs) < 2 || !slices.Contains(cs[:len(cs)-1], string(got)) {
-		return "", fmt.Errorf("the entry left as %s is not one of the racer's earlier files at %s (%q, %v)", aside, from, got, errors.Join(lerr, rerr))
+		return "", fmt.Errorf("the entry left as %s is not one of the racer's earlier files at %s (%q, %s)", aside, from, got, errText(errors.Join(lerr, rerr)))
 	}
 	return aside, nil
+}
+
+// errText is err's text for a check's message, "no error" for nil.
+func errText(err error) string {
+	if err == nil {
+		return "no error"
+	}
+	return err.Error()
 }
 
 // putBackTaken deletes the racer's tree under dir while its victim
