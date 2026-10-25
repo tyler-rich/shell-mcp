@@ -3703,7 +3703,19 @@ There is no other path. Each `remove` sets an entry aside at most once and calls
 
 **Failing first** (`c97fd31`, the checks moved unchanged): `TestDeleteRacerPutBackTaken` fails with "a temporary name was left behind: <tree>/s2/.shell-mcp-delete-…". `TestRacerRunProblemRejects/reported,_but_nothing_left_set_aside` fails too ("accepted"), because the old checks never compared the refusal with the tree. The other five cases pass there as well, so they are regression guards.
 
-**Noted, not changed:** the helper's `TestPrivDeleteConcurrentRacer` (`internal/privd/ops`) does not check for temporary names at all. It cannot flake this way, but it also does not check that the case is reported. Bringing it to the same checks would be its own change.
+**The helper's side (maintainer, 2026-10-25: in this PR).** The helper's `TestPrivDeleteConcurrentRacer` (`internal/privd/ops`) did not check for temporary names at all, so it could not flake this way, but it never checked that the case is reported either.
+- **Shared rules.** The checks moved to `internal/gate/gatetest/setaside.go` (`RacerWrites`, `RacerPut`, `TempNames`, `DeleteReport`, `RacerRunProblem`). That is test support, which only tests may import (`TestForTestingOnlyInTests`), so both racers apply the same acceptance rules. fsx builds its `DeleteReport` from `fsx.Error`. The helper builds its own from three things: the wire refusal (code and message), the audit line's `set_aside`, and its backup. For the helper, "changed" means the backup was kept and not discarded.
+- **A second latent flake, fixed.** The helper racer expected a kept backup exactly when an entry had been removed. A run that strands the racer's file before removing anything keeps its backup (the tree changed), so the old check would have failed it. It now expects a kept backup exactly when an entry was removed or one was left set aside.
+- **`TestPrivDeleteRacerPutBackTaken`** drives the sequence through the helper. It asserts the refusal, `set_aside`, the backup kept, the racer's two files, and that 6 entries were removed.
+- **Failing first, against deliberate breaks** (each run once, then reverted, never committed):
+
+  | Break | Result |
+  |---|---|
+  | The helper no longer records `set_aside` from the delete's error (`files.go`) | `TestPrivDeleteRacerPutBackTaken` FAIL ("a temporary name was left behind without being reported"); `TestPrivDeleteSetAside` FAIL |
+  | fsx reports every stop as unchanged (`stopped`: `Unchanged = true`) | fsx `TestDeleteRacerPutBackTaken` FAIL ("not the one the refusal reports"). The helper's test passes, because the helper discards a backup only when nothing was committed *and* fsx says unchanged, and a stranded entry is a commit. That is defence in depth, not a gap |
+  | The helper discards the backup of every failed request (`dispatch.go`) | `TestPrivDeleteRacerPutBackTaken` FAIL ("not the one the refusal reports": reported unchanged) |
+
+- **With a delay** (scratch, reverted): a 10 ms sleep at `DeleteStepAfterRename` in the helper racer, 3 × 400 runs. 4 runs left the racer's earlier file set aside, all accepted as the documented case with their backups kept; every racer file survived.
 
 **Not changed:** production code; the protocol, error codes and envelope; Landlock; the generated units; either policy schema; dependencies.
 
