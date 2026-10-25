@@ -596,22 +596,11 @@ func TestDeleteConcurrentRacer(t *testing.T) {
 	e := newDelEnv(t, 100)
 	staging := filepath.Join(e.write, "staging")
 	must(t, os.Mkdir(staging, 0o750))
-	mk := func(dir string) []string {
-		var files []string
-		for _, s := range []string{"s1", "s2", "s3"} {
-			for j := range 4 {
-				p := fmt.Sprintf("%s/%s/f%d", dir, s, j)
-				put(t, p, "data")
-				files = append(files, p)
-			}
-		}
-		return files
-	}
 	// The deletion's duration: the median of a few.
 	var durs []time.Duration
 	for i := range 9 {
 		cal := filepath.Join(e.write, fmt.Sprintf("calibrate%d", i))
-		mk(cal)
+		mkRacerTree(t, cal)
 		pv, err := e.fs.PreviewDelete(cal, true)
 		must(t, err)
 		start := time.Now()
@@ -625,10 +614,10 @@ func TestDeleteConcurrentRacer(t *testing.T) {
 	var atRecompute, during, completed, planted int
 	for i := range runs {
 		dir := filepath.Join(e.write, fmt.Sprintf("r%d", i))
-		files := mk(dir)
+		files := mkRacerTree(t, dir)
 		pv, err := e.fs.PreviewDelete(dir, true)
 		must(t, err)
-		made := map[string]string{} // path → content, for every file the racer created
+		w := racerWrites{}
 		done := make(chan struct{})
 		var wg sync.WaitGroup
 		wg.Go(func() {
@@ -645,15 +634,8 @@ func TestDeleteConcurrentRacer(t *testing.T) {
 				} else {
 					p = files[pick(len(files))]
 				}
-				content := fmt.Sprintf("racer %d.%d", i, k)
-				tmp := filepath.Join(staging, fmt.Sprintf("racer-%d-%d", i, k))
-				if os.WriteFile(tmp, []byte(content), 0o600) != nil {
+				if racerPut(staging, p, fmt.Sprintf("racer %d.%d", i, k), w) != nil {
 					return
-				}
-				if os.Rename(tmp, p) == nil {
-					made[p] = content // a later replacement of p overwrites it here too
-				} else {
-					_ = os.Remove(tmp)
 				}
 				spin(time.Duration(jitter(int64(dur/8) + 1)))
 			}
@@ -671,16 +653,228 @@ func TestDeleteConcurrentRacer(t *testing.T) {
 			wantCode(t, err, protocol.CodeExists)
 			during++
 		}
-		for p, content := range made {
-			planted++
-			if got, rerr := os.ReadFile(p); rerr != nil || string(got) != content { //nolint:gosec // G304: test fixture
-				t.Fatalf("run %d: the racer's file %s was deleted or changed (%v): the deletion removed something it never saw", i, p, rerr)
-			}
+		planted += len(w)
+		if _, problem := racerRunProblem(e.write, files, w, err); problem != nil {
+			t.Fatalf("run %d: %v", i, problem)
 		}
-		noTempNames(t, e.write)
 	}
 	t.Logf("concurrent racer: %d runs (a deletion takes ~%v): %d refused at the recompute, %d stopped during deletion, %d completed before the racer "+
 		"changed anything; %d racer files, every one survived", runs, dur, atRecompute, during, completed, planted)
+}
+
+// mkRacerTree makes the racer's tree under dir (s1, s2 and s3, each with
+// the files f0 to f3) and returns its files.
+func mkRacerTree(t *testing.T, dir string) []string {
+	t.Helper()
+	var files []string
+	for _, s := range []string{"s1", "s2", "s3"} {
+		for j := range 4 {
+			p := fmt.Sprintf("%s/%s/f%d", dir, s, j)
+			put(t, p, "data")
+			files = append(files, p)
+		}
+	}
+	return files
+}
+
+// racerWrites records every file a racer put into a tree, by path, in the
+// order it put them: each later one at a path replaced the one before.
+type racerWrites map[string][]string
+
+// racerPut puts content at p as a new inode, staged in staging, as the
+// racer does: it creates p or replaces what is there, and is recorded in w
+// only when its rename succeeded. An error means it could not stage it.
+func racerPut(staging, p, content string, w racerWrites) error {
+	tmp := filepath.Join(staging, "racer-"+randHex(8))
+	if err := os.WriteFile(tmp, []byte(content), 0o600); err != nil {
+		return err
+	}
+	if os.Rename(tmp, p) != nil {
+		_ = os.Remove(tmp)
+		return nil
+	}
+	w[p] = append(w[p], content)
+	return nil
+}
+
+// tempNames lists every entry under dir whose name has the set-aside
+// prefix.
+func tempNames(dir string) []string {
+	var out []string
+	_ = filepath.WalkDir(dir, func(p string, _ fs.DirEntry, err error) error {
+		if err == nil && strings.HasPrefix(filepath.Base(p), ".shell-mcp-delete-") {
+			out = append(out, p)
+		}
+		return nil
+	})
+	return out
+}
+
+// racerRunProblem checks one racer run, after DeleteExact returned: every
+// file the racer put into the tree is still there with the content it put
+// last (each earlier one was replaced by the racer itself), and no entry
+// is left set aside anywhere under root. It returns the path of an entry
+// left set aside that it accepts ("" when there is none).
+func racerRunProblem(root string, _ []string, w racerWrites, _ error) (string, error) {
+	for p, cs := range w {
+		if got, rerr := os.ReadFile(p); rerr != nil || string(got) != cs[len(cs)-1] { //nolint:gosec // G304: test fixture
+			return "", fmt.Errorf("the racer's file %s was deleted or changed (%v): the deletion removed something it never saw", p, rerr)
+		}
+	}
+	if left := tempNames(root); len(left) > 0 {
+		return "", fmt.Errorf("a temporary name was left behind: %s", left[0])
+	}
+	return "", nil
+}
+
+// putBackTaken deletes the racer's tree under dir while its victim
+// s2/f1 is replaced, after its check under its name and before it is set
+// aside, by first, and then, once it was set aside and before it can be
+// put back, by the racer ("racer 0.3", recorded in w). It returns the
+// tree's files, the victim and the delete's error.
+func putBackTaken(t *testing.T, e *env, dir string, w racerWrites, first func(staging, victim string)) (files []string, victim string, err error) {
+	t.Helper()
+	staging := filepath.Join(e.write, "staging")
+	must(t, os.MkdirAll(staging, 0o750))
+	files = mkRacerTree(t, dir)
+	pv, err := e.fs.PreviewDelete(dir, true)
+	must(t, err)
+	victim = dir + "/s2/f1"
+	e.fs.cfg.InjectDeleteStep = func(s DeleteStep, p string) {
+		if p != victim {
+			return
+		}
+		switch s {
+		case DeleteStepBeforeRename: // the object set aside is not the listed one
+			first(staging, victim)
+		case DeleteStepAfterRename: // and its name is taken again before the put-back
+			must(t, racerPut(staging, victim, "racer 0.3", w))
+		default:
+		}
+	}
+	_, err = e.fs.DeleteExact(dir, true, pv.PreviewSHA256)
+	e.fs.cfg.InjectDeleteStep = nil
+	return files, victim, err
+}
+
+// TestDeleteRacerPutBackTaken: the sequence TestDeleteConcurrentRacer
+// reaches under load, driven through the deletion's steps. The racer
+// replaces a listed file after its check under its name and before it is
+// set aside, so what is set aside (the racer's file) fails its check; and
+// it replaces the file again before the put-back, so the put-back finds
+// the name taken. That is POLICY §3's "Entries set aside and not removed":
+// the racer's first file stays under its temporary name, reported as such,
+// and nothing else is lost or deleted. The racer's checks accept exactly
+// that.
+func TestDeleteRacerPutBackTaken(t *testing.T) {
+	e := newDelEnv(t, 100)
+	dir := filepath.Join(e.write, "tree")
+	w := racerWrites{}
+	files, victim, err := putBackTaken(t, e, dir, w, func(staging, victim string) {
+		must(t, racerPut(staging, victim, "racer 0.1", w))
+	})
+	wantCode(t, err, protocol.CodeExists)
+	aside, problem := racerRunProblem(e.write, files, w, err)
+	if problem != nil {
+		t.Fatal(problem)
+	}
+	if aside == "" || contentAt(t, aside) != "racer 0.1" || contentAt(t, victim) != "racer 0.3" {
+		t.Fatalf("set aside %q: not the racer's first file, or the name does not hold its second", aside)
+	}
+	// Bottom-up: s1's four files, s1 and s2/f0 were removed before the
+	// victim; nothing after it was.
+	var fe *Error
+	if !errors.As(err, &fe) || !strings.Contains(fe.Msg, "6 of 16 entries were deleted") {
+		t.Fatalf("the refusal does not say what was deleted: %v", err)
+	}
+	var left []string
+	must(t, filepath.WalkDir(dir, func(p string, _ fs.DirEntry, err error) error {
+		left = append(left, p)
+		return err
+	}))
+	want := []string{dir, dir + "/s2", aside, dir + "/s2/f1", dir + "/s2/f2", dir + "/s2/f3", dir + "/s3", dir + "/s3/f0", dir + "/s3/f1", dir + "/s3/f2", dir + "/s3/f3"}
+	if !slices.Equal(left, want) {
+		t.Fatalf("left %v, want %v", left, want)
+	}
+}
+
+// TestRacerRunProblemRejects: the racer's checks accept nothing but the
+// documented case. Each case starts from it, or from the closest sequence
+// a deletion can be driven through, and changes one thing.
+func TestRacerRunProblemRejects(t *testing.T) {
+	cases := []struct {
+		name string
+		// run deletes the racer's tree under dir and changes the tree
+		// after it, and returns the tree's files, the racer's writes and
+		// the delete's error.
+		run func(t *testing.T, e *env, dir string) ([]string, racerWrites, error)
+	}{
+		{"left set aside without being reported", func(t *testing.T, e *env, dir string) ([]string, racerWrites, error) {
+			files := mkRacerTree(t, dir)
+			pv, err := e.fs.PreviewDelete(dir, true)
+			must(t, err)
+			e.fs.cfg.InjectStopAfterSetAside = func(p string) error {
+				if p == dir+"/s2/f1" {
+					return errors.New("stopped after the set-aside")
+				}
+				return nil
+			}
+			_, err = e.fs.DeleteExact(dir, true, pv.PreviewSHA256)
+			e.fs.cfg.InjectStopAfterSetAside = nil
+			return files, racerWrites{}, err
+		}},
+		{"a directory left set aside", func(t *testing.T, e *env, dir string) ([]string, racerWrites, error) {
+			files := mkRacerTree(t, dir)
+			pv, err := e.fs.PreviewDelete(dir, true)
+			must(t, err)
+			w := racerWrites{}
+			e.fs.cfg.InjectDeleteStep = func(s DeleteStep, p string) {
+				if p != dir+"/s1" || s != DeleteStepAfterRename {
+					return
+				}
+				must(t, os.WriteFile(tempNameIn(t, dir)+"/inside", []byte("newcomer inside"), 0o600))
+				must(t, racerPut(filepath.Join(e.write, "staging"), dir+"/s1", "racer 0.1", w))
+			}
+			must(t, os.MkdirAll(filepath.Join(e.write, "staging"), 0o750))
+			_, err = e.fs.DeleteExact(dir, true, pv.PreviewSHA256)
+			e.fs.cfg.InjectDeleteStep = nil
+			return files, w, err
+		}},
+		{"set aside, but not one of the racer's files", func(t *testing.T, e *env, dir string) ([]string, racerWrites, error) {
+			w := racerWrites{}
+			files, _, err := putBackTaken(t, e, dir, w, func(staging, victim string) { replaceFile(t, staging, victim, "not the racer's") })
+			return files, w, err
+		}},
+		{"a second temporary name", func(t *testing.T, e *env, dir string) ([]string, racerWrites, error) {
+			w := racerWrites{}
+			files, _, err := putBackTaken(t, e, dir, w, func(staging, victim string) { must(t, racerPut(staging, victim, "racer 0.1", w)) })
+			put(t, dir+"/s3/.shell-mcp-delete-0123456789abcdef0123456789abcdef", "stray")
+			return files, w, err
+		}},
+		{"a racer file lost", func(t *testing.T, e *env, dir string) ([]string, racerWrites, error) {
+			w := racerWrites{}
+			files, victim, err := putBackTaken(t, e, dir, w, func(staging, victim string) { must(t, racerPut(staging, victim, "racer 0.1", w)) })
+			must(t, os.Remove(victim))
+			return files, w, err
+		}},
+		{"reported, but nothing left set aside", func(t *testing.T, e *env, dir string) ([]string, racerWrites, error) {
+			w := racerWrites{}
+			files, _, err := putBackTaken(t, e, dir, w, func(staging, victim string) { must(t, racerPut(staging, victim, "racer 0.1", w)) })
+			must(t, os.Remove(tempNameIn(t, dir+"/s2")))
+			return files, w, err
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := newDelEnv(t, 100)
+			files, w, err := c.run(t, e, filepath.Join(e.write, "tree"))
+			if aside, problem := racerRunProblem(e.write, files, w, err); problem == nil {
+				t.Fatalf("accepted (set aside %q; %v)", aside, err)
+			} else {
+				t.Logf("refused: %v", problem)
+			}
+		})
+	}
 }
 
 // spin waits d without sleeping (time.Sleep oversleeps at this scale).
