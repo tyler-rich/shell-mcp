@@ -225,7 +225,8 @@ func UutilsSiblings(resolved string, ms []IdentityMatch) ([]IdentityMatch, error
 func CheckFile(t Trust, p string, fi os.FileInfo) error { return checkFile(t, p, fi) }
 
 // Content returns what the file at p (described by fi, from os.Stat) holds,
-// read once per load for each inode (ContentCache).
+// read once per load for each device, inode, size, modification and change
+// time (ContentCache).
 func (s *IdentityScan) Content(p string, fi os.FileInfo) (Content, error) {
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
@@ -234,7 +235,7 @@ func (s *IdentityScan) Content(p string, fi os.FileInfo) (Content, error) {
 	if s.content == nil {
 		s.content = ContentCache{}
 	}
-	return s.content.Probe(p, st.Dev, st.Ino, fi.Size())
+	return s.content.Probe(p, FileKey{Dev: st.Dev, Ino: st.Ino, Size: fi.Size(), Mtime: st.Mtim.Nano(), Ctime: st.Ctim.Nano()})
 }
 
 // probe is Content through the validator's scan, made on first use.

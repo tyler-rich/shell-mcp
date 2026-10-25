@@ -301,20 +301,28 @@ func ProbeContent(p string, size int64) (Content, error) {
 	return c, nil
 }
 
-// ContentCache remembers what each file holds, by device and inode, for one
-// policy load: the commands on one multi-call binary (every uutils utility
-// is a hard link to it) and the interpreters several scripts share are read
-// once.
-type ContentCache map[[2]uint64]Content
+// ContentCache remembers what each file holds for one policy load: the
+// commands on one multi-call binary (every uutils utility is a hard link to
+// it) and the interpreters several scripts share are read once. A file is
+// read again when any part of its key differs, so a binary rewritten in
+// place under the same inode is identified again (as finely as the kernel's
+// timestamps, one clock tick).
+type ContentCache map[FileKey]Content
 
-// Probe returns ProbeContent for a file that os.Stat described as fi, read
-// once per load; dev and ino identify it.
-func (cc ContentCache) Probe(p string, dev, ino uint64, size int64) (Content, error) {
-	k := [2]uint64{dev, ino}
+// FileKey identifies a file's content for ContentCache: device, inode,
+// size, and modification and change time in nanoseconds.
+type FileKey struct {
+	Dev, Ino           uint64
+	Size, Mtime, Ctime int64
+}
+
+// Probe returns ProbeContent for the file at p with key k, read once per
+// key.
+func (cc ContentCache) Probe(p string, k FileKey) (Content, error) {
 	if c, ok := cc[k]; ok {
 		return c, nil
 	}
-	c, err := ProbeContent(p, size)
+	c, err := ProbeContent(p, k.Size)
 	if err != nil {
 		return c, err
 	}
