@@ -430,8 +430,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/release/verify.sh dist "$VERSION" "$IMAGE_REPO@$INDEX" "$GITHUB_REPOSITORY" "$GITHUB_REF"
       - name: release notes
+        env:
+          NOTES_VERSION: ${{ inputs.notes-version }}
         run: |
-          bash scripts/release/render-notes.sh "$VERSION" "${{ inputs.notes-version }}" "$IMAGE_REPO" "$INDEX" "$GITHUB_REPOSITORY" "$GITHUB_REF" >notes.md
+          bash scripts/release/render-notes.sh "$VERSION" "$NOTES_VERSION" "$IMAGE_REPO" "$INDEX" "$GITHUB_REPOSITORY" "$GITHUB_REF" >notes.md
           { echo "### Release notes ($([ "$PUBLISH" = true ] && echo release || echo dry run))"; cat notes.md; } >>"$GITHUB_STEP_SUMMARY"
           mkdir -p signed && cp dist/*.sigstore.json notes.md signed/
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
