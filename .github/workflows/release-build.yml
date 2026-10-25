@@ -127,7 +127,10 @@ jobs:
       - name: SHA256SUMS
         id: sums
         run: |
-          (cd dist && ls -1 | LC_ALL=C sort | xargs sha256sum -- >SHA256SUMS && cat SHA256SUMS)
+          # Written outside dist first, so that it does not list itself.
+          (cd dist && ls -1 | LC_ALL=C sort | xargs sha256sum -- >../SHA256SUMS.tmp)
+          mv SHA256SUMS.tmp dist/SHA256SUMS
+          cat dist/SHA256SUMS
           {
             echo "sums<<EOF_SUMS"
             cat dist/SHA256SUMS
