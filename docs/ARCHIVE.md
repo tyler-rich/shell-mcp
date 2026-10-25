@@ -3540,3 +3540,123 @@ CI before (PR #40's last run, `e580253`): `internal/privd/ops` 456.2 s (ubuntu-2
 - **CI on `9c57b19`** (run `40131278530`): both Go jobs passed every step. ubuntu-24.04 `LANDLOCK_PATH=psx kernel_abi=7 effective_abi=7` (its forced-psx step is skipped, as on every ABI 7 runner). ubuntu-26.04 `LANDLOCK_PATH=tsync kernel_abi=8 effective_abi=8`, and its forced-psx step passed with go-landlock v0.11.0 (`LANDLOCK_PATH=psx kernel_abi=8 effective_abi=7`). Every new copy test ran and passed in both jobs, the setgid ones included. CodeQL, deps-current, gitleaks, image and probes passed. e2e-host: 119 passed, 1 failed; `TestPrivCopyOwnerRace` passed. The maintainer accepted the go-landlock bump and the copy-over behaviour (a copy over a file whose owner fails rule R is accepted with both an owner and a group that pass, as a write is).
 - **The failure was the test's fixture, not the change.** `TestPrivCopyOwner`'s both-needed case copied over a `root 0640` file in example-app's directory. The preview hashes the destination through `priv_read_file`, and the read rule refused that file ("is not read as root") before rule R was reached. That refusal is documented (PRIVILEGED §6, "Through the tools"). The subtest is now split in two. A `0640` root file asserts the read rule's refusal at the preview, with no approval requested and the file unchanged. A world-readable (`0644`) root file covers the both-needed case: refused with an owner alone, accepted as `example-app:example-app` with both.
 - **`scripts/ci-local.sh` on the fix (`9c61241`, run alone):** every step passed. Race step: `cmd/shell-mcp-gate` 12.2 s, `internal/gate/execx` 5.2 s, `internal/gate/fsx` 32.9 s, `internal/gate/ops` 105.0 s, `internal/privd/ops` 115.6 s, `internal/privd/pkg` 7.0 s, `internal/tools` 25.2 s, every other package under 5 s.
+
+### 2026-10-24 — Multi-call binaries, GNU coreutils under other names, coreutils options that run a program, #! interpreters (S-MC) (PR #53, branch feat/multicall)
+
+**Decision (maintainer, 2026-10-24, from the phase-1 analysis):**
+- option (i) for uutils only, argv[0] left as the resolved path;
+- GNU coreutils built as one binary, BusyBox, toybox and anything unrecognised refused;
+- F1 with content identification where it is reliable;
+- F2;
+- F3 as option (ii) of S4c-9 (refused unless acknowledged);
+- #! interpreters judged, with a WARN and N-26 recorded;
+- a WARN when a command runs as another name than the one written.
+
+**What the phase-1 analysis found (pushback, verified in an `ubuntu:26.04` container and at the source).**
+- **Ubuntu 26.04's layout.** `/usr/bin/chown` is a symlink to `/usr/lib/cargo/bin/coreutils/chown`. That file is one of 116 hard links of one 11.8 MB uutils 0.10.0 binary (`rust-coreutils` 0.10.0-1ubuntu2~26.04.1); `/usr/bin/coreutils` is another. POLICY §5 had said "hard links"; the effect on the identity check was the same.
+- **GNU coreutils on 26.04 is not multi-call.** `gnu-coreutils` 9.7 (Priority required, Essential) installs single-purpose binaries as `/usr/bin/gnu<cmd>` (`/usr/sbin/gnuchroot`).
+- **uutils does not dispatch on argv[0].**
+  - uutils 0.10.0 on glibc Linux (`validation::binary_path`) takes the kernel's `AT_EXECFN`, unless argv[0]'s base name equals it, the path is under `/proc/`, or the file is a script.
+  - Ubuntu's `require-utility-to-be-invoked-at-matching-path.patch` also requires that name to equal the base name of `/proc/self/exe`; otherwise it prints "Security violation" and exits 1.
+  - Probed with `gnuenv -a`: executing `…/coreutils/chown` with argv[0] `env` runs chown; executing `/usr/bin/coreutils` with argv[0] `chown` reads the utility from argv[1].
+  - So setting argv[0] to the applet's name, as plan §5 proposed, would change nothing for uutils. Executing the resolved file by its own path, as the gate and helper already do, makes every source agree.
+- **GNU's single binary** (`src/coreutils.c`) dispatches on argv[0]'s exact base name, else on `--coreutils-prog=` in argv[1]; under a name ending in `coreutils` it accepts only `--help`/`--version`.
+- **BusyBox** (`libbb/appletlib.c`) uses argv[0]'s base name, and argv[1] under any name starting with `busybox`.
+- **F1 (new finding, high in the helper).** The real `shell-mcp-privd check-policy`, built from `dev` and run on 26.04, loaded `/usr/bin/gnuenv` as a core-unit root command and `/usr/bin/gnudd` without the list B acknowledge. `gnutimeout`, `gnunice`, `gnunohup`, `gnustdbuf` and `gnuruncon` behave like `gnuenv`, and the gate accepted them all. Their names were on no list, and their sizes matched nothing the identity scan found.
+- **F2 (new finding).** `runcon` runs a program and was in no group. GNU `/usr/bin/runcon` (Debian 13, Ubuntu 24.04) and `gnuruncon` were declarable; on 26.04, uutils' `runcon` was refused only because it shares the uutils binary.
+- **F3 (new finding).** `split --filter` (run through `$SHELL -c`), `sort --compress-program` and `install --strip-program` run a program, and no rule covered them in root templates.
+
+**What changed.**
+- **Content (`internal/gate/policy/content.go`, shared by gate and helper).** `ProbeContent` reads a resolved command binary, and a script's interpreter, once. It reads in 1 MiB chunks that overlap by the longest marker less one byte (`scanFor`), up to 1 GiB (a larger file is refused), and returns the file's kind:
+  - a `#!` script, parsed as `binfmt_script` does: 256 bytes, the interpreter up to the first blank, the trimmed rest as one argument; no newline, or a NUL, is an error;
+  - BusyBox (`BusyBox v`) or toybox (its `--help` or its URL), refused as group 1;
+  - uutils (`(uutils coreutils)`);
+  - GNU coreutils as one binary (`--coreutils-prog=`), refused;
+  - a GNU coreutils program (`GNU coreutils`, or Ubuntu's package note `"name":"coreutils"`), with the listed programs whose names it carries as whole NUL-delimited strings;
+  - otherwise, plain.
+
+  The markers are stored reversed, so that no binary built from the module (the gate, the helper, `example-probe`, the test binaries) carries them. Tests build fixtures through `MarkerForTesting`.
+- **uutils.**
+  - The resolved file's base name is the utility (`Command.Applet`) and must be exactly in `uutilsApplets`: the 109 names of 0.10.0's `coreutils --list`, not the 115 links. Ubuntu links ten names that 0.10.0 does not list (`b3sum`, `hashsum`, `relpath` and the `sha3*`/`shake*` sums), and the list has `hostname`, `kill`, `more` and `uptime`, which have no links. The existing name rules then apply to that utility.
+  - In the identity check (`UutilsSiblings`), matches that are uutils utilities are dropped; any other match refuses.
+  - `check-policy` reports it: `ok   commands[<id>]: … is the uutils multi-call binary; it runs as <utility> …` (gate), `[uutils applet <utility>]` (helper).
+- **F1.**
+  - **The prefix rule.** `hardDenied` treats `gnu` followed by a GNU coreutils program's name as that program, and so do the helper's `Classify`, `scanned`, and the GTFOBins lookup (through `CanonicalName`). The prefix applies only to the 106 GNU coreutils names, so `gnupg` is untouched.
+  - **The embedded name.** A GNU coreutils binary that carries `env`, `chroot`, `nice`, `nohup`, `stdbuf`, `timeout`, `runcon` or `dd` as a whole string is that program. The helper records it as recognised by identity.
+  - **Content identification (the maintainer's question): reliable for exactly those names, not in general.** On Debian 13 (9.7), Ubuntu 24.04 (9.4) and Ubuntu 26.04 (9.7, gnu-prefixed), each of those eight binaries carries its own name as a whole string, and no other binary carries any of them. But the linker merges string literals into the tails of longer ones: seven programs (`chown`, `[`, `date`, `ls`, `sort`, `sum`, `tty`) carry no whole copy of their own name (`chown` appears only inside `fchown`), and `test` has no `GNU coreutils` string at all. So the embedded name refuses renamed copies of the listed programs, and the prefix rule stays as well.
+  - **The WARN.** A GNU-marked binary whose name (without the prefix) is not a GNU coreutils program gets a WARN.
+  - `sort`, `split` and `install` (F3) are not identified by content.
+- **F2.** `runcon` is in POLICY §5 group 4 (gate and helper).
+- **F3 (helper).**
+  - `ClassAction` covers `sort`, `split` and `install`, recognised by written, resolved and identity name, and on 26.04 as the uutils utility or the `gnu`-prefixed program.
+  - `ProgramAction` matches a long option by abbreviation: its name before `=` must be a prefix of `--compress-program`, `--filter` or `--strip-program` and longer than `--` (which also covers `--strip`). It matches `install`'s bundled short options by any `s` in a single-dash token. It errs on the safe side, as `find`'s rule does.
+  - An acknowledged one is a finding (category `exec`, the program, match `template`; `REVIEW program-action`). No protocol change: the summary's values only widen.
+  - No other coreutils option runs a program; the programs that run one they are given are already listed. `install -s` runs the fixed `strip`, and is counted anyway.
+- **#! scripts (gate and helper).**
+  - The interpreter is resolved and judged through the same function, at most five scripts deep (execve(2): "up to a limit of four recursions"). Every refusal is prefixed "… is a #! script run by …".
+  - In the helper, the interpreter's recognised programs count as resolved names, and the #! arguments along the way are matched together with each template's tokens for actions.
+  - A WARN names the interpreter, and another fires when the interpreter is outside the sandbox's (gate) or the core unit's (helper) read+execute directories. No Landlock rule changed.
+- **Written ≠ resolved.** A WARN when a command's path resolves to another base name: it runs as that name.
+- **The cost, measured and cut.** The gate loads its policy on every request. Measured with `check-policy` in `ubuntu:26.04` (10 runs each), the first version read the 11.8 MB uutils binary once per command, with 15 patterns: 4 ms for a policy with one `findmnt`, 29 ms with one uutils command, 220 ms with ten. The scan now runs once per inode per load (`ContentCache`, in the identity scan; every uutils command is a hard link to one file). Its first pass looks for the 7 markers only; the GNU program names are searched in a second pass over GNU coreutils programs alone. After that: 3, 8 and 10 ms.
+- **Lint.** `Command` grew to 136 bytes, so four range loops over commands now use an index (gocritic `rangeValCopy`).
+- **e2e harness.** `installPolicy` now registers the base policy's restore before installing a variant. On the tests-only run, the refused multi-call variant stayed in place and made three later package tests fail.
+- **Docs.**
+  - POLICY §5: group 4, the prefix rule, the identity exception, the new multi-call section in place of v1's limitation, and the coreutils options.
+  - PRIVILEGED §4 (content, F3, findings, the residual), §5.3 list B, and §6 (the worked chown example, now declarable on 26.04).
+  - TOOLS (the summary's findings) and SECURITY §3 (the identity row).
+  - plan §5 (S-MC done) and the handoff (S-MC done, N-13's residual, N-26).
+
+**Why.** Before this change:
+- every coreutils command on 26.04 was refused;
+- the worked chown example could not be declared;
+- GNU coreutils' own wrappers got past the never list under their prefixed names.
+
+uutils' dispatch, verified at the source, lets the executed file's name decide, and the gate and the helper control that name at load.
+
+**Alternatives rejected.**
+- **Setting argv[0] to the applet's name.** No effect for uutils; for GNU's single binary or BusyBox it would make argv[0] the only thing that decides, which phase 1 advised against.
+- **Option (ii), refusing uutils because it also holds `env`.** Safe, but it leaves `/usr/bin/gnuchown` as the only route on 26.04.
+- **Running the binary at policy load** (`--list`, `--version`). The brief forbids it.
+- **A general "multi-call" detector by link count.** Many single-purpose tools dispatch on argv[0], and a copy has one link.
+- **Applying F3 in the gate.** Gate commands run as the service account inside the sandbox, the same reason `find`'s rule is helper-only.
+
+**Tests (committed failing first, `a9a7abe`; output in the PR body).** Inert stubs in that commit: `Command.Applet` and `Interpreter` never set, `UutilsApplets` empty, `parseShebang` finding no script, `ProgramAction` finding nothing.
+- **Gate policy.** `TestUutilsApplet`, `TestUutilsAppletCheckedByNameItRunsAs`, `TestOtherMultiCallRefused`, `TestGNUPrefixedNames`, `TestGNUContentNames`, `TestRunconHardDenied`, `TestScriptInterpreter`, `TestWrittenResolvedNameWarning`, and `TestRealCoreutils`, which uses the machine's own coreutils: GNU on Debian 13 and 24.04, uutils with its `--list` on 26.04.
+- **Helper policy.** `TestUutilsAppletPrivileged`, `TestOtherMultiCallPrivileged`, `TestGNUCoreutilsPrivileged`, `TestProgramActions`, `TestScriptInterpreterPrivileged`, `TestWrittenResolvedNamePrivileged`.
+- **CLIs.** `TestCheckPolicyReportsMultiCall` (both).
+- **e2e.**
+  - `TestMulticallRunnerLayout`: the runner's layout, and the table equals the runner's `coreutils --list`.
+  - `TestMulticallCheckPolicy`: 31 cases on the runner's own binaries, through both real `check-policy`s.
+  - `TestMulticallGateExec`: uutils chown and stat under the gate's sandbox.
+  - `TestMulticallHelperExec`: PRIVILEGED §6's chown example on `/usr/bin/chown`, in the core unit.
+- **Fuzz.** `FuzzShebang`, `FuzzScanFor` (against `bytes.Contains`, with chunks of 1–17 bytes), and `FuzzN13Match` extended (the new class and `ProgramAction`). 60 s each, no crashers.
+- **Locally on 26.04.** Test binaries built in the Go image and run in `ubuntu:26.04`: both policy packages pass in full, `TestRealCoreutils` included.
+
+**CI on the tests-only head** (run `40144538473`, `a9a7abe`).
+- Both Go jobs stopped at lint (`rangeValCopy` on the larger `Command`, and `indexAlloc` in the fuzz test), so their unit tests did not run there. The failing unit tests are the local run above.
+- e2e-host: the four new tests failed for the intended reasons: the empty table; the gate and helper refusing uutils chown by identity; `gnuenv` accepted; scripts accepted; no warnings. The cases already refused before passed.
+- Three package tests failed because the refused variant stayed installed (fixed in `installPolicy`, above). The other 117 tests passed.
+
+**Deferred.** N-26 (what a script itself runs); N-5, N-22 and N-25; the deployment docs (S5).
+
+**Versions.**
+- **Go:** 1.27.3 (the newest stable with a published `golang:1.27.3-trixie`, per `deps-current`, 2026-10-24). The refresh moved nothing.
+- **Direct modules:** go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+
+**2026-10-24 — PR #53 follow-up: CI on `a31199c`, and the content cache's key.**
+- **CI on `a31199c`** (run `40147253200`): every job passed, the `ci` aggregate included; CodeQL passed.
+  - ubuntu-24.04: `LANDLOCK_PATH=psx kernel_abi=7 effective_abi=7` (its forced-psx step is skipped, as on every ABI 7 runner).
+  - ubuntu-26.04: `LANDLOCK_PATH=tsync kernel_abi=8 effective_abi=8`; its forced step `LANDLOCK_PATH=psx kernel_abi=8 effective_abi=7`.
+  - Race step, 24.04 / 26.04: `internal/gate/ops` 298.6 / 366.6 s, `internal/privd/ops` 262.7 / 269.1 s, `internal/gate/fsx` 43.0 / 55.2 s, `internal/tools` 42.7 / 58.0 s, `cmd/shell-mcp-gate` 30.4 / 32.9 s, `internal/gate/execx` 16.0 / 22.7 s, `internal/privd/pkg` 8.6 / 10.4 s, `internal/gate/policy` 2.8 / 3.3 s, `internal/privd/policy` 2.7 / 3.6 s.
+  - `TestRealCoreutils` ran on both images: GNU on 24.04; uutils with its `--list` on 26.04.
+  - e2e-host: 124 of 124 passed, none skipped. `TestMulticallRunnerLayout`, `TestMulticallCheckPolicy` (all 31 cases), `TestMulticallGateExec` and `TestMulticallHelperExec` all passed.
+  - `TestMulticallHelperExec` settles the open question: in the core unit (the preview reported unit `core`, and the run went there), `/usr/bin/chown --version` printed `chown (uutils coreutils) …`, and the worked example re-owned its one path to `example-app:example-app`. So Ubuntu's `/proc/self/exe` check passes under the core unit's sandbox and Landlock: its readlink of the command's own `/proc/self/exe` works there (`ProtectProc=ptraceable` shows a process itself; Landlock has no right governing readlink). Nothing was loosened.
+- **The content cache's key (the maintainer's question).** It was keyed on device and inode only. A binary rewritten in place under the same inode during one load would have kept its first identification, though the cache never outlives a load. It is now keyed on device, inode, size, modification time and change time in nanoseconds (`FileKey`), so any of them changing reads the file again, as finely as the kernel's timestamps (one clock tick). `TestContentCacheSeesRewrite` (committed failing first, `b7f5f26`) rewrites a fixture in place three ways and fails on all three before the fix: with another size; with the same size and a new mtime; and with the same size and its mtime put back, so that only the change time differs.
+- **Judgement calls accepted by the maintainer:** a list B interpreter needs the acknowledge and is reported as recognised by resolved name; `install -s` needs the acknowledge.
+- **`scripts/ci-local.sh` on `f733db5`:** every step passed except one intermittent failure, unrelated to S-MC.
+  - The forced-psx race step failed once in `internal/gate/fsx` `TestDeleteConcurrentRacer`, at inner run 340 of 400: "a temporary name was left behind: …/.shell-mcp-delete-…".
+  - This PR changes nothing in fsx or the delete path.
+  - The same test passed 10 times in a row there (`-race -tags landlock_forcepsx -count=10`, 4,000 inner runs); the whole forced-psx step then passed on re-run; and it passed on both CI images on `a31199c`.
+  - Recorded for the maintainer, not changed: a racer re-taking a name during the put-back is the documented case that leaves a `.shell-mcp-delete-` entry (POLICY §3, "Entries set aside and not removed"), which the test's `noTempNames` does not allow for. So either the racer can reach that case under load, or there is a gap in the delete. It needs its own look.

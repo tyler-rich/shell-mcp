@@ -425,6 +425,12 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 		if c.RootEquivalent {
 			extra += " [root_equivalent]"
 		}
+		if c.Applet != "" {
+			extra += " [uutils applet " + c.Applet + "]"
+		}
+		if c.Interpreter != "" {
+			extra += " [#! script run by " + c.Interpreter + "]"
+		}
 		pr("command %s: tier %s, unit %s, %s%s", c.ID, c.Tier, c.Unit, c.Resolved, extra)
 	}
 	for _, fd := range p.Acknowledged {

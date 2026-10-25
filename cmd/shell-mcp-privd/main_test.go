@@ -13,6 +13,7 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
+	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 	"github.com/tyler-rich/shell-mcp/internal/privd/units"
 )
@@ -445,5 +446,26 @@ func TestCheckPolicyStickyIsOpen(t *testing.T) {
 		if strings.Contains(line, " is sticky ") && strings.Contains(line, "chmod and chown are refused") {
 			t.Errorf("a sticky directory is reported as refusing chmod and chown: %s", line)
 		}
+	}
+}
+
+// TestCheckPolicyReportsMultiCall (S-MC): check-policy names the uutils
+// utility a command runs as, and the interpreter of a #! script.
+func TestCheckPolicyReportsMultiCall(t *testing.T) {
+	y := validPolicy + "commands:\n" +
+		"  - id: owner\n    path: {D}/bin/chown\n    tier: read\n    templates: [[\"--version\"]]\n" +
+		"  - id: renew\n    path: {D}/bin/renew\n    tier: read\n    templates: [[]]\n"
+	env, p := testEnv(t, y)
+	d := filepath.Dir(filepath.Dir(filepath.Dir(p)))
+	bin := filepath.Join(d, "bin")
+	gatetest.WriteFile(t, filepath.Join(bin, "chown"), "invented\x00"+gpolicy.MarkerForTesting("uutils")+" 0.0.0\x00", 0o755)
+	gatetest.WriteFile(t, filepath.Join(bin, "example-interp"), "invented interpreter\n", 0o755)
+	gatetest.WriteFile(t, filepath.Join(bin, "renew"), "#!"+filepath.Join(bin, "example-interp")+"\n", 0o755)
+	gatetest.Mkdir(t, filepath.Join(d, "sysbin"), 0o755)
+	var so, se bytes.Buffer
+	checkPolicyWith([]string{"--policy", p}, &so, &se, env)
+	if !strings.Contains(so.String(), "command owner: tier read, unit core, "+filepath.Join(bin, "chown")+" [uutils applet chown]") ||
+		!strings.Contains(so.String(), "command renew: tier read, unit core, "+filepath.Join(bin, "renew")+" [#! script run by "+filepath.Join(bin, "example-interp")+"]") {
+		t.Fatalf("check-policy:\n%s\n%s", so.String(), se.String())
 	}
 }

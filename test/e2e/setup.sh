@@ -341,6 +341,29 @@ EOF
 chmod 0644 /etc/shell-mcp/gate-hardening.yaml
 /usr/local/bin/shell-mcp-gate check-policy --policy /etc/shell-mcp/gate-hardening.yaml >/dev/null
 
+# The multi-call policy (multicall_test.go, S-MC): commands on this
+# machine's own coreutils (on Ubuntu 26.04 the uutils multi-call binary).
+# It is not checked here: the tests check it, and before S-MC it is
+# refused.
+cat >/etc/shell-mcp/gate-multicall.yaml <<EOF
+version: 1
+max_tier: read
+sandbox:
+  landlock: $landlock
+paths:
+  read: [/srv/e2e-gate]
+commands:
+  - id: mc-chown-version
+    path: /usr/bin/chown
+    tier: read
+    templates: [["--version"]]
+  - id: mc-stat-owner
+    path: /usr/bin/stat
+    tier: read
+    templates: [["--format=%U", "{path:read}"]]
+EOF
+chmod 0644 /etc/shell-mcp/gate-multicall.yaml
+
 # Static read-tool fixtures: a tree with a directory symlink whose target is
 # absolute (os.Root refuses to follow it), a file on the built-in deny list
 # and one under the policy's deny pattern. Fixtures with token- or key-shaped
@@ -497,6 +520,18 @@ priv_policy '' '' true >"$bin/privileged-upgrade.yaml"
 priv_policy '' '' true | sed 's/^  default_timeout_s: 30$/  default_timeout_s: 10/; s/^  max_timeout_s: 60$/  max_timeout_s: 24/' >"$bin/privileged-pkgstage.yaml"
 # The smallest backup store cap (64 MiB), for the store-cap test.
 priv_policy '' '' false | sed 's/^  keep: 3$/  keep: 3\n  max_store_bytes: 67108864/' >"$bin/privileged-small-store.yaml"
+# PRIVILEGED §6's worked chown example on this machine's own coreutils
+# (multicall_test.go, S-MC), and chown's version, in the core unit.
+priv_policy '' '' false | awk '{ print } /^commands:$/ && !done { done = 1
+	print "  - id: mc-chown"
+	print "    path: /usr/bin/chown"
+	print "    tier: operator"
+	print "    description: \"give mc-owned to example-app\""
+	print "    templates: [[\"--no-dereference\", \"example-app:example-app\", \"/srv/e2e-priv-exec/root/mc-owned\"]]"
+	print "  - id: mc-chown-version"
+	print "    path: /usr/bin/chown"
+	print "    tier: read"
+	print "    templates: [[\"--version\"]]" }' >"$bin/privileged-multicall.yaml"
 chmod 0600 "$bin"/privileged*.yaml
 install -o root -g root -m 0600 "$bin/privileged.yaml" /etc/shell-mcp/privileged.yaml
 

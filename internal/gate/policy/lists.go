@@ -54,8 +54,9 @@ var hardDeny = []struct {
 	{3, "text-program languages", []string{"awk", "gawk", "mawk", "nawk"}},
 	// Everything that runs another program it is given (S4c-9, handoff
 	// N-13): such a command's argv no longer says what runs. setarch's
-	// personality aliases (linux32, linux64, i386, x86_64) are setarch.
-	{4, "launchers and wrappers", []string{"env", "xargs", "nohup", "setsid", "timeout", "nice", "ionice", "stdbuf", "flock", "watch", "parallel",
+	// personality aliases (linux32, linux64, i386, x86_64) are setarch;
+	// coreutils' runcon runs a program in another SELinux context (S-MC).
+	{4, "launchers and wrappers", []string{"env", "xargs", "nohup", "setsid", "timeout", "nice", "ionice", "stdbuf", "flock", "watch", "parallel", "runcon",
 		"systemd-run", "systemd-cat", "systemd-inhibit", "systemd-socket-activate", "run-parts", "start-stop-daemon", "taskset", "chrt",
 		"prlimit", "setarch", "linux32", "linux64", "i386", "x86_64", "numactl", "time", "logsave", "dbus-run-session", "dbus-launch",
 		"ssh-agent", "chronic", "rlwrap", "unbuffer", "xvfb-run", "fakeroot", "faketime", "daemonize", "cgexec"}},
@@ -89,10 +90,23 @@ func notCommand(base string) bool {
 // containerCLIs need `root_equivalent: true` (POLICY §4).
 var containerCLIs = []string{"docker", "podman", "ctr", "nerdctl", "kubectl"}
 
-// hardDenied returns the group that denies a base name, if any. It runs for
-// every entry of the system binary directories (the identity check), so
-// literal names are looked up in a map and only the few globs are matched.
+// hardDenied returns the group that denies a base name, if any. A GNU
+// coreutils program installed under a "gnu" prefix (Ubuntu 26.04's
+// /usr/bin/gnuenv beside uutils) is the program it is (S-MC, F1).
 func hardDenied(base string) (group int, name string, denied bool) {
+	if g, n, ok := hardDeniedName(base); ok {
+		return g, n, true
+	}
+	if rest, ok := GNUUnprefixed(base); ok {
+		return hardDeniedName(rest)
+	}
+	return 0, "", false
+}
+
+// hardDeniedName looks one base name up. It runs for every entry of the
+// system binary directories (the identity check), so literal names are
+// looked up in a map and only the few globs are matched.
+func hardDeniedName(base string) (group int, name string, denied bool) {
 	if i, ok := hardDenyLiteral[base]; ok {
 		return hardDeny[i].group, hardDeny[i].name, true
 	}

@@ -156,6 +156,11 @@ type Command struct {
 	Description    string
 	RootEquivalent bool
 	Templates      []template.Template
+	// Applet is the utility the uutils multi-call binary runs as (the
+	// resolved file's name), or "" for any other binary (S-MC).
+	Applet string
+	// Interpreter is the resolved interpreter of a #! script, or "".
+	Interpreter string
 }
 
 // Command returns the command with the given id.

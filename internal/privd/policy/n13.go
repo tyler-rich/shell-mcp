@@ -4,6 +4,7 @@ package policy
 
 import (
 	"slices"
+	"strings"
 
 	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
 )
@@ -38,6 +39,9 @@ const (
 	ClassPackageTool
 	// ClassFind: find, with an acknowledge when a template holds an action.
 	ClassFind
+	// ClassAction: sort, split or install, with an acknowledge when a
+	// template holds an option that runs another program (S-MC, F3).
+	ClassAction
 )
 
 // packageTools are the package managers a command could run outside the
@@ -70,16 +74,30 @@ const powerGroup = 11
 
 // helperScanNames are the names the helper's binary identity check adds to
 // the gate's (hard-denied names, built-in operations, D-Bus clients).
-func helperScanNames() []string { return append(slices.Clone(packageTools), findProgram) }
+func helperScanNames() []string {
+	return append(append(slices.Clone(packageTools), findProgram), actionPrograms...)
+}
 
 // Classify returns a program base name's class, and for ClassNever and
-// ClassListB its POLICY §5 group.
+// ClassListB its POLICY §5 group. A GNU coreutils program under Ubuntu's
+// "gnu" prefix is that program (S-MC, F1).
 func Classify(base string) (class Class, group int) {
+	if class, group = classify(base); class == ClassNone {
+		if rest, ok := gpolicy.GNUUnprefixed(base); ok {
+			return classify(rest)
+		}
+	}
+	return class, group
+}
+
+func classify(base string) (class Class, group int) {
 	switch {
 	case slices.Contains(packageTools, base):
 		return ClassPackageTool, 0
 	case base == findProgram:
 		return ClassFind, 0
+	case slices.Contains(actionPrograms, base):
+		return ClassAction, 0
 	case gpolicy.IsBuiltinOp(base) || gpolicy.IsBusClient(base):
 		return ClassNotCommand, 0
 	}
@@ -98,6 +116,48 @@ func Classify(base string) (class Class, group int) {
 func FindAction(tokens []string) string {
 	for _, t := range tokens {
 		if slices.Contains(findActions, t) {
+			return t
+		}
+	}
+	return ""
+}
+
+// actionPrograms are coreutils programs with an option that runs another
+// program (S-MC, F3), and those options: GNU and uutils sort's
+// --compress-program, split's --filter (GNU runs it through $SHELL -c), and
+// install's --strip-program and -s/--strip, which run a stripping program.
+// No other coreutils option runs a program (the programs that run one they
+// are given, env, nice, nohup, stdbuf, timeout, chroot and runcon, are on
+// POLICY §5's lists). Long options may be abbreviated (getopt_long, and
+// clap's inferred long arguments in uutils), so a token is an action when
+// its name, before any "=", is a prefix of the option, longer than "--";
+// install's short options may be bundled, so any single-dash token holding
+// an "s" is one. Like find's actions, the match errs on the safe side: an
+// ambiguous abbreviation, or an "s" that is only another option's value,
+// counts.
+var actionPrograms = []string{"sort", "split", "install"}
+
+var programActions = map[string]struct{ long, short string }{
+	"sort":    {long: "--compress-program"},
+	"split":   {long: "--filter"},
+	"install": {long: "--strip-program", short: "s"},
+}
+
+// ProgramAction returns the first token that is one of program's options
+// that run another program (sort, split, install), or "".
+func ProgramAction(program string, tokens []string) string {
+	a, ok := programActions[program]
+	if !ok {
+		return ""
+	}
+	for _, t := range tokens {
+		if name, _, _ := strings.Cut(t, "="); strings.HasPrefix(t, "--") {
+			if len(name) > 2 && strings.HasPrefix(a.long, name) {
+				return t
+			}
+			continue
+		}
+		if a.short != "" && len(t) > 1 && t[0] == '-' && strings.ContainsAny(t[1:], a.short) {
 			return t
 		}
 	}

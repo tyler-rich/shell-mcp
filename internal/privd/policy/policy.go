@@ -166,6 +166,11 @@ type Command struct {
 	Templates []template.Template
 	// Findings are the command's N-13 findings (handoff §2.1).
 	Findings []CommandFinding
+	// Applet is the utility the uutils multi-call binary runs as (the
+	// resolved file's name), or "" for any other binary (S-MC).
+	Applet string
+	// Interpreter is the resolved interpreter of a #! script, or "".
+	Interpreter string
 }
 
 // CommandFinding is a declared command whose program defeats a bound

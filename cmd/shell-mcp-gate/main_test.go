@@ -15,6 +15,7 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
+	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
 )
 
 func runCmd(args []string, stdin string) (code int, stdout, stderr string) {
@@ -336,5 +337,26 @@ func TestCheckPolicyChecksGitRepos(t *testing.T) {
 	}
 	if strings.Contains(got, "nothing was run") {
 		t.Errorf("check-policy repeats the operation's \"nothing was run\":\n%s", got)
+	}
+}
+
+// TestCheckPolicyReportsMultiCall (S-MC): check-policy names the uutils
+// utility a command runs as, and the interpreter of a #! script.
+func TestCheckPolicyReportsMultiCall(t *testing.T) {
+	d := gatetest.SecureDir(t)
+	bin := filepath.Join(d, "bin")
+	gatetest.WriteFile(t, filepath.Join(bin, "chown"), "invented\x00"+policy.MarkerForTesting("uutils")+" 0.0.0\x00", 0o755)
+	gatetest.WriteFile(t, filepath.Join(bin, "example-interp"), "invented interpreter\n", 0o755)
+	gatetest.WriteFile(t, filepath.Join(bin, "renew"), "#!"+filepath.Join(bin, "example-interp")+"\n", 0o755)
+	p := filepath.Join(d, "etc", "policy.yaml")
+	gatetest.WriteFile(t, p, "version: 1\nmax_tier: read\nsandbox:\n  landlock: best-effort\n  system_read_exec: ["+bin+"]\ncommands:\n"+
+		"  - id: owner\n    path: "+filepath.Join(bin, "chown")+"\n    tier: read\n    templates: [[\"--version\"]]\n"+
+		"  - id: renew\n    path: "+filepath.Join(bin, "renew")+"\n    tier: read\n    templates: [[]]\n", 0o644)
+	var out, errb bytes.Buffer
+	gatetest.Mkdir(t, filepath.Join(d, "home"), 0o755)
+	checkPolicyWith([]string{"--policy", p}, &out, &errb, gatetest.Trust(), filepath.Join(d, "home"))
+	if !strings.Contains(out.String(), "ok   commands[owner]: "+filepath.Join(bin, "chown")+" is the uutils multi-call binary; it runs as chown") ||
+		!strings.Contains(out.String(), "WARN commands[renew]: "+filepath.Join(bin, "renew")+" is a #! script run by "+filepath.Join(bin, "example-interp")) {
+		t.Fatalf("check-policy:\n%s", out.String())
 	}
 }

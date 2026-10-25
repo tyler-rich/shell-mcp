@@ -38,6 +38,8 @@ Both are fixed in **S4c-0**, a standalone `fix(privd)` PR that comes before any 
 
 Each is one PR, Opus 5.5 at High (D-022).
 
+**After S4c: S-MC (done, PR #53).** Multi-call binaries in gate and privileged command templates (plan.md §5), as the maintainer decided on 2026-10-24 (ARCHIVE §14). The uutils multi-call binary is judged by the utility it runs as; GNU coreutils as one binary, BusyBox and toybox are refused by content; GNU coreutils' programs are recognised under the `gnu` prefix and by their embedded names (F1); `runcon` is in group 4 (F2); coreutils options that run a program need an acknowledge in the privileged policy (F3); #! scripts are judged by their interpreter, with N-26 recorded.
+
 **Protocol changes (§4):**
 - a `helper` block on forwarded responses;
 - seven new read-tier preview ops;
@@ -260,7 +262,7 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
   - **Renamed copies of `systemctl`, `journalctl` and `git`**: refused by identity (before, a copy of `systemctl` matched only the power names that link to it, so it needed just an acknowledge, and a copy of `git` was not caught).
   - **Power binaries** (group 11): already acknowledged; now also reported.
   - Each acknowledged package tool, `find` with an action and power binary is a finding, in `check-policy` and in the policy summary.
-  - **Residual until S-MC:** a root-owned wrapper script that calls any of these programs is judged by its own name and identity only (PRIVILEGED §4).
+  - **Residual until S-MC:** a root-owned wrapper script that calls any of these programs is judged by its own name and identity only (PRIVILEGED §4). **After S-MC (PR #53):** a #! script is judged by its interpreter, and multi-call binaries by the program they run as (POLICY §5); what a script or a compiled wrapper itself runs is still not looked at (N-26).
 
 **N-14. The recovery path for an unfinished dpkg database (found in S4c-7, PR #42).**
 - **What.** A package operation killed at its limit (or any other interrupted dpkg) leaves packages half-configured; every later apt run, unattended security upgrades included, and every package preview refuses until `dpkg --configure -a` runs. No package operation does that (it would be a new op).
@@ -334,6 +336,17 @@ Tests for these: `TestSelfCheckFailuresAnswered`, `TestPreAuthRefusalsAreSilent`
 **N-25. A FIFO in a gitlink's directory stalls a git operation (found in PR #51, 2026-10-24). Low. Not fixed (maintainer, 2026-10-24).**
 - **What.** With `--ignore-submodules=all`, git still compares a populated gitlink's checked-out commit with the recorded one before it applies the flag: `ie_match_stat` → `ce_match_stat_basic` → `ce_compare_gitlink` (`read-cache.c`, git 2.55) resolves the submodule's HEAD within git's own process (`repo_resolve_gitlink_ref` → `repo_get_submodule_ref_store` → `repo_submodule_init`, which reads its `.git` gitfile, repository format and refs). No process starts and nothing from the submodule's configuration runs; the result is discarded under `=all`. But an account that can write the gitlink's directory can make one of those files a FIFO, and git's read then blocks: `git_status`, `git_diff`, `git_pull` and the discard (all of which run status) stall until the request timeout (`timeout`), through a read-tier tool. `update-index --refresh --ignore-submodules` skips the read; status has no such option.
 - **Status:** recorded at the maintainer's request; not fixed. A fix would have the gate open each gitlink directory's `.git` entries itself, by descriptor, before git does (refusing a non-regular file), or refuse a repository whose work tree has a gitlink directory another account can write.
+
+**N-26. What a #! script runs is not looked at (recorded in S-MC, PR #53, 2026-10-24). Open.**
+- **What S-MC does.** A command whose binary is a `#!` script is judged by its interpreter, as a command's binary is (POLICY §5): a never-listed interpreter refuses it, as do one that is not absolute or cannot be resolved and a first line the kernel would read differently. A list B or package-tool interpreter needs the acknowledge, and the line's argument counts with the template's tokens for `find`'s and coreutils' actions. Any other script gets a `check-policy` WARN naming its interpreter (maintainer decision, 2026-10-24).
+- **What remains.** The script's own content is not looked at. A root-owned `#!/usr/bin/python3` script is refused (group 2), but a script run by an allowed interpreter (a compiled one, or `#!/usr/sbin/nft -f`, acknowledged) does whatever its file says. A compiled wrapper that calls another program is judged only by its own names, content and identity. The same holds for a script whose interpreter is allowed but that `exec`s another program through it. Both are N-13's residual, narrowed.
+- **The broader question, for the maintainer:** should scripts be commands at all? Options:
+  - (a) keep S-MC's rule (the interpreter judged, the script's own content not);
+  - (b) refuse every `#!` script in the privileged policy, so root commands are binaries only, and keep the WARN in the gate, where a script runs as the service account inside the gate's sandbox;
+  - (c) refuse scripts in both.
+
+  (b) and (c) would break POLICY §4's `example-renew` shape whenever it is a script. A script's content cannot be judged in general (it is a program).
+- **Status:** recorded; no decision yet.
 
 **R-1. A restore's narrowed mode is not reported.**
 - S4c-0 clamps the restored mode but does not report it: the result has no `mode` field, and adding one was a protocol change.
@@ -1003,7 +1016,7 @@ S4c-1 left one exception to "the gate never answers `timeout` while the helper's
 ### S4c-9: privileged policy summary (Q6: yes, minimal)
 
 - **Status: done (PR #44; ARCHIVE §14, S4c-9), with N-13.** P-8 as amended (above; no other protocol, error-code, envelope, unit, Landlock or schema change). `priv_policy` is a read-tier core op built from the policy the instance enforces: its `ops` come from the operations' own checks (`within`'s tier rule, the broad unit's existence, `pkgAllowed`, `powerAllowed`), its commands state what `priv_exec_preview` resolves. The broad instance refuses it. `shell_get_policy` reports it as `privileged.policy` in the admin profile only, when the gate forwards privileged operations, with `approval` per D-006; a failure is a warning, never the tool's error. PRIVILEGED §6, "The policy summary", records the relaxation. N-13 decided and done (§2.1). N-16 recorded.
-- **Left for S4c-10 or S5:** nothing of S4c-9's scope. Recorded and open: N-8/N-9 (done since, PR #46: rule R), N-17 (done since, PR #47: the move rule), N-11, N-12, N-14's recovery op (if wanted), N-16, S-MC (multi-call binaries, and with it N-13's residual: wrapper scripts are judged by their own name and identity), and the deployment docs (S5), which should show the policy summary as the way to review what a host's privileged policy allows.
+- **Left for S4c-10 or S5:** nothing of S4c-9's scope. Recorded and open: N-8/N-9 (done since, PR #46: rule R), N-17 (done since, PR #47: the move rule), N-11, N-12, N-14's recovery op (if wanted), N-16, S-MC (multi-call binaries, and with it N-13's residual: wrapper scripts are judged by their own name and identity; done since, PR #53, with N-26 recorded), and the deployment docs (S5), which should show the policy summary as the way to review what a host's privileged policy allows.
 - **Includes.**
   - P-8, including `backups.max_store_bytes`.
   - `shell_get_policy` gains a `privileged.policy` section when the helper answers.

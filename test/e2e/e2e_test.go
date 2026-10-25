@@ -353,7 +353,9 @@ func findJournal(t *testing.T, ident string, since time.Time, want ...string) jo
 }
 
 // installPolicy copies a policy variant into place, regenerates the units
-// and reloads systemd; the base policy is restored when the test ends.
+// and reloads systemd; the base policy is restored when the test ends, also
+// when the variant is refused (registered first, so a refused variant never
+// stays in place for the tests after it).
 func installPolicy(t *testing.T, variant string) {
 	t.Helper()
 	cp := func(v string) {
@@ -361,8 +363,8 @@ func installPolicy(t *testing.T, variant string) {
 		run(t, privdBin, "units", "--policy", privPolicy, "--out", "/etc/systemd/system")
 		run(t, "systemctl", "daemon-reload")
 	}
-	cp(variant)
 	t.Cleanup(func() { cp("privileged.yaml") })
+	cp(variant)
 }
 
 func readFile(t *testing.T, p string) string {
