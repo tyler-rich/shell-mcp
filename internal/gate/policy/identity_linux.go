@@ -106,6 +106,7 @@ func scanDenied(dirs, extra []string) []*deniedFile {
 type IdentityScan struct {
 	dirs, extra []string
 	denied      []*deniedFile
+	content     ContentCache
 }
 
 // NewIdentityScan returns a scan of dirs (nil means DefaultSystemBinDirs)
@@ -222,3 +223,24 @@ func UutilsSiblings(resolved string, ms []IdentityMatch) ([]IdentityMatch, error
 // CheckFile checks an already-opened or stat'ed file: regular, owned by a
 // trusted uid, not group/other-writable.
 func CheckFile(t Trust, p string, fi os.FileInfo) error { return checkFile(t, p, fi) }
+
+// Content returns what the file at p (described by fi, from os.Stat) holds,
+// read once per load for each inode (ContentCache).
+func (s *IdentityScan) Content(p string, fi os.FileInfo) (Content, error) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return Content{}, fmt.Errorf("has no inode information")
+	}
+	if s.content == nil {
+		s.content = ContentCache{}
+	}
+	return s.content.Probe(p, st.Dev, st.Ino, fi.Size())
+}
+
+// probe is Content through the validator's scan, made on first use.
+func (v *validator) probe(p string, fi os.FileInfo, opts *LoadOptions) (Content, error) {
+	if v.scan == nil {
+		v.scan = NewIdentityScan(opts.SystemBinDirs)
+	}
+	return v.scan.Content(p, fi)
+}

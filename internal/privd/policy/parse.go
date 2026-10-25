@@ -759,7 +759,7 @@ func (v *validator) resolveProgram(field, p string, rootEquivalent bool, depth i
 	if fi.Mode().Perm()&0o111 == 0 {
 		return fail(".path", "%s is not executable", resolved)
 	}
-	ct, err := gpolicy.ProbeContent(resolved, fi.Size())
+	ct, err := v.scan.Content(resolved, fi)
 	if err != nil {
 		return fail(".path", "%s %v", resolved, err)
 	}

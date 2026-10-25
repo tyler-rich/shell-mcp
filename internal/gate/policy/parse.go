@@ -753,7 +753,7 @@ func (v *validator) resolveProgram(field, p string, rootEquivalent bool, opts *L
 	if fi.Mode().Perm()&0o111 == 0 {
 		return fail(".path", "%s is not executable", resolved)
 	}
-	ct, err := ProbeContent(resolved, fi.Size())
+	ct, err := v.probe(resolved, fi, opts)
 	if err != nil {
 		return fail(".path", "%s %v", resolved, err)
 	}

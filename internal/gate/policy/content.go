@@ -256,14 +256,10 @@ func ProbeContent(p string, size int64) (Content, error) {
 	if interp, arg, ok, serr := parseShebang(head); ok {
 		return Content{Kind: ContentScript, Interpreter: interp, Arg: arg}, serr
 	}
-	listed := gnuListed()
-	pats := make([][]byte, 0, len(markers)+len(listed))
-	kinds := make([]string, 0, cap(pats))
+	pats := make([][]byte, 0, len(markers))
+	kinds := make([]string, 0, len(markers))
 	for k, m := range markers {
 		pats, kinds = append(pats, []byte(m)), append(kinds, k)
-	}
-	for _, name := range listed {
-		pats, kinds = append(pats, []byte("\x00"+name+"\x00")), append(kinds, "name:"+name)
 	}
 	found, err := scanFor(io.MultiReader(bytes.NewReader(head), r), pats, contentChunk)
 	if err != nil {
@@ -281,14 +277,48 @@ func ProbeContent(p string, size int64) (Content, error) {
 	case (has("gnu") || has("gnu-note")) && has("gnu-multi"):
 		c.Kind = ContentGNUMulti
 	case has("gnu") || has("gnu-note"):
+		// A second pass, for GNU coreutils programs only (they are small),
+		// keeps the first one to the few markers for every other binary.
 		c.Kind = ContentGNU
-		for i, k := range kinds {
-			if name, ok := strings.CutPrefix(k, "name:"); ok && found[i] {
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			return Content{}, fmt.Errorf("cannot be read: %s", errReason(err))
+		}
+		listed := gnuListed()
+		names := make([][]byte, len(listed))
+		for i, name := range listed {
+			names[i] = []byte("\x00" + name + "\x00")
+		}
+		hit, err := scanFor(io.LimitReader(f, size), names, contentChunk)
+		if err != nil {
+			return Content{}, err
+		}
+		for i, name := range listed {
+			if hit[i] {
 				c.Names = append(c.Names, name)
 			}
 		}
-		slices.Sort(c.Names)
 	}
+	return c, nil
+}
+
+// ContentCache remembers what each file holds, by device and inode, for one
+// policy load: the commands on one multi-call binary (every uutils utility
+// is a hard link to it) and the interpreters several scripts share are read
+// once.
+type ContentCache map[[2]uint64]Content
+
+// Probe returns ProbeContent for a file that os.Stat described as fi, read
+// once per load; dev and ino identify it.
+func (cc ContentCache) Probe(p string, dev, ino uint64, size int64) (Content, error) {
+	k := [2]uint64{dev, ino}
+	if c, ok := cc[k]; ok {
+		return c, nil
+	}
+	c, err := ProbeContent(p, size)
+	if err != nil {
+		return c, err
+	}
+	cc[k] = c
 	return c, nil
 }
 

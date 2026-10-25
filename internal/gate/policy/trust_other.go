@@ -30,3 +30,7 @@ func Parse(_ []byte, _ string, _ *LoadOptions) (*Policy, error) { return nil, er
 
 // IdentityScan is Linux-only; see identity_linux.go.
 type IdentityScan struct{}
+
+func (v *validator) probe(_ string, _ os.FileInfo, _ *LoadOptions) (Content, error) {
+	return Content{}, errLinuxOnly
+}

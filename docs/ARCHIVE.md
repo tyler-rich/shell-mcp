@@ -3597,6 +3597,7 @@ CI before (PR #40's last run, `e580253`): `internal/privd/ops` 456.2 s (ubuntu-2
   - In the helper, the interpreter's recognised programs count as resolved names, and the #! arguments along the way are matched together with each template's tokens for actions.
   - A WARN names the interpreter, and another fires when the interpreter is outside the sandbox's (gate) or the core unit's (helper) read+execute directories. No Landlock rule changed.
 - **Written ≠ resolved.** A WARN when a command's path resolves to another base name: it runs as that name.
+- **The cost, measured and cut.** The gate loads its policy on every request. Measured with `check-policy` in `ubuntu:26.04` (10 runs each), the first version read the 11.8 MB uutils binary once per command, with 15 patterns: 4 ms for a policy with one `findmnt`, 29 ms with one uutils command, 220 ms with ten. The scan now runs once per inode per load (`ContentCache`, in the identity scan; every uutils command is a hard link to one file). Its first pass looks for the 7 markers only; the GNU program names are searched in a second pass over GNU coreutils programs alone. After that: 3, 8 and 10 ms.
 - **Lint.** `Command` grew to 136 bytes, so four range loops over commands now use an index (gocritic `rangeValCopy`).
 - **e2e harness.** `installPolicy` now registers the base policy's restore before installing a variant. On the tests-only run, the refused multi-call variant stayed in place and made three later package tests fail.
 - **Docs.**
