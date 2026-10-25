@@ -155,7 +155,7 @@ Run `check-policy` again after every edit; the gate re-reads the policy on every
   install -o svc-shell -g svc-shell -m 0755 -d /srv/app/config
   ```
 
-- **An ACL on a root-owned directory.** The file operations work, but the ACL mask makes the directory group-writable, so `check-policy` warns, commands get no `{path:write}` or `cwd` at or under it, and git runs in no repository under it.
+- **An ACL on a root-owned directory.** The file operations work, but the ACL mask makes the directory group-writable, so `check-policy` warns, commands get no path placeholder (`{path:read}` or `{path:write}`) and no `cwd` at or under it, and git runs in no repository under it. Use it only for a root where neither is needed (SECURITY §5 step 5).
 
   ```bash
   setfacl -m u:svc-shell:rwX /srv/app/config
@@ -219,6 +219,15 @@ restrict,from="192.0.2.0/24",command="/usr/local/bin/shell-mcp-gate serve --poli
 ```
 
 The key is the server's `ssh_key.pub` (`deploy/README.md`); it must be Ed25519. When the server's container runs on the target itself, `from=` names the Docker network's subnet (SECURITY §7).
+
+**Confirm that the service account cannot change its own key options** *(container)*. Neither the gate nor the helper reads this file; sshd's `StrictModes` is what refuses a bad one, and the ownership is yours to check:
+
+```bash
+/usr/sbin/sshd -T | grep -i '^strictmodes'
+stat -c '%U:%G %a %n' /etc/ssh /etc/ssh/authorized_keys.d /etc/ssh/authorized_keys.d/svc-shell
+```
+
+The first must print `strictmodes yes` (the default; never set `StrictModes no`). The second must show `root:root` and no group or world write bit on all three (`755`, `755`, `644`). Both checks matter: on all three images `StrictModes` refused every login when the keys file or its directory was group- or world-writable, or owned by another account ("Authentication refused: bad ownership or modes for file …" in sshd's log), but **accepted a file or directory owned by the service account itself**, which could then rewrite its own `command=` and `restrict`. Only root ownership prevents that.
 
 Apply the configuration *(real host)*, keeping your current session open until a new login has worked:
 
