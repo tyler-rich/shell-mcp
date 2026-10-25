@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
@@ -344,3 +346,84 @@ func TestRealCoreutils(t *testing.T) {
 		f.mustFail(t, cmdPath("/usr/bin/coreutils"), "not one of its utilities")
 	}
 }
+
+// TestContentCacheSeesRewrite: the per-load content cache is keyed on the
+// file's device, inode, size, modification and change time, so a binary
+// rewritten in place under the same inode is identified again: with a new
+// size, with the same size and a new modification time, and with its
+// modification time put back (only the change time differs).
+func TestContentCacheSeesRewrite(t *testing.T) {
+	f := newFixture(t)
+	p := filepath.Join(f.bin, "report-tool")
+	plain := "invented plain binary\x00" + strings.Repeat("x", 64)
+	gatetest.WriteFile(t, p, plain, 0o755)
+	s := policy.NewIdentityScan([]string{f.bin})
+	probe := func() policy.ContentKind {
+		t.Helper()
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := s.Content(p, fi)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.Kind
+	}
+	// rewrite replaces the content in place (same inode) and waits until
+	// the change time has moved, the kernel's timestamps being one tick.
+	rewrite := func(body string) {
+		t.Helper()
+		before, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range 200 {
+			if err := os.WriteFile(p, []byte(body), 0o755); err != nil { //nolint:gosec // G306: the fixture binary already exists; its mode is kept
+				t.Fatal(err)
+			}
+			after, err := os.Stat(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !os.SameFile(before, after) {
+				t.Fatal("the rewrite made a new inode")
+			}
+			if ctime(after) != ctime(before) {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatal("the change time never moved")
+	}
+	if k := probe(); k != policy.ContentPlain {
+		t.Fatalf("plain file is %v", k)
+	}
+
+	// pad gives every rewrite the same size, which is not the plain file's.
+	pad := func(s string) string { return s + strings.Repeat("y", 100-len(s)) }
+	busy := pad("invented\x00" + policy.MarkerForTesting("busybox") + "1\x00")
+	rewrite(busy) // another size than the plain file's
+	if k := probe(); k != policy.ContentBusyBox {
+		t.Errorf("after a rewrite with another size: %v", k)
+	}
+
+	same := pad("invented\x00" + policy.MarkerForTesting("toybox") + "\x00")
+	rewrite(same) // the same size, a new modification time
+	if k := probe(); k != policy.ContentToybox {
+		t.Errorf("after a same-size rewrite: %v", k)
+	}
+
+	fi, _ := os.Stat(p)
+	mtime := fi.ModTime()
+	again := pad("invented\x00" + policy.MarkerForTesting("uutils") + "\x00")
+	rewrite(again)
+	if err := os.Chtimes(p, mtime, mtime); err != nil { // only the change time differs now
+		t.Fatal(err)
+	}
+	if k := probe(); k != policy.ContentUutils {
+		t.Errorf("after a same-size rewrite with the modification time put back: %v", k)
+	}
+}
+
+func ctime(fi os.FileInfo) syscall.Timespec { return fi.Sys().(*syscall.Stat_t).Ctim }
