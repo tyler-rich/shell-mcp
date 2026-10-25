@@ -120,6 +120,10 @@ expect "notes name the tag identity" 0 "--certificate-identity https://github.co
 	bash "$r" 0.1.0 - ghcr.io/o/r "sha256:$sha$sha" o/r refs/tags/v0.1.0
 expect "notes pin the digest" 0 "ghcr.io/o/r:0.1.0@sha256:$sha$sha" \
 	bash "$r" 0.1.0 - ghcr.io/o/r "sha256:$sha$sha" o/r refs/tags/v0.1.0
+expect "notes: SHA256SUMS has no attestation of its own" 0 'itself has no attestation' \
+	bash "$r" 0.1.0 - ghcr.io/o/r "sha256:$sha$sha" o/r refs/tags/v0.1.0
+expect "notes: provenance is for the files SHA256SUMS lists" 0 'Every file `SHA256SUMS` lists, and the image index, carry SLSA build provenance' \
+	bash "$r" 0.1.0 - ghcr.io/o/r "sha256:$sha$sha" o/r refs/tags/v0.1.0
 expect "notes without a CHANGELOG section refused" 1 "does not exist" \
 	bash -c 'cd "$1" && cp "$2" ./render-notes.sh && cp "$3" ./notes.sh && bash ./render-notes.sh 0.1.0 0.1.0 r d o/r refs/tags/v0.1.0' _ "$work" "$r" "$n"
 
