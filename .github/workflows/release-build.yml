@@ -284,14 +284,12 @@ jobs:
           fail-build: "true"
           severity-cutoff: high
           output-format: table
-      - name: govulncheck (source)
+      # Source mode, at the tagged commit. Not -mode=binary: the release
+      # binaries are stripped (-s -w), and without a symbol table binary mode
+      # reports every vulnerability of every module a binary uses, reachable
+      # or not (maintainer decision, 2026-10-25; ARCHIVE §14).
+      - name: govulncheck
         run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
-      - name: govulncheck (every binary)
-        run: |
-          for f in dist/*_linux_amd64 dist/*_linux_arm64; do
-            echo "== $f"
-            go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" -mode=binary "$f"
-          done
       # D-013: nothing is released while a dependency, Go or a pinned tool is
       # behind its newest stable release.
       - name: deps-current
