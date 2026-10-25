@@ -15,7 +15,24 @@ Names below are placeholders: `mcp.example.test` (the MCP endpoint behind your r
 
 The server speaks MCP 2026-07-28 (stateless) and 2025-11-25 (D-014). Over HTTP it serves `POST /mcp` (`SHELL_MCP_PATH`) and an unauthenticated `GET /healthz` that answers `{"status":"ok"}` and nothing else. Every other request needs the bearer token, `tools/list` included; a request refused earlier by the rate limit (`429`) or the Host/Origin checks (`421`, `403`) learns nothing either.
 
-**Behind a reverse proxy.** The server speaks plain HTTP; terminate TLS at a proxy or run over a VPN, and never publish it on the public internet (SECURITY §3). Add the name clients use to `SHELL_MCP_ALLOWED_HOSTS` (otherwise `421 {"error":"host_not_allowed"}`), and the proxy's address to `SHELL_MCP_TRUSTED_PROXIES` so that rate limits and the auth lockout see the real client. List the address the server's container sees as the peer: when the proxy runs on the same host and connects to a port Docker publishes, that is usually the Docker network's gateway (`docker network inspect`), not the proxy's own address.
+**Behind a reverse proxy.** The server speaks plain HTTP; terminate TLS at a proxy or run over a VPN, and never publish it on the public internet (SECURITY §3). Add the name clients use to `SHELL_MCP_ALLOWED_HOSTS` (otherwise `421 {"error":"host_not_allowed"}`).
+
+**Trusting the proxy (`SHELL_MCP_TRUSTED_PROXIES`).** The server takes a request's client address from `X-Forwarded-For` only when the request's peer is in this list, and then from the entry that peer appended; that address is what the rate limits, the auth lockout and the approval page's logs see. Whoever can connect from a trusted address can therefore name any client it likes. The safe layout:
+
+- the reverse proxy and the server share a user-defined Docker network, and the proxy has a fixed address on it (for example `192.0.2.5`; pick a subnet of your own);
+- the server publishes no port: only the proxy is published, on a LAN or VPN address;
+- `SHELL_MCP_TRUSTED_PROXIES` is that one address, and nothing else.
+
+`deploy/docker-compose.yml` has this layout. **Do not trust the Docker network's gateway.** When something reaches the server through a port Docker publishes on the host, the server often sees the gateway as the peer, not the real sender. Trusting the gateway would trust every local process and container that connects through that port, and each could set `X-Forwarded-For` to any address: it could spread its token guesses over invented addresses to dodge the lockout, or lock out a real client, and the approval page's logs would name clients that never connected.
+
+Measured with Docker Desktop 29 (on Windows; a Linux host's networking can differ, for example with the userland proxy turned off), the server on a user-defined network `192.0.2.0/24` at `192.0.2.10`, with a published port as well, for comparison:
+
+| Request from | Peer the server logged | With `TRUSTED_PROXIES=192.0.2.1` (the gateway) | With `TRUSTED_PROXIES=192.0.2.5` (the proxy) |
+|---|---|---|---|
+| A container at `192.0.2.5` on the shared network, sending `X-Forwarded-For: 198.51.100.20` | `192.0.2.5/32` | `192.0.2.5/32` | `198.51.100.20/32` (the proxy's word, as intended) |
+| A container on another network, through the published port, sending `X-Forwarded-For: 203.0.113.99` | `192.0.2.1/32` (the gateway) | `203.0.113.99/32` (forged, believed) | `192.0.2.1/32` (ignored) |
+
+**Set the value from what the server logs, never from a guess.** Start the server with `SHELL_MCP_TRUSTED_PROXIES` empty, send one request without a token through the proxy (`curl -s -X POST https://mcp.example.test/mcp`), and read the `client` field of the server's `authentication failed` WARN line (`docker logs shell-mcp 2>&1 | grep 'authentication failed'`, which shows for example `"client":"192.0.2.5/32","reason":"missing"`; a request without a token does not count toward the lockout). That address is the one to list. Then repeat: the line should now show the address of the machine you sent it from (the proxy must append `X-Forwarded-For`; most do when told to). An IPv6 peer is logged as its /64, which is how it is counted, not as one address; give the proxy a fixed IPv4 address on the network instead. The same list applies to the approval listener (§3.2).
 
 Quick check from the client's machine (a `200` with a JSON-RPC result means the token, the host name and the path are right):
 
@@ -74,10 +91,10 @@ SHELL_MCP_APPROVAL_METHOD: web
 SHELL_MCP_APPROVAL_PUBLIC_URL: https://approve.example.test
 SHELL_MCP_APPROVERS_FILE: /run/secrets/approvers
 SHELL_MCP_APPROVAL_BIND: 0.0.0.0          # inside the container; publish the port only on loopback or a VPN address
-SHELL_MCP_TRUSTED_PROXIES: 192.0.2.5      # your TLS-terminating proxy; required for a non-loopback bind without native TLS
+SHELL_MCP_TRUSTED_PROXIES: 192.0.2.5      # the proxy's fixed address on the shared network (§1); required for a non-loopback bind without native TLS
 ```
 
-and publish the approval port beside the MCP port (`"127.0.0.1:8081:8081"`), with the approvers file in `secrets:`.
+with the approvers file in `secrets:`. Publish no port for it: the proxy forwards `approve.example.test` to the server's port 8081 on the shared network, as it forwards `mcp.example.test` to 8080.
 
 - The approval listener (default `127.0.0.1:8081`) is separate from `/mcp`, never accepts the bearer token, and answers only for the origin of `SHELL_MCP_APPROVAL_PUBLIC_URL` (any other `Host` is `421`). A non-loopback bind needs native TLS (`SHELL_MCP_APPROVAL_TLS_CERT_FILE`/`_KEY_FILE`) or `SHELL_MCP_TRUSTED_PROXIES`, and then serves only those proxies.
 - `SHELL_MCP_APPROVAL_NOTIFY_URL` (an ntfy topic URL) with `SHELL_MCP_APPROVAL_NOTIFY_TOKEN_FILE` pushes each request and every lockout to the approver's phone, with a link to the page; the push never carries an approve or decline action.

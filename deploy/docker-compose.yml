@@ -11,10 +11,16 @@ services:
     restart: unless-stopped
     user: "65532:65532"
     read_only: true
-    ports:
-      - "127.0.0.1:8080:8080"           # or a specific LAN/VPN interface address; never all interfaces by accident
+    # No published port: clients reach the server only through your reverse
+    # proxy, which joins the `front` network below at its fixed address
+    # 192.0.2.5 and is the only service with a published port (on a LAN or VPN
+    # address, never all interfaces by accident). docs/CLIENTS.md §1 says why,
+    # and how to confirm the address from the server's log.
+    networks:
+      front:
+        ipv4_address: 192.0.2.10
     environment:
-      SHELL_MCP_BIND: 0.0.0.0           # inside the container; exposure is controlled by `ports`
+      SHELL_MCP_BIND: 0.0.0.0           # inside the container; only the `front` network reaches it
       SHELL_MCP_PROFILE: read-only
       SHELL_MCP_TOKEN_FILE: /run/secrets/mcp_token
       SHELL_MCP_SSH_KEY_FILE: /run/secrets/ssh_key
@@ -23,7 +29,7 @@ services:
       SHELL_MCP_TARGET_USER: svc-shell
       SHELL_MCP_TARGET_HOST_KEYS: "ssh-ed25519 SHA256:placeholder"
       SHELL_MCP_ALLOWED_HOSTS: localhost,127.0.0.1,mcp.example.test
-      SHELL_MCP_TRUSTED_PROXIES: ""          # your reverse proxy's address (e.g. 192.0.2.5); empty = X-Forwarded-For never used
+      SHELL_MCP_TRUSTED_PROXIES: 192.0.2.5   # the proxy's fixed address on `front`, and nothing else; never the network's gateway
     secrets: [mcp_token, ssh_key]
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
@@ -39,6 +45,11 @@ services:
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
+networks:
+  front:                                # user-defined; the proxy and this server only. Pick your own subnet.
+    ipam:
+      config:
+        - subnet: 192.0.2.0/24
 secrets:
   mcp_token: { file: ./secrets/mcp_token }
   ssh_key: { file: ./secrets/ssh_key }
