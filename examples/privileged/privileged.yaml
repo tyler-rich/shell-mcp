@@ -58,7 +58,8 @@ paths:
   deny: ["/etc/example-app/secrets/**"]
 
 owners:
-  # The only users and groups priv_chown and priv_write_file may set.
+  # The only users and groups priv_chown, priv_write_file, priv_copy and
+  # priv_mkdir may set.
   users: [root, example-app]
   groups: [root, example-app]
 
@@ -106,9 +107,11 @@ commands:
     #                                        # CAP_SYS_TIME (drops ProtectClock=),
     #                                        # CAP_NET_ADMIN, CAP_NET_BIND_SERVICE
 
-# The built-in priv_power operation (destructive): asks systemd, from the
-# broad unit, to start reboot.target or poweroff.target — an orderly
-# shutdown. Omit the section to disallow it; the acknowledge is required.
+# The built-in priv_power operation (destructive): answered first, then,
+# 60 s later unless cancelled, asks logind from the broad unit to start
+# reboot.target or poweroff.target — an orderly shutdown that respects
+# inhibitor locks and never runs during a package operation. Omit the
+# section to disallow it; the acknowledge is required.
 power:
   allowed: [reboot]            # reboot | poweroff
   acknowledge: "planned maintenance windows only"
