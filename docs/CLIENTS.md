@@ -78,7 +78,7 @@ Records expire after `SHELL_MCP_APPROVAL_TTL` (default 300 s) and are lost when 
 Enrol the approver **on the server host**, never on the machine where the agent runs. The seed is shown once, as a QR code and an `otpauth://` URI, and stdout must be a terminal (hence `-it`):
 
 ```bash
-docker run --rm -it -v "$PWD/secrets:/run/secrets" ghcr.io/tyler-rich/shell-mcp:0.1.0 \
+docker run --rm -it -v "$PWD/secrets:/run/secrets" ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:9c19075aadb69950eb71d69d840e64ba021fcabf22c7df32a76a229d3c387dd4 \
   approver add --name alice --file /run/secrets/approvers
 ```
 
@@ -133,7 +133,7 @@ claude mcp add --transport stdio shell-mcp-local -- docker run --rm -i --user "$
   -e SHELL_MCP_TRANSPORT=stdio -e SHELL_MCP_AUTH_MODE=none -e SHELL_MCP_SSH_KEY_FILE=/run/secrets/ssh_key \
   -e SHELL_MCP_TARGET_NAME=app-host -e SHELL_MCP_TARGET_HOST=target-a.example.test -e SHELL_MCP_TARGET_USER=svc-shell \
   -e "SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:<the host key's fingerprint>" \
-  ghcr.io/tyler-rich/shell-mcp:0.1.0 serve
+  ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:9c19075aadb69950eb71d69d840e64ba021fcabf22c7df32a76a229d3c387dd4 serve
 ```
 
 The server logs to stderr only under stdio.
