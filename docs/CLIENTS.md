@@ -19,7 +19,7 @@ The server speaks MCP 2026-07-28 (stateless) and 2025-11-25 (D-014). Over HTTP i
 
 **Trusting the proxy (`SHELL_MCP_TRUSTED_PROXIES`).** The server takes a request's client address from `X-Forwarded-For` only when the request's peer is in this list, and then from the entry that peer appended; that address is what the rate limits, the auth lockout and the approval page's logs see. Whoever can connect from a trusted address can therefore name any client it likes. The safe layout:
 
-- the reverse proxy and the server share a user-defined Docker network, and the proxy has a fixed address on it (for example `192.0.2.5`; pick a subnet of your own);
+- the reverse proxy and the server share a user-defined Docker network, and the proxy has a fixed address on it (`172.30.80.5` in `deploy/`, an RFC 1918 example: pick a subnet that does not clash with your own networks);
 - the server publishes no port: only the proxy is published, on a LAN or VPN address;
 - `SHELL_MCP_TRUSTED_PROXIES` is that one address, and nothing else.
 
@@ -32,7 +32,7 @@ Measured with Docker Desktop 29 (on Windows; a Linux host's networking can diffe
 | A container at `192.0.2.5` on the shared network, sending `X-Forwarded-For: 198.51.100.20` | `192.0.2.5/32` | `192.0.2.5/32` | `198.51.100.20/32` (the proxy's word, as intended) |
 | A container on another network, through the published port, sending `X-Forwarded-For: 203.0.113.99` | `192.0.2.1/32` (the gateway) | `203.0.113.99/32` (forged, believed) | `192.0.2.1/32` (ignored) |
 
-**Set the value from what the server logs, never from a guess.** Start the server with `SHELL_MCP_TRUSTED_PROXIES` empty, send one request without a token through the proxy (`curl -s -X POST https://mcp.example.test/mcp`), and read the `client` field of the server's `authentication failed` WARN line (`docker logs shell-mcp 2>&1 | grep 'authentication failed'`, which shows for example `"client":"192.0.2.5/32","reason":"missing"`; a request without a token does not count toward the lockout). That address is the one to list. Then repeat: the line should now show the address of the machine you sent it from (the proxy must append `X-Forwarded-For`; most do when told to). An IPv6 peer is logged as its /64, which is how it is counted, not as one address; give the proxy a fixed IPv4 address on the network instead. The same list applies to the approval listener (§3.2).
+**Set the value from what the server logs, never from a guess.** Start the server with `SHELL_MCP_TRUSTED_PROXIES` empty, send one request without a token through the proxy (`curl -s -X POST https://mcp.example.test/mcp`), and read the `client` field of the server's `authentication failed` WARN line (`docker logs shell-mcp 2>&1 | grep 'authentication failed'`, which shows for example `"client":"172.30.80.5/32","reason":"missing"`; a request without a token does not count toward the lockout). That address is the one to list. Then repeat: the line should now show the address of the machine you sent it from (the proxy must append `X-Forwarded-For`; most do when told to). An IPv6 peer is logged as its /64, which is how it is counted, not as one address; give the proxy a fixed IPv4 address on the network instead. The same list applies to the approval listener (§3.2).
 
 Quick check from the client's machine (a `200` with a JSON-RPC result means the token, the host name and the path are right):
 
@@ -91,7 +91,7 @@ SHELL_MCP_APPROVAL_METHOD: web
 SHELL_MCP_APPROVAL_PUBLIC_URL: https://approve.example.test
 SHELL_MCP_APPROVERS_FILE: /run/secrets/approvers
 SHELL_MCP_APPROVAL_BIND: 0.0.0.0          # inside the container; publish the port only on loopback or a VPN address
-SHELL_MCP_TRUSTED_PROXIES: 192.0.2.5      # the proxy's fixed address on the shared network (§1); required for a non-loopback bind without native TLS
+SHELL_MCP_TRUSTED_PROXIES: 172.30.80.5    # the proxy's fixed address on the shared network (§1); required for a non-loopback bind without native TLS
 ```
 
 with the approvers file in `secrets:`. Publish no port for it: the proxy forwards `approve.example.test` to the server's port 8081 on the shared network, as it forwards `mcp.example.test` to 8080.

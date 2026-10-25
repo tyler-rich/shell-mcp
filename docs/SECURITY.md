@@ -155,7 +155,7 @@ services:
     user: "65532:65532"
     read_only: true
     networks:                           # no published port: only the reverse proxy, on `front`, reaches it
-      front: { ipv4_address: 192.0.2.10 }
+      front: { ipv4_address: 172.30.80.10 }
     environment:
       SHELL_MCP_BIND: 0.0.0.0           # inside the container; only the `front` network reaches it
       SHELL_MCP_PROFILE: read-only
@@ -166,7 +166,7 @@ services:
       SHELL_MCP_TARGET_USER: svc-shell
       SHELL_MCP_TARGET_HOST_KEYS: "ssh-ed25519 SHA256:placeholder"
       SHELL_MCP_ALLOWED_HOSTS: localhost,127.0.0.1,mcp.example.test
-      SHELL_MCP_TRUSTED_PROXIES: 192.0.2.5   # the proxy's fixed address on `front`; never the network's gateway
+      SHELL_MCP_TRUSTED_PROXIES: 172.30.80.5 # the proxy's fixed address on `front`; never the network's gateway
     secrets: [mcp_token, ssh_key]
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
@@ -183,7 +183,7 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 networks:
-  front: { ipam: { config: [{ subnet: 192.0.2.0/24 }] } }
+  front: { ipam: { config: [{ subnet: 172.30.80.0/24 }] } }   # RFC 1918 example: pick one that does not clash with your networks
 secrets:
   mcp_token: { file: ./secrets/mcp_token }
   ssh_key: { file: ./secrets/ssh_key }

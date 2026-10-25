@@ -48,7 +48,7 @@ docker run -d --name shell-mcp \
 
 ## Docker Compose
 
-[`docker-compose.yml`](docker-compose.yml) is the reference deployment. Its hardening flags (`user`, `read_only`, `cap_drop`, `security_opt`, limits) are normative. Keep them. It is laid out for a reverse proxy: the server publishes no port and sits on a user-defined network, `front`, which your proxy joins at the fixed address `192.0.2.5`, the only entry in `SHELL_MCP_TRUSTED_PROXIES`.
+[`docker-compose.yml`](docker-compose.yml) is the reference deployment. Its hardening flags (`user`, `read_only`, `cap_drop`, `security_opt`, limits) are normative. Keep them. It is laid out for a reverse proxy: the server publishes no port and sits on a user-defined network, `front`, which your proxy joins at the fixed address `172.30.80.5`, the only entry in `SHELL_MCP_TRUSTED_PROXIES`. The subnet (`172.30.80.0/24`, RFC 1918) is an example: pick one that does not clash with your own networks and change the addresses to match.
 
 ```sh
 docker compose up -d
@@ -59,10 +59,10 @@ Attach the proxy in its own compose file or service, for example:
 ```yaml
     networks:
       front:
-        ipv4_address: 192.0.2.5
+        ipv4_address: 172.30.80.5
 ```
 
-(with `front` declared as `external: true, name: deploy_front` when the proxy lives in another compose project). The proxy forwards `mcp.example.test` to `http://192.0.2.10:8080` and appends `X-Forwarded-For`; only the proxy publishes a port, on a LAN or VPN address. Never put the Docker network's gateway in `SHELL_MCP_TRUSTED_PROXIES`, and confirm the proxy's address from the server's own `authentication failed` log line before you set it: [`../docs/CLIENTS.md`](../docs/CLIENTS.md) §1 says why and how. Terminate TLS at the proxy or run over a VPN, and do not expose this server to the public internet.
+(with `front` declared as `external: true, name: deploy_front` when the proxy lives in another compose project). The proxy forwards `mcp.example.test` to `http://172.30.80.10:8080` and appends `X-Forwarded-For`; only the proxy publishes a port, on a LAN or VPN address. Never put the Docker network's gateway in `SHELL_MCP_TRUSTED_PROXIES`, and confirm the proxy's address from the server's own `authentication failed` log line before you set it: [`../docs/CLIENTS.md`](../docs/CLIENTS.md) §1 says why and how. Terminate TLS at the proxy or run over a VPN, and do not expose this server to the public internet.
 
 The compose runs the `read-only` profile with approvals off. For the `operator` or `admin` profile, and for the approval page (its own port, an approvers file in `secrets:`, `SHELL_MCP_APPROVAL_*`), see [`../docs/CLIENTS.md`](../docs/CLIENTS.md) §2 and §3.
 
