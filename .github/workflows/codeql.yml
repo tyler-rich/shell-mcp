@@ -1,5 +1,8 @@
 # CodeQL advanced setup (GitHub's default setup is deliberately off; the two
 # cannot run together). Actions pinned to release SHAs (D-013).
+# Two languages: Go (built manually) and the workflows themselves (actions,
+# no build: injection and permission findings in .github/workflows, among
+# them the release workflows).
 name: codeql
 
 on:
@@ -19,28 +22,38 @@ concurrency:
 
 jobs:
   analyze:
-    name: analyze (go)
+    name: analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
       security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: manual
+          - language: actions
+            build-mode: none
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: matrix.language == 'go'
         with:
           go-version-file: go.mod
       - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
-          languages: go
-          build-mode: manual
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
           queries: security-extended
       - name: build
+        if: matrix.language == 'go'
         env:
           GOTOOLCHAIN: local
         run: go build ./...
       - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
-          category: /language:go
+          category: /language:${{ matrix.language }}
