@@ -3881,3 +3881,19 @@ cosign is not installed on the workstation, so it ran from the official image `g
 **Deferred:** finding A's wording in `render-notes.sh` and ARCHITECTURE §7 (the maintainer's call); the next release's pin repeats N-29; N-5, N-22, N-25, N-26 as recorded.
 
 **Versions:** Go 1.27.3 (go.mod; deps-current in ci-local below). Direct modules unchanged: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0. No dependency added. Release tools as in S5a: cosign v3.1.4, syft v1.55.0, Trivy v0.76.1, Grype v0.121.0, govulncheck v1.9.0.
+
+### 2026-10-25 — The release notes say which files carry provenance; CLIENTS pins the image digest (branch docs/provenance-wording)
+**Finding A, checked against the workflow first.** `.github/workflows/release-build.yml` attests with `actions/attest` and `subject-checksums: dist/SHA256SUMS`, which records provenance for each file `SHA256SUMS` lists and for none other, and `SHA256SUMS` does not list itself. `SHA256SUMS` is covered by its cosign signature (`SHA256SUMS.sigstore.json`). On v0.1.0 `gh attestation verify SHA256SUMS` is HTTP 404 while all 17 listed files pass (previous entry). The release notes template and ARCHITECTURE §7 said "every file" carries provenance, which was wrong for `SHA256SUMS`. The published 0.1.0 notes are immutable and unchanged.
+
+**Changed (wording only):**
+- `scripts/release/render-notes.sh`: `SHA256SUMS` lists every release file except itself and the Sigstore bundles; provenance is for every file it lists and the image index; `SHA256SUMS` itself has no attestation and its cosign signature covers it; SBOM attestations are for the binaries and platform images; one sentence on which command to run for which file, as in the README. The five commands are unchanged and match the README's.
+- `docs/ARCHITECTURE.md` §7 (the **sign** step): same statement, naming `subject-checksums: dist/SHA256SUMS`.
+- `scripts/release/verify.sh`: the header comment now says what the script checks (it already checked exactly the listed files and the index).
+- `scripts/release/release_test.sh`: two tests pin the new notes wording; committed first and run failing (`44 passed, 2 failed`), passing after the change.
+- `docs/CLIENTS.md`: both `ghcr.io/tyler-rich/shell-mcp:0.1.0` references (the enrolment and the stdio examples) carry `@sha256:9c19075a…387dd4`, as `deploy/` does (N-29).
+
+**Workflow, wording only (maintainer-approved):** in `.github/workflows/release-build.yml`, the `sign` entry of the header comment now says exactly what is signed and attested, and the step named "provenance (every release file)" is renamed "provenance (every file SHA256SUMS lists)". No job name, step id, `uses:` line, input or check name changed, and nothing that affects behaviour.
+
+**Not changed, by design:** no signing or attestation step, no attestation for `SHA256SUMS` (that would be a design change), and the 0.1.0 CHANGELOG section.
+
+**Versions:** no dependency or Go change in this docs-only branch; as in the previous entry.
