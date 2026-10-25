@@ -19,8 +19,8 @@ concurrency:
 env:
   GOLANGCI_LINT_VERSION: v2.15.0
   GOVULNCHECK_VERSION: v1.9.0
-  TRIVY_VERSION: v0.76.0
-  GRYPE_VERSION: v0.120.1
+  TRIVY_VERSION: v0.76.1
+  GRYPE_VERSION: v0.121.0
   GOTOOLCHAIN: local
 
 jobs:
@@ -221,6 +221,10 @@ jobs:
       # The release check against release builds and each test-only build.
       - name: release-binary-check self-test
         run: bash scripts/release-binary-check_test.sh
+      # The release scripts' refusals: tag and version formats, the CHANGELOG
+      # section, the CI and CodeQL checks a release needs (offline).
+      - name: release scripts self-test
+        run: bash scripts/release/release_test.sh
       # ci-local against a fake docker: it may label, list, stop and remove
       # only its own containers. No container is started here.
       - name: ci-local self-test
@@ -312,7 +316,7 @@ jobs:
             echo "- kernel: $(uname -r)"
             echo "- runner: $( { go build -o /tmp/landlock-probe ./scripts/probe/landlock && /tmp/landlock-probe; } 2>&1 | tail -n1 || true)"
             echo "- golang container: $(docker run --rm -v "$PWD:/src:ro" -w /src -e GOFLAGS=-buildvcs=false -e HOME=/tmp -u 65532:65532 \
-                "$(awk 'toupper($1) == "FROM" && $2 ~ /^golang:/ { print $2; exit }' Dockerfile)" \
+                "$(awk 'toupper($1) == "FROM" { for (i = 2; i <= NF; i++) if ($i ~ /^golang:/) { print $i; exit } }' Dockerfile)" \
                 sh -c 'GOCACHE=/tmp/c GOMODCACHE=/tmp/m go run ./scripts/probe/landlock' 2>&1 | tail -n1 || true)"
             echo "- systemd probe:"
             echo '```'

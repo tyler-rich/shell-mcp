@@ -1,0 +1,7 @@
+# The loopback registry the release workflow pushes the images to inside a
+# job (127.0.0.1 only, no volume, removed with the job), so that the
+# multi-platform index can be built, verified and signed in a dry run without
+# publishing anything. It is never built: the workflow runs this FROM line's
+# image, and this file exists so that Dependabot keeps its digest current and
+# deps-current its version (D-013).
+FROM registry:3.1.2@sha256:01cd312e67026f06f5d89c3e133a4a9adc7cb9eeb9b1194e0b2954dfd770efd2
