@@ -28,7 +28,7 @@ Common optional inputs on tools that run a process: `timeout_seconds` (1..`SHELL
 | Claude Code VS Code extension | 2026-07-28 | `elicitation` | Declines ("print mode"; anthropics/claude-code#98256). | Works the same way. |
 | Claude Desktop chat through mcp-remote 0.15.1 `--protocol auto` | Desktop to mcp-remote: stdio `initialize`; mcp-remote to the server: `--protocol auto` | Desktop declared only `roots` and the MCP Apps `extensions` entry, with no `elicitation` | Nothing to show it with. | Works the same way. |
 
-`docs/CLIENTS.md` (S5) carries this matrix forward.
+`docs/CLIENTS.md` §5 carries this matrix forward, with the client configurations.
 
 ## Read tier (profile ≥ `read-only`)
 

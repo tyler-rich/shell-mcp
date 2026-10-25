@@ -10,7 +10,7 @@ This document is normative. Where it conflicts with convenience, it wins. Changi
 | SSH private key(s) | Secret file / env store / server memory | `internal/sshx` only. Never logged, never in `check` output (show the public-key fingerprint instead). |
 | Approver TOTP seeds | Mounted secret file (`SHELL_MCP_APPROVERS_FILE`, `0600`) / server memory | `internal/approval` only. Never in environment variables (`SHELL_MCP_APPROVERS` is refused), never logged, never in `check` or effective-config output, never on the workstation where the agent runs: only in the approver's authenticator and the server's secret file. A readable seed is an approval, so a group/other-accessible file fails startup. |
 | Approval notify token | Secret file / env store / server memory | The notifier only (`SHELL_MCP_APPROVAL_NOTIFY_TOKEN`/`_FILE`). Never logged, never in `check` output. |
-| Gate policy, privileged policy, gate and helper binaries, helper units, `authorized_keys` | Target, root-owned | Root only (D-016). Gate and helper refuse to run if any is writable by group/other or not owned by root; the helper also refuses when its units were generated for a different policy. |
+| Gate policy, privileged policy, gate and helper binaries, helper units, `authorized_keys` | Target, root-owned | Root only (D-016). The gate refuses to run if its policy or binary, or a directory above either, is writable by group/other or not owned by root; the helper refuses the same for its policy and binary, and when its units were generated for a different policy. Neither reads `authorized_keys`: sshd's `StrictModes` (on by default) refuses a keys file or directory that is group- or world-writable or owned by an account other than root or the service user, and accepts one the service user owns, so the operator confirms they are root's (`docs/TARGET-SETUP.md` §7). |
 | Host files, service state, journal, process list | Target | Through gate operations only, within the policy. |
 | Tool results (file contents, command output, logs) | In transit to the client | Returned to the model on request, redacted and size-capped; **never logged**. |
 
@@ -105,7 +105,7 @@ Everything a root operator legitimately does can be declared in a host policy. W
    restrict,from="192.0.2.0/24",command="/usr/local/bin/shell-mcp-gate serve --policy /etc/shell-mcp/operator.yaml --principal operator" ssh-ed25519 AAAA… shell-mcp-operator
    ```
 4. **Gate and policy root-owned**: `/usr/local/bin/shell-mcp-gate` `root:root 0755`; `/etc/shell-mcp/` `root:root 0755`; policies `root:root 0644` (or `root:svc-shell 0640`).
-5. **Writes via ACLs**: grant the service user write access only to the write roots (`setfacl -R -m u:svc-shell:rwX` and default ACLs), never to anything in the protected set.
+5. **Write roots owned by the service user**: give the service user write access only to the write roots, never to anything in the protected set. The recommended way is ownership (`install -o svc-shell -g svc-shell -m 0755 -d <root>`, or `chown -R svc-shell:` and no group or world write bit), with every directory above the root root's and not group- or world-writable. An ACL (`setfacl -R -m u:svc-shell:rwX` and default ACLs) on a root-owned directory also grants it, but the ACL mask counts as the group bits, so the directory is group-writable to the gate's chain rules: commands get no path placeholder (`{path:read}` or `{path:write}`) and no `cwd` at or under it, since the owner-matched exception does not cover a group-writable directory (POLICY §4, "Commands' paths"), and git runs in no repository under it (POLICY §7, "The repository is closed"). Use an ACL only for a root where neither commands' path placeholders nor git are used; `check-policy` warns about such a root.
 6. **No sudoers entry at all.** If service control is enabled: install `polkitd`, then `shell-mcp-gate polkit …` → review → install as `/etc/polkit-1/rules.d/60-shell-mcp.rules` `root:root 0644`.
 7. **Landlock enabled:** `landlock` appears in `/sys/kernel/security/lsm` (enabled by default on current Debian and Ubuntu kernels; verify).
 8. **Explicit UID/GID, minimal groups (D-020):** choose an unused UID/GID, confirm no files on the host are owned by it (`find / -xdev -uid <UID>` on each filesystem that holds application or container data), create the account with that UID, add only `systemd-journal` (if journal ops are enabled) and the helper's socket group (if root actions are enabled), and never `docker`, `sudo`, `adm`, `disk` or similar. **Groups must be local:** the gate is a static binary without NSS, so it resolves supplementary group names from `/etc/group` only; a group known only through NSS (LDAP, SSSD, …) has no name to check and the gate refuses to serve (`install_insecure`, fail closed).
@@ -154,10 +154,10 @@ services:
     restart: unless-stopped
     user: "65532:65532"
     read_only: true
-    ports:
-      - "127.0.0.1:8080:8080"           # or a specific LAN/VPN interface address; never all interfaces by accident
+    networks:                           # no published port: only the reverse proxy, on `front`, reaches it
+      front: { ipv4_address: 172.30.80.10 }
     environment:
-      SHELL_MCP_BIND: 0.0.0.0           # inside the container; exposure is controlled by `ports`
+      SHELL_MCP_BIND: 0.0.0.0           # inside the container; only the `front` network reaches it
       SHELL_MCP_PROFILE: read-only
       SHELL_MCP_TOKEN_FILE: /run/secrets/mcp_token
       SHELL_MCP_SSH_KEY_FILE: /run/secrets/ssh_key
@@ -166,7 +166,7 @@ services:
       SHELL_MCP_TARGET_USER: svc-shell
       SHELL_MCP_TARGET_HOST_KEYS: "ssh-ed25519 SHA256:placeholder"
       SHELL_MCP_ALLOWED_HOSTS: localhost,127.0.0.1,mcp.example.test
-      SHELL_MCP_TRUSTED_PROXIES: ""          # your reverse proxy's address (e.g. 192.0.2.5); empty = X-Forwarded-For never used
+      SHELL_MCP_TRUSTED_PROXIES: 172.30.80.5 # the proxy's fixed address on `front`; never the network's gateway
     secrets: [mcp_token, ssh_key]
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
@@ -182,6 +182,8 @@ services:
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
+networks:
+  front: { ipam: { config: [{ subnet: 172.30.80.0/24 }] } }   # RFC 1918 example: pick one that does not clash with your networks
 secrets:
   mcp_token: { file: ./secrets/mcp_token }
   ssh_key: { file: ./secrets/ssh_key }
@@ -189,4 +191,4 @@ secrets:
 
 When the container runs on the target itself, it reaches the host's sshd through the Docker host gateway (`extra_hosts: ["host.docker.internal:host-gateway"]`) — the `from=` restriction then names the Docker network's subnet. In DockHand/Portainer, keep secrets in the tool's encrypted env store (`SHELL_MCP_TOKEN`, `SHELL_MCP_SSH_KEY`), never in the YAML.
 
-TLS: terminate at a reverse proxy or run over a VPN; the server speaks plain HTTP on an internal network only. Behind that proxy, list its address in `SHELL_MCP_TRUSTED_PROXIES` (and nothing else): only requests from a listed peer have their client taken from `X-Forwarded-For` (its last entry); every other request counts against its own peer address.
+TLS: terminate at a reverse proxy or run over a VPN; the server speaks plain HTTP on an internal network only. Behind that proxy, list its address in `SHELL_MCP_TRUSTED_PROXIES` (and nothing else): only requests from a listed peer have their client taken from `X-Forwarded-For` (its last entry); every other request counts against its own peer address. The proxy and the server share a user-defined network, the proxy has a fixed address there, and the server publishes no port. Never list the Docker network's gateway: a request through a published port often arrives from the gateway, so trusting it would let every local process that reaches that port set its own client address (`docs/CLIENTS.md` §1, with the measurement). Set the value from the peer the server logs (`authentication failed`, field `client`), not from a guess.

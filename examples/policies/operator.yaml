@@ -67,7 +67,8 @@ commands:
     description: "Filesystem and free space holding an application directory"
     templates:
       # {path:read} is resolved under a read root and checked against the
-      # deny list; the resolved path is what findmnt receives. (findmnt, from
-      # util-linux, is its own binary; coreutils commands such as du cannot be
-      # declared on hosts whose coreutils is one multi-call binary, POLICY §5.)
+      # deny list; the resolved path is what findmnt receives. (On Ubuntu
+      # 26.04, coreutils commands such as du resolve to the uutils multi-call
+      # binary and are judged as the utility they run as; check-policy says
+      # so. POLICY §5.)
       - ["--noheadings", "--output", "SOURCE,FSTYPE,SIZE,USED,AVAIL", "--target", "{path:read}"]
