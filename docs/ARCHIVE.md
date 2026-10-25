@@ -3660,3 +3660,67 @@ uutils' dispatch, verified at the source, lets the executed file's name decide, 
   - This PR changes nothing in fsx or the delete path.
   - The same test passed 10 times in a row there (`-race -tags landlock_forcepsx -count=10`, 4,000 inner runs); the whole forced-psx step then passed on re-run; and it passed on both CI images on `a31199c`.
   - Recorded for the maintainer, not changed: a racer re-taking a name during the put-back is the documented case that leaves a `.shell-mcp-delete-` entry (POLICY §3, "Entries set aside and not removed"), which the test's `noTempNames` does not allow for. So either the racer can reach that case under load, or there is a gap in the delete. It needs its own look.
+
+### 2026-10-25 — The delete racer's leftover entry was the documented put-back case (PR #54, branch fix/delete-racer)
+**Question (PR #53's follow-up):** in `scripts/ci-local.sh`'s forced-psx race step, `TestDeleteConcurrentRacer` (`internal/gate/fsx`) left a `.shell-mcp-delete-` entry at inner run 340 of 400. A test gap, or a gap in the delete?
+
+**Answer: a test gap.** The racer can reach the put-back case of POLICY §3 ("Entries set aside and not removed"), which the delete reports correctly; the test refused it. No production code changed.
+
+**Every path through the deleter that leaves a `.shell-mcp-delete-` entry** (`internal/gate/fsx/delete_exact.go`):
+1. **Step 3 fails, then the put-back fails.** `statx` of the temporary name fails, or shows another object than the listed one; `restore` renames it back with `RENAME_NOREPLACE`, which fails when the name was taken again (or for any other reason). `stranded` is counted, `setAside` and `setAsideFrom` are set, a commit is reported. The refusal is `exists` and names both paths, in its message and in `Error.SetAside`; `unchanged()` is false. Documented (POLICY §3; `TestDeletePutBackFails`).
+2. **The unlink fails, then the put-back fails.** A directory that gained entries (`ENOTEMPTY`, `EEXIST`) or any other unlink error, with the same put-back, accounting and report. Documented (POLICY §3; `TestDeletePutBackFailsForADirectory`).
+3. **The process stops between the set-aside and the unlink or put-back** (a timeout, SIGKILL). Nothing is reported, since nothing is left to report it; the prefix is how an operator finds it. Documented (POLICY §3). Tests simulate it with `InjectStopAfterSetAside`: the set-aside is counted and nothing is put back, so `putBacks != setAsides` makes `unchanged()` false and the helper keeps its backup (`TestDeleteStopAfterSetAside`, `TestPrivDeleteStopAfterSetAsideKeepsBackup`). `Error.SetAside` is empty.
+
+There is no other path. Each `remove` sets an entry aside at most once and calls `restore` at most once, and the pass stops at the first failing entry, so a pass strands at most one entry and a single `setAside` field is enough. The discard accounting (`deleted == 0 && stranded == 0 && putBacks == setAsides`) is false on all three paths.
+
+**What this racer can reach.** It renames files from a staging directory onto `<tree>/sN/new-<k>` and onto the tree's twelve files. It never creates a directory name or the tree's own name, and never touches a temporary name.
+- Path 3: no. There is no hook in the test, and the process lived on to report the failure.
+- Path 2: no. Its put-back fails only when `sN` or the tree's name is taken again, and the racer creates neither. A racer file can land inside a set-aside directory (its rename resolved the directory before the set-aside); the unlink then fails, and the put-back succeeds.
+- Path 1: yes, in exactly one way. Step 3 can fail only when the temporary name holds an object that was not listed, and the racer never writes there. So the racer replaced the listed file between step 1 and step 2 (what got set aside is the racer's file), and then took the name again between step 2 and the put-back. This is the documented case. The old checks still found every racer file at its path, because the name holds the racer's later file and the old `made` map kept only the last write per path. Then `noTempNames` refused the entry.
+
+**PR #53's run.** Only the message survived: "a temporary name was left behind: …/.shell-mcp-delete-…", from `noTempNames`, after the racer-file check had passed. By the above, the entry came through path 1 and was reported. The deleter's counters for such a run follow from the code: N deleted, N + 1 set aside, 0 put back, 1 stranded, unchanged false.
+
+**Reproduction** (in `ci-local.sh`'s Go image, non-root, the forced-psx tag, `-race`).
+- **Under load:** `-run TestDeleteConcurrentRacer -count=20` with 64 busy loops on 32 CPUs in the same container gave 8,000 inner runs and no reproduction. Under load the measured deletion took 4 to 12 ms, and the racer scales with that measurement.
+- **Delay hook:** the existing `Config.InjectDeleteStep` (fsx tests only; production code never sets it) spins at `DeleteStepAfterRename`, the start of the window between the set-aside and the put-back. The racer itself was unchanged and calibrated without the delay, as in the test. This was a scratch test, not committed: 5 × 400 runs per delay.
+
+  | Delay after the rename | Step-3 failures (put-backs) | Entries left set aside | The documented case | Anything else |
+  |---|---|---|---|---|
+  | 0 | 46 | 0 | 0 | 0 |
+  | 500 µs | 45 | 1 | 1 | 0 |
+  | 2 ms | 23 | 9 | 9 | 0 |
+  | 10 ms | 18 | 13 | 13 | 0 |
+
+  In every case the refusal was `exists` and not unchanged, and `Error.SetAside` and the message named the entry and the listed file. The entry was the racer's earlier file at that path. For example, in one run `s1/f1` was written twice; the first write was set aside, the second held the name, and the message said "1 of 16 entries were deleted". So without delay, about 2 % of runs put an entry back. One is stranded whenever the deleting thread is held between its rename and its put-back for as long as the racer takes to hit the same file again.
+- **No new hook.** The prompt allowed a build-tagged delay hook; it was not needed, because `InjectDeleteStep` already fires at both ends of the window.
+
+**The test change** (`internal/gate/fsx/delete_exact_test.go`).
+- The per-run checks moved into `racerRunProblem`. The racer records every write per path, in order (`racerWrites`).
+- The checks accept the documented case and nothing else: exactly one temporary name under the write root; the refusal is `exists`, not unchanged, and names it (in `Error.SetAside`, and in the message with the listed file it was set aside from); that file is one of the tree's, in the same directory; and the entry is a regular file holding one of the racer's earlier writes at that file, not its last. Every racer file must still be at its path with its last content.
+- The racer counts such runs and removes the entry, as an operator would, so later runs are still checked for temporary names of their own.
+- `TestDeleteRacerPutBackTaken` drives the sequence deterministically: the victim `s2/f1` is replaced at `DeleteStepBeforeRename` and its name taken again at `DeleteStepAfterRename`. It asserts "6 of 16 entries were deleted" and the exact tree left.
+- `TestRacerRunProblemRejects` covers what must still be refused: an entry left unreported (`InjectStopAfterSetAside`); a directory left set aside; an entry that is not one of the racer's files; a second temporary name; a racer file lost; and a refusal that names an entry not there.
+
+**Failing first** (`c97fd31`, the checks moved unchanged): `TestDeleteRacerPutBackTaken` fails with "a temporary name was left behind: <tree>/s2/.shell-mcp-delete-…". `TestRacerRunProblemRejects/reported,_but_nothing_left_set_aside` fails too ("accepted"), because the old checks never compared the refusal with the tree. The other five cases pass there as well, so they are regression guards.
+
+**The helper's side (maintainer, 2026-10-25: in this PR).** The helper's `TestPrivDeleteConcurrentRacer` (`internal/privd/ops`) did not check for temporary names at all, so it could not flake this way, but it never checked that the case is reported either.
+- **Shared rules.** The checks moved to `internal/gate/gatetest/setaside.go` (`RacerWrites`, `RacerPut`, `TempNames`, `DeleteReport`, `RacerRunProblem`). That is test support, which only tests may import (`TestForTestingOnlyInTests`), so both racers apply the same acceptance rules. fsx builds its `DeleteReport` from `fsx.Error`. The helper builds its own from three things: the wire refusal (code and message), the audit line's `set_aside`, and its backup. For the helper, "changed" means the backup was kept and not discarded.
+- **A second latent flake, fixed.** The helper racer expected a kept backup exactly when an entry had been removed. A run that strands the racer's file before removing anything keeps its backup (the tree changed), so the old check would have failed it. It now expects a kept backup exactly when an entry was removed or one was left set aside.
+- **`TestPrivDeleteRacerPutBackTaken`** drives the sequence through the helper. It asserts the refusal, `set_aside`, the backup kept, the racer's two files, and that 6 entries were removed.
+- **Failing first, against deliberate breaks** (each run once, then reverted, never committed):
+
+  | Break | Result |
+  |---|---|
+  | The helper no longer records `set_aside` from the delete's error (`files.go`) | `TestPrivDeleteRacerPutBackTaken` FAIL ("a temporary name was left behind without being reported"); `TestPrivDeleteSetAside` FAIL |
+  | fsx reports every stop as unchanged (`stopped`: `Unchanged = true`) | fsx `TestDeleteRacerPutBackTaken` FAIL ("not the one the refusal reports"). The helper's test passes, because the helper discards a backup only when nothing was committed *and* fsx says unchanged, and a stranded entry is a commit. That is defence in depth, not a gap |
+  | The helper discards the backup of every failed request (`dispatch.go`) | `TestPrivDeleteRacerPutBackTaken` FAIL ("not the one the refusal reports": reported unchanged) |
+
+- **With a delay** (scratch, reverted): a 10 ms sleep at `DeleteStepAfterRename` in the helper racer, 3 × 400 runs. 4 runs left the racer's earlier file set aside, all accepted as the documented case with their backups kept; every racer file survived.
+
+**Not changed:** production code; the protocol, error codes and envelope; Landlock; the generated units; either policy schema; dependencies.
+
+**Versions.**
+- **Go:** 1.27.3 (deps-current: the newest stable with a published `golang:1.27.3-trixie`, 2026-10-25). The refresh moved nothing.
+- **Direct modules:** go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+- **Dependencies added:** none.
+- **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
