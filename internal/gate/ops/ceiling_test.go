@@ -48,6 +48,7 @@ func absent(t *testing.T, p string) {
 // A request without a ceiling, or with an unknown one, is bad_request, and
 // nothing runs: the op-level checks never see it.
 func TestCeilingRequired(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "operator")
 	marker := filepath.Join(f.write, "marker")
 	write := m{"command_id": "probe-op", "args": []string{"write", marker}}
@@ -73,6 +74,7 @@ func TestCeilingRequired(t *testing.T) {
 // Built-in ops: the lower of max_tier and the ceiling applies, and the
 // refusal names the limit that applied.
 func TestCeilingBoundsOps(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "destructive")
 	target := filepath.Join(f.write, "x")
 	writeArgs := m{"path": target, "content_b64": base64.StdEncoding.EncodeToString([]byte("x"))}
@@ -111,6 +113,7 @@ func TestCeilingBoundsOps(t *testing.T) {
 // max_tier is operator, so only the ceiling stops the operator command,
 // and the marker it would create proves that nothing ran.
 func TestCeilingBoundsExec(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "operator")
 	marker := filepath.Join(f.write, "marker")
 	args := m{"command_id": "probe-op", "args": []string{"write", marker}}
@@ -142,6 +145,7 @@ func TestCeilingBoundsExec(t *testing.T) {
 // unchanged, so the helper applies it too (priv_exec's tier is the
 // command's, known only to the helper).
 func TestCeilingBoundsPriv(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "destructive")
 	h := startHelper(t, f, echoID(""))
 	f.deniedAt("read", "priv_write_file", m{"path": "/etc/example-app/x", "content_b64": "eA=="}, "ceiling read")

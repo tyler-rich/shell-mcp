@@ -88,6 +88,7 @@ func (g *gitFixture) head(t *testing.T) string {
 }
 
 func TestGitStatusLogDiff(t *testing.T) {
+	t.Parallel()
 	g := newGitFixture(t, "read")
 	var st struct {
 		Branch   string `json:"branch"`
@@ -158,6 +159,7 @@ func TestGitStatusLogDiff(t *testing.T) {
 // no other GIT_CONFIG_* variable, and every program-naming variable set to
 // a value that runs nothing (N-20).
 func TestGitEnvironment(t *testing.T) {
+	t.Parallel()
 	g := newGitFixture(t, "read")
 	logp := filepath.Join(g.dir, "fakegit.log")
 	g.opts.Git = gatetest.BuildFakeSys(t, g.bin, "git", logp)
@@ -189,6 +191,7 @@ func TestGitEnvironment(t *testing.T) {
 // TestGitRepoPinning: <repo>/.git must be a real directory inside the
 // root: a gitfile, a symlink or a commondir redirect is refused.
 func TestGitRepoPinning(t *testing.T) {
+	t.Parallel()
 	g := newGitFixture(t, "read")
 	g.policy("read", "    - path: {R}/gitfile\n      remote: {REMOTE}\n    - path: {R}/linked\n      remote: {REMOTE}\n"+
 		"    - path: {R}/common\n      remote: {REMOTE}\n    - path: {R}/nogit\n      remote: {REMOTE}\n")
@@ -223,6 +226,7 @@ func exists(p string) bool { _, err := os.Stat(p); return err == nil }
 // environment executes it (a marker file appears). Gated: the op refuses
 // with policy_denied naming the key, and the marker does not appear.
 func TestGitConfigAllowlist(t *testing.T) {
+	t.Parallel()
 	g := newGitFixture(t, "read")
 	marker := filepath.Join(g.dir, "MARKER")
 	gatetest.WriteFile(t, filepath.Join(g.repo, ".gitattributes"), "*.conf diff=x filter=x\n", 0o644)
@@ -280,6 +284,7 @@ var dataKeys = [][2]string{
 // works with every git op, including a pull and a discard, and the
 // output still parses (forced colors do not leak into what the gate reads).
 func TestGitDataKeysAllowed(t *testing.T) {
+	t.Parallel()
 	g := newGitFixture(t, "destructive")
 	for _, kv := range dataKeys {
 		gatetest.Git(t, g.repo, "config", kv[0], kv[1])
@@ -322,6 +327,7 @@ func TestGitDataKeysAllowed(t *testing.T) {
 // refused with a message that names the key, says how to remove it and
 // that LFS is not supported; any other key outside the list still is.
 func TestGitLFSRefusedActionably(t *testing.T) {
+	t.Parallel()
 	g := newGitFixture(t, "read")
 	for _, kv := range [][2]string{{"filter.lfs.clean", "git-lfs clean -- %f"}, {"filter.lfs.smudge", "git-lfs smudge -- %f"},
 		{"filter.lfs.process", "git-lfs filter-process"}, {"filter.lfs.required", "true"}} {
@@ -416,6 +422,9 @@ func reap(pids []int) {
 // the gate's argv minus the maintenance flags (git's defaults) leaves a
 // daemonized `git maintenance` process behind, outside the caller's
 // process group. Gated: after git_pull responds, no git process remains.
+// Not parallel: it makes the test process a child subreaper and counts every
+// git process whose parent is the test process, which another test's git
+// (started through the gate binary, a child of the test process) would be.
 func TestGitPullLeavesNoDetachedProcess(t *testing.T) {
 	g := newGitFixture(t, "operator")
 	if err := unix.Prctl(unix.PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0); err != nil {
@@ -454,6 +463,7 @@ func TestGitPullLeavesNoDetachedProcess(t *testing.T) {
 // tracked app.conf. Gated: git_status lists it and git_discard_preview
 // would remove it — the repository is treated as case-sensitive.
 func TestGitIgnoreCasePinned(t *testing.T) {
+	t.Parallel()
 	g := newGitFixture(t, "read")
 	gatetest.Git(t, g.repo, "config", "core.ignorecase", "true")
 	gatetest.WriteFile(t, filepath.Join(g.repo, "APP.CONF"), "x\n", 0o644)
@@ -484,6 +494,7 @@ type pullData struct {
 }
 
 func TestGitPull(t *testing.T) {
+	t.Parallel()
 	g := newGitFixture(t, "operator")
 	old := g.head(t)
 	var d pullData
@@ -534,6 +545,7 @@ func TestGitPull(t *testing.T) {
 // server B while remote.origin.url still names A. Gated: git_pull refuses
 // with policy_denied naming the key.
 func TestGitPullInsteadOf(t *testing.T) {
+	t.Parallel()
 	g := newGitFixture(t, "operator")
 	b := gatetest.NewGitServer(t)
 	bwork := b.Seed(t, "deploy.git", map[string]string{"app.conf": "port=8080\n", ".gitignore": "*.log\n"})
@@ -560,6 +572,7 @@ func TestGitPullInsteadOf(t *testing.T) {
 // TestGitDirWriteDenied: fsx refuses writes to any path with a .git
 // component (POLICY §3); the same writes elsewhere in the write root work.
 func TestGitDirWriteDenied(t *testing.T) {
+	t.Parallel()
 	g := newGitFixture(t, "destructive")
 	cfg := filepath.Join(g.repo, ".git", "config")
 	b64 := "W2NvcmVdCg==" // "[core]\n"

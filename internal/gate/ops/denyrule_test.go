@@ -13,6 +13,7 @@ import (
 // The gate's deny refusal names the rule: a built-in rule by its pattern
 // (here "**/.ssh/**" inside an invented read root).
 func TestGateDenyRefusalNamesBuiltinRule(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "read")
 	key := filepath.Join(f.read, ".ssh", "id_invented")
 	gatetest.WriteFile(t, key, "invented\n", 0o600)

@@ -79,6 +79,7 @@ type statusData struct {
 }
 
 func TestServiceStatus(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "read")
 	argv := f.fakeSystemd(t, "read")
 	var d statusData
@@ -113,6 +114,7 @@ func TestServiceStatus(t *testing.T) {
 }
 
 func TestServiceList(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "read")
 	argv := f.fakeSystemd(t, "read")
 	var d struct {
@@ -151,6 +153,7 @@ func TestServiceList(t *testing.T) {
 var epochArg = regexp.MustCompile(`^@\d{10}$`)
 
 func TestJournal(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "read")
 	argv := f.fakeSystemd(t, "read")
 	var d struct {
@@ -197,6 +200,7 @@ func TestJournal(t *testing.T) {
 }
 
 func TestServiceControl(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "operator")
 	argv := f.fakeSystemd(t, "operator")
 	var d struct {

@@ -44,7 +44,8 @@ func waitHangup(c net.Conn, bound time.Duration) bool {
 // TestForwardSignalsHangupAndWaits: a helper whose command outlives the
 // gate's wait (an instance that started late) gets the gate's hang-up
 // before the gate's deadline, and the gate's answer comes only after the
-// helper has ended the command and answered: it is the helper's.
+// helper has ended the command and answered: it is the helper's. Not
+// parallel: it bounds the hang-up to 2.3 s of wall-clock time.
 func TestForwardSignalsHangupAndWaits(t *testing.T) {
 	f := newFixture(t, "destructive")
 	var mu sync.Mutex
@@ -91,7 +92,8 @@ func TestForwardSignalsHangupAndWaits(t *testing.T) {
 // or answers something unreadable — a request that can change the host (an
 // operator or destructive op, or priv_exec above ceiling read) is
 // outcome_unknown, never a refusal; a read request keeps
-// its codes.
+// its codes. Not parallel: which answer the gate gets depends on its
+// 300 ms timeout and 600 ms grace against the fake helpers' own sleeps.
 func TestForwardOutcomeUnknown(t *testing.T) {
 	answers := map[string]func(string, net.Conn){
 		"silent":      func(_ string, c net.Conn) { waitHangup(c, 5*time.Second); time.Sleep(3 * time.Second) },
@@ -138,6 +140,7 @@ func TestForwardOutcomeUnknown(t *testing.T) {
 // the one read-tier op that changes the host (S4c-8, P-13: read tier only so
 // that it is never approval-gated), so a lost answer of it is outcome_unknown.
 func TestPrivMayChangeMatchesTiers(t *testing.T) {
+	t.Parallel()
 	for _, op := range protocol.PrivOps {
 		f := newFixture(t, "read")
 		f.writePolicy("read", "privileged:\n  enabled: true\n  socket: /run/shell-mcp/privd.sock\n  max_tier: read\n")

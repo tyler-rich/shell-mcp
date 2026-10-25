@@ -36,6 +36,7 @@ func contentOf(t *testing.T, p string) string {
 }
 
 func TestWriteFileExpectAbsent(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "operator")
 	p := filepath.Join(f.write, "fresh.txt")
 	var w struct {
@@ -62,6 +63,7 @@ func TestWriteFileExpectAbsent(t *testing.T) {
 // checks, immediately before the commit; the gate answers exists and the
 // file is untouched, for every run.
 func TestGateCreateOnlyCommitWindow(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "operator")
 	src := filepath.Join(f.write, "src.txt")
 	cases := []struct {
@@ -105,6 +107,7 @@ func TestGateCreateOnlyCommitWindow(t *testing.T) {
 // regular file with that content, otherwise exists (not_found when it is
 // gone), and nothing changes.
 func TestGateCopyMoveExpectedDestination(t *testing.T) {
+	t.Parallel()
 	for _, op := range []string{"copy", "move"} {
 		t.Run(op, func(t *testing.T) {
 			f := newFixture(t, "operator")
@@ -137,6 +140,7 @@ func TestGateCopyMoveExpectedDestination(t *testing.T) {
 // immediately before the commit: the gate answers exists and the racing
 // content survives, for every run; a refused move leaves its source.
 func TestGateVerifiedReplaceCommitWindow(t *testing.T) {
+	t.Parallel()
 	const old = "approved old\n"
 	f := newFixture(t, "operator")
 	src := filepath.Join(f.write, "src.txt")

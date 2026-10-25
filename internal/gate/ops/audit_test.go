@@ -42,6 +42,7 @@ func (f *fixture) auditTo(t *testing.T) func() string {
 // sanitized args, outcome and duration — and never content, stdin, output
 // or command arguments.
 func TestAuditLines(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "operator")
 	next := f.auditTo(t)
 
@@ -87,6 +88,7 @@ func TestAuditLines(t *testing.T) {
 // line for the same forwarded request (PRIVILEGED §8). A request refused
 // before its id is known logs an empty id.
 func TestAuditLineCarriesRequestID(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "operator")
 	next := f.auditTo(t)
 	f.ok("hello", m{}, nil)
@@ -104,6 +106,7 @@ func TestAuditLineCarriesRequestID(t *testing.T) {
 // tier ceiling, for an op that ran, for one the ceiling refused, and as
 // empty for a request refused before it was read.
 func TestAuditLineCarriesCeiling(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "operator")
 	next := f.auditTo(t)
 	f.ok("hello", m{}, nil)

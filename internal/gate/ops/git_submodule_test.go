@@ -100,6 +100,7 @@ func (l *gitlinkFixture) noMarker(t *testing.T, what string) {
 // filter, with or without a .gitmodules that sets ignore = none, and each
 // answers.
 func TestGitNeverEntersSubmodule(t *testing.T) {
+	t.Parallel()
 	for _, gm := range []bool{false, true} {
 		for _, op := range []string{"git_status", "git_log", "git_diff", "git_diff_staged", "git_pull", "git_discard_preview", "git_discard"} {
 			name := op
@@ -144,6 +145,7 @@ func TestGitNeverEntersSubmodule(t *testing.T) {
 // runs). Gated: --ignore-submodules=all on the command line wins over both,
 // and neither enters it.
 func TestGitSubmoduleFlagBeatsConfig(t *testing.T) {
+	t.Parallel()
 	l := newGitlinkFixture(t, "read", true)
 	ver := strings.TrimSpace(gatetest.Git(t, l.dir, "version"))
 	for _, sub := range [][]string{
@@ -195,6 +197,7 @@ func (l *gitlinkFixture) diff(t *testing.T, staged bool) string {
 // still shows in git_status and git_diff --cached, and still refuses a pull
 // and a discard; a pull still counts a gitlink it moves.
 func TestGitWithSubmodules(t *testing.T) {
+	t.Parallel()
 	l := newGitlinkFixture(t, "destructive", false)
 	recorded := l.srcHead(t)
 	// The submodule's own state: a new commit, an edit and an untracked
@@ -386,6 +389,7 @@ func containsC(argv []string, v string) bool {
 // keeps it out of submodules (see workTreeGaps). The gate's git is a
 // recorder that logs each run and then executes the real git.
 func TestGitWorkTreeCommandsIgnoreSubmodules(t *testing.T) {
+	t.Parallel()
 	l := newGitlinkFixture(t, "destructive", true)
 	logp := filepath.Join(l.dir, "git.log")
 	l.opts.Git = gatetest.BuildGitRecorder(t, l.bin, logp, ops.GitPath)
@@ -423,6 +427,7 @@ func TestGitWorkTreeCommandsIgnoreSubmodules(t *testing.T) {
 
 // TestGitWorkTreeGapsFound: the check reports what it is for.
 func TestGitWorkTreeGapsFound(t *testing.T) {
+	t.Parallel()
 	var cvals []string
 	for _, k := range gitx.SubmoduleKeys {
 		cvals = append(cvals, k.Args...)

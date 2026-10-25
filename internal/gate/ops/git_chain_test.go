@@ -105,6 +105,7 @@ func gitState(t *testing.T, g *gitFixture) string {
 // its owner and its mode, before any git process starts, and nothing
 // changes; closed again, each runs.
 func TestGitRepoChain(t *testing.T) {
+	t.Parallel()
 	g := newGitFixture(t, "destructive")
 	gatetest.Push(t, g.work, "upstream.txt", "from upstream\n", "upstream change")
 	smallChange(t, g)
@@ -168,6 +169,7 @@ func TestGitRepoChain(t *testing.T) {
 // existing .git/config.worktree are refused for every git operation
 // (policy_denied), and nothing changes.
 func TestGitRepoStructure(t *testing.T) {
+	t.Parallel()
 	g := discardRepo(t)
 	gitDir := filepath.Join(g.repo, ".git")
 	for _, c := range []struct {
@@ -247,6 +249,7 @@ func recordedGits(t *testing.T, logp string) []gitRun {
 // before its subcommand, and every environment setting above. The gate's
 // git is a recorder that logs each run and then executes the real git.
 func TestGitEveryProcessIsolated(t *testing.T) {
+	t.Parallel()
 	g := newGitFixture(t, "destructive")
 	logp := filepath.Join(g.dir, "git.log")
 	g.opts.Git = gatetest.BuildGitRecorder(t, g.bin, logp, ops.GitPath)
@@ -324,6 +327,7 @@ func interleave(vals []string) []string {
 // it runs none. The gate's own operations refuse such configuration
 // outright (policy_denied, POLICY §7); this proves the second layer.
 func TestGitConfigHooksDisabled(t *testing.T) {
+	t.Parallel()
 	g := newGitFixture(t, "read")
 	marker := filepath.Join(g.dir, "MARKER")
 	script := filepath.Join(g.dir, "mark.sh")

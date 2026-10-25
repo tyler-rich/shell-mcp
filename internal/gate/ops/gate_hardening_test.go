@@ -77,6 +77,7 @@ type chainReq struct {
 // intermediate directory, the parent), exec_preview and exec refuse with
 // path_denied naming it, the same message each time, and nothing runs.
 func TestExecPathChain(t *testing.T) {
+	t.Parallel()
 	f := chainFixture(t)
 	a := filepath.Join(f.write, "a")
 	b := filepath.Join(a, "b")
@@ -133,6 +134,7 @@ func TestExecPathChain(t *testing.T) {
 // {path:read} or {path:write} that is one) must be closed itself; a file's
 // own mode does not matter.
 func TestExecDirTarget(t *testing.T) {
+	t.Parallel()
 	f := chainFixture(t)
 	dir := filepath.Join(f.write, "d")
 	gatetest.Mkdir(t, dir, 0o755)
@@ -191,6 +193,7 @@ func wantChainRefused(t *testing.T, r *[3]response, dir string, c chainReq) {
 // with the fresh preview's hash. Every request is refused at the
 // resolution, and the denied file is never read or written.
 func TestExecPathChainRace(t *testing.T) {
+	t.Parallel()
 	f := chainFixture(t)
 	secret := filepath.Join(f.secrets, "token")
 	race := filepath.Join(f.write, "race")
@@ -276,6 +279,7 @@ func TestExecPathChainRace(t *testing.T) {
 // owner and group through the descriptor it changed; a mismatch is
 // verify_failed, never a success.
 func TestChmodReadsBack(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "operator")
 	p := filepath.Join(f.write, "x.conf")
 	gatetest.WriteFile(t, p, "x\n", 0o600)
@@ -294,6 +298,7 @@ func TestChmodReadsBack(t *testing.T) {
 // through any operation, a command is never given it, and nothing moves
 // into or out of the directory that holds it; the refusals name it.
 func TestMoveStagingNameRefused(t *testing.T) {
+	t.Parallel()
 	f := chainFixture(t)
 	dir := filepath.Join(f.write, "s")
 	gatetest.Mkdir(t, dir, 0o755)

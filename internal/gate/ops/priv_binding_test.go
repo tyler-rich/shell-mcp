@@ -50,6 +50,7 @@ func (f *fixture) setLimits(maxS, defaultS int) {
 // `helper`, beside the gate's own `gate` block, on success and on a helper
 // error; a response the gate answers itself has none.
 func TestForwardHelperBlock(t *testing.T) {
+	t.Parallel()
 	for _, unit := range []string{"core", "broad"} {
 		t.Run(unit, func(t *testing.T) {
 			f := newFixture(t, "destructive")
@@ -97,6 +98,7 @@ func TestForwardHelperBlock(t *testing.T) {
 // timeout_ms clamped to its max_timeout_s, or its default_timeout_s when
 // the request has none — and everything else exactly as received.
 func TestForwardClampsTimeout(t *testing.T) {
+	t.Parallel()
 	const args = `{"path":"/etc/example-app"}`
 	for name, c := range map[string]struct {
 		field string
@@ -141,7 +143,8 @@ func TestForwardClampsTimeout(t *testing.T) {
 // forwarded, as the real helper does before it kills the command, and only
 // then answers (timed_out). The gate's answer must come after that run has
 // ended, and be the helper's; it must never be the gate's own timeout while
-// the helper is still running.
+// the helper is still running. Not parallel: the helper's run and the
+// gate's 2 s grace are wall-clock times.
 func TestForwardAnswerAfterHelperRun(t *testing.T) {
 	f := newFixture(t, "destructive")
 	var mu sync.Mutex

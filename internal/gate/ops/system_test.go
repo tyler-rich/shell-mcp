@@ -18,6 +18,7 @@ func (f *fixture) rawPolicy(y string) {
 }
 
 func TestSysinfo(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "read")
 	var d struct {
 		OS struct {
@@ -56,6 +57,7 @@ func TestSysinfo(t *testing.T) {
 }
 
 func TestDisk(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "read")
 	type mount struct {
 		MountPoint string `json:"mount_point"`
@@ -118,6 +120,7 @@ type procData struct {
 }
 
 func TestProcesses(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "read")
 	child := exec.CommandContext(t.Context(), f.probe, "sleep", "30s", "--password", "hunter2", "--token=abc123", "-p", "s3cret", //nolint:gosec // G204: test child built by this test
 		"https://user:pw@host.example.test/x", strings.Repeat("a", 700))

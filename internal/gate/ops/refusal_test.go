@@ -15,6 +15,7 @@ import (
 // what the policy needs, and that best-effort is the alternative — for a
 // low Landlock ABI, for no Landlock at all, and for a seccomp failure.
 func TestSandboxRefusalMessages(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		rep  sandbox.Report

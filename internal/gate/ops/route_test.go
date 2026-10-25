@@ -85,6 +85,7 @@ func (h *twoHelpers) count(sock string) int {
 // policy), and everything else to privileged.socket. The helper instance is
 // authoritative; this only picks the door.
 func TestRouting(t *testing.T) {
+	t.Parallel()
 	for op, c := range map[string]struct {
 		args string
 		want string
@@ -133,6 +134,7 @@ func TestRouting(t *testing.T) {
 // is sent; a malformed unit argument is bad_request; the args are still
 // forwarded byte for byte.
 func TestRoutingRefusals(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "destructive")
 	h := startTwoHelpers(t, f, "privileged:\n  enabled: true\n  socket: "+coreSock+"\n  max_tier: destructive\n")
 	f.ok("priv_stat", m{"path": "/etc/example-app"}, nil) // control
@@ -174,6 +176,7 @@ func TestRoutingRefusals(t *testing.T) {
 // mutating package operations operator (remove destructive), priv_power
 // destructive, and priv_power_cancel read (S4c-8: never approval-gated).
 func TestRoutingTiers(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "destructive")
 	h := startTwoHelpers(t, f, "privileged:\n  enabled: true\n  socket: "+coreSock+"\n  broad_socket: "+broadSock+"\n  max_tier: read\n")
 	for _, op := range []string{"priv_pkg_update_index_preview", "priv_pkg_install_preview", "priv_pkg_upgrade_preview", "priv_pkg_remove_preview", "priv_power_preview", "priv_power_cancel"} {
@@ -194,6 +197,7 @@ func TestRoutingTiers(t *testing.T) {
 // TestBackupCheckIsReadTier: priv_backup_check (handoff P-11) is a read op
 // the gate forwards at ceiling read, to the core socket.
 func TestBackupCheckIsReadTier(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "read")
 	h := startTwoHelpers(t, f, "privileged:\n  enabled: true\n  socket: "+coreSock+"\n  broad_socket: "+broadSock+"\n  max_tier: read\n")
 	f.writePolicy("read", "privileged:\n  enabled: true\n  socket: "+coreSock+"\n  broad_socket: "+broadSock+"\n  max_tier: read\n")
@@ -207,6 +211,7 @@ func TestBackupCheckIsReadTier(t *testing.T) {
 // gate forwards at ceiling read under privileged.max_tier read, to the core
 // socket.
 func TestPolicySummaryIsReadTier(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "read")
 	pol := "privileged:\n  enabled: true\n  socket: " + coreSock + "\n  broad_socket: " + broadSock + "\n  max_tier: read\n"
 	h := startTwoHelpers(t, f, pol)
@@ -221,6 +226,7 @@ func TestPolicySummaryIsReadTier(t *testing.T) {
 // to the core socket under privileged.max_tier read at ceiling read, while
 // the operations themselves are refused there.
 func TestMetaPreviewsAreReadTier(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "read")
 	pol := "privileged:\n  enabled: true\n  socket: " + coreSock + "\n  broad_socket: " + broadSock + "\n  max_tier: read\n"
 	h := startTwoHelpers(t, f, pol)
@@ -246,6 +252,7 @@ func TestMetaPreviewsAreReadTier(t *testing.T) {
 // core socket at ceiling read under privileged.max_tier read, while the
 // restore itself (operator) is refused there.
 func TestRestorePreviewIsReadTier(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "read")
 	pol := "privileged:\n  enabled: true\n  socket: " + coreSock + "\n  broad_socket: " + broadSock + "\n  max_tier: read\n"
 	h := startTwoHelpers(t, f, pol)
@@ -267,6 +274,7 @@ func TestRestorePreviewIsReadTier(t *testing.T) {
 // core socket at ceiling read under privileged.max_tier read, while the
 // delete itself is refused there.
 func TestDeletePreviewIsReadTier(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "read")
 	pol := "privileged:\n  enabled: true\n  socket: " + coreSock + "\n  broad_socket: " + broadSock + "\n  max_tier: read\n"
 	h := startTwoHelpers(t, f, pol)

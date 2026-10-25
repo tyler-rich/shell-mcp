@@ -207,6 +207,7 @@ func (f *fixture) fail(op string, args any, code string) {
 type m = map[string]any
 
 func TestHelloAndGateInfo(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "destructive")
 	var hello struct {
 		Protocol     int            `json:"protocol"`
@@ -240,6 +241,7 @@ func TestHelloAndGateInfo(t *testing.T) {
 }
 
 func TestSandboxBeforeRequest(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "read")
 	_, rd := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}` + "\n")
 	if !rd.read || rd.readFirst || f.sandboxCalls != 1 {
@@ -255,6 +257,7 @@ func TestSandboxBeforeRequest(t *testing.T) {
 }
 
 func TestInstallFailuresNeverReadRequest(t *testing.T) {
+	t.Parallel()
 	cases := map[string]func(f *fixture){
 		"root":          func(f *fixture) { f.opts.Identity.UID = 0 },
 		"trusted uid":   func(f *fixture) { f.opts.Identity.UID = install.ID(os.Getuid()) },
@@ -290,6 +293,7 @@ func TestInstallFailuresNeverReadRequest(t *testing.T) {
 }
 
 func TestDecodeErrors(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "read")
 	for in, code := range map[string]string{
 		`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","op":"write_file"}` + "\n":            "bad_request",
@@ -307,6 +311,7 @@ func TestDecodeErrors(t *testing.T) {
 }
 
 func TestTiersAndUnknownOps(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "read")
 	f.fail("write_file", m{"path": filepath.Join(f.write, "x"), "content_b64": ""}, "tier_denied")
 	f.fail("delete", m{"path": filepath.Join(f.write, "x")}, "tier_denied")
@@ -325,6 +330,7 @@ func TestTiersAndUnknownOps(t *testing.T) {
 }
 
 func TestPrivileged(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "operator")
 	f.fail("priv_read_file", m{"path": "/etc/example-app/x"}, "privileged_disabled")
 	f.writePolicy("operator", "privileged:\n  enabled: true\n  socket: /run/shell-mcp/privd.sock\n  max_tier: read\n")
@@ -336,6 +342,7 @@ func TestPrivileged(t *testing.T) {
 }
 
 func TestFileOps(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "destructive")
 	var rd struct {
 		Content string `json:"content"`
@@ -408,6 +415,7 @@ func TestFileOps(t *testing.T) {
 }
 
 func TestReadBackFault(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "operator")
 	f.opts.InjectReadBackFault = func(b []byte) []byte { return append(bytes.Clone(b), '!') }
 	f.fail("write_file", m{"path": filepath.Join(f.write, "v.txt"), "content_b64": base64.StdEncoding.EncodeToString([]byte("x"))}, "verify_failed")
@@ -424,6 +432,7 @@ type execData struct {
 }
 
 func TestExec(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "operator")
 	var d execData
 	f.ok("exec", m{"command_id": "probe-echo", "args": []string{"echo", "hello world"}}, &d)
@@ -462,6 +471,7 @@ func TestExec(t *testing.T) {
 }
 
 func TestExecTimeout(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "read")
 	resp, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"exec","args":{"command_id":"probe-io","args":["sleep","5s"]},"timeout_ms":300}` + "\n")
 	var d execData
@@ -471,6 +481,7 @@ func TestExecTimeout(t *testing.T) {
 }
 
 func TestPolicySummary(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t, "read")
 	var s struct {
 		MaxTier  string `json:"max_tier"`
@@ -508,6 +519,7 @@ func TestPolicySummary(t *testing.T) {
 // TestProductionOptionsHaveNoTestHooks: the production constructor never
 // sets a test-only hook, uses the fixed built-in binary paths, and audits.
 func TestProductionOptionsHaveNoTestHooks(t *testing.T) {
+	t.Parallel()
 	o, err := ops.ProductionOptions("v", "/etc/shell-mcp/policy.yaml", "readonly")
 	if err != nil {
 		t.Fatal(err)
