@@ -18,7 +18,7 @@ repo="$({ pwd -W 2>/dev/null || pwd; })"
 # --- Pinned image and tools ----------------------------------------------------
 # The Go image is read from the Dockerfile's builder stage, so Dependabot's
 # docker updates move CI-local, CI and the image build together.
-go_image="$(awk 'toupper($1) == "FROM" && $2 ~ /^golang:/ { print $2; exit }' Dockerfile)"
+go_image="$(awk 'toupper($1) == "FROM" { for (i = 2; i <= NF; i++) if ($i ~ /^golang:/) { print $i; exit } }' Dockerfile)"
 # golangci-lint and govulncheck run from their modules at pinned versions,
 # built by `go run` in the Go image above and verified by their go.sum and
 # the Go checksum database; keep them in step with GOLANGCI_LINT_VERSION and
@@ -177,6 +177,24 @@ step "go test -race (diagnostic build, server)" "" in_go sh -c "go test -race -t
 step "govulncheck" "" in_go go run "golang.org/x/vuln/cmd/govulncheck@$govulncheck_version" ./...
 step "build linux/amd64" "" cross_build amd64
 step "build linux/arm64" "" cross_build arm64
+# The release build (scripts/release/build.sh) as the release workflow runs
+# it, twice: every file must be byte-identical between the two (unsigned; the
+# workflow signs). The commit and its time are read here, on the host.
+release_snapshot() {
+	local commit epoch
+	commit="$(git rev-parse HEAD)"
+	epoch="$(git log -1 --format=%ct HEAD)"
+	in_go env SOURCE_DATE_EPOCH="$epoch" bash -c 'set -e
+		v="0.0.0-dryrun.${1:0:7}"
+		bash scripts/release/build.sh "$v" "$1" /tmp/release-a >/dev/null
+		bash scripts/release/build.sh "$v" "$1" /tmp/release-b >/dev/null
+		(cd /tmp/release-a && sha256sum -- *) >/tmp/a.sums
+		(cd /tmp/release-b && sha256sum -- *) | diff /tmp/a.sums -
+		cat /tmp/a.sums
+		echo "release snapshot: $(wc -l </tmp/a.sums) files, identical in two builds"' _ "$commit"
+}
+step "release snapshot build (twice)" "" release_snapshot
+step "release scripts self-test" "" in_go bash scripts/release/release_test.sh
 step "deps-current" "run go get -u ./... && go mod tidy, or bump go.mod's go line" in_go bash scripts/deps-current.sh
 step "deps-current self-test" "" in_go bash scripts/deps-current_test.sh
 step "release-binary-check self-test" "" in_go bash scripts/release-binary-check_test.sh
