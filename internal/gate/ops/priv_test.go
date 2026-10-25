@@ -105,7 +105,6 @@ func echoID(code string) func(string, net.Conn) {
 }
 
 func TestForwardRequestUnchanged(t *testing.T) {
-	t.Parallel()
 	f := newFixture(t, "destructive")
 	h := startHelper(t, f, echoID(""))
 	args := `{"path":"/etc/example-app/app.conf","content_b64":"eA==","mode":"0640","owner":"root"}`
@@ -138,9 +137,6 @@ func TestForwardRequestUnchanged(t *testing.T) {
 	}
 }
 
-// TestForwardErrors: each helper answer the gate cannot use maps to its
-// code. Not parallel: "no answer" bounds the gate's deadline (300 ms plus
-// the 200 ms grace) to 2.5 s of wall-clock time.
 func TestForwardErrors(t *testing.T) {
 	for name, c := range map[string]struct {
 		answer func(string, net.Conn)
@@ -185,7 +181,6 @@ func TestForwardErrors(t *testing.T) {
 // its read (or EPIPE on its write) rather than EOF — still a refusal with
 // no byte received, never helper_unavailable.
 func TestForwardRefusedWithRequestUnread(t *testing.T) {
-	t.Parallel()
 	f := newFixture(t, "destructive")
 	startHelper(t, f, echoID(""))
 	p := filepath.Join(sockDir(t), "refusing.sock")
@@ -291,7 +286,6 @@ func answerUnread(t *testing.T, f *fixture, line string, early bool) {
 // before the gate's write (EPIPE) or after it (a reset): never
 // helper_refused, which is kept for a close without a byte.
 func TestForwardHelperSelfCheckCodes(t *testing.T) {
-	t.Parallel()
 	for _, code := range selfCheckCodes {
 		for _, early := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/early=%v", code, early), func(t *testing.T) {
@@ -316,7 +310,6 @@ func TestForwardHelperSelfCheckCodes(t *testing.T) {
 }
 
 func TestForwardUnavailable(t *testing.T) {
-	t.Parallel()
 	f := newFixture(t, "destructive")
 	startHelper(t, f, echoID(""))
 	f.opts.DialHelper = func(ctx context.Context, _ string) (net.Conn, error) {
@@ -328,7 +321,6 @@ func TestForwardUnavailable(t *testing.T) {
 // The gate refuses before dialing when forwarding is disabled or the op is
 // above privileged.max_tier.
 func TestForwardRefusedAtGateNeverDials(t *testing.T) {
-	t.Parallel()
 	f := newFixture(t, "destructive")
 	h := startHelper(t, f, echoID(""))
 	f.writePolicy("destructive", "privileged:\n  enabled: true\n  socket: /run/shell-mcp/privd.sock\n  max_tier: operator\n")
@@ -344,7 +336,6 @@ func TestForwardRefusedAtGateNeverDials(t *testing.T) {
 // The gate's audit line for a forwarded request carries the request id and
 // the helper's outcome.
 func TestForwardAudit(t *testing.T) {
-	t.Parallel()
 	f := newFixture(t, "destructive")
 	startHelper(t, f, echoID("path_denied"))
 	next := f.auditTo(t)

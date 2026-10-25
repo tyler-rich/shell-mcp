@@ -33,7 +33,6 @@ func gateTree(t *testing.T, dir string) {
 }
 
 func TestDeleteBindsThePreview(t *testing.T) {
-	t.Parallel()
 	f := newFixture(t, "destructive")
 	dir := filepath.Join(f.write, "tree")
 	gateTree(t, dir)
@@ -72,7 +71,6 @@ func TestDeleteBindsThePreview(t *testing.T) {
 // point of the deletion pass; the gate answers exists and the newcomer
 // survives, in every run.
 func TestGateDeleteWindow(t *testing.T) {
-	t.Parallel()
 	f := newFixture(t, "destructive")
 	steps := []fsx.DeleteStep{fsx.DeleteStepAfterCompare, fsx.DeleteStepBeforeEntry, fsx.DeleteStepBeforeRename, fsx.DeleteStepAfterRename}
 	for i := range gateWindowRuns {
@@ -112,7 +110,6 @@ func TestGateDeleteWindow(t *testing.T) {
 // TestGateDeleteNamesASetAsideEntry: when an entry set aside cannot be put
 // back, the refusal and the gate's audit line name its temporary path.
 func TestGateDeleteNamesASetAsideEntry(t *testing.T) {
-	t.Parallel()
 	f := newFixture(t, "destructive")
 	next := f.auditTo(t)
 	dir := filepath.Join(f.write, "tree")

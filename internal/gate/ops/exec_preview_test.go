@@ -61,7 +61,6 @@ func execCases(f *fixture) []m {
 }
 
 func TestExecPreviewResolvesAsExec(t *testing.T) {
-	t.Parallel()
 	f := execPreviewFixture(t, "destructive")
 	for _, c := range execCases(f) {
 		var pv execPreview
@@ -121,7 +120,6 @@ func TestExecPreviewResolvesAsExec(t *testing.T) {
 }
 
 func TestExecExpectedPreview(t *testing.T) {
-	t.Parallel()
 	f := execPreviewFixture(t, "destructive")
 	out := filepath.Join(f.write, "wiped")
 	args := m{"command_id": "probe-wipe", "args": []string{"write", out}}
@@ -199,7 +197,6 @@ func TestExecExpectedPreview(t *testing.T) {
 // the request's ceiling, as exec checks it: a destructive command is
 // refused at ceiling operator (the operator profile's shell_run_command).
 func TestExecPreviewTier(t *testing.T) {
-	t.Parallel()
 	f := execPreviewFixture(t, "destructive")
 	args := m{"command_id": "probe-wipe", "args": []string{"write", filepath.Join(f.write, "x")}}
 	f.deniedAt("operator", "exec_preview", args, "ceiling operator")
@@ -324,7 +321,6 @@ func FuzzExecPreviewMatchesExec(f *testing.F) {
 // between is refused by the tier check, which comes before anything else,
 // and nothing runs.
 func TestExecRaisedTierStopsAtTheCeiling(t *testing.T) {
-	t.Parallel()
 	f := execPreviewFixture(t, "destructive")
 	out := filepath.Join(f.write, "raised")
 	args := m{"command_id": "probe-op", "args": []string{"write", out}}

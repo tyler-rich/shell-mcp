@@ -122,7 +122,6 @@ func actions(pv *discardPlan) map[string]string {
 }
 
 func TestGitDiscardPreviewReports(t *testing.T) {
-	t.Parallel()
 	g := discardRepo(t)
 	// A stash entry that must survive, made before the tree is dirtied.
 	gatetest.WriteFile(t, filepath.Join(g.repo, "app.conf"), "stashed\n", 0o644)
@@ -168,7 +167,6 @@ func TestGitDiscardPreviewReports(t *testing.T) {
 }
 
 func TestGitDiscardRestoresExactlyThePreview(t *testing.T) {
-	t.Parallel()
 	for _, untracked := range []bool{false, true} {
 		t.Run(fmt.Sprintf("include_untracked=%v", untracked), func(t *testing.T) {
 			g := discardRepo(t)
@@ -268,7 +266,6 @@ func setAsideUnder(t *testing.T, root string) []string {
 }
 
 func TestGitDiscardBindsThePreview(t *testing.T) {
-	t.Parallel()
 	g := discardRepo(t)
 	dirty(t, g)
 	pv := g.preview(t, true)
@@ -351,7 +348,6 @@ func replaceWith(t *testing.T, p, content string) {
 }
 
 func TestGitDiscardRefusals(t *testing.T) {
-	t.Parallel()
 	g := discardRepo(t)
 	repo := g.repo
 	both := func(name string, args m, code, msg string) {
@@ -490,7 +486,6 @@ func TestGitDiscardRefusals(t *testing.T) {
 // without the gate's flags. Gated: neither the preview nor the discard
 // runs any of them.
 func TestGitDiscardHooksNeverRun(t *testing.T) {
-	t.Parallel()
 	g := discardRepo(t)
 	marker := filepath.Join(g.dir, "hook-ran")
 	for _, h := range []string{"post-index-change", "post-checkout", "reference-transaction", "pre-commit", "post-rewrite"} {
@@ -527,7 +522,6 @@ func TestGitDiscardHooksNeverRun(t *testing.T) {
 // index lock, so a concurrent git add fails rather than being undone, and
 // the lock is released afterwards, also when the discard stops.
 func TestGitDiscardHoldsTheIndexLock(t *testing.T) {
-	t.Parallel()
 	g := discardRepo(t)
 	dirty(t, g)
 	pv := g.preview(t, false)
@@ -581,7 +575,6 @@ func TestGitDiscardHoldsTheIndexLock(t *testing.T) {
 // TestGitDiscardStaleGateLock: a gate that dies holding the lock leaves it
 // marked; the next preview and discard report it and never remove it.
 func TestGitDiscardStaleGateLock(t *testing.T) {
-	t.Parallel()
 	g := discardRepo(t)
 	dirty(t, g)
 	pv := g.preview(t, false)
@@ -831,7 +824,6 @@ func TestGitDiscardConcurrentRacer(t *testing.T) {
 // and the audit line name it, the index is unchanged, and a later preview
 // with include_untracked refuses to remove it.
 func TestGitDiscardNamesAStrandedEntry(t *testing.T) {
-	t.Parallel()
 	g := discardRepo(t)
 	next := g.auditTo(t)
 	dirty(t, g)
@@ -874,7 +866,6 @@ func TestGitDiscardNamesAStrandedEntry(t *testing.T) {
 // the entry set aside is not removed, the refusal names it, and the index
 // is unchanged.
 func TestGitDiscardOpenDescriptorWrite(t *testing.T) {
-	t.Parallel()
 	g := discardRepo(t)
 	victim := filepath.Join(g.repo, "app.conf")
 	for _, at := range []fsx.DiscardStep{fsx.DiscardStepBeforeUntracked, fsx.DiscardStepBeforeCheckout, fsx.DiscardStepAfterCheckout} {

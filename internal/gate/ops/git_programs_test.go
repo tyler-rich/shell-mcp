@@ -144,7 +144,6 @@ func installedHookEvents(t *testing.T) []string {
 
 // TestGitProgramKeysCovered: see the file comment.
 func TestGitProgramKeysCovered(t *testing.T) {
-	t.Parallel()
 	ver := strings.TrimSpace(installedGit(t, "version"))
 	keys := strings.Fields(installedGit(t, "help", "--config"))
 	events := installedHookEvents(t)
@@ -169,7 +168,6 @@ func TestGitProgramKeysCovered(t *testing.T) {
 // add, a hook event and a program-running key the gate does not cover, and
 // for a table entry whose override is missing from the gate's argv.
 func TestGitProgramKeyGapsFound(t *testing.T) {
-	t.Parallel()
 	cvals, env := gateCValues(), ops.GitEnv("/home/svc", "/srv/app/deploy")
 	if g := programKeyGaps(gitx.ProgramKeys, []string{"core.editor", "user.name", "filter.<driver>.clean"}, gitx.HookEvents, cvals, env); len(g) != 0 {
 		t.Fatalf("covered keys reported: %q", g)
@@ -239,7 +237,6 @@ func submoduleKeyGaps(table []gitx.SubmoduleKey, keys, cvals []string) []string 
 // make a command enter a submodule is covered by gitx.SubmoduleKeys, and
 // every -c value of the table is on the gate's command line.
 func TestGitSubmoduleKeysCovered(t *testing.T) {
-	t.Parallel()
 	ver := strings.TrimSpace(installedGit(t, "version"))
 	keys := strings.Fields(installedGit(t, "help", "--config"))
 	matched := 0
@@ -261,7 +258,6 @@ func TestGitSubmoduleKeysCovered(t *testing.T) {
 // TestGitSubmoduleKeyGapsFound: the check fails for a key a future git
 // could add and for a table override missing from the gate's argv.
 func TestGitSubmoduleKeyGapsFound(t *testing.T) {
-	t.Parallel()
 	var cvals []string
 	for _, k := range gitx.SubmoduleKeys {
 		cvals = append(cvals, k.Args...)

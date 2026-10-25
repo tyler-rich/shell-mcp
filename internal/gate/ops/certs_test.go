@@ -41,7 +41,6 @@ func selfSigned(t *testing.T, cn string, days int) (certPEM, keyPEM string) {
 }
 
 func TestCertInspect(t *testing.T) {
-	t.Parallel()
 	f := newFixture(t, "read")
 	cert, key := selfSigned(t, "app.example.test", 20)
 	gatetest.WriteFile(t, filepath.Join(f.read, "tls", "cert.pem"), cert, 0o644)
