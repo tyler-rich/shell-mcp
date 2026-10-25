@@ -2,7 +2,8 @@
 # Proves deps-current.sh cannot pass vacuously: on a scratch copy of the
 # module it must fail when a real go.mod requirement is behind its newest
 # release, when the go line is behind the newest stable Go, when a CI tool pin
-# is behind or drifts, and when ci-local's golangci-lint runs on a Go older than
+# (golangci-lint, govulncheck, Trivy, Grype, gitleaks, cosign, syft, the loopback
+# registry image) is behind or drifts, and when ci-local's golangci-lint runs on a Go older than
 # go.mod's go line; and that the Go check follows the published golang image
 # (deps-current-go.sh, against a fake go.dev and registry, offline). Needs go,
 # curl and network access to the module proxy for the other cases.
@@ -38,10 +39,11 @@ setup_failed() {
 copy() {
 	local dst="$work/$1"
 	mkdir -p "$dst"
-	mkdir -p "$dst/.github/workflows" "$dst/scripts"
+	mkdir -p "$dst/.github/workflows" "$dst/scripts/release"
 	cp -R "$repo/go.mod" "$repo/go.sum" "$repo/Dockerfile" "$repo/cmd" "$repo/internal" "$dst/"
-	cp "$repo/.github/workflows/ci.yml" "$dst/.github/workflows/"
+	cp "$repo/.github/workflows/ci.yml" "$repo/.github/workflows/release-build.yml" "$dst/.github/workflows/"
 	cp "$repo/scripts/ci-local.sh" "$dst/scripts/"
+	cp "$repo/scripts/release/Dockerfile.registry" "$dst/scripts/release/"
 	echo "$dst"
 }
 
@@ -140,6 +142,52 @@ else
 	expect "lint step outside the Go image fails" 1 "golangci-lint in scripts/ci-local.sh does not run with the Go image's go" "$lintimage"
 fi
 
+# 12-20. The release and scanner tools: each pin older than its newest stable
+#     release fails, the files that pin one tool must agree, and a pin that
+#     cannot be found fails. pin <dir> <file> <VAR> <value> sets one.
+pin() {
+	sed -i "s/^\( *$3: \).*/\1$4/" "$1/$2"
+	grep -q "^ *$3: $4\$" "$1/$2"
+}
+ci=".github/workflows/ci.yml" rel=".github/workflows/release-build.yml"
+oldtrivy="$(copy oldtrivy)"
+if pin "$oldtrivy" "$ci" TRIVY_VERSION v0.70.0 && pin "$oldtrivy" "$rel" TRIVY_VERSION v0.70.0; then
+	expect "old Trivy pin fails" 1 "Trivy v0.70.0 is older than the newest stable" "$oldtrivy"
+else setup_failed "could not set the Trivy pins"; fi
+trivydrift="$(copy trivydrift)"
+if pin "$trivydrift" "$rel" TRIVY_VERSION v0.70.0; then
+	expect "Trivy pin drift fails" 1 "Trivy is pinned differently" "$trivydrift"
+else setup_failed "could not set the release Trivy pin"; fi
+oldgrype="$(copy oldgrype)"
+if pin "$oldgrype" "$ci" GRYPE_VERSION v0.110.0 && pin "$oldgrype" "$rel" GRYPE_VERSION v0.110.0; then
+	expect "old Grype pin fails" 1 "Grype v0.110.0 is older than the newest stable" "$oldgrype"
+else setup_failed "could not set the Grype pins"; fi
+oldleaks="$(copy oldleaks)"
+if pin "$oldleaks" "$ci" GITLEAKS_VERSION 8.28.0; then
+	expect "old gitleaks pin fails" 1 "gitleaks v8.28.0 is older than the newest stable" "$oldleaks"
+else setup_failed "could not set the gitleaks pin"; fi
+oldcosign="$(copy oldcosign)"
+if pin "$oldcosign" "$rel" COSIGN_VERSION v3.0.0; then
+	expect "old cosign pin fails" 1 "cosign v3.0.0 is older than the newest stable" "$oldcosign"
+else setup_failed "could not set the cosign pin"; fi
+oldsyft="$(copy oldsyft)"
+if pin "$oldsyft" "$rel" SYFT_VERSION v1.40.0; then
+	expect "old syft pin fails" 1 "syft v1.40.0 is older than the newest stable" "$oldsyft"
+else setup_failed "could not set the syft pin"; fi
+nocosign="$(copy nocosign)"
+sed -i '/^  COSIGN_VERSION: /d' "$nocosign/$rel"
+expect "missing cosign pin fails" 1 "cannot find the cosign pin" "$nocosign"
+vulnrel="$(copy vulnrel)"
+if pin "$vulnrel" "$rel" GOVULNCHECK_VERSION v1.1.4; then
+	expect "release govulncheck pin drift fails" 1 "govulncheck is pinned differently" "$vulnrel"
+else setup_failed "could not set the release govulncheck pin"; fi
+oldreg="$(copy oldreg)"
+sed -i 's#^FROM registry:[^ ]*#FROM registry:3.0.0@sha256:6c5666b861f3505b116bb9aa9b25175e71210414bd010d92035ff64018f9457e#' "$oldreg/scripts/release/Dockerfile.registry"
+if grep -q '^FROM registry:3.0.0@' "$oldreg/scripts/release/Dockerfile.registry"; then
+	expect "old loopback registry image fails" 1 "the loopback registry image registry:3.0.0 is older than registry:" "$oldreg"
+else setup_failed "could not set the registry image"; fi
+expect "current tool pins pass" 0 "deps-current: cosign v" "$current"
+
 # --- Go toolchain vs. published golang image (offline) ---------------------------
 # deps-current-go.sh runs with a fake curl first on PATH: go.dev and the
 # registry are canned responses, so these cases never touch the network. The
@@ -225,16 +273,16 @@ expect_go() { # expect_go <name> <want-exit> <want-substring> <dir> [VAR=value..
 	fi
 }
 
-# 12. The newest stable Go has its image and go.mod is older: fail as before.
+# 21. The newest stable Go has its image and go.mod is older: fail as before.
 expect_go "newer Go with image fails" 1 "go.mod 'go 1.27.2' is older than the newest stable Go 1.27.3" \
 	"$(gomod "$work/go-a" 1.27.2)" FAKE_IMAGES="1.27.3-trixie 1.27.2-trixie"
-# 13. The newest stable Go has no image yet and go.mod is on the newest Go
+# 22. The newest stable Go has no image yet and go.mod is on the newest Go
 #     that has one: pass, and name the Go version awaiting its image.
 expect_go "newer Go without image passes" 0 "deps-current: INFO — Go 1.27.3 is released but golang:1.27.3-trixie is not published yet" \
 	"$(gomod "$work/go-b" 1.27.2)" FAKE_IMAGES="1.27.2-trixie 1.27.1-trixie"
 expect_go "newer Go without image reports the target" 0 "matches Go 1.27.2, the newest stable Go with a published golang:1.27.2-trixie image" \
 	"$work/go-b" FAKE_IMAGES="1.27.2-trixie 1.27.1-trixie"
-# 14. The registry cannot be queried: fail closed, whichever request breaks.
+# 23. The registry cannot be queried: fail closed, whichever request breaks.
 expect_go "registry token error fails" 1 "deps-current: FAIL — cannot query the registry for golang:1.27.3-trixie" \
 	"$(gomod "$work/go-c" 1.27.2)" FAKE_IMAGES="1.27.2-trixie" FAKE_FAIL=token
 expect_go "registry manifest error fails" 1 "deps-current: FAIL — cannot query the registry for golang:1.27.3-trixie" \
@@ -243,16 +291,16 @@ expect_go "unexpected registry status fails" 1 "deps-current: FAIL — cannot qu
 	"$work/go-c" FAKE_IMAGES="1.27.2-trixie" FAKE_MANIFEST_STATUS=429
 expect_go "go.dev error fails" 1 "could not determine the newest Go release" \
 	"$work/go-c" FAKE_IMAGES="1.27.3-trixie" FAKE_FAIL=go
-# 15. go.mod older than the newest Go that has an image: fail.
+# 24. go.mod older than the newest Go that has an image: fail.
 expect_go "go.mod older than newest Go with image fails" 1 "go.mod 'go 1.27.1' is older than Go 1.27.2, the newest stable Go with a published golang:1.27.2-trixie image" \
 	"$(gomod "$work/go-d" 1.27.1)" FAKE_IMAGES="1.27.2-trixie 1.27.1-trixie"
-# 16. go.mod on a Go whose image is not published yet: fail (nothing can build it).
+# 25. go.mod on a Go whose image is not published yet: fail (nothing can build it).
 expect_go "go.mod ahead of the newest image fails" 1 "go.mod go 1.27.3 is newer than Go 1.27.2, the newest stable Go with a published golang:1.27.2-trixie image" \
 	"$(gomod "$work/go-f" 1.27.3)" FAKE_IMAGES="1.27.2-trixie"
-# 17. Current: go.mod on the newest stable Go, whose image exists.
+# 26. Current: go.mod on the newest stable Go, whose image exists.
 expect_go "current Go passes" 0 "go.mod go 1.27.3 (toolchain implied by go line) matches newest stable Go 1.27.3" \
 	"$(gomod "$work/go-e" 1.27.3)" FAKE_IMAGES="1.27.3-trixie 1.27.2-trixie"
-# 18. The walk back is bounded: no image among the newest releases fails.
+# 27. The walk back is bounded: no image among the newest releases fails.
 expect_go "no image among the newest releases fails" 1 "deps-current: FAIL — none of the 5 newest stable Go releases (1.27.9 … 1.27.5) has a published golang:<version>-trixie image" \
 	"$(gomod "$work/go-g" 1.27.3)" FAKE_GO_RELEASES="$work/rel-gap.json" FAKE_IMAGES="1.27.3-trixie"
 
