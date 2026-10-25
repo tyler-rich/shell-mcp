@@ -2,7 +2,12 @@
 # All names, hosts and fingerprints are placeholders.
 services:
   shell-mcp:
-    image: ghcr.io/tyler-rich/shell-mcp:0.0.1 # TODO(S5): pin digest
+    # Pin the release by digest: replace this line with the release's
+    # 0.1.0@sha256:<digest> from its release notes, or from
+    #   docker buildx imagetools inspect ghcr.io/tyler-rich/shell-mcp:0.1.0 --format '{{.Manifest.Digest}}'
+    # once you have verified it (README, "Verifying a release"). This file is
+    # part of the release, which cannot contain its own image's digest.
+    image: ghcr.io/tyler-rich/shell-mcp:0.1.0
     restart: unless-stopped
     user: "65532:65532"
     read_only: true

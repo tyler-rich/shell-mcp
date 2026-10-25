@@ -1,10 +1,14 @@
 # Deploying shell-mcp
 
-> Pre-alpha. Until Session 2 lands, `serve` refuses to start in `bearer` mode ("bearer auth arrives in Session 2"), so none of these deployments serve traffic yet. The files show the intended, hardened shape.
+> **Pin the image by digest.** The commands below write `ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:<digest>`: take the digest from the release notes, or from
+> `docker buildx imagetools inspect ghcr.io/tyler-rich/shell-mcp:0.1.0 --format '{{.Manifest.Digest}}'`,
+> and verify it first (README, "Verifying a release"). The reference compose ships with the tag only, because a release cannot contain its own image's digest; replace it.
 
 The server needs only two secrets, the MCP bearer token and the SSH private key, plus each target's pinned host-key fingerprint. It needs no Docker socket, host mounts or capabilities. See [`../docs/SECURITY.md`](../docs/SECURITY.md) §3 and §7, and [`.env.example`](.env.example) for every variable.
 
 ## Secrets
+
+Run these in this directory, next to `docker-compose.yml`: Compose resolves its `./secrets/…` paths relative to the compose file.
 
 ```sh
 mkdir -p secrets && chmod 700 secrets
@@ -17,7 +21,7 @@ chmod 600 secrets/*
 chown 65532:65532 secrets/mcp_token secrets/ssh_key
 ```
 
-Install `secrets/ssh_key.pub` on the target as described in the target setup guide, and pin the target's host key: `ssh-keyscan -t ed25519 <host> | ssh-keygen -lf -` prints the `SHA256:` fingerprint. Check it against the host's own `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` over a trusted channel. Never trust a key on first use.
+Install `secrets/ssh_key.pub` on the target as described in [`../docs/TARGET-SETUP.md`](../docs/TARGET-SETUP.md) §7, and pin the target's host key: `ssh-keyscan -t ed25519 <host> | ssh-keygen -lf -` prints the `SHA256:` fingerprint. Check it against the host's own `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` over a trusted channel. Never trust a key on first use.
 
 ## Plain docker
 
@@ -35,20 +39,22 @@ docker run -d --name shell-mcp \
   -e "SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:placeholder" \
   -v "$PWD/secrets/mcp_token:/run/secrets/mcp_token:ro" \
   -v "$PWD/secrets/ssh_key:/run/secrets/ssh_key:ro" \
-  ghcr.io/tyler-rich/shell-mcp:0.0.1
+  ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:<digest>
 ```
 
-`docker run --rm ghcr.io/tyler-rich/shell-mcp:0.0.1 check` (with the same environment and mounts) validates the configuration, connects to every target, verifies its host key and calls the gate's `hello`, and prints the result: the configuration with the token shown only as a length and the key only as its fingerprint, then per target the verified host-key pin, gate version, protocol, principal, policy hash, `max_tier`, sandbox status and the profile's tools that target can serve. It exits non-zero if any target fails.
+`docker run --rm ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:<digest> check` (with the same environment and mounts) validates the configuration, connects to every target, verifies its host key and calls the gate's `hello`, and prints the result: the configuration with the token shown only as a length and the key only as its fingerprint, then per target the verified host-key pin, gate version, protocol, principal, policy hash, `max_tier`, sandbox status and the profile's tools that target can serve. It exits non-zero if any target fails.
 
 ## Docker Compose
 
 [`docker-compose.yml`](docker-compose.yml) is the reference deployment. Its hardening flags (`user`, `read_only`, `cap_drop`, `security_opt`, the loopback-only `ports`, limits) are normative. Keep them.
 
 ```sh
-docker compose -f deploy/docker-compose.yml up -d
+docker compose up -d
 ```
 
 Publish the port only on loopback, or on a specific LAN/VPN interface address. Terminate TLS at a reverse proxy or run over a VPN, and do not expose this server to the public internet.
+
+The compose runs the `read-only` profile with approvals off. For the `operator` or `admin` profile, and for the approval page (its own port, an approvers file in `secrets:`, `SHELL_MCP_APPROVAL_*`), see [`../docs/CLIENTS.md`](../docs/CLIENTS.md) §2 and §3.
 
 ## Stack editors (DockHand, Portainer, …)
 
