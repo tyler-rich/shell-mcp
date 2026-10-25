@@ -3892,6 +3892,8 @@ cosign is not installed on the workstation, so it ran from the official image `g
 - `scripts/release/release_test.sh`: two tests pin the new notes wording; committed first and run failing (`44 passed, 2 failed`), passing after the change.
 - `docs/CLIENTS.md`: both `ghcr.io/tyler-rich/shell-mcp:0.1.0` references (the enrolment and the stdio examples) carry `@sha256:9c19075a…387dd4`, as `deploy/` does (N-29).
 
-**Not changed, by design:** no workflow, signing or attestation step, and no attestation for `SHA256SUMS` (that would be a design change). Left as they are: the workflow's step name "provenance (every release file)" and its header comments (a workflow edit is the maintainer's call; they are less exact than the notes now are), and the 0.1.0 CHANGELOG section.
+**Workflow, wording only (maintainer-approved):** in `.github/workflows/release-build.yml`, the `sign` entry of the header comment now says exactly what is signed and attested, and the step named "provenance (every release file)" is renamed "provenance (every file SHA256SUMS lists)". No job name, step id, `uses:` line, input or check name changed, and nothing that affects behaviour.
+
+**Not changed, by design:** no signing or attestation step, no attestation for `SHA256SUMS` (that would be a design change), and the 0.1.0 CHANGELOG section.
 
 **Versions:** no dependency or Go change in this docs-only branch; as in the previous entry.
