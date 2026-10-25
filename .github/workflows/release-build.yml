@@ -198,8 +198,11 @@ jobs:
             out="$("dist/${c}_${VERSION}_linux_amd64" version)"
             echo "$out"
             case "$out" in "$c $VERSION (commit $GITHUB_SHA, "*) ;; *) echo "unexpected version output" >&2; exit 1 ;; esac
-            go version -m "dist/${c}_${VERSION}_linux_arm64" | grep -F -- "-X main.version=$VERSION -X main.commit=$GITHUB_SHA" >/dev/null ||
-              { echo "${c} arm64: version not stamped" >&2; exit 1; }
+            # The arm64 binary cannot run here, and -trimpath keeps -ldflags out
+            # of its build information: its stamped strings must be in it.
+            for s in "$VERSION" "$GITHUB_SHA"; do
+              grep -a -q -F -- "$s" "dist/${c}_${VERSION}_linux_arm64" || { echo "${c} arm64: $s not stamped" >&2; exit 1; }
+            done
           done
       - name: SBOMs are CycloneDX and list the modules
         run: |
