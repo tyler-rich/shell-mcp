@@ -3644,3 +3644,14 @@ uutils' dispatch, verified at the source, lets the executed file's name decide, 
 - **Direct modules:** go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
 - **Dependencies added:** none.
 - **Tools:** golangci-lint v2.15.0, govulncheck v1.9.0.
+
+**2026-10-24 — PR #53 follow-up: CI on `a31199c`, and the content cache's key.**
+- **CI on `a31199c`** (run `40147253200`): every job passed, the `ci` aggregate included; CodeQL passed.
+  - ubuntu-24.04: `LANDLOCK_PATH=psx kernel_abi=7 effective_abi=7` (its forced-psx step is skipped, as on every ABI 7 runner).
+  - ubuntu-26.04: `LANDLOCK_PATH=tsync kernel_abi=8 effective_abi=8`; its forced step `LANDLOCK_PATH=psx kernel_abi=8 effective_abi=7`.
+  - Race step, 24.04 / 26.04: `internal/gate/ops` 298.6 / 366.6 s, `internal/privd/ops` 262.7 / 269.1 s, `internal/gate/fsx` 43.0 / 55.2 s, `internal/tools` 42.7 / 58.0 s, `cmd/shell-mcp-gate` 30.4 / 32.9 s, `internal/gate/execx` 16.0 / 22.7 s, `internal/privd/pkg` 8.6 / 10.4 s, `internal/gate/policy` 2.8 / 3.3 s, `internal/privd/policy` 2.7 / 3.6 s.
+  - `TestRealCoreutils` ran on both images: GNU on 24.04; uutils with its `--list` on 26.04.
+  - e2e-host: 124 of 124 passed, none skipped. `TestMulticallRunnerLayout`, `TestMulticallCheckPolicy` (all 31 cases), `TestMulticallGateExec` and `TestMulticallHelperExec` all passed.
+  - `TestMulticallHelperExec` settles the open question: in the core unit (the preview reported unit `core`, and the run went there), `/usr/bin/chown --version` printed `chown (uutils coreutils) …`, and the worked example re-owned its one path to `example-app:example-app`. So Ubuntu's `/proc/self/exe` check passes under the core unit's sandbox and Landlock: its readlink of the command's own `/proc/self/exe` works there (`ProtectProc=ptraceable` shows a process itself; Landlock has no right governing readlink). Nothing was loosened.
+- **The content cache's key (the maintainer's question).** It was keyed on device and inode only. A binary rewritten in place under the same inode during one load would have kept its first identification, though the cache never outlives a load. It is now keyed on device, inode, size, modification time and change time in nanoseconds (`FileKey`), so any of them changing reads the file again, as finely as the kernel's timestamps (one clock tick). `TestContentCacheSeesRewrite` (committed failing first, `b7f5f26`) rewrites a fixture in place three ways and fails on all three before the fix: with another size; with the same size and a new mtime; and with the same size and its mtime put back, so that only the change time differs.
+- **Judgement calls accepted by the maintainer:** a list B interpreter needs the acknowledge and is reported as recognised by resolved name; `install -s` needs the acknowledge.
