@@ -497,7 +497,7 @@ Then set `SHELL_MCP_APPROVAL_METHOD=web`, `SHELL_MCP_APPROVAL_PUBLIC_URL=https:/
 
 ## Verifying a release
 
-Each [GitHub release](https://github.com/tyler-rich/shell-mcp/releases) has the binaries (`shell-mcp`, `shell-mcp-gate`, `shell-mcp-privd`, as `<name>_X.Y.Z_linux_<arch>`), `shell-mcp_X.Y.Z_examples.tar.gz`, CycloneDX SBOMs, `SHA256SUMS`, and a Sigstore bundle `<file>.sigstore.json` for every binary, the archive and `SHA256SUMS`. The image is `ghcr.io/tyler-rich/shell-mcp:X.Y.Z`, with its digest in the release notes. Everything is signed by the release workflow **at the release's tag**, and only that identity is a release: a dry run or a branch build has another one and fails these checks. For 0.1.0:
+Each [GitHub release](https://github.com/tyler-rich/shell-mcp/releases) has the binaries (`shell-mcp`, `shell-mcp-gate`, `shell-mcp-privd`, as `<name>_X.Y.Z_linux_<arch>`), `shell-mcp_X.Y.Z_examples.tar.gz`, CycloneDX SBOMs, `LICENSE` and `NOTICE`, `SHA256SUMS`, and a Sigstore bundle `<file>.sigstore.json` for every binary, the archive and `SHA256SUMS`. The image is `ghcr.io/tyler-rich/shell-mcp:X.Y.Z`, with its digest in the release notes. Everything is signed by the release workflow **at the release's tag**, and only that identity is a release: a dry run or a branch build has another one and fails these checks. For 0.1.0:
 
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
@@ -526,7 +526,7 @@ gh attestation verify oci://ghcr.io/tyler-rich/shell-mcp@sha256:<digest from the
   --signer-workflow tyler-rich/shell-mcp/.github/workflows/release-build.yml --source-ref refs/tags/v0.1.0
 ```
 
-Run the `cosign verify-blob` and `gh attestation verify` lines for each file you use (`SHA256SUMS` and the examples archive included). These are the checks the release workflow itself runs after signing, together with the refusal of another ref ([ARCHITECTURE §7](docs/ARCHITECTURE.md#7-build-release-and-supply-chain)).
+Run the `cosign verify-blob` line for each binary you use, the examples archive and `SHA256SUMS`, and the `gh attestation verify` line for each file you use that `SHA256SUMS` lists. `SHA256SUMS` itself has a signature but no attestation of its own: the provenance is recorded for each file it lists, so `gh attestation verify SHA256SUMS` finds nothing (HTTP 404). These are the checks the release workflow itself runs after signing, together with the refusal of another ref ([ARCHITECTURE §7](docs/ARCHITECTURE.md#7-build-release-and-supply-chain)).
 
 ## Upgrading
 
