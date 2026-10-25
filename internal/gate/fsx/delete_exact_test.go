@@ -589,7 +589,8 @@ func fiIsDir(t *testing.T, p string) bool {
 // delay of up to the deletion's measured duration and then, until the
 // delete returns, keeps creating new files in random directories of the
 // tree and replacing random files of the tree by other inodes. Every file
-// it managed to create survives, in every run.
+// it managed to create survives, in every run, at its path or, in the one
+// documented case (racerRunProblem), reported under a temporary name.
 func TestDeleteConcurrentRacer(t *testing.T) {
 	t.Parallel()
 	const runs = 400
@@ -611,7 +612,7 @@ func TestDeleteConcurrentRacer(t *testing.T) {
 	slices.Sort(durs)
 	dur := max(durs[len(durs)/2], 20*time.Microsecond)
 
-	var atRecompute, during, completed, planted int
+	var atRecompute, during, stranded, completed, planted int
 	for i := range runs {
 		dir := filepath.Join(e.write, fmt.Sprintf("r%d", i))
 		files := mkRacerTree(t, dir)
@@ -654,12 +655,20 @@ func TestDeleteConcurrentRacer(t *testing.T) {
 			during++
 		}
 		planted += len(w)
-		if _, problem := racerRunProblem(e.write, files, w, err); problem != nil {
+		aside, problem := racerRunProblem(e.write, files, w, err)
+		if problem != nil {
 			t.Fatalf("run %d: %v", i, problem)
 		}
+		if aside != "" {
+			stranded++
+			// Recovered as an operator would (POLICY §3), so that every
+			// later run is checked for temporary names of its own.
+			must(t, os.Remove(aside))
+		}
 	}
-	t.Logf("concurrent racer: %d runs (a deletion takes ~%v): %d refused at the recompute, %d stopped during deletion, %d completed before the racer "+
-		"changed anything; %d racer files, every one survived", runs, dur, atRecompute, during, completed, planted)
+	t.Logf("concurrent racer: %d runs (a deletion takes ~%v): %d refused at the recompute, %d stopped during deletion (%d of them leaving the racer's "+
+		"earlier file set aside, reported), %d completed before the racer changed anything; %d racer files, every one survived",
+		runs, dur, atRecompute, during, stranded, completed, planted)
 }
 
 // mkRacerTree makes the racer's tree under dir (s1, s2 and s3, each with
@@ -710,21 +719,59 @@ func tempNames(dir string) []string {
 	return out
 }
 
-// racerRunProblem checks one racer run, after DeleteExact returned: every
-// file the racer put into the tree is still there with the content it put
-// last (each earlier one was replaced by the racer itself), and no entry
-// is left set aside anywhere under root. It returns the path of an entry
-// left set aside that it accepts ("" when there is none).
-func racerRunProblem(root string, _ []string, w racerWrites, _ error) (string, error) {
+// racerRunProblem checks one racer run, after DeleteExact returned err:
+// every file the racer put into the tree is still there with the content
+// it put last (each earlier one was replaced by the racer itself), and no
+// entry is left set aside anywhere under root, with one exception, the
+// documented one (POLICY §3, "Entries set aside and not removed"). The
+// racer replaced a listed file after its check under its name and before
+// it was set aside, so what was set aside failed its check; and it took
+// the name again before the put-back. The racer's earlier file then stays
+// under its temporary name. That is accepted only when it is the one
+// entry left set aside under root; the refusal is exists, not unchanged,
+// and names it (Error.SetAside, and the message with the listed file it
+// was set aside from); that file is one of the tree's, in the same
+// directory; and the entry is a regular file holding one of the racer's
+// earlier writes at that file, not its last (which holds the name). It
+// returns the path of the entry it accepted ("" when there is none).
+func racerRunProblem(root string, files []string, w racerWrites, err error) (string, error) {
 	for p, cs := range w {
 		if got, rerr := os.ReadFile(p); rerr != nil || string(got) != cs[len(cs)-1] { //nolint:gosec // G304: test fixture
 			return "", fmt.Errorf("the racer's file %s was deleted or changed (%v): the deletion removed something it never saw", p, rerr)
 		}
 	}
-	if left := tempNames(root); len(left) > 0 {
-		return "", fmt.Errorf("a temporary name was left behind: %s", left[0])
+	left := tempNames(root)
+	var fe *Error
+	reported := errors.As(err, &fe) && fe.SetAside != ""
+	switch {
+	case len(left) == 0 && !reported:
+		return "", nil
+	case len(left) == 0:
+		return "", fmt.Errorf("the refusal names %s as set aside, but no temporary name was left", fe.SetAside)
+	case len(left) > 1:
+		return "", fmt.Errorf("%d temporary names were left behind: %v", len(left), left)
+	case !reported:
+		return "", fmt.Errorf("a temporary name was left behind without being reported: %s (%v)", left[0], err)
 	}
-	return "", nil
+	aside := left[0]
+	if fe.SetAside != aside || fe.Code != protocol.CodeExists || fe.Unchanged || !strings.Contains(fe.Msg, "it was left, not deleted, as "+aside) {
+		return "", fmt.Errorf("the entry left as %s is not the one the refusal reports: %+v", aside, fe)
+	}
+	from := ""
+	for _, p := range files {
+		if strings.Contains(fe.Msg, "the entry set aside from "+p+" could not be put back") {
+			from = p
+		}
+	}
+	if from == "" || filepath.Dir(from) != filepath.Dir(aside) {
+		return "", fmt.Errorf("the entry left as %s was not set aside from a file of the tree in its directory: %s", aside, fe.Msg)
+	}
+	fi, lerr := os.Lstat(aside)
+	got, rerr := os.ReadFile(aside) //nolint:gosec // G304: test fixture
+	if cs := w[from]; lerr != nil || rerr != nil || !fi.Mode().IsRegular() || len(cs) < 2 || !slices.Contains(cs[:len(cs)-1], string(got)) {
+		return "", fmt.Errorf("the entry left as %s is not one of the racer's earlier files at %s (%q, %v)", aside, from, got, errors.Join(lerr, rerr))
+	}
+	return aside, nil
 }
 
 // putBackTaken deletes the racer's tree under dir while its victim
