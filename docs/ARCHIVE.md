@@ -3888,7 +3888,7 @@ cosign is not installed on the workstation, so it ran from the official image `g
 **Changed (wording only):**
 - `scripts/release/render-notes.sh`: `SHA256SUMS` lists every release file except itself and the Sigstore bundles; provenance is for every file it lists and the image index; `SHA256SUMS` itself has no attestation and its cosign signature covers it; SBOM attestations are for the binaries and platform images; one sentence on which command to run for which file, as in the README. The five commands are unchanged and match the README's.
 - `docs/ARCHITECTURE.md` §7 (the **sign** step): same statement, naming `subject-checksums: dist/SHA256SUMS`.
-- `scripts/release/verify.sh`: the header comment now says what the script checks (it already attested-checked exactly the listed files and the index).
+- `scripts/release/verify.sh`: the header comment now says what the script checks (it already checked exactly the listed files and the index).
 - `scripts/release/release_test.sh`: two tests pin the new notes wording; committed first and run failing (`44 passed, 2 failed`), passing after the change.
 - `docs/CLIENTS.md`: both `ghcr.io/tyler-rich/shell-mcp:0.1.0` references (the enrolment and the stdio examples) carry `@sha256:9c19075a…387dd4`, as `deploy/` does (N-29).
 
