@@ -2,7 +2,7 @@
 # they ship as release assets. Base images are pinned by digest (D-013);
 # Dependabot keeps them current.
 
-FROM golang:1.27.3-trixie@sha256:1896654cfc5c2b5ad74c07f29cb36f5d2d1cbed42e3054070fbfe444e521e83c AS builder
+FROM golang:1.27.3-trixie@sha256:fbb7ae40b62ff8afe31662df570d39b4f5052ac32b90dae8e60d7657a20a74f4 AS builder
 
 ARG VERSION=dev
 ARG REVISION=dev
@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 go build -trimpath -buildvcs=true \
       -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${REVISION}" \
       -o /out/shell-mcp ./cmd/shell-mcp
 
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99
 
 ARG VERSION=dev
 ARG REVISION=dev
