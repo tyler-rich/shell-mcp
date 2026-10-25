@@ -2,10 +2,15 @@
 # they ship as release assets. Base images are pinned by digest (D-013);
 # Dependabot keeps them current.
 
-FROM golang:1.27.3-trixie@sha256:fbb7ae40b62ff8afe31662df570d39b4f5052ac32b90dae8e60d7657a20a74f4 AS builder
+# The builder runs on the build machine's platform and cross-compiles for the
+# target (TARGETOS/TARGETARCH, set by BuildKit), so the arm64 image needs no
+# emulation: the final stage only copies the binary.
+FROM --platform=$BUILDPLATFORM golang:1.27.3-trixie@sha256:fbb7ae40b62ff8afe31662df570d39b4f5052ac32b90dae8e60d7657a20a74f4 AS builder
 
 ARG VERSION=dev
 ARG REVISION=dev
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -13,9 +18,11 @@ RUN go mod download && go mod verify
 COPY cmd ./cmd
 COPY internal ./internal
 
-# .dockerignore excludes .git, so -buildvcs=true stamps no VCS data here; the
-# revision is injected through ldflags and the OCI revision label.
-RUN CGO_ENABLED=0 go build -trimpath -buildvcs=true \
+# The same flags as scripts/release/build.sh, so that the image's binary is
+# byte-identical to the released shell-mcp binary of its platform (the
+# release workflow checks it). The revision is injected through ldflags and
+# the OCI revision label; no VCS data is stamped (.dockerignore excludes .git).
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -buildvcs=false \
       -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${REVISION}" \
       -o /out/shell-mcp ./cmd/shell-mcp
 

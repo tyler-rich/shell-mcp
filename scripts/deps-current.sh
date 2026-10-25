@@ -176,7 +176,7 @@ if [[ "$lint_steps" -eq 0 || "$lint_steps" != "$lint_steps_in_go" ]]; then
 	fail=1
 	lint_go_ok=0
 fi
-go_image="$(awk 'toupper($1) == "FROM" && $2 ~ /^golang:/ { print $2; exit }' Dockerfile 2>/dev/null || true)"
+go_image="$(awk 'toupper($1) == "FROM" { for (i = 2; i <= NF; i++) if ($i ~ /^golang:/) { print $i; exit } }' Dockerfile 2>/dev/null || true)"
 lint_go="$(sed -n 's/^golang:\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)[-@].*/\1/p' <<<"$go_image")"
 if [[ -z "$lint_go" ]]; then
 	echo "deps-current: FAIL — cannot read the Go version from the Dockerfile's golang image (got '$go_image')"

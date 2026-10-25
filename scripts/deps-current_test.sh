@@ -123,8 +123,8 @@ expect "tool pin drift between files fails" 1 "govulncheck is pinned differently
 #     older than go.mod's go line fails (with GOTOOLCHAIN=local it cannot load
 #     the module).
 oldlintgo="$(copy oldlintgo)"
-sed -i 's#^\(FROM golang:\)[0-9][0-9.]*-#\11.26.0-#' "$oldlintgo/Dockerfile"
-if ! grep -q '^FROM golang:1.26.0-' "$oldlintgo/Dockerfile"; then
+sed -i 's#^\(FROM .*golang:\)[0-9][0-9.]*-#\11.26.0-#' "$oldlintgo/Dockerfile"
+if ! grep -q '^FROM .*golang:1.26.0-' "$oldlintgo/Dockerfile"; then
 	setup_failed "could not set the Go image version in the scratch Dockerfile"
 else
 	expect "lint Go older than go.mod fails" 1 "golangci-lint in scripts/ci-local.sh runs on Go 1.26.0, older than go.mod's go" "$oldlintgo"
