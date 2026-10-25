@@ -39,8 +39,8 @@ func (s *server) hello(raw jsontext.Value) (data any, warns []string, failure er
 			ops = append(ops, op)
 		}
 	}
-	for _, c := range s.p.Commands {
-		if c.Tier <= s.p.MaxTier {
+	for i := range s.p.Commands {
+		if s.p.Commands[i].Tier <= s.p.MaxTier {
 			ops = append(ops, protocol.OpExec, protocol.OpExecPreview)
 			break
 		}
@@ -146,7 +146,8 @@ func PolicySummary(p *policy.Policy) Summary {
 	for _, r := range p.Git.Repos {
 		s.Git.Repos = append(s.Git.Repos, repoSummary{Path: r.Path, Remote: redactRemote(r.Remote)})
 	}
-	for _, c := range p.Commands {
+	for i := range p.Commands {
+		c := &p.Commands[i]
 		cs := cmdSummary{ID: c.ID, Description: c.Description, Tier: c.Tier.String(), RootEquivalent: c.RootEquivalent, Templates: [][]string{}}
 		for _, t := range c.Templates {
 			cs.Templates = append(cs.Templates, t.String())

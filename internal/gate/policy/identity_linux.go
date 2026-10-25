@@ -58,7 +58,7 @@ func scanned(name string, extra []string) bool {
 	if _, _, denied := hardDenied(name); denied {
 		return true
 	}
-	return notCommand(name) || slices.Contains(extra, name)
+	return notCommand(name) || slices.Contains(extra, name) || slices.Contains(extra, CanonicalName(name))
 }
 
 // scanDenied lists the files under dirs whose names are scanned; each real
@@ -171,29 +171,52 @@ func (s *IdentityScan) MatchAll(resolved string, fi os.FileInfo) ([]IdentityMatc
 
 // identity compares the resolved command binary with every scanned file:
 // identical to a hard-denied file, or to a built-in operation's binary or a
-// D-Bus client, it is refused as that name would be.
-func (v *validator) identity(field, resolved string, fi os.FileInfo, opts *LoadOptions) bool {
+// D-Bus client, it is refused as that name would be. For the uutils
+// multi-call binary (S-MC), which runs as the name of the file it is
+// executed by, its other names are its other utilities and say nothing
+// about this command; any other name is refused.
+func (v *validator) identity(field, resolved string, fi os.FileInfo, opts *LoadOptions, uutils bool, via string) bool {
 	if v.scan == nil {
 		v.scan = NewIdentityScan(opts.SystemBinDirs)
 	}
 	ms, err := v.scan.MatchAll(resolved, fi)
 	if err != nil {
-		v.fail(field+".path", "%v", err)
+		v.fail(field+".path", "%s%v", via, err)
 		return false
+	}
+	if uutils {
+		ms, err = UutilsSiblings(resolved, ms)
+		if err != nil {
+			v.fail(field+".path", "%s%v", via, err)
+			return false
+		}
 	}
 	for _, m := range ms {
 		if m.Group > 0 {
-			v.fail(field+".path", "%s is a hard link to, or a copy of, the hard-denied %q (%s; group %d: %s)", resolved, m.Name, m.Path, m.Group, m.GroupName)
+			v.fail(field+".path", "%s%s is a hard link to, or a copy of, the hard-denied %q (%s; group %d: %s)", via, resolved, m.Name, m.Path, m.Group, m.GroupName)
 			return false
 		}
 	}
 	for _, m := range ms {
 		if notCommand(m.Name) {
-			v.fail(field+".path", "%s is a hard link to, or a copy of, %q (%s), which may not be a policy command", resolved, m.Name, m.Path)
+			v.fail(field+".path", "%s%s is a hard link to, or a copy of, %q (%s), which may not be a policy command", via, resolved, m.Name, m.Path)
 			return false
 		}
 	}
 	return true
+}
+
+// UutilsSiblings drops from a uutils binary's identity matches the names
+// that are its own utilities, and refuses one under any other name: the
+// uutils binary is never also a shell, or a renamed program of another
+// package, and if it is, its names cannot be trusted.
+func UutilsSiblings(resolved string, ms []IdentityMatch) ([]IdentityMatch, error) {
+	for _, m := range ms {
+		if !IsUutilsApplet(m.Name) {
+			return nil, fmt.Errorf("%s is the uutils multi-call binary and is also reached as %q (%s), which is not one of its utilities", resolved, m.Name, m.Path)
+		}
+	}
+	return nil, nil
 }
 
 // CheckFile checks an already-opened or stat'ed file: regular, owned by a

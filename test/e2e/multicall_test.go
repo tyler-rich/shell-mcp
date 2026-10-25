@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,9 +38,9 @@ const (
 	mcOwned      = chainRoot + "/mc-owned"
 )
 
-// runAs runs a command as uid and returns its output and exit code; a
-// failure to start is fatal.
-func runAs(t *testing.T, uid uint32, name string, args ...string) (string, int) {
+// runAs runs a command as uid and returns its output, whatever its exit
+// status (check-policy exits 1 for any FAIL); a failure to start is fatal.
+func runAs(t *testing.T, uid uint32, name string, args ...string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	defer cancel()
@@ -51,14 +52,11 @@ func runAs(t *testing.T, uid uint32, name string, args ...string) (string, int) 
 	cmd.Stdout, cmd.Stderr = &out, &out
 	err := cmd.Run()
 	var ee *exec.ExitError
-	switch {
-	case err == nil:
-		return out.String(), 0
-	case errors.As(err, &ee):
-		return out.String(), ee.ExitCode()
+	if err == nil || errors.As(err, &ee) {
+		return out.String()
 	}
 	t.Fatalf("%s %v: %v", name, args, err)
-	return "", 0
+	return ""
 }
 
 // TestMulticallRunnerLayout: the runner's coreutils are laid out as the
@@ -69,7 +67,7 @@ func TestMulticallRunnerLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := os.ReadFile(r) //nolint:gosec // G304: the runner's own chown
+	b, err := os.ReadFile(r)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,11 +91,21 @@ func TestMulticallRunnerLayout(t *testing.T) {
 func mcFixture(t *testing.T) {
 	t.Helper()
 	cp := func(src, dst string) {
-		b, err := os.ReadFile(src) //nolint:gosec // G304: the runner's own binaries
+		in, err := os.Open(src) //nolint:gosec // G304: the runner's own binaries
 		if err != nil {
 			t.Fatal(err)
 		}
-		rootFile(t, dst, string(b), 0o755)
+		defer func() { _ = in.Close() }()
+		out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755) //nolint:gosec // G302,G304: a fixed fixture path; an executable copy
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.Copy(out, in); err != nil {
+			t.Fatal(err)
+		}
+		if err := out.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	cp("/usr/bin/gnuenv", "/usr/local/bin/e2e-mc-renamed-env")
 	cp("/usr/bin/gnuchown", "/usr/local/bin/e2e-mc-renamed-chown")
@@ -198,18 +206,18 @@ func TestMulticallCheckPolicy(t *testing.T) {
 			cmd := fmt.Sprintf("commands:\n  - id: x\n    path: %s\n    tier: read\n%%s    templates: %s\n", c.path, c.tpl)
 			gp := filepath.Join(mcPolicyDir, c.name+"-gate.yaml")
 			rootFile(t, gp, "version: 1\nmax_tier: read\npaths:\n  read: [/srv/e2e-gate]\n"+fmt.Sprintf(cmd, ""), 0o644)
-			out, _ := runAs(t, svcShell, gateBin, "check-policy", "--policy", gp)
+			out := runAs(t, svcShell, gateBin, "check-policy", "--policy", gp)
 			wantCheck(t, "gate", out, c.gate, c.gateNote)
 
 			privHead := "version: 1\nclient_uid: 4200001\nsocket_group: svc-shell-priv\nmax_tier: operator\npaths:\n  write: [/srv/e2e-priv-exec/root]\n" +
 				"owners:\n  users: [root]\n  groups: [root]\nmodes:\n  max: \"0755\"\n"
 			pp := filepath.Join(mcPolicyDir, c.name+"-priv.yaml")
 			rootFile(t, pp, privHead+fmt.Sprintf(cmd, ""), 0o600)
-			out, _ = runAs(t, 0, privdBin, "check-policy", "--policy", pp)
+			out = runAs(t, 0, privdBin, "check-policy", "--policy", pp)
 			wantCheck(t, "helper", out, c.priv, c.privNote)
 			if c.priv == "acknowledge" || c.privAck != "" {
 				rootFile(t, pp, privHead+fmt.Sprintf(cmd, "    acknowledge: \"e2e: invented review note\"\n"), 0o600)
-				out, _ = runAs(t, 0, privdBin, "check-policy", "--policy", pp)
+				out = runAs(t, 0, privdBin, "check-policy", "--policy", pp)
 				wantCheck(t, "helper, acknowledged", out, c.privAck, "")
 			}
 		})

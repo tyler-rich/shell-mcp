@@ -24,6 +24,9 @@ func FuzzN13Match(f *testing.F) {
 		f.Add(s, "/srv", s)
 	}
 	f.Add("unattended-upgrades", "-name", "-delete")
+	f.Add("sort", "--compress-program=x", "-u")
+	f.Add("gnuinstall", "-Ds", "--strip")
+	f.Add("split", "--f", "--filter=cat")
 	f.Fuzz(func(t *testing.T, base, tok1, tok2 string) {
 		class, group := policy.Classify(base)
 		if c2, g2 := policy.Classify(base); c2 != class || g2 != group {
@@ -36,6 +39,8 @@ func FuzzN13Match(f *testing.F) {
 			want = policy.ClassPackageTool
 		case base == "find":
 			want = policy.ClassFind
+		case slices.Contains([]string{"sort", "split", "install"}, gpolicy.CanonicalName(base)):
+			want = policy.ClassAction
 		case slices.Contains(n13BusClients, base) || gpolicy.IsBuiltinOp(base):
 			want = policy.ClassNotCommand
 		case denied && g <= 10:
@@ -67,6 +72,14 @@ func FuzzN13Match(f *testing.F) {
 		for _, tok := range padded {
 			if !slices.Contains(n13FindActions, tok) && policy.FindAction([]string{tok}) != "" {
 				t.Fatalf("FindAction(%q) found an action", tok)
+			}
+		}
+		// ProgramAction reports one of the tokens, only an option (a placeholder
+		// value never starts with "-"), and only for sort, split and install.
+		for _, prog := range []string{"sort", "split", "install", base} {
+			a := policy.ProgramAction(prog, tokens)
+			if a != "" && (!slices.Contains(tokens, a) || !strings.HasPrefix(a, "-") || !slices.Contains([]string{"sort", "split", "install"}, prog)) {
+				t.Fatalf("ProgramAction(%q, %q) = %q", prog, tokens, a)
 			}
 		}
 	})

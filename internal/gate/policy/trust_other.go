@@ -17,7 +17,7 @@ func checkFile(_ Trust, _ string, _ fs.FileInfo) error { return errLinuxOnly }
 
 func errReason(err error) string { return err.Error() }
 
-func (v *validator) identity(field, _ string, _ os.FileInfo, _ *LoadOptions) bool {
+func (v *validator) identity(field, _ string, _ os.FileInfo, _ *LoadOptions, _ bool, _ string) bool {
 	v.fail(field, "%v", errLinuxOnly)
 	return false
 }

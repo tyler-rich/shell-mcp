@@ -644,11 +644,11 @@ func (v *validator) commands(p *Policy, raw []rawCommand, opts *LoadOptions) {
 			continue
 		}
 		c.Description = rc.Description
-		resolved, ok := v.resolveCommand(field, &rc, opts)
+		prog, ok := v.resolveCommand(field, &rc, opts)
 		if !ok {
 			continue
 		}
-		c.Resolved = resolved
+		c.Resolved, c.Applet, c.Interpreter = prog.resolved, prog.applet, prog.interpreter
 		if len(rc.Templates) == 0 || len(rc.Templates) > template.MaxTemplateCount {
 			v.fail(field+".templates", "needs 1..%d templates", template.MaxTemplateCount)
 			continue
@@ -679,61 +679,121 @@ func (v *validator) commands(p *Policy, raw []rawCommand, opts *LoadOptions) {
 	}
 }
 
-// resolveCommand resolves the binary, applies the hard-deny list to the
-// base name as written and as resolved, requires root_equivalent for
-// container CLIs, and checks ownership of the binary and its directories.
-func (v *validator) resolveCommand(field string, rc *rawCommand, opts *LoadOptions) (resolved string, ok bool) {
-	if err := pathx.CheckClean(rc.Path); err != nil {
-		v.fail(field+".path", "%v", err)
-		return "", false
+// program is a resolved command binary: its real path, the uutils utility
+// it runs as, and a script's resolved interpreter.
+type program struct{ resolved, applet, interpreter string }
+
+// maxScripts is how many #! scripts the kernel follows in a chain:
+// "up to a limit of four recursions" (execve(2)).
+const maxScripts = 5
+
+// resolveCommand resolves a command's binary (resolveProgram) and warns
+// when it runs as another name than the one written, or has documented
+// escape techniques.
+func (v *validator) resolveCommand(field string, rc *rawCommand, opts *LoadOptions) (program, bool) {
+	prog, ok := v.resolveProgram(field, rc.Path, rc.RootEquivalent, opts, 0, "")
+	if !ok {
+		return prog, false
 	}
-	resolved, err := filepath.EvalSymlinks(rc.Path)
+	written, ran := filepath.Base(rc.Path), filepath.Base(prog.resolved)
+	if written != ran {
+		v.warn("%s: %s resolves to %s; it runs as %q, the name it is executed by, not as %q (argv[0] is the resolved path; POLICY §5)", field, rc.Path, prog.resolved, ran, written)
+	}
+	if w := EscapeWarning(field, false, CanonicalName(written), CanonicalName(ran)); w != "" {
+		v.warn("%s", w)
+	}
+	return prog, true
+}
+
+// resolveProgram resolves a binary, applies the hard-deny list to the base
+// name as written and as resolved, requires root_equivalent for container
+// CLIs, checks ownership of the binary and its directories, and judges it
+// by its content (S-MC): BusyBox, toybox and GNU coreutils as one binary
+// are refused; the uutils multi-call binary runs as the resolved file's
+// name, which must be one of its utilities; a GNU coreutils program that
+// carries a listed program's name is that program; and a #! script is
+// judged by its interpreter, resolved the same way (depth scripts above
+// it; via, when set, says so in every message).
+func (v *validator) resolveProgram(field, p string, rootEquivalent bool, opts *LoadOptions, depth int, via string) (program, bool) {
+	fail := func(sub, format string, args ...any) (program, bool) {
+		v.fail(field+sub, "%s"+format, append([]any{via}, args...)...)
+		return program{}, false
+	}
+	if err := pathx.CheckClean(p); err != nil {
+		return fail(".path", "%v", err)
+	}
+	resolved, err := filepath.EvalSymlinks(p)
 	if err != nil {
-		v.fail(field+".path", "%s cannot be resolved: %v", rc.Path, errReason(err))
-		return "", false
+		return fail(".path", "%s cannot be resolved: %v", p, errReason(err))
 	}
-	for _, base := range []string{filepath.Base(rc.Path), filepath.Base(resolved)} {
+	for _, base := range []string{filepath.Base(p), filepath.Base(resolved)} {
 		if g, name, denied := hardDenied(base); denied {
-			v.fail(field+".path", "%s resolves to %q, which is hard-denied (group %d: %s)", rc.Path, base, g, name)
-			return "", false
+			return fail(".path", "%s resolves to %q, which is hard-denied (group %d: %s)", p, base, g, name)
 		}
 		if slices.Contains(builtinOps, base) {
-			v.fail(field+".path", "%q may not be a policy command; use the built-in operations", base)
-			return "", false
+			return fail(".path", "%q may not be a policy command; use the built-in operations", base)
 		}
 		if slices.Contains(busClients, base) {
-			v.fail(field+".path", "%q may not be a policy command: a D-Bus client can start units or power off the host", base)
-			return "", false
+			return fail(".path", "%q may not be a policy command: a D-Bus client can start units or power off the host", base)
 		}
-		if slices.Contains(containerCLIs, base) && !rc.RootEquivalent {
-			v.fail(field+".root_equivalent", "%q is root-equivalent; set root_equivalent: true to acknowledge it", base)
-			return "", false
+		if slices.Contains(containerCLIs, base) && !rootEquivalent {
+			return fail(".root_equivalent", "%q is root-equivalent; set root_equivalent: true to acknowledge it", base)
 		}
 	}
 	if _, err = CheckChain(opts.Trust, resolved); err != nil {
-		v.fail(field+".path", "%v", err)
-		return "", false
+		return fail(".path", "%v", err)
 	}
 	fi, err := os.Stat(resolved)
 	if err != nil {
-		v.fail(field+".path", "%s: %v", resolved, errReason(err))
-		return "", false
+		return fail(".path", "%s: %v", resolved, errReason(err))
 	}
-	if err := checkFile(opts.Trust, resolved, fi); err != nil {
-		v.fail(field+".path", "%v", err)
-		return "", false
+	if ferr := checkFile(opts.Trust, resolved, fi); ferr != nil {
+		return fail(".path", "%v", ferr)
 	}
 	if fi.Mode().Perm()&0o111 == 0 {
-		v.fail(field+".path", "%s is not executable", resolved)
-		return "", false
+		return fail(".path", "%s is not executable", resolved)
 	}
-	if !v.identity(field, resolved, fi, opts) {
-		return "", false
+	ct, err := ProbeContent(resolved, fi.Size())
+	if err != nil {
+		return fail(".path", "%s %v", resolved, err)
 	}
-	if w := EscapeWarning(field, false, filepath.Base(rc.Path), filepath.Base(resolved)); w != "" {
-		v.warn("%s", w)
+	prog := program{resolved: resolved}
+	switch ct.Kind {
+	case ContentBusyBox, ContentToybox:
+		return fail(".path", "%s is %s (recognised by its content), which is hard-denied (group 1: shells)", resolved, ct.Kind)
+	case ContentGNUMulti:
+		return fail(".path", "%s is %s (recognised by its content), which is not supported: it runs as the name in argv[0] or its first argument (POLICY §5)", resolved, ct.Kind)
+	case ContentUutils:
+		prog.applet = filepath.Base(resolved)
+		if !IsUutilsApplet(prog.applet) {
+			return fail(".path", "%s is the uutils multi-call binary, which runs as the name of the file it is executed by; %q is not one of its utilities (POLICY §5)", resolved, prog.applet)
+		}
+	case ContentGNU:
+		if len(ct.Names) > 0 {
+			g, gname, _ := hardDenied(ct.Names[0])
+			return fail(".path", "%s carries the GNU coreutils marker and the program name %q, which is hard-denied (group %d: %s)", resolved, ct.Names[0], g, gname)
+		}
+		if !IsGNUProgram(filepath.Base(resolved)) {
+			v.warn("%s: %s carries the GNU coreutils marker, but %q is not a GNU coreutils program name; a renamed copy of a listed GNU coreutils program is refused only where its content names it (POLICY §5)", field, resolved, filepath.Base(resolved))
+		}
+	case ContentScript:
+		if depth >= maxScripts {
+			return fail(".path", "%s is a #! script nested more than %d deep, which the kernel refuses", resolved, maxScripts)
+		}
+		if cerr := pathx.CheckClean(ct.Interpreter); cerr != nil || !filepath.IsAbs(ct.Interpreter) {
+			return fail(".path", "%s is a #! script whose interpreter %q is not an absolute clean path", resolved, ct.Interpreter)
+		}
+		ip, ok := v.resolveProgram(field, ct.Interpreter, false, opts, depth+1, fmt.Sprintf("%s%s is a #! script run by %s: ", via, resolved, ct.Interpreter))
+		if !ok {
+			return program{}, false
+		}
+		prog.interpreter = ip.resolved
+		v.warn("%s: %s is a #! script run by %s; the interpreter reads the script and gets the template's arguments after it (POLICY §5)", field, resolved, ip.resolved)
 	}
-	return resolved, true
+	if !v.identity(field, resolved, fi, opts, ct.Kind == ContentUutils, via) {
+		return program{}, false
+	}
+	return prog, true
 }
 
 // roots emits warnings that need the whole policy.
@@ -745,9 +805,13 @@ func (v *validator) roots(p *Policy, opts *LoadOptions) {
 	if _, ok := pathx.Longest(execDirs, opts.GateExecutable); opts.GateExecutable != "" && !ok {
 		v.warn("the gate binary %s is outside the sandbox's read+execute directories; under Landlock no command, git, systemctl or journalctl operation can start (install it under /usr, or add its directory to sandbox.system_read_exec)", opts.GateExecutable)
 	}
-	for _, c := range p.Commands {
+	for i := range p.Commands {
+		c := &p.Commands[i]
 		if _, ok := pathx.Longest(execDirs, c.Resolved); !ok {
 			v.warn("commands[%s]: %s is outside the sandbox's read+execute directories; add its directory to sandbox.system_read_exec", c.ID, c.Resolved)
+		}
+		if _, ok := pathx.Longest(execDirs, c.Interpreter); c.Interpreter != "" && !ok {
+			v.warn("commands[%s]: the interpreter %s is outside the sandbox's read+execute directories, so the script cannot start; add its directory to sandbox.system_read_exec", c.ID, c.Interpreter)
 		}
 	}
 	for _, d := range p.Sandbox.SystemReadExec {

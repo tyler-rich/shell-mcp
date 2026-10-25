@@ -243,6 +243,11 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust
 		}
 	} else {
 		pr("ok   policy: sha256 %s, max_tier %s, %d commands", p.SHA256, p.MaxTier, len(p.Commands))
+		for i := range p.Commands {
+			if c := &p.Commands[i]; c.Applet != "" {
+				pr("ok   commands[%s]: %s is the uutils multi-call binary; it runs as %s (the name of the file it is executed by)", c.ID, c.Resolved, c.Applet)
+			}
+		}
 		for _, w := range p.Warnings {
 			pr("WARN %s", w)
 		}

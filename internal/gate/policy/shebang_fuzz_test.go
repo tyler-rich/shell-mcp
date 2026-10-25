@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -31,7 +32,7 @@ func FuzzShebang(f *testing.F) {
 			strings.TrimLeft(arg, " \t") != arg || strings.TrimRight(arg, " \t") != arg {
 			t.Fatalf("%q: interpreter %q, argument %q", b, interp, arg)
 		}
-		if n := strings.Index(string(b), "\n"); n < 0 || n >= 256 {
+		if n := bytes.IndexByte(b, '\n'); n < 0 || n >= 256 {
 			t.Fatalf("%q: parsed past the kernel's 256 bytes", b)
 		}
 	})

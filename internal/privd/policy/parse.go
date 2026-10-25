@@ -595,9 +595,9 @@ func (v *validator) command(field string, rc *rawCommand, maxTier Tier) (Command
 		v.fail(field+".unit", "is %q; want core or broad", rc.Unit)
 		ok = false
 	}
-	resolved, rec, rok := v.resolve(field, rc)
+	prog, rec, rok := v.resolve(field, rc)
 	ok = ok && rok
-	c.Resolved = resolved
+	c.Resolved, c.Applet, c.Interpreter = prog.resolved, prog.applet, prog.interpreter
 	if !v.commandCapabilities(field, rc, &c) {
 		ok = false
 	}
@@ -618,13 +618,18 @@ func (v *validator) command(field string, rc *rawCommand, maxTier Tier) (Command
 			c.Templates = append(c.Templates, tpl)
 		}
 	}
-	if !ok || !v.review(field, &c, rec) {
+	if !ok || !v.review(field, &c, rec, prog.scriptArgs) {
 		return c, false
 	}
 	// The gate's GTFOBins list and warning (POLICY §6), for a command that
 	// runs as root (handoff N-16).
-	if w := gpolicy.EscapeWarning(field, true, filepath.Base(rc.Path), filepath.Base(resolved)); w != "" {
+	if w := gpolicy.EscapeWarning(field, true, gpolicy.CanonicalName(filepath.Base(rc.Path)), gpolicy.CanonicalName(filepath.Base(prog.resolved))); w != "" {
 		v.warn("%s", w)
+	}
+	if _, inSystem := pathx.Longest(gpolicy.DefaultReadExec(), c.Interpreter); c.Interpreter != "" && c.Unit == UnitCore && !inSystem {
+		// The core unit's Landlock ruleset grants read+execute on the
+		// system directories and each command's own binary (PRIVILEGED §5.1).
+		v.warn("%s: the interpreter %s is outside the core unit's read+execute directories, so the script cannot start there", field, c.Interpreter)
 	}
 	if c.Unit == UnitBroad {
 		// The broad unit has network and full root capabilities: whatever the
@@ -672,97 +677,180 @@ func notCommandReason(base string) string {
 // every other listed program the binary was recognised as (groups 11–13,
 // package tools, find), for command to require an acknowledge and report
 // them (handoff N-13).
-func (v *validator) resolve(field string, rc *rawCommand) (resolved string, rec []recognised, ok bool) {
-	if err := pathx.CheckClean(rc.Path); err != nil {
-		v.fail(field+".path", "%v", err)
-		return "", nil, false
+func (v *validator) resolve(field string, rc *rawCommand) (prog program, rec []recognised, ok bool) {
+	prog, rec, ok = v.resolveProgram(field, rc.Path, rc.RootEquivalent, 0, "")
+	if ok {
+		if written, ran := filepath.Base(rc.Path), filepath.Base(prog.resolved); written != ran {
+			v.warn("%s: %s resolves to %s; it runs as %q, the name it is executed by, not as %q (argv[0] is the resolved path; POLICY §5)", field, rc.Path, prog.resolved, ran, written)
+		}
 	}
-	resolved, err := filepath.EvalSymlinks(rc.Path)
+	return prog, rec, ok
+}
+
+// program is a resolved command binary: its real path, the uutils utility
+// it runs as, a script's resolved interpreter, and the arguments of every
+// #! line on the way to it.
+type program struct {
+	resolved, applet, interpreter string
+	scriptArgs                    []string
+}
+
+// maxScripts is how many #! scripts the kernel follows in a chain:
+// "up to a limit of four recursions" (execve(2)).
+const maxScripts = 5
+
+// resolveProgram resolves a binary and applies the gate's checks with the
+// helper's lists, by name as written, as resolved, by its content and by
+// identity (S-MC, as the gate's resolveProgram): BusyBox, toybox and GNU
+// coreutils as one binary are refused; the uutils multi-call binary is
+// judged by the utility it runs as, the resolved file's name, which must be
+// one of its utilities, and its other names are ignored; a GNU coreutils
+// program carrying a listed program's name is that program; a #! script is
+// judged by its interpreter, whose programs count as resolved names (depth
+// scripts above it; via, when set, says so in every message).
+func (v *validator) resolveProgram(field, p string, rootEquivalent bool, depth int, via string) (prog program, rec []recognised, ok bool) {
+	fail := func(sub, format string, args ...any) (program, []recognised, bool) {
+		v.fail(field+sub, "%s"+format, append([]any{via}, args...)...)
+		return program{}, nil, false
+	}
+	if err := pathx.CheckClean(p); err != nil {
+		return fail(".path", "%v", err)
+	}
+	resolved, err := filepath.EvalSymlinks(p)
 	if err != nil {
-		v.fail(field+".path", "%s cannot be resolved: %v", rc.Path, gpolicy.ErrReason(err))
-		return "", nil, false
+		return fail(".path", "%s cannot be resolved: %v", p, gpolicy.ErrReason(err))
 	}
 	add := func(r recognised) {
 		if !slices.ContainsFunc(rec, func(o recognised) bool { return o.name == r.name }) {
 			rec = append(rec, r)
 		}
 	}
-	for _, b := range []struct{ base, match string }{{filepath.Base(rc.Path), MatchWritten}, {filepath.Base(resolved), MatchResolved}} {
+	for _, b := range []struct{ base, match string }{{filepath.Base(p), MatchWritten}, {filepath.Base(resolved), MatchResolved}} {
 		switch {
 		case strings.HasPrefix(b.base, "shell-mcp"):
-			v.fail(field+".path", "%q may not be a command: it is one of this project's binaries", b.base)
-			return "", nil, false
-		case gpolicy.IsContainerCLI(b.base) && !rc.RootEquivalent:
-			v.fail(field+".root_equivalent", "%q is root-equivalent; set root_equivalent: true to acknowledge it", b.base)
-			return "", nil, false
+			return fail(".path", "%q may not be a command: it is one of this project's binaries", b.base)
+		case gpolicy.IsContainerCLI(b.base) && !rootEquivalent:
+			return fail(".root_equivalent", "%q is root-equivalent; set root_equivalent: true to acknowledge it", b.base)
 		}
 		switch class, g := Classify(b.base); class {
 		case ClassNotCommand:
-			v.fail(field+".path", "%q may not be a privileged command: %s", b.base, notCommandReason(b.base))
-			return "", nil, false
+			return fail(".path", "%q may not be a privileged command: %s", b.base, notCommandReason(b.base))
 		case ClassNever:
 			_, name, _ := gpolicy.HardDenied(b.base)
-			v.fail(field+".path", "%s is on the never list (PRIVILEGED §5.3 list A: %q is POLICY §5 group %d, %s)", rc.Path, b.base, g, name)
-			return "", nil, false
+			return fail(".path", "%s is on the never list (PRIVILEGED §5.3 list A: %q is POLICY §5 group %d, %s)", p, b.base, g, name)
 		case ClassNone:
 		default:
-			add(recognised{class: class, group: g, name: b.base, match: b.match})
+			add(recognised{class: class, group: g, name: gpolicy.CanonicalName(b.base), match: b.match})
 		}
 	}
 	if resolved == v.opts.HelperExecutable || v.never.Covers(resolved) {
-		v.fail(field+".path", "%s may not be a command: it is on the never list", resolved)
-		return "", nil, false
+		return fail(".path", "%s may not be a command: it is on the never list", resolved)
 	}
 	if _, err = gpolicy.CheckChain(v.opts.Trust, resolved); err != nil {
-		v.fail(field+".path", "%v", err)
-		return "", nil, false
+		return fail(".path", "%v", err)
 	}
 	fi, err := os.Stat(resolved)
 	if err != nil {
-		v.fail(field+".path", "%s: %v", resolved, gpolicy.ErrReason(err))
-		return "", nil, false
+		return fail(".path", "%s: %v", resolved, gpolicy.ErrReason(err))
 	}
 	if ferr := gpolicy.CheckFile(v.opts.Trust, resolved, fi); ferr != nil {
-		v.fail(field+".path", "%v", ferr)
-		return "", nil, false
+		return fail(".path", "%v", ferr)
 	}
 	if fi.Mode().Perm()&0o111 == 0 {
-		v.fail(field+".path", "%s is not executable", resolved)
-		return "", nil, false
+		return fail(".path", "%s is not executable", resolved)
+	}
+	ct, err := gpolicy.ProbeContent(resolved, fi.Size())
+	if err != nil {
+		return fail(".path", "%s %v", resolved, err)
+	}
+	prog = program{resolved: resolved}
+	switch ct.Kind {
+	case gpolicy.ContentBusyBox, gpolicy.ContentToybox:
+		return fail(".path", "%s is on the never list (PRIVILEGED §5.3 list A: it is %s, recognised by its content, POLICY §5 group 1, shells)", p, ct.Kind)
+	case gpolicy.ContentGNUMulti:
+		return fail(".path", "%s is %s (recognised by its content), which is not supported: it runs as the name in argv[0] or its first argument (POLICY §5)", resolved, ct.Kind)
+	case gpolicy.ContentUutils:
+		prog.applet = filepath.Base(resolved)
+		if !gpolicy.IsUutilsApplet(prog.applet) {
+			return fail(".path", "%s is the uutils multi-call binary, which runs as the name of the file it is executed by; %q is not one of its utilities (POLICY §5)", resolved, prog.applet)
+		}
+	case gpolicy.ContentGNU:
+		for _, n := range ct.Names {
+			switch class, g := Classify(n); class {
+			case ClassNever:
+				_, name, _ := gpolicy.HardDenied(n)
+				return fail(".path", "%s is on the never list (PRIVILEGED §5.3 list A: it carries the GNU coreutils marker and the program name %q, POLICY §5 group %d, %s)", p, n, g, name)
+			case ClassNone:
+			default:
+				add(recognised{class: class, group: g, name: n, match: MatchIdentity})
+			}
+		}
+		if !gpolicy.IsGNUProgram(filepath.Base(resolved)) {
+			v.warn("%s: %s carries the GNU coreutils marker, but %q is not a GNU coreutils program name; a renamed copy of a listed GNU coreutils program is refused only where its content names it (POLICY §5)", field, resolved, filepath.Base(resolved))
+		}
+	case gpolicy.ContentScript:
+		if depth >= maxScripts {
+			return fail(".path", "%s is a #! script nested more than %d deep, which the kernel refuses", resolved, maxScripts)
+		}
+		if cerr := pathx.CheckClean(ct.Interpreter); cerr != nil || !filepath.IsAbs(ct.Interpreter) {
+			return fail(".path", "%s is a #! script whose interpreter %q is not an absolute clean path", resolved, ct.Interpreter)
+		}
+		ip, irec, ok := v.resolveProgram(field, ct.Interpreter, false, depth+1, fmt.Sprintf("%s%s is a #! script run by %s: ", via, resolved, ct.Interpreter))
+		if !ok {
+			return program{}, nil, false
+		}
+		// What the interpreter is recognised as runs this command: as
+		// the name the script's path resolves to, as the kernel resolves it.
+		for _, r := range irec {
+			r.match = MatchResolved
+			add(r)
+		}
+		prog.interpreter, prog.scriptArgs = ip.resolved, ip.scriptArgs
+		if ct.Arg != "" {
+			prog.scriptArgs = append(prog.scriptArgs, ct.Arg)
+		}
+		v.warn("%s: %s is a #! script run by %s; the interpreter reads the script and gets the template's arguments after it, as root (POLICY §5)", field, resolved, ip.resolved)
 	}
 	ms, err := v.scan.MatchAll(resolved, fi)
 	if err != nil {
-		v.fail(field+".path", "%v", err)
-		return "", nil, false
+		return fail(".path", "%v", err)
+	}
+	if ct.Kind == gpolicy.ContentUutils {
+		// The uutils binary's other names are its other utilities, which
+		// this command never runs (S-MC); any other name refuses it.
+		if ms, err = gpolicy.UutilsSiblings(resolved, ms); err != nil {
+			return fail(".path", "%v", err)
+		}
 	}
 	// A multi-call binary matches every name that runs it: the strongest
 	// class decides, never first, then may not, then the rest.
 	for _, m := range ms {
 		if class, g := Classify(m.Name); class == ClassNever {
-			v.fail(field+".path", "%s is on the never list (PRIVILEGED §5.3 list A: a hard link to, or a copy of, %q (%s), POLICY §5 group %d, %s)", rc.Path, m.Name, m.Path, g, m.GroupName)
-			return "", nil, false
+			return fail(".path", "%s is on the never list (PRIVILEGED §5.3 list A: a hard link to, or a copy of, %q (%s), POLICY §5 group %d, %s)", p, m.Name, m.Path, g, m.GroupName)
 		}
 	}
 	for _, m := range ms {
 		if class, _ := Classify(m.Name); class == ClassNotCommand {
-			v.fail(field+".path", "%s may not be a privileged command: it is a hard link to, or a copy of, %q (%s), and %s", rc.Path, m.Name, m.Path, notCommandReason(m.Name))
-			return "", nil, false
+			return fail(".path", "%s may not be a privileged command: it is a hard link to, or a copy of, %q (%s), and %s", p, m.Name, m.Path, notCommandReason(m.Name))
 		}
 	}
 	for _, m := range ms {
 		if class, g := Classify(m.Name); class != ClassNone {
-			add(recognised{class: class, group: g, name: m.Name, match: MatchIdentity})
+			add(recognised{class: class, group: g, name: gpolicy.CanonicalName(m.Name), match: MatchIdentity})
 		}
 	}
-	return resolved, rec, true
+	return prog, rec, true
 }
 
 // review applies N-13's acknowledge rule to a resolved command (handoff
 // §2.1): a POLICY §5 group 11–13 binary, a package tool, or find with an
 // action in any of its templates needs a non-empty acknowledge. It sets the
 // command's list B group and findings, and reports each for check-policy.
-func (v *validator) review(field string, c *Command, rec []recognised) bool {
+func (v *validator) review(field string, c *Command, rec []recognised, scriptArgs []string) bool {
 	var needs []string
+	// A template's tokens, after the arguments of any #! line on the way to
+	// the program (they reach it first).
+	tokens := func(t template.Template) []string { return append(slices.Clone(scriptArgs), t.String()...) }
 	for _, r := range rec {
 		switch r.class {
 		case ClassListB:
@@ -776,9 +864,17 @@ func (v *validator) review(field string, c *Command, rec []recognised) bool {
 			c.Findings = append(c.Findings, CommandFinding{Category: FindingPackage, Program: r.name, Match: r.match})
 		case ClassFind:
 			for _, t := range c.Templates {
-				if a := FindAction(t.String()); a != "" {
+				if a := FindAction(tokens(t)); a != "" {
 					needs = append(needs, fmt.Sprintf("%s is find (recognised by %s name) with %s in a template: it runs, deletes or writes as root outside any binding", c.Resolved, r.match, a))
 					c.Findings = append(c.Findings, CommandFinding{Category: FindingExec, Program: findProgram, Match: MatchTemplate})
+					break
+				}
+			}
+		case ClassAction:
+			for _, t := range c.Templates {
+				if a := ProgramAction(r.name, tokens(t)); a != "" {
+					needs = append(needs, fmt.Sprintf("%s is %s (recognised by %s name) with %s in a template: it runs another program as root outside any binding", c.Resolved, r.name, r.match, a))
+					c.Findings = append(c.Findings, CommandFinding{Category: FindingExec, Program: r.name, Match: MatchTemplate})
 					break
 				}
 			}
@@ -794,8 +890,13 @@ func (v *validator) review(field string, c *Command, rec []recognised) bool {
 			v.find("package-tool", c.ID, "%s is the package tool %s (recognised by %s name); it runs outside the package operations' binding; acknowledge: %s", c.Resolved, fd.Program, fd.Match, c.Acknowledge)
 		case FindingExec:
 			for _, t := range c.Templates {
-				if a := FindAction(t.String()); a != "" {
-					v.find("find-action", c.ID, "%s is find with %s in a template; acknowledge: %s", c.Resolved, a, c.Acknowledge)
+				if fd.Program == findProgram {
+					if a := FindAction(tokens(t)); a != "" {
+						v.find("find-action", c.ID, "%s is find with %s in a template; acknowledge: %s", c.Resolved, a, c.Acknowledge)
+						break
+					}
+				} else if a := ProgramAction(fd.Program, tokens(t)); a != "" {
+					v.find("program-action", c.ID, "%s is %s with %s in a template, which runs another program; acknowledge: %s", c.Resolved, fd.Program, a, c.Acknowledge)
 					break
 				}
 			}
