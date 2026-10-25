@@ -1,33 +1,362 @@
+//go:build linux
+
 package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
+	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
+	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
+	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
 )
 
-func TestStubsExit2(t *testing.T) {
-	for _, c := range []string{"serve", "check-policy", "polkit"} {
-		var out, errb bytes.Buffer
-		if code := run([]string{c}, &out, &errb); code != 2 {
-			t.Fatalf("%s exit %d, want 2", c, code)
+func runCmd(args []string, stdin string) (code int, stdout, stderr string) {
+	var out, errb bytes.Buffer
+	code = run(args, strings.NewReader(stdin), &out, &errb)
+	return code, out.String(), errb.String()
+}
+
+func TestPolkitUsage(t *testing.T) {
+	code, out, errb := runCmd([]string{"polkit"}, "")
+	if code != 2 || out != "" || !strings.Contains(errb, "usage: shell-mcp-gate polkit --policy <file> --user <name>") {
+		t.Fatalf("polkit: %d %q %q", code, out, errb)
+	}
+}
+
+// A malformed forced command still answers with one JSON response (so the
+// server gets install_insecure, not a broken session), and exits 0.
+func TestServeMalformedForcedCommand(t *testing.T) {
+	for _, args := range [][]string{{"serve"}, {"serve", "--policy"}, {"serve", "--policy", "/x", "--bogus"}, {"serve", "--policy", "/x", "extra"}} {
+		code, out, errb := runCmd(args, `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`+"\n")
+		var r struct {
+			OK    bool `json:"ok"`
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
 		}
-		if want := c + " arrives in Session 1"; !strings.Contains(errb.String(), want) || out.Len() != 0 {
-			t.Fatalf("%s: stdout %q stderr %q", c, out.String(), errb.String())
+		if code != 0 || errb != "" || json.Unmarshal([]byte(out), &r) != nil || r.OK || r.Error.Code != "install_insecure" {
+			t.Fatalf("%v: %d %q %q", args, code, out, errb)
 		}
+	}
+}
+
+func TestCheckPolicy(t *testing.T) {
+	if code, _, errb := runCmd([]string{"check-policy"}, ""); code != 2 || !strings.Contains(errb, "--policy") {
+		t.Fatalf("usage: %d %q", code, errb)
+	}
+	// Under production trust a policy owned by the test uid fails the
+	// ownership check; check-policy reports it and exits 1.
+	d := gatetest.SecureDir(t)
+	p := filepath.Join(d, "policy.yaml")
+	gatetest.WriteFile(t, p, "version: 1\nmax_tier: read\n", 0o644)
+	code, out, _ := runCmd([]string{"check-policy", "--policy", p}, "")
+	if code != 1 || !strings.Contains(out, "FAIL") || !strings.Contains(out, "owned by uid") {
+		t.Fatalf("check-policy: %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "sandbox:") && !strings.Contains(out, "Landlock") {
+		t.Fatalf("check-policy must report the sandbox probe:\n%s", out)
 	}
 }
 
 func TestVersion(t *testing.T) {
-	var out, errb bytes.Buffer
-	if code := run([]string{"version"}, &out, &errb); code != 0 || !strings.HasPrefix(out.String(), "shell-mcp-gate dev") {
-		t.Fatalf("version: exit %d, %q", code, out.String())
+	code, out, _ := runCmd([]string{"version"}, "")
+	if code != 0 || !strings.HasPrefix(out, "shell-mcp-gate dev") {
+		t.Fatalf("version: exit %d, %q", code, out)
 	}
 }
 
 func TestUnknownCommand(t *testing.T) {
-	var out, errb bytes.Buffer
-	if code := run([]string{"exec"}, &out, &errb); code != 2 {
+	if code, _, _ := runCmd([]string{"exec"}, ""); code != 2 {
 		t.Fatalf("unknown command exit %d", code)
+	}
+}
+
+// TestCheckPolicyWarnsGTFOBins: with test trust (so the fixture policy
+// loads), check-policy prints a WARN line naming the command and its
+// escape-technique categories.
+func TestCheckPolicyWarnsGTFOBins(t *testing.T) {
+	d := gatetest.SecureDir(t)
+	gatetest.WriteFile(t, filepath.Join(d, "bin", "tar"), "invented binary\n", 0o755)
+	p := filepath.Join(d, "etc", "policy.yaml")
+	gatetest.WriteFile(t, p, "version: 1\nmax_tier: read\nsandbox:\n  landlock: best-effort\n  system_read_exec: ["+filepath.Join(d, "bin")+
+		"]\ncommands:\n  - id: list-archive\n    path: "+filepath.Join(d, "bin", "tar")+"\n    tier: read\n    templates: [[\"-tf\", \"{path:read}\"]]\n", 0o644)
+	var out, errb bytes.Buffer
+	gatetest.Mkdir(t, filepath.Join(d, "home"), 0o755)
+	checkPolicyWith([]string{"--policy", p}, &out, &errb, gatetest.Trust(), filepath.Join(d, "home"))
+	if !strings.Contains(out.String(), "WARN commands[list-archive]") || !strings.Contains(out.String(), "GTFOBins") ||
+		!strings.Contains(out.String(), "command execution") {
+		t.Fatalf("check-policy:\n%s", out.String())
+	}
+}
+
+func TestPolkitCommand(t *testing.T) {
+	d := gatetest.SecureDir(t)
+	p := filepath.Join(d, "etc", "policy.yaml")
+	gatetest.WriteFile(t, p, "version: 1\nmax_tier: operator\nservices:\n  control:\n    units: [example-app.service]\n    verbs: [restart]\n", 0o644)
+	run := func(args ...string) (int, string, string) {
+		var out, errb bytes.Buffer
+		code := polkitWith(args, &out, &errb, gatetest.Trust())
+		return code, out.String(), errb.String()
+	}
+	code, out, errb := run("--policy", p, "--user", "nobody")
+	if code != 0 || errb != "" || !strings.Contains(out, `subject.user !== "nobody"`) || !strings.Contains(out, `"example-app.service": ["restart"]`) ||
+		!strings.HasPrefix(out, "// Generated by shell-mcp-gate polkit") {
+		t.Fatalf("polkit: %d %q\n%s", code, errb, out)
+	}
+	if code, _, errb := run("--policy", p); code != 2 || !strings.Contains(errb, "--user") {
+		t.Fatalf("usage: %d %q", code, errb)
+	}
+	if code, _, errb := run("--policy", p, "--user", "svc-no-such-user"); code != 1 || !strings.Contains(errb, "svc-no-such-user") {
+		t.Fatalf("unknown user: %d %q", code, errb)
+	}
+	if code, _, errb := run("--policy", p, "--user", "root"); code != 1 || errb == "" {
+		t.Fatalf("root: %d %q", code, errb)
+	}
+	gatetest.WriteFile(t, p, "version: 1\nmax_tier: operator\nservices:\n  control:\n    units: [\"example-*.service\"]\n    verbs: [restart]\n", 0o644)
+	if code, out, errb := run("--policy", p, "--user", "nobody"); code != 1 || out != "" || !strings.Contains(errb, "glob") {
+		t.Fatalf("glob unit: %d %q %q", code, out, errb)
+	}
+	gatetest.WriteFile(t, p, "version: 1\nmax_tier: operator\n", 0o644)
+	if code, out, errb := run("--policy", p, "--user", "nobody"); code != 1 || out != "" || !strings.Contains(errb, "services.control") {
+		t.Fatalf("no control units: %d %q %q", code, out, errb)
+	}
+}
+
+// TestTrampolineIsNotACommand: the exec trampoline runs only from execx's
+// init, when it is exactly argv[1] of a process started with an empty
+// environment and its control socket (internal/gate/execx). The forced
+// command's argv is fixed by authorized_keys and starts with serve; as a
+// command name the trampoline argument is unknown.
+func TestTrampolineIsNotACommand(t *testing.T) {
+	if code, out, errOut := runCmd([]string{execx.TrampolineArg}, ""); code != 2 || out != "" || !strings.Contains(errOut, "unknown command") {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, out, errOut)
+	}
+	if code, out, _ := runCmd([]string{"serve", execx.TrampolineArg}, ""); code != 0 || !strings.Contains(out, `"code":"install_insecure"`) {
+		t.Fatalf("as a serve argument: exit %d, stdout %q", code, out)
+	}
+}
+
+// TestCheckPolicyProbesNoReplace: check-policy probes each write root's
+// filesystem for RENAME_NOREPLACE and warns, naming the root, where it is
+// missing (deletes, and copies and moves without overwrite, are refused
+// there) or could not be probed.
+func TestCheckPolicyProbesNoReplace(t *testing.T) {
+	d := gatetest.SecureDir(t)
+	w1, w2 := filepath.Join(d, "srv", "one"), filepath.Join(d, "srv", "two")
+	gatetest.Mkdir(t, w1, 0o755)
+	gatetest.Mkdir(t, w2, 0o755)
+	gatetest.Mkdir(t, filepath.Join(d, "home"), 0o755)
+	p := filepath.Join(d, "etc", "policy.yaml")
+	gatetest.WriteFile(t, p, "version: 1\nmax_tier: destructive\nsandbox:\n  landlock: best-effort\npaths:\n  write: ["+w1+", "+w2+"]\n", 0o644)
+	run := func() string {
+		var out, errb bytes.Buffer
+		checkPolicyWith([]string{"--policy", p}, &out, &errb, gatetest.Trust(), filepath.Join(d, "home"))
+		return out.String()
+	}
+	// The real probe, on the test's own filesystem.
+	if out := run(); !strings.Contains(out, "ok   paths.write "+w1+": RENAME_NOREPLACE supported") ||
+		!strings.Contains(out, "ok   paths.write "+w2+": RENAME_NOREPLACE supported") {
+		t.Fatalf("check-policy:\n%s", out)
+	}
+	defer func(f func(string) error) { probeNoReplace = f }(probeNoReplace)
+	probeNoReplace = func(root string) error {
+		if root == w2 {
+			return fsx.ErrNoReplaceUnsupported
+		}
+		return nil
+	}
+	out := run()
+	if !strings.Contains(out, "WARN paths.write "+w2+": the filesystem does not support RENAME_NOREPLACE") ||
+		strings.Contains(out, "WARN paths.write "+w1) || !strings.Contains(out, "delete and move are refused") {
+		t.Fatalf("check-policy:\n%s", out)
+	}
+	probeNoReplace = func(string) error { return errors.New("permission denied") }
+	if out := run(); !strings.Contains(out, "WARN paths.write "+w1+": could not probe RENAME_NOREPLACE") {
+		t.Fatalf("check-policy:\n%s", out)
+	}
+}
+
+// TestCheckPolicyProbesExchange: check-policy probes each write root's
+// filesystem for RENAME_EXCHANGE, which a write with expected_sha256 and a
+// copy or move with a bound destination need (verified replaces, POLICY
+// §3), and warns, naming the root, where it is missing or could not be
+// probed.
+func TestCheckPolicyProbesExchange(t *testing.T) {
+	d := gatetest.SecureDir(t)
+	w1, w2 := filepath.Join(d, "srv", "one"), filepath.Join(d, "srv", "two")
+	gatetest.Mkdir(t, w1, 0o755)
+	gatetest.Mkdir(t, w2, 0o755)
+	gatetest.Mkdir(t, filepath.Join(d, "home"), 0o755)
+	p := filepath.Join(d, "etc", "policy.yaml")
+	gatetest.WriteFile(t, p, "version: 1\nmax_tier: destructive\nsandbox:\n  landlock: best-effort\npaths:\n  write: ["+w1+", "+w2+"]\n", 0o644)
+	run := func() string {
+		var out, errb bytes.Buffer
+		checkPolicyWith([]string{"--policy", p}, &out, &errb, gatetest.Trust(), filepath.Join(d, "home"))
+		return out.String()
+	}
+	// The real probe, on the test's own filesystem, leaving nothing behind.
+	if out := run(); !strings.Contains(out, "ok   paths.write "+w1+": RENAME_EXCHANGE supported") ||
+		!strings.Contains(out, "ok   paths.write "+w2+": RENAME_EXCHANGE supported") {
+		t.Fatalf("check-policy:\n%s", out)
+	}
+	for _, w := range []string{w1, w2} {
+		if ents, err := os.ReadDir(w); err != nil || len(ents) != 0 {
+			t.Fatalf("the probes left %v in %s (%v)", ents, w, err)
+		}
+	}
+	defer func(f func(string) error) { probeExchange = f }(probeExchange)
+	probeExchange = func(root string) error {
+		if root == w2 {
+			return fsx.ErrExchangeUnsupported
+		}
+		return nil
+	}
+	out := run()
+	if !strings.Contains(out, "WARN paths.write "+w2+": the filesystem does not support RENAME_EXCHANGE") ||
+		strings.Contains(out, "WARN paths.write "+w1) || !strings.Contains(out, "expected_sha256") {
+		t.Fatalf("check-policy:\n%s", out)
+	}
+	probeExchange = func(string) error { return errors.New("permission denied") }
+	if out := run(); !strings.Contains(out, "WARN paths.write "+w1+": could not probe RENAME_EXCHANGE") ||
+		!strings.Contains(out, "WARN paths.write "+w2+": could not probe RENAME_EXCHANGE") {
+		t.Fatalf("check-policy:\n%s", out)
+	}
+}
+
+// TestCheckPolicyChecksRootChains: check-policy checks every read and write
+// root's path from / by descriptor, as the rules for commands' paths
+// (handoff N-11) and git repositories (N-20) do, trusting root and the
+// account it runs as: a root with a directory on its path that another
+// account could change, or a sticky one, gets a WARN naming that directory
+// and what the gate then refuses under the root; a closed one an ok line.
+// An unprivileged test cannot give a directory to another account, so
+// "another account" is an open mode here.
+func TestCheckPolicyChecksRootChains(t *testing.T) {
+	d := gatetest.SecureDir(t)
+	app, drop, shared, sticky := filepath.Join(d, "srv", "app"), filepath.Join(d, "srv", "drop"), filepath.Join(d, "srv", "shared"), filepath.Join(d, "srv", "sticky")
+	gatetest.Mkdir(t, app, 0o755)
+	gatetest.Mkdir(t, filepath.Join(drop, "logs"), 0o755)
+	gatetest.Mkdir(t, shared, 0o755)
+	gatetest.Mkdir(t, sticky, 0o755)
+	gatetest.Mkdir(t, filepath.Join(d, "home"), 0o755)
+	for _, c := range []struct {
+		dir  string
+		mode os.FileMode
+	}{{drop, 0o777}, {shared, 0o775}, {sticky, os.ModeSticky | 0o755}} {
+		if err := os.Chmod(c.dir, c.mode); err != nil {
+			t.Fatal(err)
+		}
+		gatetest.ExactMode(t, c.dir, c.mode)
+	}
+	p := filepath.Join(d, "etc", "policy.yaml")
+	gatetest.WriteFile(t, p, "version: 1\nmax_tier: destructive\nsandbox:\n  landlock: best-effort\npaths:\n  read: ["+app+", "+filepath.Join(drop, "logs")+"]\n"+
+		"  write: ["+shared+", "+sticky+"]\n", 0o644)
+	var out, errb bytes.Buffer
+	checkPolicyWith([]string{"--policy", p}, &out, &errb, gatetest.Trust(), filepath.Join(d, "home"))
+	got := out.String()
+	for _, want := range []string{
+		"ok   paths.read " + app + ": every directory from / to it is root's or the service account's and neither group- nor world-writable nor sticky",
+		"WARN paths.read " + filepath.Join(drop, "logs") + ": " + drop + " is group- or world-writable (mode 0777); commands get no cwd at or under it, " +
+			"and a {path:read} only where the directories open on its path are one other account's that only it can write (POLICY §4); " +
+			"git runs in no repository under it (POLICY §7)",
+		"WARN paths.write " + shared + ": " + shared + " is group- or world-writable (mode 0775); commands get no {path:write} or cwd at or under it",
+		"WARN paths.write " + sticky + ": " + sticky + " is sticky (mode 1755); commands get no {path:write} or cwd at or under it",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("report lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "WARN paths.read "+app+":") {
+		t.Errorf("a closed root got a WARN:\n%s", got)
+	}
+}
+
+// TestCheckPolicyChecksGitRepos: check-policy applies the closed repository
+// rule (fsx.CheckGitRepo, handoff N-20) to every repository in git.repos,
+// as the git operations would, so an operator learns before a git tool is
+// refused: a WARN naming the repository and the entry with its owner and
+// mode, or what else would refuse it; an ok line for a closed one.
+func TestCheckPolicyChecksGitRepos(t *testing.T) {
+	d := gatetest.SecureDir(t)
+	repos := filepath.Join(d, "srv", "repos")
+	gatetest.Mkdir(t, repos, 0o755)
+	gatetest.Mkdir(t, filepath.Join(d, "home"), 0o755)
+	names := []string{"closed", "openconfig", "opendir", "nogit"}
+	for _, n := range names {
+		dir := filepath.Join(repos, n)
+		gatetest.Mkdir(t, dir, 0o755)
+		if n == "nogit" {
+			continue
+		}
+		gatetest.Git(t, dir, "init", "-q")
+		for _, c := range []struct {
+			p    string
+			mode os.FileMode
+		}{{filepath.Join(dir, ".git"), 0o755}, {filepath.Join(dir, ".git", "config"), 0o644}} {
+			if err := os.Chmod(c.p, c.mode); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := os.Chmod(filepath.Join(repos, "openconfig", ".git", "config"), 0o666); err != nil { //nolint:gosec // G302: another account's access, simulated
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(repos, "opendir"), 0o775); err != nil { //nolint:gosec // G302: another account's access, simulated
+		t.Fatal(err)
+	}
+	y := "version: 1\nmax_tier: read\nsandbox:\n  landlock: best-effort\npaths:\n  read: [" + repos + "]\ngit:\n  repos:\n"
+	for _, n := range names {
+		y += "    - path: " + filepath.Join(repos, n) + "\n      remote: https://git.example.test/org/" + n + ".git\n"
+	}
+	p := filepath.Join(d, "etc", "policy.yaml")
+	gatetest.WriteFile(t, p, y, 0o644)
+	var out, errb bytes.Buffer
+	checkPolicyWith([]string{"--policy", p}, &out, &errb, gatetest.Trust(), filepath.Join(d, "home"))
+	got := out.String()
+	uid := strconv.Itoa(os.Getuid())
+	for _, want := range []string{
+		"ok   git.repos[0] " + filepath.Join(repos, "closed") + ": closed",
+		"WARN git.repos[1] " + filepath.Join(repos, "openconfig") + ": the file " + filepath.Join(repos, "openconfig", ".git", "config") +
+			" is group- or world-writable (owner uid " + uid + ", mode 0666)",
+		"WARN git.repos[2] " + filepath.Join(repos, "opendir") + ": the directory " + filepath.Join(repos, "opendir") +
+			" is group- or world-writable (owner uid " + uid + ", mode 0775)",
+		"WARN git.repos[3] " + filepath.Join(repos, "nogit") + ": repo has no .git directory",
+		"every git operation on it is refused",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("report lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "nothing was run") {
+		t.Errorf("check-policy repeats the operation's \"nothing was run\":\n%s", got)
+	}
+}
+
+// TestCheckPolicyReportsMultiCall (S-MC): check-policy names the uutils
+// utility a command runs as, and the interpreter of a #! script.
+func TestCheckPolicyReportsMultiCall(t *testing.T) {
+	d := gatetest.SecureDir(t)
+	bin := filepath.Join(d, "bin")
+	gatetest.WriteFile(t, filepath.Join(bin, "chown"), "invented\x00"+policy.MarkerForTesting("uutils")+" 0.0.0\x00", 0o755)
+	gatetest.WriteFile(t, filepath.Join(bin, "example-interp"), "invented interpreter\n", 0o755)
+	gatetest.WriteFile(t, filepath.Join(bin, "renew"), "#!"+filepath.Join(bin, "example-interp")+"\n", 0o755)
+	p := filepath.Join(d, "etc", "policy.yaml")
+	gatetest.WriteFile(t, p, "version: 1\nmax_tier: read\nsandbox:\n  landlock: best-effort\n  system_read_exec: ["+bin+"]\ncommands:\n"+
+		"  - id: owner\n    path: "+filepath.Join(bin, "chown")+"\n    tier: read\n    templates: [[\"--version\"]]\n"+
+		"  - id: renew\n    path: "+filepath.Join(bin, "renew")+"\n    tier: read\n    templates: [[]]\n", 0o644)
+	var out, errb bytes.Buffer
+	gatetest.Mkdir(t, filepath.Join(d, "home"), 0o755)
+	checkPolicyWith([]string{"--policy", p}, &out, &errb, gatetest.Trust(), filepath.Join(d, "home"))
+	if !strings.Contains(out.String(), "ok   commands[owner]: "+filepath.Join(bin, "chown")+" is the uutils multi-call binary; it runs as chown") ||
+		!strings.Contains(out.String(), "WARN commands[renew]: "+filepath.Join(bin, "renew")+" is a #! script run by "+filepath.Join(bin, "example-interp")) {
+		t.Fatalf("check-policy:\n%s", out.String())
 	}
 }

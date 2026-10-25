@@ -1,0 +1,137 @@
+# Releases (D-010, plan S5). A vX.Y.Z tag on main is a release: the owner
+# approves it in the `release` environment before anything is pushed, signed
+# or published. workflow_dispatch and pull requests that touch the release
+# files are dry runs: the same build, checks, signing and verification
+# against a loopback registry, with no write permission to publish anything.
+# The work happens in release-build.yml (reusable, so that it is the
+# workflow that signs the provenance: SLSA v1.0 Build Level 3).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: The X.Y.Z about to be tagged (its CHANGELOG section is checked; the build is stamped X.Y.Z-dryrun.<commit>).
+        required: true
+        type: string
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - .github/workflows/release.yml
+      - .github/workflows/release-build.yml
+      - Dockerfile
+      - scripts/release-binary-check.sh
+      - scripts/release/**
+      - CHANGELOG.md
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  preflight:
+    name: preflight (version, main, CI and CodeQL, notes, environment)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: read
+      actions: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      notes-version: ${{ steps.version.outputs.notes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: version
+        id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          case "$EVENT" in
+            push) mode=tag ref="$GITHUB_REF_NAME"
+              [ "$GITHUB_REF_TYPE" = tag ] || { echo "a release starts only from a tag" >&2; exit 1; } ;;
+            workflow_dispatch) mode=dispatch ref="$REQUESTED" ;;
+            pull_request) mode=pull_request ref="" ;;
+            *) echo "unexpected event $EVENT" >&2; exit 1 ;;
+          esac
+          out="$(bash scripts/release/version.sh "$mode" "$ref" "$GITHUB_SHA")"
+          read -r version notes <<<"$out"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "notes=$notes" >>"$GITHUB_OUTPUT"
+          echo "### $mode: building $version (notes: $notes)" >>"$GITHUB_STEP_SUMMARY"
+      # A release tag must name a commit on main.
+      - name: the tagged commit is on main
+        if: github.event_name == 'push'
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main ||
+            { echo "$GITHUB_SHA is not on main; a release is tagged on main" >&2; exit 1; }
+      # ci and analyze (go) succeeded on this exact commit (on main, the merge
+      # commit: both workflows run on push to main). A pull request's own
+      # checks are still running beside this run, so its dry run skips this.
+      - name: CI and CodeQL succeeded on this commit
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/release/checks.sh "$GITHUB_REPOSITORY" "$GITHUB_SHA"
+      - name: the CHANGELOG section
+        if: steps.version.outputs.notes != '-'
+        env:
+          NOTES: ${{ steps.version.outputs.notes }}
+        run: bash scripts/release/notes.sh "$NOTES" | tee -a "$GITHUB_STEP_SUMMARY"
+      # A release environment GitHub created on the fly would have no
+      # reviewers: refuse to release unless it exists with a required
+      # reviewer and admits only v*.*.* tags. A dispatched dry run (just
+      # before tagging) checks it too; a pull request's only reports it.
+      - name: the release environment requires a reviewer
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          env_json="$(gh api "repos/$GITHUB_REPOSITORY/environments/release")" ||
+            { echo "the release environment does not exist (or cannot be read); create it with a required reviewer first" >&2; exit 1; }
+          jq -e '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length > 0' <<<"$env_json" >/dev/null ||
+            { echo "the release environment has no required reviewer" >&2; exit 1; }
+          jq -e '.deployment_branch_policy.custom_branch_policies == true' <<<"$env_json" >/dev/null ||
+            { echo "the release environment admits any branch or tag" >&2; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/environments/release/deployment-branch-policies" \
+            --jq '[.branch_policies[] | "\(.type // "branch"):\(.name)"] | sort | join(" ")' |
+            grep -x 'tag:v\*\.\*\.\*' ||
+            { echo "the release environment must admit exactly the tag pattern v*.*.*" >&2; exit 1; }
+
+  dryrun:
+    name: dry run
+    needs: preflight
+    if: github.event_name != 'push' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release-build.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+      notes-version: ${{ needs.preflight.outputs.notes-version }}
+      publish: false
+
+  release:
+    name: release
+    needs: preflight
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release-build.yml
+    with:
+      version: ${{ needs.preflight.outputs.version }}
+      notes-version: ${{ needs.preflight.outputs.notes-version }}
+      publish: true

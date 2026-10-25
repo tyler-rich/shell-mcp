@@ -1,0 +1,77 @@
+# Example gate policy: read-only.
+#
+# Every name and path here is a placeholder (/srv/app, /etc/example-app,
+# example-app.service, git.example.test). Install as root:
+#   /etc/shell-mcp/read-only.yaml   root:root 0644
+# and select it from the SSH key's forced command:
+#   command="/usr/local/bin/shell-mcp-gate serve --policy /etc/shell-mcp/read-only.yaml --principal readonly"
+# Run `shell-mcp-gate check-policy --policy /etc/shell-mcp/read-only.yaml`
+# after every edit. Write it for the worst case: "what would I accept a fully
+# compromised MCP server doing with this key?"
+
+version: 1
+
+# The ceiling for every operation and command. read = no state change.
+max_tier: read
+
+# The kernel sandbox (Landlock + no_new_privs + a seccomp filter for MPTCP),
+# applied before the request is read and inherited by every child.
+sandbox:
+  # required (the default) refuses to serve when the kernel cannot enforce
+  # the rules (Landlock ABI 4 or newer is needed). best-effort serves with
+  # reduced enforcement and says so in hello and check-policy.
+  landlock: required
+  # Extra read+execute directories for declared binaries. /usr, /bin, /sbin
+  # and /lib* are always granted; never add a writable directory here.
+  system_read_exec: []
+  # TCP ports children may connect to. Git pulls need the remote's port
+  # (443); a read-only key needs none. There is never a TCP bind.
+  tcp_connect_ports: []
+
+# Omitted limits take the defaults shown in docs/POLICY.md §1.
+limits:
+  max_output_bytes: 262144
+  max_read_bytes: 1048576
+  max_processes: 2000
+
+paths:
+  # Read roots. /, /proc, /sys, /dev and /run can never be roots.
+  read: [/srv/app, /etc/example-app, /var/log/example-app]
+  # Added to the built-in deny list (keys, shadow, .ssh, ...), which cannot
+  # be removed.
+  deny: ["/srv/app/secrets/**", "**/*.key"]
+
+services:
+  # Units whose status (and listing) is visible: globs over unit names.
+  status: ["example-app.service", "example-*.service"]
+
+journal:
+  # Units whose journal is readable; the service account needs the
+  # systemd-journal group for other units' messages.
+  units: ["example-app.service"]
+  max_lines: 1000
+
+git:
+  # Remotes must be https:// (ssh cannot work: the gate sets
+  # core.sshCommand=/bin/false and ssh is hard-denied; file:// is disabled).
+  # A read-only key reads status, log and diff; git_pull needs operator.
+  repos:
+    - path: /srv/app/deploy
+      remote: https://git.example.test/org/deploy.git
+
+# Redaction patterns (RE2) applied to every output, on top of the built-in
+# private-key, Authorization and Bearer rules.
+redact:
+  patterns: ['(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*\S+']
+
+# Declared commands: an absolute, root-owned binary and exact argv templates.
+# check-policy prints a GTFOBins WARN for apt (it can run other programs in
+# some modes); this exact template, with the gate's fixed PAGER=cat
+# environment, has no such path.
+commands:
+  - id: apt-upgradable
+    path: /usr/bin/apt
+    tier: read
+    description: "Packages with available upgrades"
+    templates:
+      - ["list", "--upgradable"]

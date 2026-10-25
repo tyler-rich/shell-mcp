@@ -1,6 +1,7 @@
 package config
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"fmt"
 	"log/slog"
@@ -14,15 +15,29 @@ const masked = "[REDACTED]"
 // it as a fixed mask; only Equal and Len read it.
 type Secret struct{ v string }
 
+// NewSecret wraps v.
+func NewSecret(v string) Secret { return Secret{v: v} }
+
 // Len returns the secret's length in bytes.
 func (s Secret) Len() int { return len(s.v) }
+
+// Reveal returns the secret's value. Only code that sends the secret where
+// it belongs calls it (the notifier's Authorization header); nothing logs or
+// returns its result.
+func (s Secret) Reveal() string { return s.v }
 
 // IsZero reports whether the secret is empty.
 func (s Secret) IsZero() bool { return s.v == "" }
 
-// Equal compares candidate with the secret in constant time.
+// Equal compares candidate with the secret in constant time. Both are
+// hashed with SHA-256 first, so the comparison takes the same time whatever
+// the candidate's length and leaks neither the secret's length nor a prefix.
 func (s Secret) Equal(candidate string) bool {
-	return s.v != "" && subtle.ConstantTimeCompare([]byte(s.v), []byte(candidate)) == 1
+	if s.v == "" {
+		return false
+	}
+	a, b := sha256.Sum256([]byte(s.v)), sha256.Sum256([]byte(candidate))
+	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
 }
 
 // String implements fmt.Stringer.
@@ -78,3 +93,10 @@ func (k *PrivateKey) MarshalText() ([]byte, error) { return []byte(k.Fingerprint
 
 // LogValue implements slog.LogValuer.
 func (k *PrivateKey) LogValue() slog.Value { return slog.StringValue(k.Fingerprint()) }
+
+// PrivateKeyFromSigner wraps a signer that was parsed elsewhere (tests and
+// tools that already hold one). Load enforces the Ed25519 rule for
+// configured keys; the SSH client checks it again.
+func PrivateKeyFromSigner(s ssh.Signer) *PrivateKey {
+	return &PrivateKey{signer: s, fingerprint: ssh.FingerprintSHA256(s.PublicKey())}
+}

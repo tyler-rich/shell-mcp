@@ -1,7 +1,6 @@
 package transport
 
 import (
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +19,9 @@ func noneConfig() *config.Config {
 		Port:       8080,
 		Path:       "/mcp",
 		MaxTimeout: 300 * time.Second,
+		// The config defaults.
+		AllowedHosts:    []string{"localhost", "127.0.0.1"},
+		RateLimitPerMin: 120,
 	}
 }
 
@@ -30,7 +32,7 @@ var mcpStub = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 
 func newTestServer(t *testing.T) *http.Server {
 	t.Helper()
-	srv, err := New(noneConfig(), mcpStub)
+	srv, err := New(noneConfig(), mcpStub, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -94,29 +96,20 @@ func TestHealthzBypassesMCPHandler(t *testing.T) {
 func TestMCPPathRoutesToHandlerAndOthersAre404(t *testing.T) {
 	srv := newTestServer(t)
 	rec := httptest.NewRecorder()
-	srv.Handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", strings.NewReader("{}")))
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", strings.NewReader("{}"))
+	r.Host = "127.0.0.1:8080"
+	srv.Handler.ServeHTTP(rec, r)
 	if rec.Code != http.StatusTeapot {
 		t.Fatalf("/mcp not routed to MCP handler: %d", rec.Code)
 	}
 	for _, p := range []string{"/", "/mcp/extra", "/healthz/x", "/metrics"} {
 		rec = httptest.NewRecorder()
-		srv.Handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, p, http.NoBody))
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, p, http.NoBody)
+		r.Host = "localhost"
+		srv.Handler.ServeHTTP(rec, r)
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("%s status = %d, want 404", p, rec.Code)
 		}
-	}
-}
-
-func TestServeRefusesBearerMode(t *testing.T) {
-	cfg := noneConfig()
-	cfg.AuthMode = "bearer"
-	cfg.Bind = "0.0.0.0"
-	srv, err := New(cfg, mcpStub)
-	if srv != nil || err == nil {
-		t.Fatalf("New accepted bearer mode (srv=%v, err=%v)", srv, err)
-	}
-	if !errors.Is(err, ErrBearerNotImplemented) || err.Error() != "bearer auth arrives in Session 2" {
-		t.Fatalf("error = %q", err)
 	}
 }
 
@@ -124,7 +117,7 @@ func TestServeRefusesNonLoopbackEvenIfNone(t *testing.T) {
 	// Defence in depth: config validation already forbids this combination.
 	cfg := noneConfig()
 	cfg.Bind = "0.0.0.0"
-	if _, err := New(cfg, mcpStub); err == nil {
+	if _, err := New(cfg, mcpStub, nil); err == nil {
 		t.Fatal("New accepted unauthenticated non-loopback bind")
 	}
 }

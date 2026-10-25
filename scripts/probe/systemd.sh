@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Reports whether a systemd-enabled container can boot on this Docker host
-# without --privileged (Session 1c's helper e2e needs one). Prints one line;
-# exit 0 if systemd reached running or degraded, 3 otherwise.
+# without --privileged (information only: the helper e2e runs on CI's
+# GitHub-hosted runner VM). Prints one line; exit 0 if systemd reached
+# running or degraded, 3 otherwise.
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 
@@ -10,9 +11,20 @@ export MSYS_NO_PATHCONV=1
 here="$(cd "$(dirname "$0")" && { pwd -W 2>/dev/null || pwd; })"
 image="shell-mcp-probe-systemd:local"
 name="shell-mcp-probe-systemd-$$"
+# The container carries a label, and only containers with it are removed:
+# ci-local's run label when ci-local runs this probe, its own otherwise.
+label="${SHELL_MCP_CI_LOCAL_LABEL:-shell-mcp.ci-local=probe-$$-$RANDOM}"
+remove_own_containers() {
+	local ids
+	ids="$(docker ps -aq --filter "label=$label" 2>/dev/null || true)"
+	if [[ -n "$ids" ]]; then
+		# shellcheck disable=SC2086 # one container id per word
+		docker rm -f $ids >/dev/null 2>&1 || true
+	fi
+}
 
 docker build -q -t "$image" -f "$here/Dockerfile.systemd" "$here" >/dev/null
-trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
+trap remove_own_containers EXIT
 
 # CLAUDE.md cgroup exception. No --privileged, no added capabilities, no other
 # host mount; the image is built from this repository on a digest-pinned base.
@@ -22,7 +34,7 @@ trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
 # write access to the host (or VM) cgroup tree: run this on disposable test
 # machines only (a workstation's Docker VM, a CI runner). The tmpfs mounts are
 # what systemd expects; container=docker lets it detect the container.
-docker run -d -t --name "$name" --cgroupns=private \
+docker run -d -t --name "$name" --label "$label" --cgroupns=private \
 	-v /sys/fs/cgroup:/sys/fs/cgroup:rw -e container=docker \
 	--tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
 	"$image" >/dev/null

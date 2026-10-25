@@ -1,0 +1,390 @@
+//go:build linux
+
+package fsx
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"strconv"
+	"strings"
+
+	"golang.org/x/sys/unix"
+
+	"github.com/tyler-rich/shell-mcp/internal/pathx"
+	"github.com/tyler-rich/shell-mcp/internal/protocol"
+)
+
+// The moved-in rule (PRIVILEGED §6, "Files another account could have moved
+// in"; handoff docs/handoff/S4C-PRIVILEGED.md N-6, N-7), applied when
+// Config.GuardMovedIn is set (the helper). An account that can write a
+// directory on a file's path can move a file from elsewhere on the same
+// filesystem into it (rename and link need write access to the directory
+// that receives the name), or swap a sibling directory into the path (a
+// rename within one parent needs write access to that parent only), have
+// root act, and move the result out again.
+//
+// The chain is every directory from the root the path is resolved under
+// (inclusive) down to the file's parent, each opened from the previous
+// one's descriptor with O_PATH|O_NOFOLLOW and checked by statx, never by a
+// separate lookup of a path; the last must be the parent fsx holds. A file
+// is owner-matched when every directory in the chain is neither group- nor
+// world-writable and is owned by a trusted uid (root; Config.TrustedDirOwner)
+// or by the file's owner: then no account but root and that owner could
+// have put it there. The first directory of the chain that another account
+// could write cannot itself be moved (its parent is closed), so a walk by
+// name from the root always passes through it.
+//
+// Reads (ReadFile, a copy's source, CurrentFile) return a file only when it
+// is owner-matched or world-readable. Rule R (handoff N-8, N-9;
+// ownerRule): root leaves a regular file (written, copied, restored) only
+// when the owner it will have is owner-matched, so another account that
+// could move the file elsewhere could have made it itself. A write or copy
+// over an existing file keeps its owner and group only when that owner
+// passes: otherwise a write needs both an owner and a group given, which
+// must pass too, and a copy, which cannot name one, is refused. A new file
+// or copy without an owner is root's, so it is created only under a closed
+// chain. Directories above the root are not checked per request
+// (check-policy reports them, CheckRootChain).
+
+// ChainDir is one directory on the chain from a root to a file's parent:
+// its path (for messages), owner and permission bits.
+type ChainDir struct {
+	Path string
+	UID  uint32
+	Mode uint32
+}
+
+// rootChain returns the chain of l's target: every directory from l's root
+// (inclusive) to l's parent (inclusive), by descriptor. A root itself has
+// none.
+func (f *FS) rootChain(l *loc) ([]ChainDir, error) {
+	if l.parent == nil {
+		return nil, nil
+	}
+	pf, err := l.parent.Open(".")
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	defer func() { _ = pf.Close() }()
+	top, err := l.top.Open(".")
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	defer func() { _ = top.Close() }()
+	var comps []string
+	if rel := pathx.Rel(l.rootReal, l.parentReal); rel != "." {
+		comps = strings.Split(rel, "/")
+	}
+	var chain []ChainDir
+	err = withFD(pf, func(pfd int) error {
+		want, serr := statxAt(pfd, "", unix.AT_EMPTY_PATH)
+		if serr != nil {
+			return mapErr(serr)
+		}
+		return withFD(top, func(tfd int) error {
+			fd, oerr := unix.Openat(tfd, ".", unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+			if oerr != nil {
+				return mapErr(&fs.PathError{Op: "openat", Path: l.rootReal, Err: oerr})
+			}
+			defer func() { _ = unix.Close(fd) }()
+			cur := l.rootReal
+			for i := 0; ; i++ {
+				id, ierr := statxAt(fd, "", unix.AT_EMPTY_PATH)
+				if ierr != nil {
+					return mapErr(ierr)
+				}
+				if id.mask&statxMeta != statxMeta {
+					return errf(protocol.CodeBadRequest, "the kernel did not report the owner and mode (statx) that the helper checks on a path; nothing was done")
+				}
+				chain = append(chain, ChainDir{Path: l.logical(cur), UID: id.uid, Mode: id.perm})
+				if i == len(comps) {
+					if !id.sameObject(&want) {
+						return errf(protocol.CodePathDenied, "the path changed while it was checked; nothing was done")
+					}
+					return nil
+				}
+				nfd, oerr := unix.Openat(fd, comps[i], unix.O_PATH|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+				cur = join(cur, comps[i])
+				if oerr != nil {
+					return mapErr(&fs.PathError{Op: "openat", Path: cur, Err: oerr})
+				}
+				_ = unix.Close(fd)
+				fd = nfd
+			}
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return chain, nil
+}
+
+// logical names a real path under l's root by its configured root's name.
+func (l *loc) logical(rp string) string {
+	if rp == l.rootReal {
+		return l.root
+	}
+	return join(l.root, pathx.Rel(l.rootReal, rp))
+}
+
+// WriteChain returns the chain of p, a path under a write root whose parent
+// exists (the helper's restore checks the owner it would set against it).
+func (f *FS) WriteChain(p string) ([]ChainDir, error) {
+	l, err := f.locate(p, true)
+	if err != nil {
+		return nil, err
+	}
+	defer l.close()
+	return f.rootChain(l)
+}
+
+// MovedInBy returns the first directory of chain through which an account
+// other than root and owner could have put an entry there (group- or
+// world-writable, or owned by another uid), or nil when the chain is
+// owner-matched for owner.
+func (f *FS) MovedInBy(chain []ChainDir, owner uint32) *ChainDir {
+	for i := range chain {
+		d := &chain[i]
+		if d.Mode&0o022 != 0 || !f.trustedOwner(d.UID) && d.UID != owner {
+			return d
+		}
+	}
+	return nil
+}
+
+// OwnerVerdict is which owners a file may have under a chain (rule R):
+// any owner, only UID, or none (Any false and UID nil). Dir is the first
+// directory of the chain that is not closed, when there is one.
+type OwnerVerdict struct {
+	Any bool
+	UID *uint32
+	Dir *ChainDir
+}
+
+// OwnerVerdictOf is the verdict for chain: exactly the owners MovedInBy
+// accepts. Every directory closed: any. Otherwise, when no directory is
+// group- or world-writable and every one that is not a trusted uid's
+// belongs to one uid, only that uid; else none.
+func (f *FS) OwnerVerdictOf(chain []ChainDir) OwnerVerdict {
+	var v OwnerVerdict
+	none := false
+	for i := range chain {
+		d := &chain[i]
+		if d.Mode&0o022 == 0 && f.trustedOwner(d.UID) {
+			continue
+		}
+		if v.Dir == nil {
+			v.Dir = d
+		}
+		switch {
+		case d.Mode&0o022 != 0:
+			none = true
+		case v.UID == nil:
+			uid := d.UID
+			v.UID = &uid
+		case *v.UID != d.UID:
+			none = true
+		}
+	}
+	switch {
+	case v.Dir == nil:
+		v.Any = true
+	case none:
+		v.UID = nil
+	}
+	return v
+}
+
+// allows says whether a file owned by uid may be left under the verdict's
+// chain.
+func (v *OwnerVerdict) allows(uid uint32) bool {
+	return v.Any || v.UID != nil && *v.UID == uid
+}
+
+// ownerRule is rule R (handoff N-8, N-9; PRIVILEGED §6), applied by
+// writeAtomic on the parent it holds before anything is backed up or
+// written: root leaves a regular file only when the owner it will have is
+// owner-matched on the chain from the root to that parent. That owner is
+// the one given, else an existing file's (kept), else the helper's own (a
+// new file or copy). A copy may name its owner as a write does (N-19). An
+// existing file whose kept owner does not pass needs both an owner and a
+// group given (N-6). A refusal names the one owner that would pass, when
+// exactly one would, and changes nothing.
+func (f *FS) ownerRule(l *loc, o *atomicOpts, exists bool, kept uint32) error {
+	if !f.cfg.GuardMovedIn {
+		return nil
+	}
+	chain, err := f.rootChain(l)
+	if err != nil {
+		return err
+	}
+	v := f.OwnerVerdictOf(chain)
+	if v.Any {
+		return nil
+	}
+	explicit := o.owner != nil && o.owner.UID != nil
+	both := explicit && o.owner.GID != nil
+	uid := uint32(os.Geteuid()) //nolint:gosec // G115: a uid fits
+	switch {
+	case explicit:
+		uid = *o.owner.UID
+	case exists:
+		uid = kept
+	}
+	if exists && !v.allows(kept) && !both {
+		d := f.MovedInBy(chain, kept)
+		by := ""
+		if o.copy {
+			by = " by a copy"
+		}
+		return unchanged(errf(protocol.CodePathDenied, "%q is not overwritten%s as root keeping its owner and group: the directory %s is %s, so another account could have moved it there; "+
+			"give both an owner and a group from the privileged policy's owners; %s; nothing was changed", l.p, by, d.Path, f.MovedInWhy(d, kept), f.ownerHint(&v)))
+	}
+	if v.allows(uid) {
+		return nil
+	}
+	d := f.MovedInBy(chain, uid)
+	what := "a file of uid " + strconv.FormatUint(uint64(uid), 10)
+	switch {
+	case o.copy && explicit:
+		what = "a copy of uid " + strconv.FormatUint(uint64(uid), 10)
+	case o.copy && !exists:
+		what = "a copy without an owner, which is root's"
+	case !explicit && !exists:
+		what = "a file without an owner, which is root's"
+	}
+	return unchanged(errf(protocol.CodePathDenied, "%q is not left as %s: the directory %s is %s, so another account could move the file elsewhere and keep "+
+		"what it could not have made itself; %s; nothing was changed", l.p, what, d.Path, f.MovedInWhy(d, uid), f.ownerHint(&v)))
+}
+
+// ownerHint names the one owner that would pass, or says that none would.
+func (f *FS) ownerHint(v *OwnerVerdict) string {
+	if v.UID == nil {
+		return "no owner may be given a file there: root's file tools leave none under that directory"
+	}
+	who := "uid " + strconv.FormatUint(uint64(*v.UID), 10)
+	if n := newNames().user(*v.UID); n != "" {
+		who += " (" + n + ")"
+	}
+	return "only " + who + ", the account that owns that directory, may own a file there"
+}
+
+// MovedInWhy says why d is open to another account, for messages.
+func (f *FS) MovedInWhy(d *ChainDir, owner uint32) string {
+	var r []string
+	if !f.trustedOwner(d.UID) && d.UID != owner {
+		r = append(r, fmt.Sprintf("owned by uid %d", d.UID))
+	}
+	if d.Mode&0o022 != 0 {
+		r = append(r, fmt.Sprintf("group- or world-writable (mode %04o)", d.Mode))
+	}
+	return strings.Join(r, " and ")
+}
+
+// movedIn checks l's target, owned by owner, against the chain: nil when it
+// is owner-matched, else the first open directory.
+func (f *FS) movedIn(l *loc, owner uint32) (*ChainDir, error) {
+	chain, err := f.rootChain(l)
+	if err != nil {
+		return nil, err
+	}
+	d := f.MovedInBy(chain, owner)
+	if d == nil {
+		return nil, nil
+	}
+	c := *d
+	return &c, nil
+}
+
+// movedInRead applies the read rule to the opened target fi: a file that
+// is neither owner-matched nor world-readable is not read.
+func (f *FS) movedInRead(l *loc, fi fs.FileInfo) error {
+	if !f.cfg.GuardMovedIn || fi.Mode().Perm()&0o004 != 0 {
+		return nil
+	}
+	owner := metaOf(fi).UID
+	d, err := f.movedIn(l, owner)
+	if err != nil || d == nil {
+		return err
+	}
+	return errf(protocol.CodePathDenied, "%q is not read as root: the directory %s is %s, so another account could have moved it there; "+
+		"under such a directory root reads only what that account could read itself (its own file, or a world-readable one)",
+		l.p, d.Path, f.MovedInWhy(d, owner))
+}
+
+// CurrentFile is what a restore would replace at p (a path under a write
+// root, its parent existing): nil when nothing is there, else a regular file
+// opened through a verified descriptor, its stat and SHA-256 (at most
+// maxHashBytes), read under the moved-in rule. A symlink, a directory,
+// another non-file, and a file with setuid, setgid, sticky or world-write
+// bits are refused as a write over them would be.
+func (f *FS) CurrentFile(p string) (fs.FileInfo, string, error) {
+	l, err := f.locate(p, true)
+	if err != nil {
+		return nil, "", err
+	}
+	defer l.close()
+	if l.parent == nil {
+		return nil, "", errf(protocol.CodeIsADirectory, "is a directory")
+	}
+	fi, err := l.parent.Lstat(l.base)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return nil, "", nil
+	case err != nil:
+		return nil, "", mapErr(err)
+	case fi.Mode()&fs.ModeSymlink != 0:
+		return nil, "", errf(protocol.CodePathDenied, "final path component is a symlink")
+	case fi.IsDir():
+		return nil, "", errf(protocol.CodeIsADirectory, "is a directory")
+	case !fi.Mode().IsRegular():
+		return nil, "", errf(protocol.CodeBadRequest, "not a regular file")
+	}
+	file, err := f.openTarget(l)
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, "", mapErr(err)
+	}
+	switch {
+	case !info.Mode().IsRegular():
+		return nil, "", errf(protocol.CodeBadRequest, "not a regular file")
+	case unixMode(info)&0o7002 != 0:
+		return nil, "", errf(protocol.CodePolicyDenied, "existing file has setuid, setgid, sticky or world-write bits")
+	case info.Size() > maxHashBytes:
+		return nil, "", errf(protocol.CodeTooLarge, "the file is larger than the %d MiB the helper hashes", maxHashBytes>>20)
+	}
+	if err := f.movedInRead(l, info); err != nil {
+		return nil, "", err
+	}
+	h := sha256.New()
+	if _, err := io.Copy(h, io.LimitReader(file, maxHashBytes+1)); err != nil {
+		return nil, "", mapErr(err)
+	}
+	return info, hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// CheckWritable applies the write path rules to p without touching the
+// filesystem: absolute and clean, under a write root, not denied or
+// protected (the restore preview, for every entry of a tree before any
+// exists).
+func (f *FS) CheckWritable(p string) error {
+	if err := pathx.CheckClean(p); err != nil {
+		return errf(protocol.CodeBadRequest, "path must be absolute and clean: %v", err)
+	}
+	if _, ok := pathx.Longest(f.cfg.WriteRoots, p); !ok {
+		return errf(protocol.CodePathDenied, "path is outside the policy's write roots")
+	}
+	if err := f.stagedRefused(p); err != nil {
+		return err
+	}
+	return f.checkPath(p, true).orNil()
+}

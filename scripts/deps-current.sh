@@ -4,10 +4,21 @@
 #   - a module we build from is behind its newest stable release;
 #   - a direct requirement has a stable next major version (<path>/vN+1, or
 #     <path>/v2 for a v0/v1 module) — pre-release-only next majors are info;
-#   - the golangci-lint or govulncheck version pinned in ci.yml and
-#     scripts/ci-local.sh differs between the two or is older than its newest
-#     stable release;
-#   - go.mod's go/toolchain line is older than the newest stable Go on go.dev.
+#   - a tool pinned in the workflows or scripts/ci-local.sh is older than its
+#     newest stable release, or the files that pin it disagree, or a pin is
+#     missing: golangci-lint and govulncheck (ci.yml, ci-local.sh and, for
+#     govulncheck, release-build.yml), Trivy and Grype (ci.yml and
+#     release-build.yml), gitleaks (ci.yml), cosign and syft
+#     (release-build.yml);
+#   - the release workflow's loopback registry image
+#     (scripts/release/Dockerfile.registry) is not pinned by digest, or is
+#     older than the newest stable distribution release whose official
+#     registry image is published;
+#   - go.mod's go/toolchain line is not the newest stable Go on go.dev that
+#     has a published official golang:<version>-trixie image (the newest
+#     stable Go, unless its image is not published yet; deps-current-go.sh);
+#   - scripts/ci-local.sh lints with a Go older than go.mod's go/toolchain
+#     line, or with anything but golangci-lint built in the Go image.
 # Needs go, git and curl. Run from any directory; checks the module containing
 # this script unless DEPS_CURRENT_DIR names another.
 #
@@ -18,7 +29,8 @@
 # removes any requirement we add for them, so they cannot be pinned from here.
 set -euo pipefail
 
-cd "${DEPS_CURRENT_DIR:-$(dirname "$0")/..}"
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+cd "${DEPS_CURRENT_DIR:-$script_dir/..}"
 
 fail=0
 stable_re='^v[0-9]+\.[0-9]+\.[0-9]+$'
@@ -93,58 +105,135 @@ done <<<"$direct"
 
 # --- CI tool pins ----------------------------------------------------------------
 ci_yml=".github/workflows/ci.yml"
+release_yml=".github/workflows/release-build.yml"
 ci_local="scripts/ci-local.sh"
 
-# check_tool NAME CI_PIN LOCAL_PIN NEWEST
-check_tool() {
-	local name="$1" ci="$2" local_pin="$3" newest="$4"
-	if [[ -z "$ci" || -z "$local_pin" ]]; then
-		echo "deps-current: FAIL — cannot find the $name pin in $ci_yml (got '$ci') or $ci_local (got '$local_pin')"
-		fail=1
-		return
-	fi
+# check_pins NAME NEWEST FILE=PIN...: every file pins NAME, all to the same
+# version, none older than NEWEST. A pin may omit the leading v (gitleaks).
+check_pins() {
+	local name="$1" newest="$2" spec file val first="" listed="" ok=1
+	shift 2
+	local -a vals=()
+	for spec in "$@"; do
+		file="${spec%%=*}" val="${spec#*=}"
+		if [[ -z "$val" ]]; then
+			echo "deps-current: FAIL — cannot find the $name pin in $file"
+			fail=1 ok=0
+			continue
+		fi
+		val="v${val#v}"
+		vals+=("$val")
+		listed+="${listed:+, }$file $val"
+		[[ -z "$first" ]] && first="$val"
+		[[ "$val" != "$first" ]] && ok=2
+	done
 	if [[ -z "$newest" ]]; then
 		echo "deps-current: FAIL — could not determine the newest stable $name release"
 		fail=1
 		return
 	fi
-	if [[ "$ci" != "$local_pin" ]]; then
-		echo "deps-current: FAIL — $name is pinned differently: $ci_yml $ci, $ci_local $local_pin"
+	if [[ $ok -eq 2 ]]; then
+		echo "deps-current: FAIL — $name is pinned differently: $listed"
 		fail=1
 	fi
 	local pin
-	for pin in $(printf '%s\n%s\n' "$ci" "$local_pin" | sort -u); do
+	for pin in $(printf '%s\n' "${vals[@]}" | sort -u); do
 		if older "$pin" "$newest"; then
 			echo "deps-current: FAIL — $name $pin is older than the newest stable $newest"
-			fail=1
+			fail=1 ok=0
 		fi
 	done
-	if [[ "$ci" == "$local_pin" ]] && ! older "$ci" "$newest"; then
-		echo "deps-current: $name $ci is the newest stable release"
+	if [[ $ok -eq 1 ]]; then
+		echo "deps-current: $name $first is the newest stable release"
 	fi
 }
 
-lint_ci="$(awk '$1 == "GOLANGCI_LINT_VERSION:" { print $2 }' "$ci_yml" 2>/dev/null || true)"
-lint_local="$(sed -n 's#.*golangci/golangci-lint:\(v[0-9.]*\)@.*#\1#p' "$ci_local" 2>/dev/null | head -n1 || true)"
-lint_newest="$(git ls-remote --tags --refs https://github.com/golangci/golangci-lint |
-	awk '{ sub("refs/tags/", "", $2); print $2 }' | grep -E "$stable_re" | sort -V | tail -n1 || true)"
-check_tool golangci-lint "$lint_ci" "$lint_local" "$lint_newest"
+# pin_of FILE VAR: the value of "VAR: value" (a workflow env entry).
+pin_of() { awk -v k="$2:" '$1 == k { print $2; exit }' "$1" 2>/dev/null || true; }
+# newest_tag OWNER/REPO: the newest vX.Y.Z tag of a GitHub repository.
+newest_tag() {
+	git ls-remote --tags --refs "https://github.com/$1" |
+		awk '{ sub("refs/tags/", "", $2); print $2 }' | grep -E "$stable_re" | sort -V | tail -n1 || true
+}
 
-vuln_ci="$(awk '$1 == "GOVULNCHECK_VERSION:" { print $2 }' "$ci_yml" 2>/dev/null || true)"
-vuln_local="$(sed -n 's/^govulncheck_version="\(v[0-9.]*\)"$/\1/p' "$ci_local" 2>/dev/null || true)"
+check_pins golangci-lint "$(newest_tag golangci/golangci-lint)" \
+	"$ci_yml=$(pin_of "$ci_yml" GOLANGCI_LINT_VERSION)" \
+	"$ci_local=$(sed -n 's/^golangci_lint_version="\(v[0-9.]*\)"$/\1/p' "$ci_local" 2>/dev/null || true)"
+
 # @latest on the module proxy is the newest release, never a pre-release.
-vuln_newest="$(go list -m -f '{{.Version}}' golang.org/x/vuln@latest 2>/dev/null || true)"
-check_tool govulncheck "$vuln_ci" "$vuln_local" "$vuln_newest"
+check_pins govulncheck "$(go list -m -f '{{.Version}}' golang.org/x/vuln@latest 2>/dev/null || true)" \
+	"$ci_yml=$(pin_of "$ci_yml" GOVULNCHECK_VERSION)" \
+	"$ci_local=$(sed -n 's/^govulncheck_version="\(v[0-9.]*\)"$/\1/p' "$ci_local" 2>/dev/null || true)" \
+	"$release_yml=$(pin_of "$release_yml" GOVULNCHECK_VERSION)"
+
+check_pins Trivy "$(newest_tag aquasecurity/trivy)" \
+	"$ci_yml=$(pin_of "$ci_yml" TRIVY_VERSION)" "$release_yml=$(pin_of "$release_yml" TRIVY_VERSION)"
+check_pins Grype "$(newest_tag anchore/grype)" \
+	"$ci_yml=$(pin_of "$ci_yml" GRYPE_VERSION)" "$release_yml=$(pin_of "$release_yml" GRYPE_VERSION)"
+check_pins gitleaks "$(newest_tag gitleaks/gitleaks)" "$ci_yml=$(pin_of "$ci_yml" GITLEAKS_VERSION)"
+check_pins cosign "$(newest_tag sigstore/cosign)" "$release_yml=$(pin_of "$release_yml" COSIGN_VERSION)"
+check_pins syft "$(newest_tag anchore/syft)" "$release_yml=$(pin_of "$release_yml" SYFT_VERSION)"
+
+# --- Loopback registry image -----------------------------------------------------
+# The official registry image (Docker Hub library/registry) is tagged with
+# distribution's release versions, published some time after the release.
+# The pin must equal the newest stable distribution release whose image is
+# published, walking back from the newest at most five releases; a release
+# without its image yet is info. Docker Hub is queried anonymously with a
+# HEAD request; anything but 200 or 404 fails closed.
+registry_file="scripts/release/Dockerfile.registry"
+registry_image="$(awk 'toupper($1) == "FROM" { print $2; exit }' "$registry_file" 2>/dev/null || true)"
+registry_tag="$(sed -n 's/^registry:\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)@sha256:[0-9a-f]\{64\}$/\1/p' <<<"$registry_image")"
+registry_status() { # registry_status <tag>: 200, 404 or another status
+	local token
+	token="$(curl -fsS --max-time 30 \
+		'https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/registry:pull' |
+		grep -o '"token": *"[^"]*"' | head -n1 | sed 's/^"token": *"\(.*\)"$/\1/')" || return 1
+	[[ -n "$token" ]] || return 1
+	printf 'Authorization: Bearer %s\n' "$token" |
+		curl -sS --max-time 30 -I -o /dev/null -w '%{http_code}' -H @- \
+			-H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \
+			"https://registry-1.docker.io/v2/library/registry/manifests/$1"
+}
+if [[ -z "$registry_tag" ]]; then
+	echo "deps-current: FAIL — $registry_file must pin registry:X.Y.Z@sha256:<digest> (got '$registry_image')"
+	fail=1
+else
+	registry_newest=""
+	registry_failed=0
+	while read -r tag; do
+		[[ -n "$tag" ]] || continue
+		status="$(registry_status "${tag#v}")" || status="error"
+		case "$status" in
+		200) registry_newest="${tag#v}"; break ;;
+		404) echo "deps-current: info — distribution $tag is released but registry:${tag#v} is not published yet" ;;
+		*)
+			echo "deps-current: FAIL — cannot query Docker Hub for registry:${tag#v} ($status)"
+			fail=1 registry_failed=1
+			break
+			;;
+		esac
+	done < <(git ls-remote --tags --refs https://github.com/distribution/distribution |
+		awk '{ sub("refs/tags/", "", $2); print $2 }' | grep -E "$stable_re" | sort -V | tail -n5 | sort -rV)
+	if [[ $registry_failed -eq 0 ]]; then
+		if [[ -z "$registry_newest" ]]; then
+			echo "deps-current: FAIL — none of the 5 newest distribution releases has a published registry image"
+			fail=1
+		elif older "$registry_tag" "$registry_newest"; then
+			echo "deps-current: FAIL — the loopback registry image registry:$registry_tag is older than registry:$registry_newest"
+			fail=1
+		else
+			echo "deps-current: the loopback registry image registry:$registry_tag is the newest published"
+		fi
+	fi
+fi
 
 # --- Go toolchain ------------------------------------------------------------
-# ?mode=json lists stable releases only, newest first.
-latest="$(curl -fsS --max-time 30 'https://go.dev/dl/?mode=json' |
-	grep -o '"version": *"go[0-9][0-9.]*"' | head -n1 | grep -o 'go[0-9][0-9.]*' || true)"
-if [[ -z "$latest" ]]; then
-	echo "deps-current: could not determine the newest Go release" >&2
-	exit 1
+# go.mod must be on the newest stable Go that has a published official
+# golang:<version>-trixie image; see deps-current-go.sh.
+if ! DEPS_CURRENT_DIR="$PWD" bash "$script_dir/deps-current-go.sh"; then
+	fail=1
 fi
-latest="${latest#go}"
 
 go_line="$(awk '$1 == "go" { print $2 }' go.mod)"
 toolchain_line="$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)"
@@ -152,14 +241,38 @@ toolchain_line="$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mo
 # effective toolchain is the newer of the two.
 effective="$(printf '%s\n%s\n' "$go_line" "${toolchain_line:-$go_line}" | sort -V | tail -n1)"
 
-if older "$go_line" "$latest"; then
-	echo "deps-current: FAIL — go.mod 'go $go_line' is older than the newest stable Go $latest"
+# --- golangci-lint toolchain (ci-local) ----------------------------------------
+# ci-local.sh runs with GOTOOLCHAIN=local, so the Go that builds golangci-lint
+# must be able to load this module. It must build golangci-lint with `go run`
+# in the Go image (the Dockerfile's golang builder stage), never use a
+# prebuilt image that bundles its own Go, and that Go must not be older than
+# go.mod's go/toolchain line.
+lint_go_ok=1
+lint_run='in_lint() { in_go go run "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$golangci_lint_version" "$@"; }'
+if ! grep -q -x -F -- "$lint_run" "$ci_local" ||
+	! grep -q -x -F -- 'in_go() { docker run "${common[@]}" "$go_image" "$@"; }' "$ci_local" ||
+	! grep -q '^go_image="$(awk .* Dockerfile)"$' "$ci_local"; then
+	echo "deps-current: FAIL — golangci-lint in $ci_local does not run with the Go image's go (expected: $lint_run, with in_go on the Dockerfile's golang image)"
 	fail=1
-elif older "$effective" "$latest"; then
-	echo "deps-current: FAIL — go.mod toolchain $effective is older than the newest stable Go $latest"
+	lint_go_ok=0
+fi
+lint_steps="$(grep -c '^step "golangci-lint' "$ci_local" || true)"
+lint_steps_in_go="$(grep -c '^step "golangci-lint[^"]*" "" in_lint run ' "$ci_local" || true)"
+if [[ "$lint_steps" -eq 0 || "$lint_steps" != "$lint_steps_in_go" ]]; then
+	echo "deps-current: FAIL — golangci-lint in $ci_local does not run with the Go image's go ($lint_steps_in_go of $lint_steps lint steps use in_lint)"
 	fail=1
-else
-	echo "deps-current: go.mod go $go_line (toolchain ${toolchain_line:-implied by go line}) matches newest stable Go $latest"
+	lint_go_ok=0
+fi
+go_image="$(awk 'toupper($1) == "FROM" { for (i = 2; i <= NF; i++) if ($i ~ /^golang:/) { print $i; exit } }' Dockerfile 2>/dev/null || true)"
+lint_go="$(sed -n 's/^golang:\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)[-@].*/\1/p' <<<"$go_image")"
+if [[ -z "$lint_go" ]]; then
+	echo "deps-current: FAIL — cannot read the Go version from the Dockerfile's golang image (got '$go_image')"
+	fail=1
+elif older "$lint_go" "$effective"; then
+	echo "deps-current: FAIL — golangci-lint in $ci_local runs on Go $lint_go, older than go.mod's go $effective"
+	fail=1
+elif [[ "$lint_go_ok" -eq 1 ]]; then
+	echo "deps-current: golangci-lint in $ci_local is built with Go $lint_go (go.mod: $effective)"
 fi
 
 exit "$fail"

@@ -1,0 +1,478 @@
+# Release build, called by release.yml only (a tag, or a dry run). It builds,
+# verifies, signs and attests in this one reusable workflow, so the provenance
+# is signed by it and not by the caller (SLSA v1.0 Build Level 3 with GitHub
+# artifact attestations: the reusable workflow that builds also attests).
+#
+#   build    the binaries, both images (pushed only to a loopback registry
+#            inside the job), SBOMs and SHA256SUMS; contents: read only
+#   verify   release-binary-check, image binaries identical to the released
+#            ones, version stamps, SBOMs, Trivy and Grype per image,
+#            govulncheck, deps-current; contents: read only
+#   approve  a real release only: the `release` environment (the owner's
+#            approval) before anything is pushed, signed or attested
+#   sign     pushes the image index unchanged (GHCR for a release, the
+#            loopback registry for a dry run), signs it and the files with
+#            cosign keyless, attests provenance and SBOMs, and verifies all
+#            of it (scripts/release/verify.sh)
+#   publish  a real release only: a draft GitHub Release with every file,
+#            then published
+#
+# build and verify state their permissions; approve, sign and publish state
+# none and inherit the caller's: a dry run's caller grants no contents or
+# packages write, so a dry run cannot publish whatever this file says.
+# Actions are pinned to the commit SHA of their newest release (D-013); the
+# tool versions below are kept current by deps-current.
+name: release-build
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: The version stamped into the build (X.Y.Z, or X.Y.Z-dryrun.<commit>).
+        required: true
+        type: string
+      notes-version:
+        description: The CHANGELOG section of the release notes, or "-" for none.
+        required: true
+        type: string
+      publish:
+        description: Push to GHCR and create the GitHub Release (a tag only).
+        required: true
+        type: boolean
+
+env:
+  GOTOOLCHAIN: local
+  TRIVY_VERSION: v0.76.1
+  GRYPE_VERSION: v0.121.0
+  COSIGN_VERSION: v3.1.4
+  SYFT_VERSION: v1.55.0
+  GOVULNCHECK_VERSION: v1.9.0
+  VERSION: ${{ inputs.version }}
+  LOOPBACK: localhost:5000/shell-mcp
+
+jobs:
+  build:
+    name: build (binaries, images, SBOMs, checksums)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      sums: ${{ steps.sums.outputs.sums }}
+      index: ${{ steps.images.outputs.index }}
+      amd64: ${{ steps.images.outputs.amd64 }}
+      arm64: ${{ steps.images.outputs.arm64 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+      - id: syft
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: ${{ env.SYFT_VERSION }}
+      - name: binaries and examples archive
+        run: bash scripts/release/build.sh "$VERSION" "$GITHUB_SHA" dist
+      - name: loopback registry
+        run: bash scripts/release/registry.sh start "shell-mcp.release=$GITHUB_RUN_ID-build"
+      # Each platform is built by the default docker driver (no emulation:
+      # the Dockerfile cross-compiles), pushed to the loopback registry, and
+      # joined into one index there; `cosign save` writes the index and both
+      # images to an OCI layout, the artifact every later job pushes unchanged.
+      - name: images (linux/amd64, linux/arm64)
+        id: images
+        run: |
+          refs=()
+          for arch in amd64 arm64; do
+            docker build --platform "linux/$arch" --build-arg VERSION="$VERSION" --build-arg REVISION="$GITHUB_SHA" -t "$LOOPBACK:build-$arch" .
+            docker push "$LOOPBACK:build-$arch"
+            d="$(bash scripts/release/registry.sh digest "$LOOPBACK:build-$arch")"
+            echo "$arch=$d" >>"$GITHUB_OUTPUT"
+            refs+=("$LOOPBACK@$d")
+          done
+          docker manifest create --insecure "$LOOPBACK:$VERSION" "${refs[@]}"
+          docker manifest push --insecure "$LOOPBACK:$VERSION"
+          index="$(bash scripts/release/registry.sh digest "$LOOPBACK:$VERSION")"
+          echo "index=$index" >>"$GITHUB_OUTPUT"
+          mkdir -p image
+          cosign save --dir image/layout "$LOOPBACK@$index"
+          tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -C image -cf image/shell-mcp-image.oci.tar layout
+          docker manifest inspect --insecure "$LOOPBACK@$index"
+      # CycloneDX SBOMs: one per binary, one per platform image (including
+      # the distroless base's OS packages), read from the loopback registry
+      # by digest.
+      - name: SBOMs
+        env:
+          SYFT: ${{ steps.syft.outputs.cmd }}
+          SYFT_CHECK_FOR_APP_UPDATE: "false"
+          SYFT_REGISTRY_INSECURE_USE_HTTP: "true"
+          AMD64: ${{ steps.images.outputs.amd64 }}
+          ARM64: ${{ steps.images.outputs.arm64 }}
+        run: |
+          "$SYFT" version
+          for f in dist/*_linux_*; do
+            "$SYFT" scan "file:$f" --source-name "$(basename "$f")" --source-version "$VERSION" -o "cyclonedx-json=$f.cdx.json"
+          done
+          for arch in amd64 arm64; do
+            d="$AMD64"; [ "$arch" = arm64 ] && d="$ARM64"
+            "$SYFT" scan "registry:$LOOPBACK@$d" --source-name shell-mcp --source-version "$VERSION" \
+              -o "cyclonedx-json=dist/shell-mcp_${VERSION}_image_linux_${arch}.cdx.json"
+          done
+      - name: SHA256SUMS
+        id: sums
+        run: |
+          # Written outside dist first, so that it does not list itself.
+          (cd dist && ls -1 | LC_ALL=C sort | xargs sha256sum -- >../SHA256SUMS.tmp)
+          mv SHA256SUMS.tmp dist/SHA256SUMS
+          cat dist/SHA256SUMS
+          {
+            echo "sums<<EOF_SUMS"
+            cat dist/SHA256SUMS
+            (cd image && sha256sum shell-mcp-image.oci.tar)
+            echo "EOF_SUMS"
+          } >>"$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-files
+          path: dist/
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-image
+          path: image/shell-mcp-image.oci.tar
+          if-no-files-found: error
+          retention-days: 1
+      - name: remove the loopback registry
+        if: always()
+        run: bash scripts/release/registry.sh stop "shell-mcp.release=$GITHUB_RUN_ID-build"
+
+  verify:
+    name: verify (release checks, image scans, govulncheck, deps-current)
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      SUMS: ${{ needs.build.outputs.sums }}
+      INDEX: ${{ needs.build.outputs.index }}
+      AMD64: ${{ needs.build.outputs.amd64 }}
+      ARM64: ${{ needs.build.outputs.arm64 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: artifacts
+      # The files are the ones build hashed (its job output, which no later
+      # step can change), and SHA256SUMS lists exactly them.
+      - name: files are the build's
+        run: |
+          mv artifacts/release-files dist && mkdir image && mv artifacts/release-image/shell-mcp-image.oci.tar image/
+          diff <(printf '%s\n' "$SUMS") <(cat dist/SHA256SUMS; cd image && sha256sum shell-mcp-image.oci.tar)
+          (cd dist && sha256sum --strict -c SHA256SUMS)
+          test "$(cd dist && ls -1 | grep -v '^SHA256SUMS$' | LC_ALL=C sort)" = "$(awk '{ print $2 }' dist/SHA256SUMS | LC_ALL=C sort)"
+          # Workflow artifacts do not keep file modes.
+          chmod 0755 dist/*_linux_amd64 dist/*_linux_arm64
+      - name: release-binary-check (every binary)
+        run: bash scripts/release-binary-check.sh dist/*_linux_amd64 dist/*_linux_arm64
+      - name: version stamps
+        run: |
+          for c in shell-mcp shell-mcp-gate shell-mcp-privd; do
+            out="$("dist/${c}_${VERSION}_linux_amd64" version)"
+            echo "$out"
+            case "$out" in "$c $VERSION (commit $GITHUB_SHA, "*) ;; *) echo "unexpected version output" >&2; exit 1 ;; esac
+            # The arm64 binary cannot run here, and -trimpath keeps -ldflags out
+            # of its build information: its stamped strings must be in it.
+            for s in "$VERSION" "$GITHUB_SHA"; do
+              grep -a -q -F -- "$s" "dist/${c}_${VERSION}_linux_arm64" || { echo "${c} arm64: $s not stamped" >&2; exit 1; }
+            done
+          done
+      - name: SBOMs are CycloneDX and list the modules
+        run: |
+          for f in dist/*.cdx.json; do
+            jq -e '.bomFormat == "CycloneDX" and (.components | length > 0)' "$f" >/dev/null || { echo "$f: not a CycloneDX SBOM with components" >&2; exit 1; }
+          done
+          for f in dist/*_linux_amd64.cdx.json dist/*_linux_arm64.cdx.json; do
+            jq -e '[.components[].name] | index("golang.org/x/sys")' "$f" >/dev/null || { echo "$f: golang.org/x/sys missing" >&2; exit 1; }
+          done
+          for arch in amd64 arm64; do
+            f="dist/shell-mcp_${VERSION}_image_linux_${arch}.cdx.json"
+            jq -e '[.components[] | select(.purl // "" | startswith("pkg:deb/"))] | length > 0' "$f" >/dev/null || { echo "$f: no OS packages" >&2; exit 1; }
+            jq -e '[.components[].name] | index("github.com/modelcontextprotocol/go-sdk")' "$f" >/dev/null || { echo "$f: the server's modules are missing" >&2; exit 1; }
+          done
+      - name: loopback registry
+        run: bash scripts/release/registry.sh start "shell-mcp.release=$GITHUB_RUN_ID-verify"
+      - name: the image index, as the build saved it
+        run: |
+          mkdir -p image/x && tar -C image/x -xf image/shell-mcp-image.oci.tar
+          bash scripts/release/registry.sh load image/x/layout "$LOOPBACK:$VERSION" "$INDEX"
+          m="$(docker manifest inspect --insecure "$LOOPBACK@$INDEX")"
+          echo "$m"
+          test "$(jq -r '[.manifests[] | "\(.platform.os)/\(.platform.architecture)=\(.digest)"] | sort | join(" ")' <<<"$m")" = "linux/amd64=$AMD64 linux/arm64=$ARM64"
+      # Each image's /shell-mcp is byte-identical to the released shell-mcp
+      # of its platform, so it is a release build too and the signed binary
+      # is what the image runs.
+      - name: image binaries are the released binaries
+        run: |
+          for arch in amd64 arm64; do
+            d="$AMD64"; [ "$arch" = arm64 ] && d="$ARM64"
+            docker pull --platform "linux/$arch" "$LOOPBACK@$d"
+            docker tag "$LOOPBACK@$d" "shell-mcp:verify-$arch"
+            id="$(docker create --platform "linux/$arch" "shell-mcp:verify-$arch")"
+            docker cp "$id:/shell-mcp" "image/shell-mcp-$arch"
+            docker rm "$id" >/dev/null
+            cmp "image/shell-mcp-$arch" "dist/shell-mcp_${VERSION}_linux_${arch}"
+            bash scripts/release-binary-check.sh "image/shell-mcp-$arch"
+            test "$(docker image inspect "shell-mcp:verify-$arch" --format '{{.Config.User}}')" = "65532:65532"
+            test "$(docker image inspect "shell-mcp:verify-$arch" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')" = "$VERSION"
+            echo "linux/$arch: the image's /shell-mcp is dist/shell-mcp_${VERSION}_linux_${arch}"
+          done
+          docker run --rm shell-mcp:verify-amd64 version
+      - name: Trivy (linux/amd64)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: image
+          image-ref: shell-mcp:verify-amd64
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          format: table
+          trivyignores: .trivyignore
+      - name: Trivy (linux/arm64)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: image
+          image-ref: shell-mcp:verify-arm64
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          format: table
+          trivyignores: .trivyignore
+          skip-setup-trivy: true
+      - name: Grype (linux/amd64)
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: shell-mcp:verify-amd64
+          grype-version: ${{ env.GRYPE_VERSION }}
+          config: .grype.yaml
+          fail-build: "true"
+          severity-cutoff: high
+          output-format: table
+      - name: Grype (linux/arm64)
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: shell-mcp:verify-arm64
+          grype-version: ${{ env.GRYPE_VERSION }}
+          config: .grype.yaml
+          fail-build: "true"
+          severity-cutoff: high
+          output-format: table
+      # Source mode, at the tagged commit. Not -mode=binary: the release
+      # binaries are stripped (-s -w), and without a symbol table binary mode
+      # reports every vulnerability of every module a binary uses, reachable
+      # or not (maintainer decision, 2026-10-25; ARCHIVE §14).
+      - name: govulncheck
+        run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
+      # D-013: nothing is released while a dependency, Go or a pinned tool is
+      # behind its newest stable release.
+      - name: deps-current
+        run: bash scripts/deps-current.sh
+      - name: remove the loopback registry
+        if: always()
+        run: bash scripts/release/registry.sh stop "shell-mcp.release=$GITHUB_RUN_ID-verify"
+
+  approve:
+    name: approve (the release environment)
+    if: inputs.publish
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - name: approved
+        run: echo "release $VERSION of $GITHUB_SHA approved"
+
+  sign:
+    name: sign and attest (${{ inputs.publish && 'GHCR' || 'dry run, loopback registry' }})
+    needs: [build, verify, approve]
+    if: ${{ !cancelled() && needs.verify.result == 'success' && (inputs.publish && needs.approve.result == 'success' || !inputs.publish && needs.approve.result == 'skipped') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # No permissions here: the caller's grant (id-token and attestations, and
+    # packages for a release) is what this job gets.
+    env:
+      SUMS: ${{ needs.build.outputs.sums }}
+      INDEX: ${{ needs.build.outputs.index }}
+      AMD64: ${{ needs.build.outputs.amd64 }}
+      ARM64: ${{ needs.build.outputs.arm64 }}
+      IMAGE_REPO: ${{ inputs.publish && format('ghcr.io/{0}', github.repository) || 'localhost:5000/shell-mcp' }}
+      PUBLISH: ${{ inputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: artifacts
+      - name: files are the build's
+        run: |
+          mv artifacts/release-files dist && mkdir image && mv artifacts/release-image/shell-mcp-image.oci.tar image/
+          diff <(printf '%s\n' "$SUMS") <(cat dist/SHA256SUMS; cd image && sha256sum shell-mcp-image.oci.tar)
+          (cd dist && sha256sum --strict -c SHA256SUMS)
+      - name: loopback registry (dry run)
+        if: ${{ !inputs.publish }}
+        run: bash scripts/release/registry.sh start "shell-mcp.release=$GITHUB_RUN_ID-sign"
+      - name: log in to GHCR (release)
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '%s\n' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      # The index and both images exactly as built (same digests), tagged
+      # with the version; for a release, the only tag pushed to GHCR.
+      - name: push the image index
+        run: |
+          mkdir -p image/x && tar -C image/x -xf image/shell-mcp-image.oci.tar
+          bash scripts/release/registry.sh load image/x/layout "$IMAGE_REPO:$VERSION" "$INDEX"
+      - name: cosign sign (image index and both images)
+        run: cosign sign --yes --recursive "$IMAGE_REPO@$INDEX"
+      - name: cosign sign-blob (binaries, examples archive, SHA256SUMS)
+        run: |
+          cd dist
+          for f in *_linux_amd64 *_linux_arm64 "shell-mcp_${VERSION}_examples.tar.gz" SHA256SUMS; do
+            cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"
+          done
+      - name: provenance (every release file)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+      - name: provenance (image index)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_REPO }}
+          subject-digest: ${{ needs.build.outputs.index }}
+          push-to-registry: ${{ inputs.publish }}
+          create-storage-record: false
+      - name: SBOM (image, linux/amd64)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_REPO }}
+          subject-digest: ${{ needs.build.outputs.amd64 }}
+          sbom-path: dist/shell-mcp_${{ inputs.version }}_image_linux_amd64.cdx.json
+          push-to-registry: ${{ inputs.publish }}
+          create-storage-record: false
+      - name: SBOM (image, linux/arm64)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE_REPO }}
+          subject-digest: ${{ needs.build.outputs.arm64 }}
+          sbom-path: dist/shell-mcp_${{ inputs.version }}_image_linux_arm64.cdx.json
+          push-to-registry: ${{ inputs.publish }}
+          create-storage-record: false
+      - name: SBOM (shell-mcp, linux/amd64)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/shell-mcp_${{ inputs.version }}_linux_amd64
+          sbom-path: dist/shell-mcp_${{ inputs.version }}_linux_amd64.cdx.json
+      - name: SBOM (shell-mcp, linux/arm64)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/shell-mcp_${{ inputs.version }}_linux_arm64
+          sbom-path: dist/shell-mcp_${{ inputs.version }}_linux_arm64.cdx.json
+      - name: SBOM (shell-mcp-gate, linux/amd64)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/shell-mcp-gate_${{ inputs.version }}_linux_amd64
+          sbom-path: dist/shell-mcp-gate_${{ inputs.version }}_linux_amd64.cdx.json
+      - name: SBOM (shell-mcp-gate, linux/arm64)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/shell-mcp-gate_${{ inputs.version }}_linux_arm64
+          sbom-path: dist/shell-mcp-gate_${{ inputs.version }}_linux_arm64.cdx.json
+      - name: SBOM (shell-mcp-privd, linux/amd64)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/shell-mcp-privd_${{ inputs.version }}_linux_amd64
+          sbom-path: dist/shell-mcp-privd_${{ inputs.version }}_linux_amd64.cdx.json
+      - name: SBOM (shell-mcp-privd, linux/arm64)
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/shell-mcp-privd_${{ inputs.version }}_linux_arm64
+          sbom-path: dist/shell-mcp-privd_${{ inputs.version }}_linux_arm64.cdx.json
+      # Verified as a user would, pinned to this run's identity, and refused
+      # for any other ref.
+      - name: verify signatures and attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/release/verify.sh dist "$VERSION" "$IMAGE_REPO@$INDEX" "$GITHUB_REPOSITORY" "$GITHUB_REF"
+      - name: release notes
+        env:
+          NOTES_VERSION: ${{ inputs.notes-version }}
+        run: |
+          bash scripts/release/render-notes.sh "$VERSION" "$NOTES_VERSION" "$IMAGE_REPO" "$INDEX" "$GITHUB_REPOSITORY" "$GITHUB_REF" >notes.md
+          { echo "### Release notes ($([ "$PUBLISH" = true ] && echo release || echo dry run))"; cat notes.md; } >>"$GITHUB_STEP_SUMMARY"
+          mkdir -p signed && cp dist/*.sigstore.json notes.md signed/
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-signed
+          path: signed/
+          if-no-files-found: error
+          retention-days: 1
+      - name: log out and remove the loopback registry
+        if: always()
+        run: |
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          bash scripts/release/registry.sh stop "shell-mcp.release=$GITHUB_RUN_ID-sign"
+
+  publish:
+    name: publish (GitHub Release)
+    if: inputs.publish
+    needs: [build, sign]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # No permissions here: the release caller grants contents: write.
+    env:
+      SUMS: ${{ needs.build.outputs.sums }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: artifacts
+      - name: files are the build's
+        run: |
+          mv artifacts/release-files dist
+          diff <(printf '%s\n' "$SUMS" | grep -v ' shell-mcp-image.oci.tar$') dist/SHA256SUMS
+          (cd dist && sha256sum --strict -c SHA256SUMS)
+      # A draft first, with every file, then published: with immutable
+      # releases on, the published release and its tag cannot change.
+      - name: create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "$TAG" \
+            --notes-file artifacts/release-signed/notes.md dist/* artifacts/release-signed/*.sigstore.json
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY"

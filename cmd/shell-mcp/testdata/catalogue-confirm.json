@@ -1,0 +1,1067 @@
+[
+  {
+    "name": "shell_control_service",
+    "title": "Control service",
+    "tier": "operator",
+    "profiles": [
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Control service"
+    },
+    "description": "Starts, stops, restarts or reloads a systemd unit the target policy allows, and returns the unit's status re-read after the action.",
+    "input_schema_sha256": "8064eeea06d2b6fae58a6c06c755e61bdd2374eac6d94a3e7e53bd3a5aeab0ce",
+    "output_schema_sha256": "6e67c900ba9cbae8efa4a50c2bf087dc5b88d43e9ce28d117120bc0142d07242",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_copy_path",
+    "title": "Copy file",
+    "tier": "operator",
+    "profiles": [
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Copy file"
+    },
+    "description": "Copies a regular file to a destination under the target policy's write roots, verified by reading the copy back.",
+    "input_schema_sha256": "eeec5ca77630f8b3785debefba524104289ea46a69827c63a4f3ee3c1f4c8f3f",
+    "output_schema_sha256": "c3ce3323d4860229c1ba60d080cf2132ac1ac6541ef3e7045f17b1a8d0ec0a82",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_delete_path",
+    "title": "Delete path",
+    "tier": "destructive",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Delete path"
+    },
+    "description": "Deletes a file, an empty directory, or with recursive a directory tree under the target policy's write roots, exactly as its approved preview listed it.",
+    "input_schema_sha256": "21cff3492dae09eb7791787386359c9dca6aaf2a6d362fd79b0dc30d9ef938d8",
+    "output_schema_sha256": "e832044acdc90e3a3b24926eb9ebf42d5b72a1ae45055c9fcc6cd27ba9c991fc",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_discard_git_changes",
+    "title": "Discard git changes",
+    "tier": "destructive",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Discard git changes"
+    },
+    "description": "Restores a repository's tracked files and index to HEAD and, with include_untracked, removes untracked files, exactly as its approved preview listed them. Superproject only: submodule work trees are never inspected (not their changes or checked-out commit); staged gitlink changes are seen.",
+    "input_schema_sha256": "52d752fcc661b680b03e3d7b4d27c7eade35558f3021b0cb8d8a684cbab8cbef",
+    "output_schema_sha256": "ec4d58b1acfcefac470a42f5e68e2c3d01653bbfb2091460dfaa5566d597745f",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_find_files",
+    "title": "Find files",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Find files"
+    },
+    "description": "Searches a directory tree with bounded depth and results, by name glob, type and modification age.",
+    "input_schema_sha256": "73347b5a7fc4f3cccd23f814d45ca52a136efd4617b5cabbdc76ac3c72c79547",
+    "output_schema_sha256": "22866528a8abe997d7383a8b0dad7e4c74b13b34a038f54b1dc17da709621831",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_get_disk_usage",
+    "title": "Get disk usage",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Get disk usage"
+    },
+    "description": "Returns each mounted filesystem's type, size, used and available bytes and inode counts.",
+    "input_schema_sha256": "b900df38a774f2c137c964a22523166ae76ee82e62305e1b3bb021e51b0ab90b",
+    "output_schema_sha256": "f9fc236e468202229269fbf5bfa6cee30457629f9ecb575b0b75047a00899e2b",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_get_git_diff",
+    "title": "Get git diff",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Get git diff"
+    },
+    "description": "Returns a repository's uncommitted or staged changes as a unified diff, redacted and size-capped.",
+    "input_schema_sha256": "349c09678cdf88f71ac05c5d5f7aa287c9679a78970b026a0f0a709dd6072b8b",
+    "output_schema_sha256": "b13f90ccd8fcd9df4ca752f312a9bbbdea669678be03d584d49334fb9f6a18b0",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_get_git_log",
+    "title": "Get git log",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Get git log"
+    },
+    "description": "Returns a repository's most recent commits: hash, author name, date and subject.",
+    "input_schema_sha256": "6d0336f0e879641d0e965996d8e13e963a67f3baef405751e13c4c86541d7c20",
+    "output_schema_sha256": "2fa084eccfc0ddb6793eb87b15dca2519f6078eb568997290c673880d04ca773",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_get_git_status",
+    "title": "Get git status",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Get git status"
+    },
+    "description": "Returns a repository's branch, HEAD, upstream, ahead/behind counts and changed or untracked paths. Superproject only: submodule work trees are never inspected (not their changes or checked-out commit); staged gitlink changes are seen.",
+    "input_schema_sha256": "9dbc919b9fd8c5ff28d099b276495e716a9eae82e94cef40aba0a8dd4b5a5f72",
+    "output_schema_sha256": "6cb85b5189474e20cb62473113e99187a4d9d5d3a3941ef4171405edf9d1a85e",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_get_journal",
+    "title": "Get journal",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Get journal"
+    },
+    "description": "Returns the most recent journal lines of one systemd unit, optionally by time range and priority, redacted and size-capped.",
+    "input_schema_sha256": "d26bf059e509305ae4d8492c48f58b376cd32d733539e8526f92bbc598e8c764",
+    "output_schema_sha256": "0611e01739260b861dccc861949ec2dc69d3853480cd3b0455de27a5f9c81927",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_get_policy",
+    "title": "Get target policy",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Get target policy"
+    },
+    "description": "Returns a target gate's version, principal, sandbox status and effective policy: roots, limits, services, repositories, commands with their templates, and privileged forwarding with the privileged helper's policy summary.",
+    "input_schema_sha256": "42809bf68a1fbfc1ec56832b0e720e986e33781f27d916d7d9a1e9ebc2696207",
+    "output_schema_sha256": "fc01f1300abefbdabb69c3ec1872592cb6eef657a00175f41b0e286effffb31b",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_get_service_status",
+    "title": "Get service status",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Get service status"
+    },
+    "description": "Returns a systemd unit's load, active and sub state, main PID, timestamps, memory, restart count and unit file state.",
+    "input_schema_sha256": "49692754fef3194d5f076d4da7ba96d3660b900c882f751f0a6bf63717b678c2",
+    "output_schema_sha256": "93e6b8311f52ab6e0259db22773a029929e683e5a6e85e61bdade241e6d03d5e",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_get_system_info",
+    "title": "Get system info",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Get system info"
+    },
+    "description": "Returns the target's OS release, kernel, hostname, uptime, load averages, memory and CPU count.",
+    "input_schema_sha256": "42809bf68a1fbfc1ec56832b0e720e986e33781f27d916d7d9a1e9ebc2696207",
+    "output_schema_sha256": "ed6a2797858d3900dc884c23f9ff20e3968109bc78413971998417b4bcf5ad18",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_git_pull",
+    "title": "Pull git repository",
+    "tier": "operator",
+    "profiles": [
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Pull git repository"
+    },
+    "description": "Fast-forwards a repository listed in the target policy from its pinned remote, refusing uncommitted changes to tracked files and diverged history, and returns the old and new HEAD.",
+    "input_schema_sha256": "73343951eed244bc1baba4103c3921334fabcfa245bfc8e1e7b4fc0aee858acf",
+    "output_schema_sha256": "0a6cc5185f08b448f50e801c227f2fc67350d73a534767e249d4588311ac4ac7",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_inspect_certificate",
+    "title": "Inspect certificate",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Inspect certificate"
+    },
+    "description": "Parses every certificate in a PEM or DER file and returns subject, issuer, names, validity, days remaining, key and fingerprint; files holding a private key are refused.",
+    "input_schema_sha256": "8784bd247132b86c34b82659bdcf02722cff3b92da6647b34525d81986bdced4",
+    "output_schema_sha256": "ab951640e0db789a136fb6d2870e02cf0b35524081c7ae47388ed11375f3a850",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_list_directory",
+    "title": "List directory",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "List directory"
+    },
+    "description": "Lists a directory's entries with type, size, mode, owner, group and modification time; symlink targets are reported, not followed.",
+    "input_schema_sha256": "3eef6630375e4baf3ebeb68c3a08e71c2cf8002ee64b922b6b8cc481b69e85f5",
+    "output_schema_sha256": "284ccdf701e86f9b2a9416d09bf4f15a2d6906ce162264ea3d6a8edeb017a755",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_list_processes",
+    "title": "List processes",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "List processes"
+    },
+    "description": "Lists the target's processes with user, state, memory, CPU time, start time and a redacted command line, filtered and sorted.",
+    "input_schema_sha256": "351dc7189c123dfc904c4f77559ab471f1d503f8069f83b49ade5079161c2ac4",
+    "output_schema_sha256": "86cf66b16d4150da2400e2b96ee42a2a524e932230c2e42480e3fa53332cdb49",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_list_services",
+    "title": "List services",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "List services"
+    },
+    "description": "Lists the target's loaded service units that its policy allows, with load, active and sub state.",
+    "input_schema_sha256": "222f8e8be45453b414ae139610f03989a64d030ffe7b35c4799b33e83129f8bc",
+    "output_schema_sha256": "d95dd922b27ae6c7e9804aefbb80cc80a027a51cd6deaa97e0110a46db8a40e9",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_list_targets",
+    "title": "List targets",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "List targets"
+    },
+    "description": "Lists the configured SSH targets with their name, host, port and user, without contacting them.",
+    "input_schema_sha256": "cd1a463c46d6264134447db17a8c3c7abe5b9a2488c6d759fea66da1f96b133e",
+    "output_schema_sha256": "8617c2ef25c7f1a0e8352910bdb435e4dcec34f55413ac3138c284f413a480fd",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_make_directory",
+    "title": "Make directory",
+    "tier": "operator",
+    "profiles": [
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Make directory"
+    },
+    "description": "Creates a directory, and optionally its missing parents, under the target policy's write roots.",
+    "input_schema_sha256": "3fece247a5709a032cb4db3b37d9c398f24c06faaa1eac88f0e6347c5628633c",
+    "output_schema_sha256": "3b45c4945742d6eb8f71abe05daec1eef61f5f9d6bd3ad9a2350916510b52ea7",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_move_path",
+    "title": "Move path",
+    "tier": "operator",
+    "profiles": [
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Move path"
+    },
+    "description": "Renames a file or directory within one write root of the target policy (same filesystem only).",
+    "input_schema_sha256": "eeec5ca77630f8b3785debefba524104289ea46a69827c63a4f3ee3c1f4c8f3f",
+    "output_schema_sha256": "502c63a10c7dd536e87a682fe4d399a736ecbde81b85ff3f260029126f6ef5f9",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_preview_delete",
+    "title": "Preview delete",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Preview delete"
+    },
+    "description": "Reports what deleting a path would remove, without removing anything: type, entry count, total bytes, the first 50 entries and a hash of the complete list.",
+    "input_schema_sha256": "634b0df84a1144f2f55b4089c223ccd9a041f16f5a113d88f0a9d1f82483e5f2",
+    "output_schema_sha256": "b2978bf54e99c3fc4c28999c9c1fc490c4dd962539169caf084ddc7fddbbb2bb",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_preview_git_discard",
+    "title": "Preview git discard",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Preview git discard"
+    },
+    "description": "Reports what discarding a repository's uncommitted changes would restore and remove, without changing anything: counts, the first 50 paths and a hash of the complete list.",
+    "input_schema_sha256": "f318573b497dac0b34fdda83166b52ac84738aca7dfccc51dc4e76516c4c0835",
+    "output_schema_sha256": "ded7c970d138590985404400536693d6ad48300264739a4bb6095e1aa93ba8c7",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_priv_cancel_power",
+    "title": "Cancel a scheduled reboot or power-off",
+    "tier": "read",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Cancel a scheduled reboot or power-off"
+    },
+    "description": "Cancels, as root, the reboot or power-off the host's privileged helper scheduled and has not yet requested; returns the cancelled action and its time.",
+    "input_schema_sha256": "42809bf68a1fbfc1ec56832b0e720e986e33781f27d916d7d9a1e9ebc2696207",
+    "output_schema_sha256": "dacb732a398f78bc8ea0528a9c3edf46f8f84179cbff69ab621369ced128df49",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_priv_change_owner",
+    "title": "Change owner as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Change owner as root"
+    },
+    "description": "Changes the owner and/or group of a file or directory as root (with recursive, also of everything under it) within the host's privileged write roots, exactly as its approved preview listed; returns the counts and the owner set.",
+    "input_schema_sha256": "bec1c8fb09ab645a9ff43b4aa47740852ab7a36a29e42868e8b51de7439e5340",
+    "output_schema_sha256": "74427cba1fe19b2fa005c1ddcfa8e361fd251aadb90200fd4a278815bb83660e",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_copy_path",
+    "title": "Copy file as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Copy file as root"
+    },
+    "description": "Copies a regular file as root to a destination within the host's privileged write roots, backing up a replaced destination and verifying by read-back; returns the hashes, mode, owner and backup ids.",
+    "input_schema_sha256": "ffa208c8bd5db93c93c6f8841ed8ced296bd1e84fc55fd3aabef55926ca27a4e",
+    "output_schema_sha256": "91a89c0cffa31374ed95432354eb9f756275c57538e792850d1b617502abf1b1",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_delete_path",
+    "title": "Delete path as root",
+    "tier": "destructive",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Delete path as root"
+    },
+    "description": "Deletes, as root, a file, an empty directory, or with recursive a directory tree within the host's privileged write roots, exactly as its approved preview listed it, after backing it up; returns the counts and the backup ids.",
+    "input_schema_sha256": "6a0b61dc66e456a8d51783d559fee7a748c06faddd8a83127230e41ac509f32b",
+    "output_schema_sha256": "905f023fbdd44d5ea36df9f67546747be651331e95d357116d8bb1bd8f6a3aa4",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_install_packages",
+    "title": "Install packages as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Install packages as root"
+    },
+    "description": "Installs, as root, allow-listed packages exactly as their approved preview resolved them, every package at its approved version, never removing any; returns what dpkg shows was installed.",
+    "input_schema_sha256": "203e97f4cdec4401af00c6862eeb5a55da9f399c1b715519ca0f676ca1db97c5",
+    "output_schema_sha256": "054d6c9b9a230a9ef630af79794583ad6d94b1590ffd4477ac9a511743aeeeab",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_list_backups",
+    "title": "List backups",
+    "tier": "read",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "List backups"
+    },
+    "description": "Lists, as root, the backups the privileged helper kept of what it overwrote or deleted, newest first: id, kind, original path, owner, mode, size, SHA-256, time and operation.",
+    "input_schema_sha256": "368eeaa3a79c677804c344d863c3dcdf56e78466bcc4fd49baaabc005223d92b",
+    "output_schema_sha256": "78596880487d04742635b50f04df91eaac4786e9daf67204478bdf2a5c74387f",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_priv_list_directory",
+    "title": "List directory as root",
+    "tier": "read",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "List directory as root"
+    },
+    "description": "Lists, as root, a directory's entries under the privileged policy's roots with type, size, mode, owner, group and modification time; symlink targets are reported, not followed.",
+    "input_schema_sha256": "4d58e3d0bb8ed0dcce42866300ba4d8940d551fd25d89cf0fbc5a4782344f401",
+    "output_schema_sha256": "284ccdf701e86f9b2a9416d09bf4f15a2d6906ce162264ea3d6a8edeb017a755",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_priv_make_directory",
+    "title": "Make directory as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Make directory as root"
+    },
+    "description": "Creates a directory as root, and optionally its missing parents, within the host's privileged write roots; returns its mode and owner.",
+    "input_schema_sha256": "4e769766099d760895ca84227a387afedd8d9402372ed46670e811ed45f0dbe0",
+    "output_schema_sha256": "30c7f5810f88edcf44e5d1670687f3a40321f476a473033b7a1ee02e0ddaa1c9",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_move_path",
+    "title": "Move path as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Move path as root"
+    },
+    "description": "Renames a file or directory as root within one of the host's privileged write roots (same filesystem only), backing up a replaced destination file; returns what was moved and the backup ids.",
+    "input_schema_sha256": "790d8769b30926847fc63e24567801015cb2590271251241162c4cf101c03e6b",
+    "output_schema_sha256": "406103841bc6a7f5ea54bca539af7cbdbb81712a1ee9ab81ff3cb1d75035efed",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_preview_delete",
+    "title": "Preview delete as root",
+    "tier": "read",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Preview delete as root"
+    },
+    "description": "Reports, as root, what deleting a path within the host's privileged write roots would remove and back up, without changing anything: type, entry count, total bytes, the first 50 entries, the backup and a hash of the complete list.",
+    "input_schema_sha256": "8ffd7c47902d7b4cef278469ec2df7ee3dce7d6e76a3f6e1afab40f7d0b47612",
+    "output_schema_sha256": "6a967d5ee90259e7c049240a9a322bd6b0c377a1ad82437adf561aa0a02b7ce0",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_priv_preview_packages",
+    "title": "Preview packages as root",
+    "tier": "read",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Preview packages as root"
+    },
+    "description": "Reports, as root, what installing, upgrading or removing packages would change, without changing anything: every package with its exact version, and a hash of the transaction.",
+    "input_schema_sha256": "30daa473d1e9535cf14cfcd170279261761a8d4b58a80a18d3117f19d279b10d",
+    "output_schema_sha256": "3f1e459d2419ddd8ef966bf88eb05d52a643ce400aafe14b06e8e6fa6173baa6",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_priv_read_file",
+    "title": "Read file as root",
+    "tier": "read",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Read file as root"
+    },
+    "description": "Reads, as root, a bounded part of a text file under the privileged policy's roots, or its last lines, redacted; a binary file returns only its size and SHA-256.",
+    "input_schema_sha256": "062ac73f234b5f9c2277ef86f8b1d9778203a1c82b5c0a5f3c64d6a359cd4cf7",
+    "output_schema_sha256": "c1d53a1021aab2f2f0f9339e00e2d15d8c31061dbc137b256cb5bd34b9ed700d",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_priv_reboot_host",
+    "title": "Reboot or power off as root",
+    "tier": "destructive",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Reboot or power off as root"
+    },
+    "description": "Reboots or powers off the host as root: answers at once with the time the action will be requested from logind, 60 seconds later, unless it is cancelled, or blocked by a package operation or an inhibitor lock, first.",
+    "input_schema_sha256": "71ad9ea19e01864a3594c237bfbcf0e060bea5489e3fc3b020e3bf7df8448d00",
+    "output_schema_sha256": "0a307efb187453a59ffe019e743a7da94d3392fa1fe24f7d4b25e7ad91acbd66",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_remove_packages",
+    "title": "Remove packages as root",
+    "tier": "destructive",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Remove packages as root"
+    },
+    "description": "Removes, as root, allow-listed packages exactly as their approved preview listed them, keeping their configuration files; returns what dpkg shows was removed.",
+    "input_schema_sha256": "203e97f4cdec4401af00c6862eeb5a55da9f399c1b715519ca0f676ca1db97c5",
+    "output_schema_sha256": "054d6c9b9a230a9ef630af79794583ad6d94b1590ffd4477ac9a511743aeeeab",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_restore_backup",
+    "title": "Restore backup as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Restore backup as root"
+    },
+    "description": "Restores, as root, a backup the privileged helper kept, over exactly the version its approved preview showed (that version is backed up first), with the recorded owner and the recorded mode within the host's mask; returns the modes set and the new backup's id.",
+    "input_schema_sha256": "c2f13feaafde0c8120e40b924a2fe50e3dc2c1d2c4da8b511db5b9d1eeb72619",
+    "output_schema_sha256": "250624220860d73c1c75e0933ef0b3e6c491b1ad4d5aa51dd46821b8fd3ea6a3",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_run_command",
+    "title": "Run command as root",
+    "tier": "destructive",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Run command as root"
+    },
+    "description": "Runs, as root, a command declared in the host's privileged policy with arguments matching one of its templates, exactly as its preview resolved it and in the unit it named, and returns its exit status and redacted, size-capped output.",
+    "input_schema_sha256": "4b33128aabec2db14e21ab2e50b11dba9569d4a22b4c36f9f3235ce273a942c0",
+    "output_schema_sha256": "902ef605c4c66f3dafc616c51ea84be4dc924f3a23a42fbee5d93d6921f631e6",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_set_permissions",
+    "title": "Set permissions as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Set permissions as root"
+    },
+    "description": "Sets the mode of a file or directory as root (with recursive, also of everything under it) within the host's privileged write roots, exactly as its approved preview listed; returns the counts and the old and new mode.",
+    "input_schema_sha256": "f91a4706ac91cda1cf6bb5b35f072ebe515c235035fbb3de68189ef23342aabc",
+    "output_schema_sha256": "8dab790cc1445b7a7c6ea67252acacc291f28341ee0a6ece9b6374c9743b3429",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_stat_path",
+    "title": "Stat path as root",
+    "tier": "read",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Stat path as root"
+    },
+    "description": "Returns, as root, one path's type, size, mode, owner, group and modification time under the privileged policy's roots, without following a final symlink, whose target is reported.",
+    "input_schema_sha256": "2af6ff11abe9191b4568e62addcb7bc71d353c46c7684eb247b1de81115b627a",
+    "output_schema_sha256": "86435fb795786e7bc96d78f626e9d93da3f8b28bdf49b2e33ee82c89c0896cbc",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_priv_update_package_index",
+    "title": "Update package index as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Update package index as root"
+    },
+    "description": "Updates, as root, the host's package index from its configured sources; returns apt-get's exit status and redacted, size-capped output.",
+    "input_schema_sha256": "6ae8497bec2bac4c9473d84c65286fe270594c68ee8ef34676a32987e07cc6b8",
+    "output_schema_sha256": "67c4286ef6cf791e25e3619443d228512e035a84eb5f08d171e07e19c9280201",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_upgrade_packages",
+    "title": "Upgrade packages as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Upgrade packages as root"
+    },
+    "description": "Upgrades, as root, exactly the packages its approved preview listed, each to its approved version, never installing what was not approved nor removing anything; returns what dpkg shows was upgraded.",
+    "input_schema_sha256": "6ae8497bec2bac4c9473d84c65286fe270594c68ee8ef34676a32987e07cc6b8",
+    "output_schema_sha256": "054d6c9b9a230a9ef630af79794583ad6d94b1590ffd4477ac9a511743aeeeab",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_write_file",
+    "title": "Write file as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Write file as root"
+    },
+    "description": "Atomically writes a text file as root within the host's privileged write roots, backing up what it replaces and verifying by read-back; returns the hashes, line counts, mode, owner and backup ids.",
+    "input_schema_sha256": "984832f955db2c45207ba60b86df5dc50848d5094a4aa687192333cd702ab840",
+    "output_schema_sha256": "8563e5a2f984f7df9290d702e45124f039f50ccc92fc433bf6472d78c10bd245",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_read_file",
+    "title": "Read file",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Read file"
+    },
+    "description": "Reads a bounded part of a text file, or its last lines, redacted; a binary file returns only its size and SHA-256.",
+    "input_schema_sha256": "55e5493879c1e0bd1be44dbda29e3430c4600e6294b9ee1c018a9c29773ca5b6",
+    "output_schema_sha256": "c1d53a1021aab2f2f0f9339e00e2d15d8c31061dbc137b256cb5bd34b9ed700d",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_run_command",
+    "title": "Run command",
+    "tier": "operator",
+    "profiles": [
+      "operator"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Run command"
+    },
+    "description": "Runs a read- or operator-tier command declared in the target policy with arguments matching one of its templates and optional standard input, and returns its exit status and redacted, size-capped output.",
+    "input_schema_sha256": "75ee38eb91069ff31f9f2e1eb15467bbee69212bb906fcdcce99f4e10763f323",
+    "output_schema_sha256": "902ef605c4c66f3dafc616c51ea84be4dc924f3a23a42fbee5d93d6921f631e6",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_run_command",
+    "title": "Run command",
+    "tier": "destructive",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Run command"
+    },
+    "description": "Runs a read-, operator- or destructive-tier command declared in the target policy with arguments matching one of its templates and optional standard input, exactly as its approved preview resolved it, and returns its exit status and redacted, size-capped output.",
+    "input_schema_sha256": "664bf58040cdb13b74e323f6d8a4c4ea1c842fdb6f81c1a6b9a3cb757f7416e3",
+    "output_schema_sha256": "902ef605c4c66f3dafc616c51ea84be4dc924f3a23a42fbee5d93d6921f631e6",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_run_read_command",
+    "title": "Run read command",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Run read command"
+    },
+    "description": "Runs a read-tier command declared in the target policy with arguments matching one of its templates, and returns its exit status and redacted, size-capped output.",
+    "input_schema_sha256": "590715efe716d349a69a5f0214a3312c08d76f9f6b018d00c7475b4a75fbe483",
+    "output_schema_sha256": "0f128ad826c1b9e1c1532826832e027902534bda0837da3890c3b77173a51636",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_set_permissions",
+    "title": "Set permissions",
+    "tier": "operator",
+    "profiles": [
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Set permissions"
+    },
+    "description": "Sets the permission bits of a file or directory under the target policy's write roots, and returns the old and new mode.",
+    "input_schema_sha256": "4a594b5528198a6936ef76b4fc16a4d53e06a1c9766f70453a7c42d8d5c58f3a",
+    "output_schema_sha256": "925231661b88701b13ab512ea5d4e6a01f7ad05a904a2356f5f50675d1f1a0b4",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_stat_path",
+    "title": "Stat path",
+    "tier": "read",
+    "profiles": [
+      "read-only",
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": true,
+      "title": "Stat path"
+    },
+    "description": "Returns one path's type, size, mode, owner, group and modification time without following a final symlink, whose target is reported.",
+    "input_schema_sha256": "8784bd247132b86c34b82659bdcf02722cff3b92da6647b34525d81986bdced4",
+    "output_schema_sha256": "86435fb795786e7bc96d78f626e9d93da3f8b28bdf49b2e33ee82c89c0896cbc",
+    "requires_user_interaction": false
+  },
+  {
+    "name": "shell_write_file",
+    "title": "Write file",
+    "tier": "operator",
+    "profiles": [
+      "operator",
+      "admin"
+    ],
+    "privileged": false,
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Write file"
+    },
+    "description": "Atomically replaces or creates a text file under the target policy's write roots and verifies it by reading it back, returning the old and new SHA-256 and line counts.",
+    "input_schema_sha256": "60317ac1fc958b9cf21b389b383c5fc99c02305852476df475257d0b76742dde",
+    "output_schema_sha256": "9d01f4fb70b983e5bb6d30c16a2eb024f802db37270a97a9b40ba131d2dba096",
+    "requires_user_interaction": true
+  }
+]

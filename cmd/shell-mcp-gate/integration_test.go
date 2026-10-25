@@ -1,0 +1,836 @@
+//go:build linux
+
+package main
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
+	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
+	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
+	"github.com/tyler-rich/shell-mcp/internal/protocol"
+)
+
+// requireABIEnv: CI sets it to the runner's Landlock ABI so sandbox tests
+// that need a newer kernel than the local containers fail instead of skip.
+const requireABIEnv = "SHELL_MCP_REQUIRE_LANDLOCK_ABI"
+
+func needABI(t *testing.T, n int) {
+	t.Helper()
+	k := sandbox.KernelABI()
+	if k >= n {
+		return
+	}
+	if req, _ := strconv.Atoi(os.Getenv(requireABIEnv)); req >= n {
+		t.Fatalf("%s=%d but the kernel's Landlock ABI is %d; this test needs ABI %d", requireABIEnv, req, k, n)
+	}
+	where := "runs in CI (ABI 8, and ABI 7 in the forced-psx entry)"
+	if n > 8 {
+		where = "no current runner has it (CI has ABI 8, and ABI 7 in the forced-psx entry)"
+	}
+	t.Skipf("needs Landlock ABI %d (kernel has %d); %s", n, k, where)
+}
+
+var (
+	dirOnce, buildOnce sync.Once
+	buildDir           string
+	dirErr             error
+	harnessPath        string
+)
+
+// harness returns the CGO_ENABLED=0 harness binary, built once into a
+// directory whose parent chain passes the gate's own executable checks.
+func harness(t *testing.T) string {
+	t.Helper()
+	dirOnce.Do(func() {
+		d, err := os.MkdirTemp("", "gate-harness")
+		if err == nil {
+			buildDir, err = filepath.EvalSymlinks(d)
+		}
+		dirErr = err
+	})
+	if dirErr != nil {
+		t.Fatal(dirErr)
+	}
+	gatetest.RequireSecure(t, buildDir)
+	buildOnce.Do(func() {
+		harnessPath = gatetest.BuildTest(t, "cmd/shell-mcp-gate", buildDir, "shell-mcp-gate", nil)
+	})
+	if harnessPath == "" {
+		t.Fatal("harness build failed earlier")
+	}
+	return harnessPath
+}
+
+// gate is an invented target layout under a secure temp dir.
+type gate struct {
+	t                                                  *testing.T
+	dir, read, write, secrets, bin, home, outside, pol string
+	probe                                              string
+	env                                                []string
+}
+
+// {GATEDIR} is the harness binary's directory. The gate starts every
+// command by re-executing its own binary (execx's trampoline), so the
+// sandbox must let it execute itself; in production it is under /usr, which
+// the default read+execute rules cover.
+const integrationPolicy = `version: 1
+max_tier: {TIER}
+sandbox:
+  landlock: {MODE}
+  system_read_exec: [{BIN}, {GATEDIR}]
+{PORTS}limits:
+  max_output_bytes: 65536
+paths:
+  read: [{R}]
+  write: [{W}]
+  deny: ["{R}/secrets/**"]
+commands:
+  - id: probe
+    path: {BIN}/probe
+    tier: read
+    templates:
+      - ["read-outside"]
+      - ["nnp"]
+      - ["procattrs"]
+      - ["rlimits"]
+      - ["mptcp"]
+      - ["echo", "{regex:^[a-z0-9 -]+$}"]
+      - ["echo", "{path:read}"]
+      - ["connect", "{int:1-65535}"]
+      - ["bind"]
+      - ["signal", "{int:1-4194304}"]
+      - ["fork-sleep", "{enum:60s}"]
+      - ["ignore-term", "{enum:60s}"]
+      - ["flood", "{int:1-100000000}"]
+`
+
+// defaultMode is required where the kernel can enforce it, else best-effort.
+func defaultMode() string {
+	if sandbox.KernelABI() >= sandbox.RequiredMinABI {
+		return "required"
+	}
+	return "best-effort"
+}
+
+func newGate(t *testing.T) *gate {
+	t.Helper()
+	harness(t)
+	d := gatetest.SecureDir(t)
+	g := &gate{t: t, dir: d,
+		read: filepath.Join(d, "srv", "app"), write: filepath.Join(d, "srv", "app", "config"),
+		secrets: filepath.Join(d, "srv", "app", "secrets"), bin: filepath.Join(d, "bin"),
+		home: filepath.Join(d, "home"), outside: filepath.Join(d, "outside"), pol: filepath.Join(d, "etc", "policy.yaml")}
+	for _, p := range []string{g.write, g.secrets, g.bin, g.home, g.outside} {
+		gatetest.Mkdir(t, p, 0o755)
+	}
+	gatetest.WriteFile(t, filepath.Join(g.read, "hello.txt"), "hello\n", 0o644)
+	gatetest.WriteFile(t, filepath.Join(g.secrets, "token"), "TOPSECRET", 0o644)
+	gatetest.WriteFile(t, filepath.Join(g.outside, "secret.txt"), "OUTSIDE", 0o644)
+	g.probe = gatetest.BuildProbe(t, g.bin, "probe", filepath.Join(g.outside, "secret.txt"))
+	g.policy("destructive", defaultMode(), "")
+	g.env = []string{harnessEnv + "=1", "HARNESS_UID=60123", "HARNESS_GIDS=60123,60124",
+		"HARNESS_GROUPS=60123=svc-shell,60124=svc-shell-priv,101=systemd-journal,999=docker", "HARNESS_HOME=" + g.home}
+	return g
+}
+
+func (g *gate) policy(tier, mode, ports string) {
+	y := strings.NewReplacer("{TIER}", tier, "{MODE}", mode, "{PORTS}", ports,
+		"{R}", g.read, "{W}", g.write, "{BIN}", g.bin, "{GATEDIR}", buildDir).Replace(integrationPolicy)
+	gatetest.WriteFile(g.t, g.pol, y, 0o644)
+}
+
+func (g *gate) rawPolicy(y string) {
+	gatetest.WriteFile(g.t, g.pol, strings.NewReplacer("{R}", g.read, "{W}", g.write, "{BIN}", g.bin, "{GATEDIR}", buildDir).Replace(y), 0o644)
+}
+
+type resp struct {
+	OK       bool            `json:"ok"`
+	ID       string          `json:"id"`
+	Data     json.RawMessage `json:"data"`
+	Warnings []string        `json:"warnings"`
+	Error    *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// serve runs the harness as `serve --policy … --principal test` with in on stdin.
+func (g *gate) serve(in string, extraEnv ...string) *resp {
+	g.t.Helper()
+	cmd := exec.CommandContext(g.t.Context(), harness(g.t), "serve", "--policy", g.pol, "--principal", "test") //nolint:gosec // G204: the test's own harness
+	cmd.Env = append(append([]string{"PATH=/usr/bin:/bin"}, g.env...), extraEnv...)
+	cmd.Stdin = strings.NewReader(in)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		g.t.Fatalf("gate exited %v; stderr %q; stdout %q", err, stderr.String(), out)
+	}
+	var r resp
+	if json.Unmarshal(out, &r) != nil || strings.Count(string(out), "\n") != 1 {
+		g.t.Fatalf("gate output is not one JSON line: %q (stderr %q)", out, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		g.t.Fatalf("gate wrote to stderr: %q", stderr.String())
+	}
+	return &r
+}
+
+func (g *gate) call(op string, args any, extraEnv ...string) *resp {
+	g.t.Helper()
+	a, _ := json.Marshal(args)
+	return g.serve(fmt.Sprintf(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":%q,"args":%s,"timeout_ms":10000}`+"\n", op, a), extraEnv...)
+}
+
+func (g *gate) want(r *resp, code string) *resp {
+	g.t.Helper()
+	if code == "" {
+		if !r.OK {
+			g.t.Fatalf("want ok, got %+v", r.Error)
+		}
+		return r
+	}
+	if r.OK || r.Error == nil || r.Error.Code != code {
+		g.t.Fatalf("want %s, got ok=%v err=%+v data=%s", code, r.OK, r.Error, r.Data)
+	}
+	return r
+}
+
+type execOut struct {
+	ExitCode        *int    `json:"exit_code"`
+	Signal          *string `json:"signal"`
+	TimedOut        bool    `json:"timed_out"`
+	Stdout          string  `json:"stdout"`
+	StdoutTruncated bool    `json:"stdout_truncated"`
+}
+
+func (g *gate) exec(args []string, extra map[string]any) execOut {
+	g.t.Helper()
+	a := map[string]any{"command_id": "probe", "args": args}
+	for k, v := range extra {
+		a[k] = v
+	}
+	r := g.want(g.call("exec", a), "")
+	var d execOut
+	if err := json.Unmarshal(r.Data, &d); err != nil {
+		g.t.Fatal(err)
+	}
+	return d
+}
+
+type m = map[string]any
+
+func TestIntegrationReadsAndPaths(t *testing.T) {
+	g := newGate(t)
+	var rd struct {
+		Content string `json:"content"`
+	}
+	r := g.want(g.call("read_file", m{"path": filepath.Join(g.read, "hello.txt")}), "")
+	if json.Unmarshal(r.Data, &rd) != nil || rd.Content != "hello\n" || r.ID != "0b5c0000-0000-4000-8000-000000000001" {
+		t.Fatalf("read %+v %s", r, r.Data)
+	}
+	g.want(g.call("read_file", m{"path": g.read + "/../outside/secret.txt"}), "bad_request")
+	// Symlink inside a root pointing outside it; to a denied file inside the root; final component.
+	if err := os.Symlink(g.outside, filepath.Join(g.read, "escape")); err != nil {
+		t.Fatal(err)
+	}
+	g.want(g.call("read_file", m{"path": filepath.Join(g.read, "escape", "secret.txt")}), "path_denied")
+	if err := os.Symlink("secrets/token", filepath.Join(g.read, "tok")); err != nil {
+		t.Fatal(err)
+	}
+	g.want(g.call("read_file", m{"path": filepath.Join(g.read, "tok")}), "path_denied")
+	if err := os.Symlink("hello.txt", filepath.Join(g.read, "hl")); err != nil {
+		t.Fatal(err)
+	}
+	g.want(g.call("read_file", m{"path": filepath.Join(g.read, "hl")}), "path_denied")
+	if err := os.Symlink("secrets", filepath.Join(g.read, "sdir")); err != nil {
+		t.Fatal(err)
+	}
+	g.want(g.call("read_file", m{"path": filepath.Join(g.read, "sdir", "token")}), "path_denied")
+}
+
+func TestIntegrationWrites(t *testing.T) {
+	g := newGate(t)
+	b64 := base64.StdEncoding.EncodeToString([]byte("data"))
+	g.want(g.call("write_file", m{"path": filepath.Join(g.write, "ok.txt"), "content_b64": b64}), "")
+	g.want(g.call("write_file", m{"path": filepath.Join(g.read, "x.txt"), "content_b64": b64}), "path_denied")
+	g.want(g.call("write_file", m{"path": filepath.Join(g.outside, "x.txt"), "content_b64": b64}), "path_denied")
+	gatetest.Mkdir(t, filepath.Join(g.write, ".ssh"), 0o755)
+	g.want(g.call("write_file", m{"path": filepath.Join(g.write, ".ssh", "authorized_keys"), "content_b64": b64}), "path_denied")
+	g.want(g.call("write_file", m{"path": filepath.Join(g.write, "s.bin"), "content_b64": b64, "mode": "4755"}), "policy_denied")
+	g.want(g.call("chmod", m{"path": filepath.Join(g.write, "ok.txt"), "mode": "2755"}), "policy_denied")
+	g.want(g.call("write_file", m{"path": filepath.Join(g.write, "v.txt"), "content_b64": b64}, "HARNESS_FAULT=readback"), "verify_failed")
+}
+
+// TestIntegrationSwapRace swaps a directory for a symlink to outside the
+// root while gate processes read and write through it.
+func TestIntegrationSwapRace(t *testing.T) {
+	g := newGate(t)
+	sub, stash, link := filepath.Join(g.write, "sub"), filepath.Join(g.write, "sub.real"), filepath.Join(g.write, "sub.link")
+	gatetest.WriteFile(t, filepath.Join(sub, "f"), "INSIDE", 0o644)
+	if err := os.Symlink(g.outside, link); err != nil {
+		t.Fatal(err)
+	}
+	var stop atomic.Bool
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for !stop.Load() {
+			_ = os.Rename(sub, stash)
+			_ = os.Rename(link, sub)
+			time.Sleep(time.Millisecond)
+			_ = os.Rename(sub, link)
+			_ = os.Rename(stash, sub)
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	n, oks := 0, 0
+	for time.Now().Before(deadline) {
+		r := g.call("read_file", m{"path": filepath.Join(sub, "f")})
+		if r.OK {
+			oks++
+		}
+		if r.OK && strings.Contains(string(r.Data), "OUTSIDE") {
+			stop.Store(true)
+			wg.Wait()
+			t.Fatal("gate read outside the root")
+		}
+		g.call("write_file", m{"path": filepath.Join(sub, "w"), "content_b64": "eA=="})
+		n++
+	}
+	stop.Store(true)
+	wg.Wait()
+	ents, _ := os.ReadDir(g.outside)
+	if len(ents) != 1 {
+		t.Fatalf("outside directory was written: %v", ents)
+	}
+	t.Logf("%d request pairs under the swap, %d successful reads", n, oks)
+	if oks == 0 {
+		t.Fatal("race test is vacuous: no read succeeded")
+	}
+}
+
+func TestIntegrationTemplates(t *testing.T) {
+	g := newGate(t)
+	if d := g.exec([]string{"echo", "hi there"}, nil); d.Stdout != "hi there\n" {
+		t.Fatalf("echo %+v", d)
+	}
+	g.want(g.call("exec", m{"command_id": "probe", "args": []string{"echo", "UPPER"}}), "template_mismatch")
+	g.want(g.call("exec", m{"command_id": "probe", "args": []string{"echo", "-x"}}), "template_mismatch")
+	g.want(g.call("exec", m{"command_id": "probe", "args": []string{"echo", "--output=/etc/x"}}), "template_mismatch")
+	g.want(g.call("exec", m{"command_id": "probe", "args": []string{"echo", filepath.Join(g.secrets, "token")}}), "path_denied")
+	g.want(g.call("exec", m{"command_id": "probe", "args": []string{"echo", "a", "b"}}), "template_mismatch")
+}
+
+func TestIntegrationPolicyRefusals(t *testing.T) {
+	g := newGate(t)
+	shell, err := filepath.EvalSymlinks("/bin/sh")
+	if err != nil {
+		t.Skip("no /bin/sh to point a link at")
+	}
+	if err := os.Symlink(shell, filepath.Join(g.bin, "ls")); err != nil {
+		t.Fatal(err)
+	}
+	g.rawPolicy("version: 1\nmax_tier: read\ncommands:\n  - id: lister\n    path: {BIN}/ls\n    tier: read\n    templates: [[\"-l\"]]\n")
+	g.want(g.call("hello", m{}), "install_insecure")
+	g.rawPolicy("version: 1\nmax_tier: read\nsudo: true\n")
+	g.want(g.call("hello", m{}), "install_insecure")
+	g.rawPolicy("version: 1\nmax_tier: operator\nprivileged:\n  enabled: true\n  socket: /tmp/privd.sock\n")
+	g.want(g.call("hello", m{}), "install_insecure")
+}
+
+func TestIntegrationTiersAndDecoding(t *testing.T) {
+	g := newGate(t)
+	g.policy("read", defaultMode(), "")
+	g.want(g.call("write_file", m{"path": filepath.Join(g.write, "x"), "content_b64": ""}), "tier_denied")
+	g.want(g.call("delete", m{"path": filepath.Join(g.write, "x")}), "tier_denied")
+	g.want(g.call("priv_read_file", m{"path": "/etc/example-app/x"}), "privileged_disabled")
+	g.want(g.serve(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`+strings.Repeat(" ", protocol.MaxRequestBytes)+"\n"), "too_large")
+	g.want(g.serve(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","op":"write_file"}`+"\n"), "bad_request")
+	g.want(g.serve(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","unknown":true}`+"\n"), "bad_request")
+	g.want(g.serve(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"made_up"}`+"\n"), "unknown_op")
+}
+
+func TestIntegrationIdentity(t *testing.T) {
+	g := newGate(t)
+	g.want(g.call("hello", m{}, "HARNESS_UID="+strconv.Itoa(os.Getuid())), "install_insecure") // the trusted owner
+	g.want(g.call("hello", m{}, "HARNESS_UID=0"), "install_insecure")
+	g.want(g.call("hello", m{}, "HARNESS_GIDS=60123,999"), "install_insecure") // docker
+	g.want(g.call("hello", m{}, "HARNESS_GIDS=60123,60124,101"), "")           // helper socket group, systemd-journal
+	g.want(g.call("hello", m{}, "SSH_ORIGINAL_COMMAND=id"), "install_insecure")
+	g.want(g.call("hello", m{}, "SSH_ORIGINAL_COMMAND="+protocol.Hello), "")
+}
+
+func grandchildDead(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+		if err != nil {
+			return
+		}
+		s := string(b)
+		if i := strings.LastIndexByte(s, ')'); i >= 0 && len(s) > i+2 && (s[i+2] == 'Z' || s[i+2] == 'X') {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("grandchild %d survived the gate", pid)
+}
+
+func TestIntegrationExecLimits(t *testing.T) {
+	g := newGate(t)
+	r := g.want(g.serve(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"exec","args":{"command_id":"probe","args":["fork-sleep","60s"]},"timeout_ms":800}`+"\n"), "")
+	var d execOut
+	if json.Unmarshal(r.Data, &d) != nil || !d.TimedOut || d.Signal == nil {
+		t.Fatalf("timeout %s", r.Data)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(d.Stdout))
+	if err != nil {
+		t.Fatalf("grandchild pid %q", d.Stdout)
+	}
+	grandchildDead(t, pid)
+	d = g.exec([]string{"flood", "5000000"}, m{"max_output_bytes": 1000})
+	if !d.StdoutTruncated || len(d.Stdout) > 1000 {
+		t.Fatalf("output cap: truncated=%v len=%d", d.StdoutTruncated, len(d.Stdout))
+	}
+}
+
+// Sandbox, filesystem: runs locally (ABI 3) and in CI (both all-thread paths).
+func TestIntegrationSandboxFilesystem(t *testing.T) {
+	needABI(t, 1)
+	g := newGate(t)
+	// Without the kernel sandbox the probe would print READ:OUTSIDE; the
+	// gate's userspace checks never see this hard-coded path.
+	if d := g.exec([]string{"read-outside"}, nil); strings.TrimSpace(d.Stdout) != "EACCES" {
+		t.Fatalf("read outside every root: %q", d.Stdout)
+	}
+	if d := g.exec([]string{"nnp"}, nil); strings.TrimSpace(d.Stdout) != "NoNewPrivs: 1" {
+		t.Fatalf("child no_new_privs: %q", d.Stdout)
+	}
+}
+
+// TestIntegrationSandboxTrampoline: a declared command, started by the real
+// gate through its exec trampoline (the gate binary re-executing itself
+// inside the sandbox), still carries everything the gate applied before
+// reading the request, plus the child limits from before its first
+// instruction: no_new_privs, the seccomp filter, the Landlock domain (the
+// probe cannot read a file outside every root), core 0/0, open files and
+// processes bounded, Pdeathsig=SIGKILL, its own process group, and no
+// descriptor beyond stdin, stdout and stderr.
+func TestIntegrationSandboxTrampoline(t *testing.T) {
+	needABI(t, 1)
+	g := newGate(t)
+	if d := g.exec([]string{"read-outside"}, nil); strings.TrimSpace(d.Stdout) != "EACCES" {
+		t.Fatalf("read outside every root: %q", d.Stdout)
+	}
+	lim := map[string]string{}
+	for _, l := range strings.Split(strings.TrimSpace(g.exec([]string{"rlimits"}, nil).Stdout), "\n") {
+		k, v, _ := strings.Cut(l, "=")
+		lim[k] = v
+	}
+	if lim["core"] != "0/0" {
+		t.Fatalf("core %q", lim["core"])
+	}
+	for _, k := range []string{"nofile", "nproc"} {
+		c, m, _ := strings.Cut(lim[k], "/")
+		cur, err1 := strconv.ParseUint(c, 10, 64)
+		maxv, err2 := strconv.ParseUint(m, 10, 64)
+		if err1 != nil || err2 != nil || cur > 1<<22 || maxv > 1<<22 {
+			t.Fatalf("%s must be bounded: %q", k, lim[k])
+		}
+	}
+	a := map[string]string{}
+	for _, l := range strings.Split(strings.TrimSpace(g.exec([]string{"procattrs"}, nil).Stdout), "\n") {
+		k, v, _ := strings.Cut(l, "=")
+		a[k] = v
+	}
+	if a["nnp"] != "1" || a["seccomp"] != "2" || a["pdeathsig"] != "9" || a["pdeathsig_thread"] != "main" || a["pgid_is_pid"] != "true" {
+		t.Fatalf("attributes %v", a)
+	}
+	// The Go runtime's own cgroup file is the only descriptor a Go command
+	// may hold, and only where the sandbox lets it read /sys.
+	if fds := a["fds"]; fds != "" && (strings.Contains(fds, ",") || !strings.HasPrefix(fds, "3:100000:/sys/fs/cgroup/")) {
+		t.Fatalf("the command has descriptors it was not given: %s", fds)
+	}
+}
+
+// TestIntegrationSandboxPdeathsigEveryRun: the gate runs the probe a couple
+// of hundred times, four at a time, sandboxed and through the trampoline,
+// on whichever all-thread Landlock path this kernel takes. Every command
+// must find SIGKILL as its parent-death signal, read on its main thread.
+func TestIntegrationSandboxPdeathsigEveryRun(t *testing.T) {
+	needABI(t, 1)
+	g := newGate(t)
+	bin := harness(t)
+	const runs, workers = 200, 4
+	var (
+		mu     sync.Mutex
+		failed int
+		first  string
+		wg     sync.WaitGroup
+	)
+	next := make(chan struct{})
+	for range workers {
+		wg.Go(func() {
+			for range next {
+				cmd := exec.CommandContext(t.Context(), bin, "serve", "--policy", g.pol, "--principal", "test") //nolint:gosec // G204: the test's own harness
+				cmd.Env = append([]string{"PATH=/usr/bin:/bin"}, g.env...)
+				cmd.Stdin = strings.NewReader(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000003","ceiling":"destructive","op":"exec","args":{"command_id":"probe","args":["procattrs"]},"timeout_ms":10000}` + "\n")
+				out, err := cmd.Output()
+				var r resp
+				var d execOut
+				got := ""
+				switch {
+				case err != nil || json.Unmarshal(out, &r) != nil || !r.OK || json.Unmarshal(r.Data, &d) != nil:
+					got = fmt.Sprintf("gate: %v %q", err, out)
+				default:
+					a := map[string]string{}
+					for _, l := range strings.Split(strings.TrimSpace(d.Stdout), "\n") {
+						k, v, _ := strings.Cut(l, "=")
+						a[k] = v
+					}
+					if a["pdeathsig"] != "9" || a["pdeathsig_thread"] != "main" {
+						got = fmt.Sprintf("pdeathsig=%s read on the %s thread", a["pdeathsig"], a["pdeathsig_thread"])
+					}
+				}
+				if got != "" {
+					mu.Lock()
+					failed++
+					if first == "" {
+						first = got
+					}
+					mu.Unlock()
+				}
+			}
+		})
+	}
+	for range runs {
+		next <- struct{}{}
+	}
+	close(next)
+	wg.Wait()
+	if failed > 0 {
+		t.Fatalf("%d of %d runs did not read pdeathsig=9 on the main thread; first: %s", failed, runs, first)
+	}
+}
+
+// TestIntegrationSandboxCommandDiesWithGate: a gate killed while its command runs
+// takes the command with it. The command (sandboxed, started through the
+// trampoline) ignores SIGTERM and would sleep for 60 s; the gate's own
+// timeout is longer still, and nothing else signals it. Only its
+// parent-death signal (SIGKILL, set by os/exec in the trampoline and kept
+// across both execs) can end it within the test's window.
+func TestIntegrationSandboxCommandDiesWithGate(t *testing.T) {
+	needABI(t, 1)
+	g := newGate(t)
+	req := `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000002","ceiling":"destructive","op":"exec","args":{"command_id":"probe","args":["ignore-term","60s"]},"timeout_ms":120000}` + "\n"
+	cmd := exec.CommandContext(t.Context(), harness(t), "serve", "--policy", g.pol, "--principal", "test") //nolint:gosec // G204: the test's own harness
+	cmd.Env = append([]string{"PATH=/usr/bin:/bin"}, g.env...)
+	cmd.Stdin = strings.NewReader(req)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	p := gatetest.FindChild(t, cmd.Process.Pid, "ignore-term", "60s")
+	t.Cleanup(p.Kill)
+	p.WaitIgnoring(t, syscall.SIGTERM)
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = cmd.Wait()
+	if !p.WaitGone(5 * time.Second) {
+		t.Fatalf("the command (pid %d) outlived the gate that started it", p.Pid)
+	}
+}
+
+// requireMPTCPEnv: CI sets it so the MPTCP tests fail, never skip, when the
+// control case cannot open an MPTCP socket on the runner's kernel.
+const requireMPTCPEnv = "SHELL_MCP_REQUIRE_MPTCP"
+
+// TestIntegrationSandboxMPTCP is two-sided. Control: the probe binary, run
+// directly (no gate, no filter), opens an MPTCP socket on this kernel.
+// Filtered: the same binary and subcommand, run by the gate as a declared
+// command, gets EPROTONOSUPPORT. Without the control the filtered result
+// would prove nothing on a kernel that has no MPTCP.
+func TestIntegrationSandboxMPTCP(t *testing.T) {
+	g := newGate(t)
+	out, err := exec.CommandContext(t.Context(), g.probe, "mptcp").Output() //nolint:gosec // G204: test child built by this test
+	if control := strings.TrimSpace(string(out)); err != nil || control != "OPENED" {
+		msg := fmt.Sprintf("control: this kernel does not open an MPTCP socket without the filter (%q, %v); the filter cannot be proven here", control, err)
+		if os.Getenv(requireMPTCPEnv) != "" {
+			t.Fatal(msg)
+		}
+		t.Skip(msg + "; runs in CI")
+	}
+	if d := g.exec([]string{"mptcp"}, nil); strings.TrimSpace(d.Stdout) != "EPROTONOSUPPORT" {
+		t.Fatalf("filtered: a declared child opened an MPTCP socket: %q", d.Stdout)
+	}
+}
+
+// Sandbox, refusal and degradation: runs on kernels below ABI 4 (local).
+func TestIntegrationSandboxRefusalAndDegradation(t *testing.T) {
+	k := sandbox.KernelABI()
+	if k >= sandbox.RequiredMinABI || k < 1 {
+		t.Skipf("needs a kernel with Landlock below ABI %d (this one has %d); runs locally on ABI 3", sandbox.RequiredMinABI, k)
+	}
+	g := newGate(t)
+	g.policy("read", "required", "")
+	g.want(g.call("hello", m{}), "sandbox_unavailable")
+	g.policy("read", "best-effort", "")
+	r := g.want(g.call("hello", m{}), "")
+	var h struct {
+		Sandbox sandbox.Report `json:"sandbox"`
+	}
+	if json.Unmarshal(r.Data, &h) != nil {
+		t.Fatal(string(r.Data))
+	}
+	want := "net,unix_socket,scope"
+	if k < sandbox.ABIFSFull {
+		want = "fs," + want
+	}
+	if h.Sandbox.MPTCP != "blocked by seccomp" {
+		t.Fatalf("hello mptcp %q", h.Sandbox.MPTCP)
+	}
+	if got := strings.Join(h.Sandbox.NotEnforced, ","); got != want || h.Sandbox.RequiredMinABI != 4 || !h.Sandbox.Applied {
+		t.Fatalf("hello sandbox %+v", h.Sandbox)
+	}
+}
+
+func listen(t *testing.T) (port int, stop func()) {
+	t.Helper()
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	return l.Addr().(*net.TCPAddr).Port, func() { _ = l.Close() }
+}
+
+// Sandbox, network: CI only (ABI 4+). A declared child is denied a TCP
+// connect to an unlisted port and any bind.
+func TestIntegrationSandboxNetwork(t *testing.T) {
+	needABI(t, sandbox.ABINet)
+	g := newGate(t)
+	listed, c1 := listen(t)
+	defer c1()
+	other, c2 := listen(t)
+	defer c2()
+	g.policy("read", "required", "  tcp_connect_ports: ["+strconv.Itoa(listed)+"]\n")
+	if d := g.exec([]string{"connect", strconv.Itoa(other)}, nil); strings.TrimSpace(d.Stdout) != "EACCES" {
+		t.Fatalf("unlisted connect: %q", d.Stdout)
+	}
+	if d := g.exec([]string{"bind"}, nil); strings.TrimSpace(d.Stdout) != "EACCES" {
+		t.Fatalf("bind: %q", d.Stdout)
+	}
+	if d := g.exec([]string{"connect", strconv.Itoa(listed)}, nil); strings.TrimSpace(d.Stdout) != "CONNECTED" {
+		t.Fatalf("listed connect: %q", d.Stdout)
+	}
+}
+
+// Sandbox, scope: CI only (ABI 6+). A declared child cannot signal a
+// process outside the gate's domain.
+func TestIntegrationSandboxSignalScope(t *testing.T) {
+	needABI(t, sandbox.ABIScope)
+	g := newGate(t)
+	victim := exec.CommandContext(t.Context(), g.probe, "sleep", "30s") //nolint:gosec // G204: test child
+	if err := victim.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = victim.Process.Kill(); _ = victim.Wait() }()
+	if d := g.exec([]string{"signal", strconv.Itoa(victim.Process.Pid)}, nil); strings.TrimSpace(d.Stdout) != "EPERM" {
+		t.Fatalf("signal outside the domain: %q", d.Stdout)
+	}
+	if err := syscall.Kill(victim.Process.Pid, 0); err != nil {
+		t.Fatalf("victim is gone: %v", err)
+	}
+}
+
+// TestProductionBinaryRefusesTestOwnedPolicy runs the real gate binary: with
+// production trust (root only), a policy owned by the test uid is refused.
+func TestProductionBinaryRefusesTestOwnedPolicy(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root")
+	}
+	g := newGate(t)
+	bin := gatetest.Build(t, "cmd/shell-mcp-gate", g.dir, "real-gate", nil)
+	cmd := exec.CommandContext(t.Context(), bin, "serve", "--policy", g.pol) //nolint:gosec // G204: the binary this test built
+	cmd.Stdin = strings.NewReader(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}` + "\n")
+	cmd.Env = []string{"PATH=/usr/bin:/bin"}
+	out, err := cmd.Output()
+	var r resp
+	if err != nil || json.Unmarshal(out, &r) != nil {
+		t.Fatalf("real gate: %v %q", err, out)
+	}
+	g.want(&r, "install_insecure")
+}
+
+// TestCGOBuiltGateRefuses: a gate built with cgo refuses to serve.
+func TestCGOBuiltGateRefuses(t *testing.T) {
+	g := newGate(t)
+	d := t.TempDir()
+	out, err := exec.CommandContext(t.Context(), "go", "env", "CC").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = exec.LookPath(strings.TrimSpace(string(out))); err != nil {
+		if os.Getenv(gatetest.RequireSecureEnv) != "" {
+			t.Fatalf("no C compiler (%s) to prove the cgo guard", strings.TrimSpace(string(out)))
+		}
+		t.Skip("no C compiler")
+	}
+	dir, _ := filepath.EvalSymlinks(d)
+	cgoHarness := gatetest.BuildTest(t, "cmd/shell-mcp-gate", dir, "cgo-gate", []string{"CGO_ENABLED=1"})
+	gateCmd := exec.CommandContext(t.Context(), cgoHarness, "serve", "--policy", g.pol, "--principal", "test") //nolint:gosec // G204: built by this test
+	gateCmd.Env = append([]string{"PATH=/usr/bin:/bin"}, g.env...)
+	gateCmd.Stdin = strings.NewReader(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}` + "\n")
+	out, err = gateCmd.Output()
+	var r resp
+	if err != nil || json.Unmarshal(out, &r) != nil {
+		t.Fatalf("cgo gate: %v %q", err, out)
+	}
+	g.want(&r, "install_insecure")
+	if !strings.Contains(r.Error.Message, "cgo") {
+		t.Fatalf("message %q", r.Error.Message)
+	}
+}
+
+// TestIntegrationSystemOps runs the native system ops inside the real
+// sandbox: they read /proc and /etc (granted read-only) and nothing else.
+func TestIntegrationSystemOps(t *testing.T) {
+	g := newGate(t)
+	for _, op := range []string{"sysinfo", "disk", "processes"} {
+		r := g.want(g.call(op, m{}), "")
+		if len(r.Data) < 20 {
+			t.Fatalf("%s: %s", op, r.Data)
+		}
+	}
+}
+
+// TestIntegrationServiceOps runs service_status, service_list and journal
+// inside the real sandbox against the fake systemctl/journalctl (declared
+// through the harness, never through the policy): the built-in ops start
+// their binaries from the read+execute directories only.
+func TestIntegrationServiceOps(t *testing.T) {
+	g := newGate(t)
+	sc := gatetest.BuildFakeSys(t, g.bin, "systemctl", "")
+	jc := gatetest.BuildFakeSys(t, g.bin, "journalctl", "")
+	g.rawPolicy("version: 1\nmax_tier: read\nsandbox:\n  landlock: " + defaultMode() + "\n  system_read_exec: [{BIN}, {GATEDIR}]\n" +
+		"services:\n  status: [\"example-*.service\"]\njournal:\n  units: [\"example-*.service\"]\n")
+	env := []string{"HARNESS_SYSTEMCTL=" + sc, "HARNESS_JOURNALCTL=" + jc}
+	g.want(g.call("service_status", m{"unit": "example-app.service"}, env...), "")
+	g.want(g.call("service_list", m{}, env...), "")
+	g.want(g.call("journal", m{"unit": "example-app.service", "lines": 3}, env...), "")
+}
+
+const gitIntegrationPolicy = `version: 1
+max_tier: operator
+sandbox:
+  landlock: {MODE}
+  tcp_connect_ports: [{PORTS}]
+  system_read_exec: [{GATEDIR}]
+paths:
+  read: [{R}]
+  write: [{W}]
+git:
+  repos:
+    - path: {W}/deploy
+      remote: {REMOTE}
+`
+
+// gitSetup serves deploy.git over HTTPS, clones it into the write root and
+// pushes one more commit upstream, so that a pull has work to do.
+func (g *gate) gitSetup(t *testing.T) (srv *gatetest.GitServer, repo string, env []string) {
+	t.Helper()
+	srv = gatetest.NewGitServer(t)
+	work := srv.Seed(t, "deploy.git", map[string]string{"app.conf": "a\n"})
+	repo = filepath.Join(g.write, "deploy")
+	srv.Clone(t, "deploy.git", repo)
+	ca := filepath.Join(g.read, "git-ca.pem")
+	srv.WriteCA(t, ca)
+	gatetest.Push(t, work, "b.conf", "b\n", "second")
+	return srv, repo, []string{"HARNESS_GIT_CA=" + ca, "HARNESS_GIT=" + gatetest.GitBin}
+}
+
+func (g *gate) gitPolicy(mode, ports, remote string) {
+	g.rawPolicy(strings.NewReplacer("{MODE}", mode, "{PORTS}", ports, "{REMOTE}", remote).Replace(gitIntegrationPolicy))
+}
+
+// TestIntegrationGitPull: git_pull inside the real sandbox, with the
+// server's port listed in tcp_connect_ports, fast-forwards the repo.
+func TestIntegrationGitPull(t *testing.T) {
+	g := newGate(t)
+	srv, repo, env := g.gitSetup(t)
+	g.gitPolicy(defaultMode(), srv.Port(), srv.RepoURL("deploy.git"))
+	var d struct {
+		Updated      bool `json:"updated"`
+		ChangedFiles int  `json:"changed_files"`
+	}
+	r := g.want(g.call("git_pull", m{"repo": repo}, env...), "")
+	if json.Unmarshal(r.Data, &d) != nil || !d.Updated || d.ChangedFiles != 1 {
+		t.Fatalf("pull %s", r.Data)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "b.conf")); err != nil {
+		t.Fatal("pulled file missing")
+	}
+}
+
+// TestIntegrationGitPullUnlistedPort is two-sided (Landlock ABI 4+, CI):
+// with the server's port missing from tcp_connect_ports the kernel refuses
+// git's connect and the pull fails with HEAD unchanged; the same pull with
+// the port listed succeeds.
+func TestIntegrationGitPullUnlistedPort(t *testing.T) {
+	needABI(t, sandbox.ABINet)
+	g := newGate(t)
+	srv, repo, env := g.gitSetup(t)
+	other, stop := listen(t)
+	defer stop()
+	head := func() string { return strings.TrimSpace(gatetest.Git(t, repo, "rev-parse", "HEAD")) }
+	before := head()
+	g.gitPolicy("required", strconv.Itoa(other), srv.RepoURL("deploy.git"))
+	r := g.call("git_pull", m{"repo": repo}, env...)
+	if r.OK || r.Error == nil || r.Error.Code != "exec_failed" || head() != before {
+		t.Fatalf("pull to an unlisted port: ok=%v err=%+v", r.OK, r.Error)
+	}
+	g.gitPolicy("required", srv.Port(), srv.RepoURL("deploy.git"))
+	g.want(g.call("git_pull", m{"repo": repo}, env...), "")
+	if head() == before {
+		t.Fatal("control: the pull with the port listed did not move HEAD")
+	}
+}
+
+// TestIntegrationTrampolineNotFromSSHCommand: what an SSH client asks to
+// run arrives only as SSH_ORIGINAL_COMMAND, which the forced command never
+// executes: the gate refuses any request that comes with one, so asking for
+// the exec trampoline gets install_insecure and nothing runs.
+func TestIntegrationTrampolineNotFromSSHCommand(t *testing.T) {
+	g := newGate(t)
+	r := g.want(g.call("hello", m{}, "SSH_ORIGINAL_COMMAND="+execx.TrampolineArg), "install_insecure")
+	if !strings.Contains(r.Error.Message, "SSH_ORIGINAL_COMMAND") {
+		t.Fatalf("refusal %q", r.Error.Message)
+	}
+}

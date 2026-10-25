@@ -1,5 +1,7 @@
 package config
 
+import "net/netip"
+
 // Effective is the printable form of a Config: secrets are replaced by their
 // length (token) or public-key fingerprint (SSH keys).
 type Effective struct {
@@ -14,7 +16,7 @@ type Effective struct {
 	AllowUnauthenticated bool              `json:"allow_unauthenticated"`
 	AllowedHosts         []string          `json:"allowed_hosts"`
 	AllowedOrigins       []string          `json:"allowed_origins"`
-	TrustProxy           bool              `json:"trust_proxy"`
+	TrustedProxies       []string          `json:"trusted_proxies"`
 	RateLimitPerMin      int               `json:"rate_limit_per_min"`
 	Targets              []EffectiveTarget `json:"targets"`
 	DefaultTarget        string            `json:"default_target"`
@@ -24,8 +26,15 @@ type Effective struct {
 	MaxTimeoutS          int               `json:"max_timeout_s"`
 	MaxOutputBytes       int               `json:"max_output_bytes"`
 	ApprovalTiers        []string          `json:"approval_tiers"`
-	ApprovalFallback     string            `json:"approval_fallback"`
+	ApprovalMethod       string            `json:"approval_method"`
 	ApprovalTTLS         int               `json:"approval_ttl_s"`
+	ApprovalBind         string            `json:"approval_bind"`
+	ApprovalPort         int               `json:"approval_port"`
+	ApprovalTLS          bool              `json:"approval_tls"`
+	ApprovalPublicURL    string            `json:"approval_public_url"`
+	Approvers            []string          `json:"approvers"`
+	ApprovalMaxApprovers int               `json:"approval_max_approvers"`
+	ApprovalNotify       bool              `json:"approval_notify"`
 	RedactPatterns       int               `json:"redact_patterns"`
 	LogLevel             string            `json:"log_level"`
 	LogFormat            string            `json:"log_format"`
@@ -56,7 +65,7 @@ func (c *Config) Effective() Effective {
 		AllowUnauthenticated: c.AllowUnauthenticated,
 		AllowedHosts:         nonNil(c.AllowedHosts),
 		AllowedOrigins:       nonNil(c.AllowedOrigins),
-		TrustProxy:           c.TrustProxy,
+		TrustedProxies:       prefixStrings(c.TrustedProxies),
 		RateLimitPerMin:      c.RateLimitPerMin,
 		Targets:              make([]EffectiveTarget, 0, len(c.Targets)),
 		DefaultTarget:        c.DefaultTarget,
@@ -66,7 +75,14 @@ func (c *Config) Effective() Effective {
 		MaxTimeoutS:          int(c.MaxTimeout.Seconds()),
 		MaxOutputBytes:       c.MaxOutputBytes,
 		ApprovalTiers:        nonNil(c.ApprovalTiers),
-		ApprovalFallback:     c.ApprovalFallback,
+		ApprovalMethod:       c.ApprovalMethod,
+		ApprovalBind:         c.ApprovalBind,
+		ApprovalPort:         c.ApprovalPort,
+		ApprovalTLS:          c.ApprovalTLSCert != nil,
+		ApprovalPublicURL:    c.ApprovalPublicURL,
+		Approvers:            approverNames(c),
+		ApprovalMaxApprovers: c.ApprovalMaxApprovers,
+		ApprovalNotify:       c.ApprovalNotifyURL != "",
 		ApprovalTTLS:         int(c.ApprovalTTL.Seconds()),
 		RedactPatterns:       len(c.RedactPatterns),
 		LogLevel:             c.LogLevel,
@@ -76,7 +92,7 @@ func (c *Config) Effective() Effective {
 	for _, t := range c.Targets {
 		e.Targets = append(e.Targets, EffectiveTarget{
 			Name: t.Name, Host: t.Host, Port: t.Port, User: t.User,
-			HostKeys: nonNil(t.HostKeys), KeyFingerprint: t.Key.Fingerprint(),
+			HostKeys: hostKeyStrings(t.HostKeys), KeyFingerprint: t.Key.Fingerprint(),
 		})
 	}
 	return e
@@ -87,4 +103,30 @@ func nonNil(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+func hostKeyStrings(pins []HostKey) []string {
+	out := make([]string, 0, len(pins))
+	for _, p := range pins {
+		out = append(out, p.String())
+	}
+	return out
+}
+
+func prefixStrings(ps []netip.Prefix) []string {
+	out := make([]string, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, p.String())
+	}
+	return out
+}
+
+// approverNames lists the approvers by name only; seeds never leave the
+// configuration.
+func approverNames(c *Config) []string {
+	out := make([]string, 0, len(c.Approvers))
+	for _, a := range c.Approvers {
+		out = append(out, a.Name)
+	}
+	return out
 }

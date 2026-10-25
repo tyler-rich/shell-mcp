@@ -8,7 +8,9 @@ This document is normative. Where it conflicts with convenience, it wins. Changi
 |---|---|---|
 | MCP bearer token | Secret file / env store / server memory | `internal/auth` only. Constant-time compare; never logged or returned. |
 | SSH private key(s) | Secret file / env store / server memory | `internal/sshx` only. Never logged, never in `check` output (show the public-key fingerprint instead). |
-| Gate policy, privileged policy, gate and helper binaries, helper units, `authorized_keys` | Target, root-owned | Root only (D-016). Gate and helper refuse to run if any is writable by group/other or not owned by root; the helper also refuses when its units were generated for a different policy. |
+| Approver TOTP seeds | Mounted secret file (`SHELL_MCP_APPROVERS_FILE`, `0600`) / server memory | `internal/approval` only. Never in environment variables (`SHELL_MCP_APPROVERS` is refused), never logged, never in `check` or effective-config output, never on the workstation where the agent runs: only in the approver's authenticator and the server's secret file. A readable seed is an approval, so a group/other-accessible file fails startup. |
+| Approval notify token | Secret file / env store / server memory | The notifier only (`SHELL_MCP_APPROVAL_NOTIFY_TOKEN`/`_FILE`). Never logged, never in `check` output. |
+| Gate policy, privileged policy, gate and helper binaries, helper units, `authorized_keys` | Target, root-owned | Root only (D-016). The gate refuses to run if its policy or binary, or a directory above either, is writable by group/other or not owned by root; the helper refuses the same for its policy and binary, and when its units were generated for a different policy. Neither reads `authorized_keys`: sshd's `StrictModes` (on by default) refuses a keys file or directory that is group- or world-writable or owned by an account other than root or the service user, and accepts one the service user owns, so the operator confirms they are root's (`docs/TARGET-SETUP.md` §7). |
 | Host files, service state, journal, process list | Target | Through gate operations only, within the policy. |
 | Tool results (file contents, command output, logs) | In transit to the client | Returned to the model on request, redacted and size-capped; **never logged**. |
 
@@ -30,17 +32,22 @@ Trust boundaries:
 | **Persistence / privilege escalation** | Writing systemd units, cron, sudoers, SSH keys, PAM, shell rc files, the gate's policy | Protected-path set cannot be a write root or inside one; the gate refuses a policy that overlaps it; setuid/setgid bits refused; `no_new_privs` on every process; no sudo anywhere (D-017); polkit rule limited to exact units × verbs; privileged groups refused at runtime (D-020). |
 | **Prompt injection via tool output** (LLM01) | Log lines, file contents, commit messages, unit descriptions containing instructions | Structured JSON results; descriptions never instruct the model to act on content; size caps; client guidance in `docs/CLIENTS.md` to treat results as data. |
 | **Excessive agency** (LLM08) | Model calls a write/destructive tool | Profiles (D-005); policy `max_tier` (D-016); computed previews; annotations so clients prompt. |
-| **Model self-approval** | A prompt-injected model supplies whatever confirmation argument a tool asks for | Destructive approval is a user answer collected by the client through elicitation, bound by HMAC to principal, tool, target, arguments and preview, short-lived and single-use (D-006, S-12); no elicitation → fail closed. |
-| **Escape via a declared binary or a gate bug** | A policy command with a file-write or exec feature; a flaw in our path matcher | Landlock ruleset computed from the policy and applied before the request is read; children inherit it; TCP bind denied and connect limited to listed ports (D-019). |
+| **Model self-approval** | A prompt-injected model supplies whatever confirmation argument a tool asks for | The approver approves on the server's approval page, with a TOTP code from an authenticator the agent's environment does not hold. The approval is bound to principal, tool, target, arguments, preview and policy, and is short-lived and single-use (D-006, S-12). `none` fails closed. `confirm-argument` is a logged opt-out with no protection against this threat. |
+| **Approval phishing / relay** | A look-alike page relays a typed code | The origin is fixed by configuration and shown on the page; approvers open approvals only from a bookmark or the server's push, never from a chat link; the result text tells the model to show the URL unchanged; codes are single-use, with lockouts; WebAuthn is the future fix. |
+| **Approval brute force** | Guessing approver codes on the approval page | At most 3 wrong codes per approver per minute, then doubling lockouts, each logged and pushed. |
+| **Approval page exposure** | The approval listener reachable from networks it should not be | Loopback by default; TLS or a trusted proxy required for anything else; proxy-only peers. |
+| **Command execution through repository configuration** | `.git/config` filters, textconv/external diff drivers, `core.askPass`, `include.path`, `url.*.insteadOf` redirecting a pull | The gate's git ops accept only an allowlist of inert repository-local keys and refuse everything else before running git; `GIT_DIR`/`GIT_WORK_TREE` pinned, no system or global config; `.git` is in the protected set, so nothing under it is writable through the file operations (POLICY §3, §7). |
+| **Hard link or copy of a denied binary** | A hard-denied binary declared under an innocent name, or reached as one program of a multi-call binary, a renamed GNU coreutils program, or the interpreter of a #! script | Binary identity check at policy load: device + inode and SHA-256 against every hard-denied file in the system binary directories; the command judged by what its file holds: uutils by the utility it runs as, other multi-call binaries refused, GNU coreutils programs by their gnu prefix and embedded name, scripts by their interpreter (POLICY §5, S-MC). |
+| **Escape via a declared binary or a gate bug** | A policy command with a file-write or exec feature; a flaw in our path matcher | Landlock ruleset computed from the policy and applied before the request is read; children inherit it; TCP bind denied and connect limited to listed ports (D-019); Multipath TCP sockets, which Landlock does not govern, are made unavailable by a seccomp filter so programs fall back to governed TCP. |
 | **Compromised MCP server** | Stolen bearer token, container compromise, SDK bug | Gate and helper are authoritative; per-key policies — a read-only server instance holds a key whose policy has `max_tier: read`; `from=` restricts where the key is usable. A compromised server can skip human approval, so the privileged policy must be written for that case (PRIVILEGED §3). |
-| **Compromised gate / service account** | Code execution as the service user | The helper accepts only declared `priv_*` operations, re-validated against the root-owned privileged policy; the core unit's `ProtectSystem=strict`, write-path list and four-capability bounding set bound what even a correct-looking request can do; the broad unit is only present if the owner enabled packages or broad commands. |
-| **Compromised helper instance** | A bug in privileged code | One instance per request, no persistence, systemd sandbox (core: no network, write paths and capabilities fixed by the generated unit), Landlock inside, backups of anything overwritten or deleted, journald audit. The broad unit is root-equivalent by design and is documented as such. |
+| **Compromised gate / service account** | Code execution as the service user | The helper accepts only declared `priv_*` operations, re-validated against the root-owned privileged policy; the core unit's `ProtectSystem=strict`, write-path list and four-capability bounding set bound what even a correct-looking request can do; the broad unit is only present if the owner enabled packages, broad commands or power. Nothing in the core unit can reach a local IPC endpoint of the host: `/run` is an empty tmpfs there and abstract sockets belong to its private network namespace, so root in the core unit cannot ask the system bus, PID 1 or any root service for anything (PRIVILEGED §5.1). |
+| **Compromised helper instance** | A bug in privileged code | One instance per request, no persistence, systemd sandbox (core: no network and no local IPC, write paths and capabilities fixed by the generated unit, other users' processes hidden), Landlock inside, backups of anything overwritten or deleted, journald audit. The broad unit is root-equivalent by design and is documented as such. |
 | **Confused deputy** | One service user serving several callers | One principal per server instance; separate keys + policies per trust level; gate audits the policy-selected principal label. |
 | **Host impersonation / MITM** | DNS or ARP spoofing of the target | Pinned host keys, no TOFU (D-012); host key algorithms restricted to the pinned types; `check` prints what it verified. |
 | **Unauthenticated enumeration** | `tools/list` without auth | Auth before any response (D-004); `/healthz` returns nothing informational. |
 | **DNS rebinding** | Browser on the LAN reaches a loopback-bound server | Host/Origin allow-list in our own middleware; loopback bind by default outside Docker. |
-| **Brute force** | Guessing the bearer token | ≥ 256-bit tokens enforced; constant-time compare; auth-failure limiter; global limiter. |
-| **Denial of service** | Huge outputs, deep walks, fork bombs, slow commands | Caps on output, stdin, file size, walk depth/results, delete entries, request/response size; timeouts with process-group kill; `RLIMIT_NPROC`/`RLIMIT_CORE`; per-target session limit; sshd `MaxSessions`/`MaxStartups`. |
+| **Brute force** | Guessing the bearer token | ≥ 256-bit tokens enforced; constant-time compare; auth-failure lockout (10 per 5 min per client → 429 for 5 min); global per-client limiter on every request. Only a presented credential that does not authenticate counts toward the lockout: a wrong token, another scheme, a malformed value, or several `Authorization` headers. A request with no `Authorization` header gets the same 401 but does not count, because it guesses nothing. Clients probe OAuth discovery without credentials before they connect, and counting those probes let a client lock itself out, or let anyone sharing its address lock it out without guessing anything. Such requests still pass the global limiter. The lockout is per client (IPv4 address or IPv6 /64). Anyone sharing a client's address can still lock it out, but only by presenting ten wrong credentials, not by sending bare requests. |
+| **Denial of service** | Huge outputs, deep walks, fork bombs, slow commands | Caps on output, stdin, file size, walk depth/results, delete entries, request/response size; timeouts with process-group kill; `RLIMIT_NPROC`/`RLIMIT_CORE` on every child, in force before its first instruction; per-target session limit; sshd `MaxSessions`/`MaxStartups`. |
 | **Tool poisoning / rug pull** | Our descriptions change between versions | `shell-mcp tools` catalogue with schema hashes; snapshot test; signed images pinned by digest. |
 | **Supply chain** | Malicious module, base image, or Action | `go.sum`, `govulncheck`, Trivy + Grype, CodeQL, gitleaks, Dependabot daily, `deps-current`, SHA-pinned Actions, digest-pinned bases, cosign signatures and provenance for image and gate binaries. |
 | **Container breakout** | Bug in the server | Distroless static, non-root, `cap_drop: ALL`, `no-new-privileges`, read-only FS, limits, no socket or mounts. Blast radius = the SSH key's policy. |
@@ -98,11 +105,11 @@ Everything a root operator legitimately does can be declared in a host policy. W
    restrict,from="192.0.2.0/24",command="/usr/local/bin/shell-mcp-gate serve --policy /etc/shell-mcp/operator.yaml --principal operator" ssh-ed25519 AAAA… shell-mcp-operator
    ```
 4. **Gate and policy root-owned**: `/usr/local/bin/shell-mcp-gate` `root:root 0755`; `/etc/shell-mcp/` `root:root 0755`; policies `root:root 0644` (or `root:svc-shell 0640`).
-5. **Writes via ACLs**: grant the service user write access only to the write roots (`setfacl -R -m u:svc-shell:rwX` and default ACLs), never to anything in the protected set.
+5. **Write roots owned by the service user**: give the service user write access only to the write roots, never to anything in the protected set. The recommended way is ownership (`install -o svc-shell -g svc-shell -m 0755 -d <root>`, or `chown -R svc-shell:` and no group or world write bit), with every directory above the root root's and not group- or world-writable. An ACL (`setfacl -R -m u:svc-shell:rwX` and default ACLs) on a root-owned directory also grants it, but the ACL mask counts as the group bits, so the directory is group-writable to the gate's chain rules: commands get no path placeholder (`{path:read}` or `{path:write}`) and no `cwd` at or under it, since the owner-matched exception does not cover a group-writable directory (POLICY §4, "Commands' paths"), and git runs in no repository under it (POLICY §7, "The repository is closed"). Use an ACL only for a root where neither commands' path placeholders nor git are used; `check-policy` warns about such a root.
 6. **No sudoers entry at all.** If service control is enabled: install `polkitd`, then `shell-mcp-gate polkit …` → review → install as `/etc/polkit-1/rules.d/60-shell-mcp.rules` `root:root 0644`.
 7. **Landlock enabled:** `landlock` appears in `/sys/kernel/security/lsm` (enabled by default on current Debian and Ubuntu kernels; verify).
-8. **Explicit UID/GID, minimal groups (D-020):** choose an unused UID/GID, confirm no files on the host are owned by it (`find / -xdev -uid <UID>` on each filesystem that holds application or container data), create the account with that UID, add only `systemd-journal` (if journal ops are enabled) and the helper's socket group (if root actions are enabled), and never `docker`, `sudo`, `adm`, `disk` or similar.
-9. **Privileged helper (only if root actions are wanted):** create the socket group and add only the service account to it; install `shell-mcp-privd` `root:root 0755` in `/usr/local/libexec`; write `/etc/shell-mcp/privileged.yaml` `root:root 0600` with `client_uid` = the pinned UID; `shell-mcp-privd check-policy` → review every acknowledge and root-equivalent item → `shell-mcp-privd units` → install the units → `systemd-analyze verify` and `systemd-analyze security shell-mcp-privd@.service` → enable the socket(s); set `privileged.enabled: true` in the gate policy of the key(s) that may use it.
+8. **Explicit UID/GID, minimal groups (D-020):** choose an unused UID/GID, confirm no files on the host are owned by it (`find / -xdev -uid <UID>` on each filesystem that holds application or container data), create the account with that UID, add only `systemd-journal` (if journal ops are enabled) and the helper's socket group (if root actions are enabled), and never `docker`, `sudo`, `adm`, `disk` or similar. **Groups must be local:** the gate is a static binary without NSS, so it resolves supplementary group names from `/etc/group` only; a group known only through NSS (LDAP, SSSD, …) has no name to check and the gate refuses to serve (`install_insecure`, fail closed).
+9. **Privileged helper (only if root actions are wanted):** create the socket group and add only the service account to it; install `shell-mcp-privd` `root:root 0755` in `/usr/local/libexec`; write `/etc/shell-mcp/privileged.yaml` `root:root 0600` with `client_uid` = the pinned UID; `shell-mcp-privd check-policy` → review every acknowledge and root-equivalent item → `shell-mcp-privd units` → install the units (the broad pair too when the policy uses packages, `unit: broad` commands or power) and create `/var/lib/shell-mcp/backups` `root:root 0700` → `systemd-analyze verify` and `systemd-analyze security` for each service unit → enable the socket(s); set `privileged.enabled: true` in the gate policy of the key(s) that may use it, with `privileged.broad_socket` when the broad unit is installed.
 
 ## 6. Fail-closed startup rules
 
@@ -115,8 +122,16 @@ Everything a root operator legitimately does can be declared in a host policy. W
 - an SSH private key is not Ed25519, is passphrase-protected without a passphrase source, or cannot be parsed;
 - `SHELL_MCP_DEFAULT_TARGET` names an unknown target;
 - a redaction pattern fails to compile;
+- a `SHELL_MCP_TRUSTED_PROXIES` entry is not an IP address or canonical CIDR prefix, or is a `/0`; or the replaced `SHELL_MCP_TRUST_PROXY` is set;
 - `stdio` transport with `bearer` mode (meaningless — stdio is `none`);
-- an invalid approval setting (`SHELL_MCP_APPROVAL_TIERS` without `destructive`, an unknown fallback, a TTL outside 30..600).
+- an invalid approval setting: `SHELL_MCP_APPROVAL_TIERS` without `destructive`; an unknown method; `SHELL_MCP_APPROVAL_FALLBACK` or `SHELL_MCP_APPROVERS` set; a TTL outside 60..900;
+- `SHELL_MCP_APPROVAL_METHOD=web` without a valid public URL or approvers file;
+- an approvers file that is group/other-accessible, has a line that does not parse, a short seed or a duplicate name, or holds more approvers than `SHELL_MCP_APPROVAL_MAX_APPROVERS`;
+- a non-loopback approval bind without native TLS or `SHELL_MCP_TRUSTED_PROXIES`;
+- an approval TLS certificate without its key, or the reverse, or either unreadable;
+- an `http://` approval public URL with a non-loopback host or bind;
+- the approval port equal to the MCP port;
+- a notify URL that is not `https://` (loopback excepted), or one without a token.
 
 A secret file readable by group/other logs a WARN on every start (container secret mounts vary; not fatal).
 
@@ -139,18 +154,19 @@ services:
     restart: unless-stopped
     user: "65532:65532"
     read_only: true
-    ports:
-      - "127.0.0.1:8080:8080"           # or a specific LAN/VPN interface address; never all interfaces by accident
+    networks:                           # no published port: only the reverse proxy, on `front`, reaches it
+      front: { ipv4_address: 172.30.80.10 }
     environment:
-      SHELL_MCP_BIND: 0.0.0.0           # inside the container; exposure is controlled by `ports`
+      SHELL_MCP_BIND: 0.0.0.0           # inside the container; only the `front` network reaches it
       SHELL_MCP_PROFILE: read-only
       SHELL_MCP_TOKEN_FILE: /run/secrets/mcp_token
       SHELL_MCP_SSH_KEY_FILE: /run/secrets/ssh_key
       SHELL_MCP_TARGET_NAME: app-host
       SHELL_MCP_TARGET_HOST: target-a.example.test
       SHELL_MCP_TARGET_USER: svc-shell
-      SHELL_MCP_TARGET_HOST_KEYS: "SHA256:placeholder"
+      SHELL_MCP_TARGET_HOST_KEYS: "ssh-ed25519 SHA256:placeholder"
       SHELL_MCP_ALLOWED_HOSTS: localhost,127.0.0.1,mcp.example.test
+      SHELL_MCP_TRUSTED_PROXIES: 172.30.80.5 # the proxy's fixed address on `front`; never the network's gateway
     secrets: [mcp_token, ssh_key]
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
@@ -166,6 +182,8 @@ services:
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
+networks:
+  front: { ipam: { config: [{ subnet: 172.30.80.0/24 }] } }   # RFC 1918 example: pick one that does not clash with your networks
 secrets:
   mcp_token: { file: ./secrets/mcp_token }
   ssh_key: { file: ./secrets/ssh_key }
@@ -173,4 +191,4 @@ secrets:
 
 When the container runs on the target itself, it reaches the host's sshd through the Docker host gateway (`extra_hosts: ["host.docker.internal:host-gateway"]`) — the `from=` restriction then names the Docker network's subnet. In DockHand/Portainer, keep secrets in the tool's encrypted env store (`SHELL_MCP_TOKEN`, `SHELL_MCP_SSH_KEY`), never in the YAML.
 
-TLS: terminate at a reverse proxy or run over a VPN; the server speaks plain HTTP on an internal network only. Set `SHELL_MCP_TRUST_PROXY=true` only behind that proxy.
+TLS: terminate at a reverse proxy or run over a VPN; the server speaks plain HTTP on an internal network only. Behind that proxy, list its address in `SHELL_MCP_TRUSTED_PROXIES` (and nothing else): only requests from a listed peer have their client taken from `X-Forwarded-For` (its last entry); every other request counts against its own peer address. The proxy and the server share a user-defined network, the proxy has a fixed address there, and the server publishes no port. Never list the Docker network's gateway: a request through a published port often arrives from the gateway, so trusting it would let every local process that reaches that port set its own client address (`docs/CLIENTS.md` §1, with the measurement). Set the value from the peer the server logs (`authentication failed`, field `client`), not from a guess.

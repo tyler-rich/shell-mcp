@@ -25,6 +25,7 @@ updates:
     directories:
       - /
       - /scripts/probe
+      - /scripts/release
     target-branch: dev
     schedule:
       interval: daily

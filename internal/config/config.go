@@ -2,11 +2,13 @@ package config
 
 import (
 	"crypto/ed25519"
+	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,6 +19,9 @@ import (
 
 	"go.yaml.in/yaml/v3"
 	"golang.org/x/crypto/ssh"
+
+	"github.com/tyler-rich/shell-mcp/internal/approval/approvers"
+	"github.com/tyler-rich/shell-mcp/internal/approval/notify"
 )
 
 // LookupFunc returns the value of an environment variable and whether it is
@@ -42,8 +47,8 @@ func oneLine(s string) string {
 // Bounds and defaults for settings with numeric ranges.
 const (
 	MinTokenLength     = 43
-	minApprovalTTL     = 30
-	maxApprovalTTL     = 600
+	minApprovalTTL     = 60
+	maxApprovalTTL     = 900
 	maxSecretFileBytes = 64 << 10
 	maxTargetsBytes    = 1 << 20
 	maxTargets         = 256
@@ -64,7 +69,7 @@ type Config struct {
 	AllowUnauthenticated bool
 	AllowedHosts         []string
 	AllowedOrigins       []string
-	TrustProxy           bool
+	TrustedProxies       []netip.Prefix
 	RateLimitPerMin      int
 	Targets              []Target
 	DefaultTarget        string
@@ -74,11 +79,25 @@ type Config struct {
 	MaxTimeout           time.Duration
 	MaxOutputBytes       int
 	ApprovalTiers        []string
-	ApprovalFallback     string
 	ApprovalTTL          time.Duration
-	RedactPatterns       []*regexp.Regexp
-	LogLevel             string
-	LogFormat            string
+	// ApprovalMethod is none, web or confirm-argument.
+	ApprovalMethod string
+	// The approval listener (web): bind, port, optional native TLS, and the
+	// page's fixed origin (scheme://host[:port], no trailing slash).
+	ApprovalBind      string
+	ApprovalPort      int
+	ApprovalTLSCert   *tls.Certificate
+	ApprovalPublicURL string
+	// Approvers are read from SHELL_MCP_APPROVERS_FILE (web).
+	Approvers            []approvers.Approver
+	ApprovalMaxApprovers int
+	// ApprovalNotifyURL and ApprovalNotifyToken configure the optional
+	// ntfy push.
+	ApprovalNotifyURL   string
+	ApprovalNotifyToken Secret
+	RedactPatterns      []*regexp.Regexp
+	LogLevel            string
+	LogFormat           string
 
 	// Warnings are non-fatal findings the caller must log at WARN on every
 	// start. They never contain secret material.
@@ -91,8 +110,42 @@ type Target struct {
 	Host     string
 	Port     int
 	User     string
-	HostKeys []string
+	HostKeys []HostKey
 	Key      *PrivateKey
+}
+
+// HostKey is one pinned host key: its type and its SHA-256 fingerprint.
+type HostKey struct {
+	Type        string
+	Fingerprint string
+}
+
+// String returns the pin as configured: "<key-type> SHA256:<base64>".
+func (h HostKey) String() string { return h.Type + " " + h.Fingerprint }
+
+// HostKeyTypes are the host-key types a pin may name (D-012). DSA and
+// certificates are never accepted; an ssh-rsa key is verified with
+// rsa-sha2-512 or rsa-sha2-256 only, never SHA-1 (internal/sshx).
+var HostKeyTypes = []string{
+	ssh.KeyAlgoED25519, ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521, ssh.KeyAlgoRSA,
+}
+
+// HostKeyPinFormat ends the one-line reason for a malformed pin: the
+// expected form and how to obtain it.
+const HostKeyPinFormat = `must be "<key-type> SHA256:<base64>" with key type ssh-ed25519, ` +
+	`ecdsa-sha2-nistp256, ecdsa-sha2-nistp384, ecdsa-sha2-nistp521 or ssh-rsa ` +
+	`(on the target, the key type is the first word of the host key's .pub file and ` +
+	`"ssh-keygen -lf <host key>.pub" prints its fingerprint; or run ` +
+	`"ssh-keyscan -t ed25519 <host> | ssh-keygen -lf -" and verify the fingerprint out of band)`
+
+// ParseHostKeyPin parses "<key-type> SHA256:<base64>": exactly one space,
+// a type from HostKeyTypes and an OpenSSH SHA-256 fingerprint.
+func ParseHostKeyPin(pin string) (HostKey, bool) {
+	typ, fp, ok := strings.Cut(pin, " ")
+	if !ok || !slices.Contains(HostKeyTypes, typ) || !ValidFingerprint(fp) {
+		return HostKey{}, false
+	}
+	return HostKey{Type: typ, Fingerprint: fp}, true
 }
 
 // Load reads the configuration from lookup (and the files it names) and
@@ -161,7 +214,7 @@ func (l *loader) network(c *Config) (err error) {
 	if len(c.AllowedHosts) > maxListItems || len(c.AllowedOrigins) > maxListItems {
 		return errorf("SHELL_MCP_ALLOWED_HOSTS / SHELL_MCP_ALLOWED_ORIGINS: at most %d entries", maxListItems)
 	}
-	if c.TrustProxy, err = l.boolean("SHELL_MCP_TRUST_PROXY", false); err != nil {
+	if c.TrustedProxies, err = l.trustedProxies(); err != nil {
 		return err
 	}
 	c.RateLimitPerMin, err = l.integer("SHELL_MCP_RATE_LIMIT_PER_MIN", 120, 1, 100000)
@@ -307,22 +360,174 @@ func (l *loader) approval(c *Config) error {
 	slices.SortFunc(tiers, func(a, b string) int { return tierOrder(a) - tierOrder(b) })
 	c.ApprovalTiers = tiers
 
-	c.ApprovalFallback = l.get("SHELL_MCP_APPROVAL_FALLBACK", "deny")
-	switch c.ApprovalFallback {
-	case "deny":
-	case "confirm-argument":
-		l.warnf("SHELL_MCP_APPROVAL_FALLBACK=confirm-argument: clients without elicitation support can approve operations with a model-supplied argument; human approval is not enforced for them")
-	default:
-		return errorf("SHELL_MCP_APPROVAL_FALLBACK must be deny or confirm-argument (got %q)", c.ApprovalFallback)
+	if l.isSet("SHELL_MCP_APPROVAL_FALLBACK") {
+		return errorf("SHELL_MCP_APPROVAL_FALLBACK was replaced by SHELL_MCP_APPROVAL_METHOD (none, web or confirm-argument)")
 	}
-
-	rawTTL := l.get("SHELL_MCP_APPROVAL_TTL", "120")
+	if l.isSet("SHELL_MCP_APPROVERS") {
+		return errorf("SHELL_MCP_APPROVERS is not accepted: approvers live only in a mounted secret file (SHELL_MCP_APPROVERS_FILE)")
+	}
+	var err error
+	if c.ApprovalMethod, err = l.enum("SHELL_MCP_APPROVAL_METHOD", "none", "none", "web", "confirm-argument"); err != nil {
+		return err
+	}
+	rawTTL := l.get("SHELL_MCP_APPROVAL_TTL", "300")
 	ttl, err := strconv.Atoi(rawTTL)
-	if err != nil || ttl < minApprovalTTL || ttl > maxApprovalTTL {
+	if err != nil || ttl < minApprovalTTL || ttl > maxApprovalTTL || rawTTL != strconv.Itoa(ttl) {
 		return errorf("SHELL_MCP_APPROVAL_TTL must be between %d and %d seconds (got %s)", minApprovalTTL, maxApprovalTTL, rawTTL)
 	}
 	c.ApprovalTTL = time.Duration(ttl) * time.Second
+	c.ApprovalBind, c.ApprovalPort, c.ApprovalMaxApprovers = "127.0.0.1", 8081, approvers.DefaultMaxApprovers
+	switch c.ApprovalMethod {
+	case "confirm-argument":
+		l.warnf("SHELL_MCP_APPROVAL_METHOD=confirm-argument: the model approves its own requests; human approval is not enforced")
+	case "web":
+		return l.approvalWeb(c)
+	}
+	if slices.ContainsFunc(approvalWebVars, l.isSet) {
+		l.warnf("SHELL_MCP_APPROVAL_PUBLIC_URL, SHELL_MCP_APPROVERS_FILE and the other approval page settings are ignored unless SHELL_MCP_APPROVAL_METHOD=web")
+	}
 	return nil
+}
+
+// approvalWebVars are the settings that only SHELL_MCP_APPROVAL_METHOD=web
+// reads.
+var approvalWebVars = []string{
+	"SHELL_MCP_APPROVAL_BIND", "SHELL_MCP_APPROVAL_PORT", "SHELL_MCP_APPROVAL_TLS_CERT_FILE", "SHELL_MCP_APPROVAL_TLS_KEY_FILE",
+	"SHELL_MCP_APPROVAL_PUBLIC_URL", "SHELL_MCP_APPROVERS_FILE", "SHELL_MCP_APPROVAL_MAX_APPROVERS",
+	"SHELL_MCP_APPROVAL_NOTIFY_URL", "SHELL_MCP_APPROVAL_NOTIFY_TOKEN", "SHELL_MCP_APPROVAL_NOTIFY_TOKEN_FILE",
+}
+
+// approvalWeb validates the approval listener, the page's origin, the
+// approvers file and the optional notifier (docs/handoff/S4B-APPROVAL.md
+// §6.7, SECURITY §6).
+func (l *loader) approvalWeb(c *Config) error {
+	c.ApprovalBind = l.get("SHELL_MCP_APPROVAL_BIND", "127.0.0.1")
+	if _, err := netip.ParseAddr(c.ApprovalBind); err != nil {
+		return errorf("SHELL_MCP_APPROVAL_BIND must be an IP address (got %q)", c.ApprovalBind)
+	}
+	if err := l.approvalTLS(c); err != nil {
+		return err
+	}
+	var err error
+	if c.ApprovalPort, err = l.integer("SHELL_MCP_APPROVAL_PORT", 8081, 1, 65535); err != nil {
+		return err
+	}
+	if c.ApprovalPort == c.Port {
+		return errorf("SHELL_MCP_APPROVAL_PORT must differ from SHELL_MCP_PORT (both %d)", c.Port)
+	}
+	raw := l.get("SHELL_MCP_APPROVAL_PUBLIC_URL", "")
+	if raw == "" {
+		return errorf("SHELL_MCP_APPROVAL_METHOD=web requires SHELL_MCP_APPROVAL_PUBLIC_URL")
+	}
+	origin, ok := publicOrigin(raw, IsLoopbackBind(c.ApprovalBind))
+	if !ok {
+		return errorf("SHELL_MCP_APPROVAL_PUBLIC_URL must be an absolute https:// URL with no userinfo, path, query or fragment " +
+			"(http:// only with a loopback host and a loopback SHELL_MCP_APPROVAL_BIND)")
+	}
+	if c.ApprovalTLSCert != nil && !strings.HasPrefix(origin, "https://") {
+		return errorf("SHELL_MCP_APPROVAL_PUBLIC_URL must be https:// when the approval listener serves TLS")
+	}
+	c.ApprovalPublicURL = origin
+	if !IsLoopbackBind(c.ApprovalBind) && c.ApprovalTLSCert == nil && len(c.TrustedProxies) == 0 {
+		return errorf("SHELL_MCP_APPROVAL_BIND=%s is not loopback: set SHELL_MCP_APPROVAL_TLS_CERT_FILE and SHELL_MCP_APPROVAL_TLS_KEY_FILE, "+
+			"or SHELL_MCP_TRUSTED_PROXIES naming the TLS-terminating proxy", c.ApprovalBind)
+	}
+	rawMax, maxSet := l.lookup("SHELL_MCP_APPROVAL_MAX_APPROVERS")
+	if c.ApprovalMaxApprovers, err = approvers.ParseMaxApprovers(strings.TrimSpace(rawMax), maxSet); err != nil {
+		return errorf("%v", err)
+	}
+	file := l.get("SHELL_MCP_APPROVERS_FILE", "")
+	if file == "" {
+		return errorf("SHELL_MCP_APPROVAL_METHOD=web requires SHELL_MCP_APPROVERS_FILE")
+	}
+	if c.Approvers, err = approvers.Load(file, c.ApprovalMaxApprovers); err != nil {
+		return errorf("SHELL_MCP_APPROVERS_FILE: %v", err)
+	}
+	return l.approvalNotify(c)
+}
+
+// approvalTLS loads the optional native TLS pair of the approval listener.
+func (l *loader) approvalTLS(c *Config) error {
+	certFile := l.get("SHELL_MCP_APPROVAL_TLS_CERT_FILE", "")
+	keyFile := l.get("SHELL_MCP_APPROVAL_TLS_KEY_FILE", "")
+	if (certFile == "") != (keyFile == "") {
+		return errorf("SHELL_MCP_APPROVAL_TLS_CERT_FILE and SHELL_MCP_APPROVAL_TLS_KEY_FILE must be set together")
+	}
+	if certFile == "" {
+		return nil
+	}
+	const reason = "SHELL_MCP_APPROVAL_TLS_CERT_FILE / SHELL_MCP_APPROVAL_TLS_KEY_FILE: cannot load the certificate and key"
+	certPEM, err := readBounded(certFile, maxSecretFileBytes)
+	if err != nil {
+		return errorf(reason)
+	}
+	keyPEM, err := l.readSecretFile("SHELL_MCP_APPROVAL_TLS_KEY_FILE", keyFile)
+	if err != nil {
+		return errorf(reason)
+	}
+	pair, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return errorf(reason)
+	}
+	c.ApprovalTLSCert = &pair
+	return nil
+}
+
+// approvalNotify validates the optional ntfy push.
+func (l *loader) approvalNotify(c *Config) error {
+	raw := l.get("SHELL_MCP_APPROVAL_NOTIFY_URL", "")
+	if raw == "" {
+		return nil
+	}
+	if _, _, err := notify.ParseTopicURL(raw); err != nil {
+		return errorf("SHELL_MCP_APPROVAL_NOTIFY_URL: %v", err)
+	}
+	tok, ok, err := l.secret("SHELL_MCP_APPROVAL_NOTIFY_TOKEN")
+	if err != nil {
+		return err
+	}
+	if !ok || strings.TrimSpace(tok) == "" {
+		return errorf("SHELL_MCP_APPROVAL_NOTIFY_URL requires SHELL_MCP_APPROVAL_NOTIFY_TOKEN or SHELL_MCP_APPROVAL_NOTIFY_TOKEN_FILE")
+	}
+	c.ApprovalNotifyURL, c.ApprovalNotifyToken = raw, Secret{v: strings.TrimSpace(tok)}
+	return nil
+}
+
+// maxPublicURL bounds SHELL_MCP_APPROVAL_PUBLIC_URL, so the approval_pending
+// message that carries it stays within an error message's bound.
+const maxPublicURL = 200
+
+// publicOrigin checks SHELL_MCP_APPROVAL_PUBLIC_URL and returns its origin
+// in lower case without a trailing slash: an absolute https:// URL (http://
+// only for a loopback host with a loopback bind) with no userinfo, path
+// other than /, query or fragment, and a port, when given, of 1..65535.
+func publicOrigin(raw string, loopbackBind bool) (string, bool) {
+	if len(raw) > maxPublicURL {
+		return "", false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" ||
+		(u.Path != "" && u.Path != "/") || u.Hostname() == "" {
+		return "", false
+	}
+	if p := u.Port(); p != "" {
+		n, perr := strconv.Atoi(p)
+		if perr != nil || n < 1 || n > 65535 || strconv.Itoa(n) != p {
+			return "", false
+		}
+	}
+	host := strings.ToLower(u.Hostname())
+	switch u.Scheme {
+	case "https":
+	case "http":
+		ip, perr := netip.ParseAddr(host)
+		if !loopbackBind || host != "localhost" && (perr != nil || !ip.IsLoopback()) {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+	return u.Scheme + "://" + strings.ToLower(u.Host), true
 }
 
 func tierOrder(t string) int {
@@ -489,9 +694,14 @@ func (l *loader) buildTarget(ft *fileTarget, sharedKey *PrivateKey) (Target, err
 	if len(ft.HostKeys) > 16 {
 		return Target{}, errorf("%s: at most 16 pinned host keys", id)
 	}
-	for _, fp := range ft.HostKeys {
-		if !ValidFingerprint(fp) {
-			return Target{}, errorf("%s: host key %q is not a SHA256:<base64> fingerprint", id, fp)
+	pins := make([]HostKey, 0, len(ft.HostKeys))
+	for _, raw := range ft.HostKeys {
+		pin, ok := ParseHostKeyPin(raw)
+		if !ok {
+			return Target{}, errorf("%s: host key %q %s", id, raw, HostKeyPinFormat)
+		}
+		if !slices.Contains(pins, pin) {
+			pins = append(pins, pin)
 		}
 	}
 
@@ -510,7 +720,7 @@ func (l *loader) buildTarget(ft *fileTarget, sharedKey *PrivateKey) (Target, err
 	}
 	return Target{
 		Name: ft.Name, Host: ft.Host, Port: ft.Port, User: ft.User,
-		HostKeys: slices.Clone(ft.HostKeys), Key: key,
+		HostKeys: pins, Key: key,
 	}, nil
 }
 
@@ -522,14 +732,16 @@ func validHost(h string) bool {
 }
 
 // ValidFingerprint reports whether fp is an OpenSSH SHA-256 fingerprint:
-// "SHA256:" followed by the unpadded standard base64 of 32 bytes.
+// "SHA256:" followed by the unpadded standard base64 of 32 bytes, in its
+// canonical form (the decoder skips \r and \n, so the value must also
+// re-encode to itself).
 func ValidFingerprint(fp string) bool {
 	b64, ok := strings.CutPrefix(fp, "SHA256:")
 	if !ok {
 		return false
 	}
 	raw, err := base64.RawStdEncoding.Strict().DecodeString(b64)
-	return err == nil && len(raw) == 32
+	return err == nil && len(raw) == 32 && base64.RawStdEncoding.EncodeToString(raw) == b64
 }
 
 func (l *loader) sharedKey() (*PrivateKey, error) {
@@ -720,4 +932,52 @@ func lowerList(s string) []string {
 		items[i] = strings.ToLower(items[i])
 	}
 	return items
+}
+
+// trustedProxies parses SHELL_MCP_TRUSTED_PROXIES: a comma list of IP
+// addresses (one host) or CIDR prefixes in canonical form. Empty (the
+// default) means X-Forwarded-For is never used. The old boolean
+// SHELL_MCP_TRUST_PROXY is refused, so a configuration that relied on it
+// fails loudly instead of silently dropping the proxy.
+func (l *loader) trustedProxies() ([]netip.Prefix, error) {
+	if l.isSet("SHELL_MCP_TRUST_PROXY") {
+		return nil, errorf("SHELL_MCP_TRUST_PROXY was replaced by SHELL_MCP_TRUSTED_PROXIES: a comma list of the proxies' IP addresses or CIDR prefixes (empty: X-Forwarded-For is never used)")
+	}
+	entries := splitList(l.get("SHELL_MCP_TRUSTED_PROXIES", ""))
+	if len(entries) > maxListItems {
+		return nil, errorf("SHELL_MCP_TRUSTED_PROXIES: at most %d entries", maxListItems)
+	}
+	out := make([]netip.Prefix, 0, len(entries))
+	for _, e := range entries {
+		p, reason := parseProxy(e)
+		if reason != "" {
+			return nil, errorf("SHELL_MCP_TRUSTED_PROXIES: %q %s", e, reason)
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+func parseProxy(e string) (p netip.Prefix, reason string) {
+	if !strings.Contains(e, "/") {
+		a, err := netip.ParseAddr(e)
+		if err != nil || a.Zone() != "" {
+			return netip.Prefix{}, "is not an IP address or CIDR prefix (for example 192.0.2.10 or 192.0.2.0/24)"
+		}
+		a = a.Unmap()
+		return netip.PrefixFrom(a, a.BitLen()), ""
+	}
+	p, err := netip.ParsePrefix(e)
+	switch {
+	case err != nil:
+		return netip.Prefix{}, "is not an IP address or CIDR prefix (for example 192.0.2.10 or 192.0.2.0/24)"
+	case p.Bits() == 0:
+		return netip.Prefix{}, "would trust every address; list the proxies' own addresses"
+	case p.Masked() != p:
+		return netip.Prefix{}, fmt.Sprintf("has host bits set; the prefix is %s", p.Masked())
+	}
+	if p.Addr().Is4In6() {
+		return netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96), ""
+	}
+	return p, ""
 }

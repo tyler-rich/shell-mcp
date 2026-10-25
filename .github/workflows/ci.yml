@@ -17,17 +17,40 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GOLANGCI_LINT_VERSION: v2.14.0
-  GOVULNCHECK_VERSION: v1.8.0
-  TRIVY_VERSION: v0.74.0
-  GRYPE_VERSION: v0.119.0
+  GOLANGCI_LINT_VERSION: v2.15.0
+  GOVULNCHECK_VERSION: v1.9.0
+  TRIVY_VERSION: v0.76.1
+  GRYPE_VERSION: v0.121.0
   GOTOOLCHAIN: local
 
 jobs:
   go:
-    name: go (fmt, vet, lint, test, vuln, build)
-    runs-on: ubuntu-latest
+    # Two pinned runner images, one per all-thread Landlock path: below ABI 8
+    # go-landlock applies no_new_privs and landlock_restrict_self on every
+    # thread through libcap/psx (the production path on Debian 13, ABI 6);
+    # from ABI 8 it uses LANDLOCK_RESTRICT_SELF_TSYNC. ubuntu-24.04 runners
+    # now report ABI 7 or ABI 8, so the psx entry runs its tests as the
+    # landlock_forcepsx test build: the sandbox plans as at ABI 7 and applies
+    # through psx on either kernel (internal/gate/sandbox/threadpath_forcepsx.go;
+    # never released, scripts/release-binary-check.sh). The tsync entry also
+    # runs the sandbox and gate tests under that tag, on its ABI 8 kernel.
+    # Each entry requires its ABI, so the kernel-dependent tests fail rather
+    # than skip, and asserts which path it took.
+    name: go (fmt, vet, lint, test, vuln, build) — ${{ matrix.image }}, Landlock ABI ${{ matrix.abi }} (${{ matrix.path }}${{ matrix.tags && ', forced' || '' }})
+    runs-on: ${{ matrix.image }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu-24.04
+            abi: "7"
+            path: psx
+            tags: landlock_forcepsx
+          - image: ubuntu-26.04
+            abi: "8"
+            path: tsync
+            tags: ""
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,18 +58,136 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+      # The gate refuses fixtures whose parent directories are group/other-
+      # writable, and the default /tmp is world-writable: give the tests a
+      # private TMPDIR under $HOME.
+      - name: private TMPDIR
+        run: |
+          d="$HOME/.shell-mcp-tmp"
+          mkdir -p "$d" && chmod 0700 "$d"
+          ls -ld / /home "$HOME" "$d"
+          echo "TMPDIR=$d" >> "$GITHUB_ENV"
       - name: gofmt
         run: |
           out="$(gofmt -l .)"
           if [ -n "$out" ]; then echo "gofmt: files need formatting:"; echo "$out"; exit 1; fi
       - name: go vet
-        run: go vet ./...
+        run: |
+          go vet ./...
+          # Files built only with a tag: the e2e suite, the helper's e2e
+          # bypass build, the server's elicitation diagnostic build, the
+          # Landlock forced-psx test build, the gate's git-configuration
+          # hook build and fsx's read-confinement hook build (none ever
+          # released).
+          go vet -tags e2e ./test/e2e/
+          go vet -tags shellmcp_e2e_bypass ./internal/privd/... ./cmd/shell-mcp-privd/
+          go vet -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/
+          go vet -tags landlock_forcepsx ./...
+          go vet -tags shellmcp_gitconfig_hook ./internal/gate/... ./cmd/shell-mcp-gate/
+          go vet -tags shellmcp_confine_hook ./internal/gate/... ./internal/privd/... ./cmd/shell-mcp-gate/ ./cmd/shell-mcp-privd/
       - name: golangci-lint
         uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: ${{ env.GOLANGCI_LINT_VERSION }}
+      - name: golangci-lint (e2e, bypass, diagnostic, forced-psx, git-configuration and read-confinement hook build tags)
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          args: --build-tags=e2e,shellmcp_e2e_bypass,shellmcp_diag,landlock_forcepsx,shellmcp_gitconfig_hook,shellmcp_confine_hook
+      # SHELL_MCP_REQUIRE_SECURE_TMP: tests fail (never skip) without a
+      # trustworthy TMPDIR. SHELL_MCP_REQUIRE_LANDLOCK_ABI: each entry's
+      # kernel ABI, so every sandbox test up to it (network rules from 4,
+      # signal and abstract-socket scoping from 8) must run and fail rather
+      # than skip. SHELL_MCP_EXPECT_LANDLOCK_PATH: the all-thread path this
+      # entry must take (TestLandlockThreadPath, which reads it from a binary
+      # built like the gate). TEST_TAGS: the entry's build tags; the tests
+      # pass them on to the binaries they build (gatetest).
       - name: go test -race
-        run: go test -race -count=1 ./...
+        env:
+          SHELL_MCP_REQUIRE_SECURE_TMP: "1"
+          SHELL_MCP_REQUIRE_LANDLOCK_ABI: ${{ matrix.abi }}
+          SHELL_MCP_EXPECT_LANDLOCK_PATH: ${{ matrix.path }}
+          TEST_TAGS: ${{ matrix.tags }}
+          # The runner's kernel supports MPTCP: the MPTCP tests' control case
+          # (a socket opened without the filter) must succeed here, or fail.
+          SHELL_MCP_REQUIRE_MPTCP: "1"
+        run: |
+          go test -race -timeout 20m -count=1 -v -tags "$TEST_TAGS" ./... 2>&1 | tee /tmp/go-test.log
+          test "${PIPESTATUS[0]}" -eq 0
+      # The forced-psx build on an ABI 8 kernel, every run: the psx entry's
+      # runner may have ABI 7 or 8. Only an ABI 8 kernel shows that the forced
+      # build requests nothing above ABI 7 (it would accept scoping silently)
+      # and still enforces, so the step fails unless the kernel reported 8+.
+      - name: go test -race (landlock_forcepsx on this ABI 8 kernel)
+        if: matrix.tags == ''
+        env:
+          SHELL_MCP_REQUIRE_SECURE_TMP: "1"
+          SHELL_MCP_REQUIRE_LANDLOCK_ABI: "7"
+          SHELL_MCP_EXPECT_LANDLOCK_PATH: psx
+          SHELL_MCP_REQUIRE_MPTCP: "1"
+        run: |
+          go test -race -timeout 20m -count=1 -v -tags landlock_forcepsx ./internal/gate/sandbox/ ./cmd/shell-mcp-gate/ 2>&1 | tee /tmp/go-test-forcepsx.log
+          test "${PIPESTATUS[0]}" -eq 0
+          grep -E 'LANDLOCK_PATH=psx kernel_abi=([89]|[1-9][0-9]) effective_abi=7' /tmp/go-test-forcepsx.log ||
+            { echo "the forced-psx build did not run on a kernel at Landlock ABI 8 or above" >&2; exit 1; }
+      # The end-to-end test build skips fsx's forbidden-root check, so these
+      # tests prove the built-in read deny list refuses on its own.
+      - name: go test -race (test build, fsx)
+        env:
+          SHELL_MCP_REQUIRE_SECURE_TMP: "1"
+        run: go test -race -timeout 20m -count=1 -v -tags shellmcp_e2e_bypass ./internal/gate/fsx/
+      # The gate's git-configuration hook build changes a repository's
+      # configuration between the gate's check and its next git process, so
+      # these tests prove git then runs nothing that configuration names
+      # (handoff N-20). Never released (scripts/release-binary-check.sh).
+      - name: go test -race (git-configuration hook build, gate ops)
+        env:
+          SHELL_MCP_REQUIRE_SECURE_TMP: "1"
+        run: |
+          git --version
+          go test -race -timeout 20m -count=1 -v -tags shellmcp_gitconfig_hook -run 'TestGitConfigChangedAfterCheck|TestProductionOptionsHaveNoGitConfigHook' ./internal/gate/ops/
+      # fsx's read-confinement hook build turns off one of the three layers
+      # that keep a lookup in its root at a time, so these tests prove which
+      # layer refuses a swapped path when another is gone (handoff N-12).
+      # Never released (scripts/release-binary-check.sh).
+      - name: go test -race (read-confinement hook build, fsx)
+        env:
+          SHELL_MCP_REQUIRE_SECURE_TMP: "1"
+        run: go test -race -timeout 20m -count=1 -v -tags shellmcp_confine_hook -run 'TestConfineLayers' ./internal/gate/fsx/
+      # The end-to-end entry points refuse to run anywhere but a GitHub-hosted
+      # runner, before doing anything (each case runs under env -i, so this
+      # runner's own variables do not leak in).
+      - name: e2e runner-only guards
+        run: |
+          CGO_ENABLED=0 go test -c -trimpath -tags e2e -o "$RUNNER_TEMP/e2e.test" ./test/e2e
+          E2E_TEST_BIN="$RUNNER_TEMP/e2e.test" bash test/e2e/guard_test.sh
+      # The elicitation diagnostic build (shellmcp_diag): built and tested
+      # here so the maintainer's local diagnostic works; never released.
+      - name: go test -race (diagnostic build, server)
+        env:
+          SHELL_MCP_REQUIRE_SECURE_TMP: "1"
+        run: |
+          go test -race -timeout 20m -count=1 -v -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -tags shellmcp_diag -o /tmp/shell-mcp-diag.exe ./cmd/shell-mcp
+      # Kernel-dependent tests, listed so that a skip is visible, with the
+      # all-thread Landlock path this entry exercised.
+      - name: sandbox tests that ran on this runner
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.image }}: kernel $(uname -r)"
+            echo "- build tags: ${{ matrix.tags || 'none (release build)' }}"
+            echo "- Landlock path exercised: $(grep -o 'LANDLOCK_PATH=[a-z]* kernel_abi=[0-9]* effective_abi=[0-9]*' /tmp/go-test.log | head -n1) (expected ${{ matrix.path }}, ABI ${{ matrix.abi }})"
+            echo '```'
+            grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|AddPath|LandlockThreadPath|ThreadPathDecision|Integration(Sandbox|Swap|ExecLimits|GitPull|ServiceOps|SystemOps)|RequiredRefused|BestEffort)' /tmp/go-test.log || true
+            echo '```'
+            if [ -f /tmp/go-test-forcepsx.log ]; then
+              echo "- landlock_forcepsx on this kernel: $(grep -o 'LANDLOCK_PATH=[a-z]* kernel_abi=[0-9]* effective_abi=[0-9]*' /tmp/go-test-forcepsx.log | head -n1) (expected psx, kernel ABI 8+, planned 7)"
+              echo '```'
+              grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|AddPath|LandlockThreadPath|ThreadPathDecision|IntegrationSandbox)' /tmp/go-test-forcepsx.log || true
+              echo '```'
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: govulncheck
         run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
       - name: cross-build (linux/amd64, linux/arm64)
@@ -54,7 +195,11 @@ jobs:
           for arch in amd64 arm64; do
             for c in shell-mcp shell-mcp-gate shell-mcp-privd; do
               CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -ldflags '-s -w' -o "/tmp/$c-$arch" "./cmd/$c"
-              echo "built $c linux/$arch"
+              # CGO_ENABLED=0 (psx then uses syscall.AllThreadsSyscall), and
+              # none of the test-only builds (e2e bypass, diagnostic,
+              # Landlock forced-psx).
+              bash scripts/release-binary-check.sh "/tmp/$c-$arch"
+              echo "built $c linux/$arch (CGO_ENABLED=0)"
             done
           done
 
@@ -73,6 +218,17 @@ jobs:
         run: bash scripts/deps-current.sh
       - name: deps-current self-test
         run: bash scripts/deps-current_test.sh
+      # The release check against release builds and each test-only build.
+      - name: release-binary-check self-test
+        run: bash scripts/release-binary-check_test.sh
+      # The release scripts' refusals: tag and version formats, the CHANGELOG
+      # section, the CI and CodeQL checks a release needs (offline).
+      - name: release scripts self-test
+        run: bash scripts/release/release_test.sh
+      # ci-local against a fake docker: it may label, list, stop and remove
+      # only its own containers. No container is started here.
+      - name: ci-local self-test
+        run: bash scripts/ci-local_test.sh
 
   gitleaks:
     name: gitleaks
@@ -107,6 +263,16 @@ jobs:
         run: |
           docker run --rm shell-mcp:ci version
           test "$(docker image inspect shell-mcp:ci --format '{{.Config.User}}')" = "65532:65532"
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # The image's binary is a release build too: no test-only tag or code.
+      - name: image binary is a release build
+        run: |
+          id="$(docker create shell-mcp:ci)"
+          docker cp "$id:/shell-mcp" "$RUNNER_TEMP/shell-mcp-image"
+          docker rm "$id" >/dev/null
+          bash scripts/release-binary-check.sh "$RUNNER_TEMP/shell-mcp-image"
       - name: Trivy
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -150,7 +316,7 @@ jobs:
             echo "- kernel: $(uname -r)"
             echo "- runner: $( { go build -o /tmp/landlock-probe ./scripts/probe/landlock && /tmp/landlock-probe; } 2>&1 | tail -n1 || true)"
             echo "- golang container: $(docker run --rm -v "$PWD:/src:ro" -w /src -e GOFLAGS=-buildvcs=false -e HOME=/tmp -u 65532:65532 \
-                "$(awk 'toupper($1) == "FROM" && $2 ~ /^golang:/ { print $2; exit }' Dockerfile)" \
+                "$(awk 'toupper($1) == "FROM" { for (i = 2; i <= NF; i++) if ($i ~ /^golang:/) { print $i; exit } }' Dockerfile)" \
                 sh -c 'GOCACHE=/tmp/c GOMODCACHE=/tmp/m go run ./scripts/probe/landlock' 2>&1 | tail -n1 || true)"
             echo "- systemd probe:"
             echo '```'
@@ -158,10 +324,116 @@ jobs:
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
+  e2e-host:
+    # End-to-end tests of the gate and the privileged helper against the
+    # runner VM's own systemd, journald and polkit (the runner's Docker
+    # cannot boot a systemd container: S0 probes). This is the only job that
+    # uses sudo (CLAUDE.md exception): a GitHub-hosted runner, no secrets,
+    # read-only token, pull_request and push only. It creates invented test
+    # accounts and installs units on a VM that is discarded afterwards.
+    name: e2e-host (systemd, journald, polkit on the runner VM)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    env:
+      # The core unit's measured score on this image (ARCHIVE §14, S1d; S1c was
+      # 1.6): the job fails if systemd-analyze security rates it worse. The
+      # broad unit's score is recorded, not enforced (root-equivalent by design).
+      E2E_SECURITY_MAX: "1.4"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: build the binaries and the e2e suite (CGO_ENABLED=0)
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          out="$RUNNER_TEMP/e2e-bin"
+          mkdir -p "$out"
+          go build -trimpath -o "$out/shell-mcp" ./cmd/shell-mcp
+          go build -trimpath -o "$out/shell-mcp-gate" ./cmd/shell-mcp-gate
+          go build -trimpath -o "$out/shell-mcp-privd" ./cmd/shell-mcp-privd
+          go build -trimpath -tags shellmcp_e2e_bypass -o "$out/shell-mcp-privd-bypass" ./cmd/shell-mcp-privd
+          go build -trimpath -ldflags "-X main.outside=/etc/example-other/secret.txt" -o "$out/example-probe" ./internal/gate/gatetest/testdata/probe
+          go test -c -trimpath -tags e2e -o "$out/e2e.test" ./test/e2e
+          chmod 0755 "$out"/*
+      - name: runner facts
+        run: |
+          {
+            echo "### e2e-host runner"
+            echo "- image: ubuntu-26.04, kernel $(uname -r)"
+            echo "- $(systemctl --version | head -n1)"
+            echo "- landlock: $(go run ./scripts/probe/landlock 2>&1 | tail -n1)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: install polkitd and openssh-server (if the image lacks them)
+        run: |
+          missing=""
+          test -x /usr/lib/polkit-1/polkitd || missing="$missing polkitd"
+          test -x /usr/sbin/sshd || missing="$missing openssh-server"
+          if [ -n "$missing" ]; then
+            sudo apt-get update
+            # shellcheck disable=SC2086 # one package per word
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends $missing
+          fi
+          echo "- polkit: $(dpkg-query -W -f='${Package} ${Version}' polkitd)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- OpenSSH (server tests): $(/usr/sbin/sshd -V 2>&1 | head -n1)" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: setup (as root)
+        run: |
+          sudo install -d -o root -g root -m 0755 /opt/e2e-bin
+          sudo install -o root -g root -m 0755 "$RUNNER_TEMP"/e2e-bin/* /opt/e2e-bin/
+          # sudo resets the environment: pass the runner's own GITHUB_ACTIONS
+          # and RUNNER_ENVIRONMENT through, for the runner-only guards of
+          # setup.sh and the e2e test binary.
+          sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" E2E_BIN=/opt/e2e-bin E2E_LANDLOCK=required bash test/e2e/setup.sh
+      - name: e2e tests (as root; nothing may skip)
+        run: |
+          sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+            E2E_BIN=/opt/e2e-bin E2E_REQUIRE_ALL=1 E2E_SECURITY_MAX="$E2E_SECURITY_MAX" \
+            /opt/e2e-bin/e2e.test -test.v -test.count=1 2>&1 | tee "$RUNNER_TEMP/e2e.log"
+          test "${PIPESTATUS[0]}" -eq 0
+      - name: summary (every test must have run and passed)
+        if: always()
+        run: |
+          log="$RUNNER_TEMP/e2e.log"
+          table="$RUNNER_TEMP/e2e-summary.md"
+          touch "$log"
+          sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+            /opt/e2e-bin/e2e.test -test.list '.*' | grep '^Test' >"$RUNNER_TEMP/e2e.tests"
+          # An empty list (a refused or broken binary) must fail, not pass.
+          test -s "$RUNNER_TEMP/e2e.tests" || { echo "no e2e tests listed" >&2; exit 1; }
+          fail=0
+          {
+            echo "### e2e-host tests"
+            echo "| test | result |"
+            echo "|---|---|"
+          } >"$table"
+          while read -r t; do
+            r="$(grep -E -- "^--- (PASS|FAIL|SKIP): $t " "$log" | head -n1 | awk '{print $2}' | tr -d ':')"
+            [ -n "$r" ] || r="NOT RUN"
+            [ "$r" = PASS ] || fail=1
+            echo "| $t | $r |" >>"$table"
+          done <"$RUNNER_TEMP/e2e.tests"
+          grep -o 'E2E_EXPOSURE=[0-9.]*' "$log" | sed 's/^E2E_EXPOSURE=/- systemd-analyze security exposure (core unit): /' >>"$table" || true
+          grep -o 'E2E_EXPOSURE_BROAD=[0-9.]*' "$log" | sed 's/^E2E_EXPOSURE_BROAD=/- systemd-analyze security exposure (broad unit, root-equivalent by design, information only): /' >>"$table" || true
+          echo "- threshold (E2E_SECURITY_MAX): $E2E_SECURITY_MAX" >>"$table"
+          tee -a "$GITHUB_STEP_SUMMARY" <"$table"
+          if grep -qE -- '--- (SKIP|FAIL)' "$log"; then fail=1; fi
+          exit "$fail"
+      - name: journal (on failure)
+        if: failure()
+        run: |
+          sudo journalctl --no-pager -n 100 -t shell-mcp-privd -t shell-mcp-gate || true
+          sudo journalctl --no-pager -n 60 -u 'shell-mcp-privd@*' -u polkit.service || true
+          systemctl --failed --no-pager || true
+
   ci:
     name: ci
     if: always()
-    needs: [go, deps-current, gitleaks, image]
+    needs: [go, deps-current, gitleaks, image, e2e-host]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
