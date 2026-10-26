@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
@@ -26,6 +27,7 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/polkit"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
+	"github.com/tyler-rich/shell-mcp/internal/template"
 )
 
 // Set with -ldflags "-X main.version=… -X main.commit=…".
@@ -185,6 +187,9 @@ func polkitWith(args []string, stdout, stderr io.Writer, trust policy.Trust) int
 var (
 	probeNoReplace = fsx.ProbeNoReplace
 	probeExchange  = fsx.ProbeExchange
+	// devFDPath is where commands reopen a {path:read:fd}; tests replace
+	// it.
+	devFDPath = "/dev/fd"
 )
 
 func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust, home string) int {
@@ -250,9 +255,23 @@ func checkPolicyWithParam(args []string, stdout, stderr io.Writer, trust policy.
 		}
 	} else {
 		pr("ok   policy: sha256 %s, max_tier %s, %d commands", p.SHA256, p.MaxTier, len(p.Commands))
+		usesFD := false
 		for i := range p.Commands {
 			if c := &p.Commands[i]; c.Applet != "" {
 				pr("ok   commands[%s]: %s is the uutils multi-call binary; it runs as %s (the name of the file it is executed by)", c.ID, c.Resolved, c.Applet)
+			}
+			if c := &p.Commands[i]; slices.ContainsFunc(c.Templates, template.Template.UsesPathReadFD) {
+				usesFD = true
+				pr("ok   commands[%s]: {path:read:fd} is passed as the gate's open descriptor (/dev/fd/4 and up, in template order); "+
+					"POLICY §4 lists the programs that give wrong results with one", c.ID)
+			}
+		}
+		// A command reopens a {path:read:fd} through /dev/fd (handoff N-22).
+		if usesFD {
+			if w := devFDWarning(devFDPath); w != "" {
+				pr("WARN %s", w)
+			} else {
+				pr("ok   %s: a link to /proc/self/fd, through which commands reopen a {path:read:fd}", devFDPath)
 			}
 		}
 		for _, w := range p.Warnings {
@@ -360,6 +379,18 @@ func gitRefusal(repo string, err error) string {
 	}
 	msg := strings.TrimPrefix(fe.Msg, fmt.Sprintf("git is not run in the repository %q: ", repo))
 	return strings.TrimSuffix(msg, "; nothing was run")
+}
+
+// devFDWarning is check-policy's warning when p (/dev/fd) is not the link
+// to /proc/self/fd through which a command reopens a {path:read:fd}, or "".
+func devFDWarning(p string) string {
+	switch t, err := os.Readlink(p); {
+	case err != nil:
+		return fmt.Sprintf("%s: cannot be read as a symlink (%v); a command given a {path:read:fd} cannot reopen it as /dev/fd/N", p, err)
+	case t != "/proc/self/fd":
+		return fmt.Sprintf("%s: is a link to %q, not /proc/self/fd; a command given a {path:read:fd} cannot reopen it as /dev/fd/N", p, t)
+	}
+	return ""
 }
 
 // rlimitDataWarning is check-policy's warning about the kernel's

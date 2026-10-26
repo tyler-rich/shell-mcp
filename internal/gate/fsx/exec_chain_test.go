@@ -31,7 +31,7 @@ type execChainEnv struct {
 
 // newExecChainEnv makes <d>/x/w, a read and write root under its own
 // ancestor <d>/x (both 0755), with the helper's settings.
-func newExecChainEnv(t *testing.T) *execChainEnv {
+func newExecChainEnv(t testing.TB) *execChainEnv {
 	t.Helper()
 	d := gatetest.SecureDir(t)
 	e := &execChainEnv{d: d, anc: filepath.Join(d, "x"), root: filepath.Join(d, "x", "w")}

@@ -62,12 +62,12 @@ func TestForwardSignalsHangupAndWaits(t *testing.T) {
 		mu.Lock()
 		ended = time.Now()
 		mu.Unlock()
-		_, _ = c.Write([]byte(`{"v":1,"id":"` + idOf(req) + `","ok":false,"error":{"code":"outcome_unknown","message":"the command was stopped"},"warnings":[],` +
+		_, _ = c.Write([]byte(`{"v":2,"id":"` + idOf(req) + `","ok":false,"error":{"code":"outcome_unknown","message":"the command was stopped"},"warnings":[],` +
 			`"gate":{"version":"h1","principal":"shell-mcp-privd","policy_sha256":"beef","max_tier":"destructive","unit":"core","duration_ms":1}}` + "\n"))
 	})
 	f.opts.HelperGrace = 2 * time.Second
 	start := time.Now()
-	r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"operator","op":"priv_exec","args":{"command_id":"probe-sleep"},"timeout_ms":300}` + "\n")
+	r, _ := f.serveRaw(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"operator","op":"priv_exec","args":{"command_id":"probe-sleep"},"timeout_ms":300}` + "\n")
 	answered := time.Now()
 	mu.Lock()
 	h, e := hungUp, ended
@@ -97,8 +97,8 @@ func TestForwardOutcomeUnknown(t *testing.T) {
 		"silent":      func(_ string, c net.Conn) { waitHangup(c, 5*time.Second); time.Sleep(3 * time.Second) },
 		"closed":      func(string, net.Conn) {},
 		"unreadable":  reply("nope\n"),
-		"another id":  reply(`{"v":1,"id":"0b5c0000-0000-4000-8000-00000000000f","ok":true,"warnings":[]}` + "\n"),
-		"no id on ok": reply(`{"v":1,"id":"","ok":true,"warnings":[]}` + "\n"),
+		"another id":  reply(`{"v":2,"id":"0b5c0000-0000-4000-8000-00000000000f","ok":true,"warnings":[]}` + "\n"),
+		"no id on ok": reply(`{"v":2,"id":"","ok":true,"warnings":[]}` + "\n"),
 	}
 	readCodes := map[string]string{"silent": "timeout", "closed": "helper_refused", "unreadable": "helper_unavailable", "another id": "helper_unavailable", "no id on ok": "helper_unavailable"}
 	for _, c := range []struct {
@@ -119,7 +119,7 @@ func TestForwardOutcomeUnknown(t *testing.T) {
 				f := newFixture(t, "destructive")
 				startHelper(t, f, answer)
 				f.opts.HelperGrace = 600 * time.Millisecond
-				r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"` + c.ceiling + `","op":"` + c.op + `","args":` + c.args + `,"timeout_ms":300}` + "\n")
+				r, _ := f.serveRaw(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"` + c.ceiling + `","op":"` + c.op + `","args":` + c.args + `,"timeout_ms":300}` + "\n")
 				want := readCodes[name]
 				if c.mayChange {
 					want = "outcome_unknown"
@@ -141,7 +141,7 @@ func TestPrivMayChangeMatchesTiers(t *testing.T) {
 	for _, op := range protocol.PrivOps {
 		f := newFixture(t, "read")
 		f.writePolicy("read", "privileged:\n  enabled: true\n  socket: /run/shell-mcp/privd.sock\n  max_tier: read\n")
-		r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"` + op + `","args":{},"timeout_ms":300}` + "\n")
+		r, _ := f.serveRaw(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"` + op + `","args":{},"timeout_ms":300}` + "\n")
 		readTier := r.Error == nil || r.Error.Code != "tier_denied"
 		if op == protocol.OpPrivPowerCancel {
 			if !readTier {

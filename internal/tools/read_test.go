@@ -101,14 +101,14 @@ func (g *recordingGate) exec(_ context.Context, s *sshtest.Session) uint32 {
 	}
 	if r.code != "" {
 		// A gate's refusal carries its own block, as a success does.
-		_, _ = fmt.Fprintf(s.Stdout, `{"v":1,"id":%q,"ok":false,"error":{"code":%q,"message":%q},"warnings":[],"gate":%s%s}`+"\n", id, r.code, r.msg, gate, helper)
+		_, _ = fmt.Fprintf(s.Stdout, `{"v":2,"id":%q,"ok":false,"error":{"code":%q,"message":%q},"warnings":[],"gate":%s%s}`+"\n", id, r.code, r.msg, gate, helper)
 		return 0
 	}
 	var one bytes.Buffer
 	if err := json.Compact(&one, []byte(r.data)); err != nil {
 		panic(fmt.Sprintf("fake gate data for %s is not JSON: %v", req.Op, err))
 	}
-	_, _ = fmt.Fprintf(s.Stdout, `{"v":1,"id":%q,"ok":true,"data":%s,"warnings":%s,"gate":%s%s}`+"\n", id, one.String(), warn, gate, helper)
+	_, _ = fmt.Fprintf(s.Stdout, `{"v":2,"id":%q,"ok":true,"data":%s,"warnings":%s,"gate":%s%s}`+"\n", id, one.String(), warn, gate, helper)
 	return 0
 }
 

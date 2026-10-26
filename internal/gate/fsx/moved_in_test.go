@@ -65,7 +65,7 @@ func (e *movedEnv) newFS(t *testing.T, root string, trustTest, guard bool) *FS {
 }
 
 // mkdirMode makes p with exactly mode (the umask cleared by a chmod).
-func mkdirMode(t *testing.T, p string, mode os.FileMode) {
+func mkdirMode(t testing.TB, p string, mode os.FileMode) {
 	t.Helper()
 	must(t, os.MkdirAll(p, 0o700))
 	must(t, os.Chmod(p, mode))
@@ -76,7 +76,7 @@ func mkdirMode(t *testing.T, p string, mode os.FileMode) {
 // and sticky bits: os.Chmod takes the special bits only as os.ModeSetuid,
 // os.ModeSetgid and os.ModeSticky and drops raw octal ones (0o1777 sets
 // 0777), so a fixture written that way is not what its test says.
-func exactMode(t *testing.T, p string, mode os.FileMode) {
+func exactMode(t testing.TB, p string, mode os.FileMode) {
 	t.Helper()
 	const bits = os.ModePerm | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
 	fi, err := os.Lstat(p)
@@ -87,7 +87,7 @@ func exactMode(t *testing.T, p string, mode os.FileMode) {
 }
 
 // putMode writes p with exactly mode.
-func putMode(t *testing.T, p, s string, mode os.FileMode) {
+func putMode(t testing.TB, p, s string, mode os.FileMode) {
 	t.Helper()
 	must(t, os.WriteFile(p, []byte(s), 0o600))
 	must(t, os.Chmod(p, mode))

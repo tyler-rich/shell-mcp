@@ -813,7 +813,7 @@
     },
     "description": "Runs, as root, a command declared in the host's privileged policy with arguments matching one of its templates, exactly as its preview resolved it and in the unit it named, and returns its exit status and redacted, size-capped output.",
     "input_schema_sha256": "7eae8e2352e326a9d9bca7735b2dddb2ef222a748f1f1d6f291076fa9df0e3e1",
-    "output_schema_sha256": "902ef605c4c66f3dafc616c51ea84be4dc924f3a23a42fbee5d93d6921f631e6",
+    "output_schema_sha256": "0111e607580b4f7aec40dd1851170909157587c89fa8d22fd0c6f8c07189da49",
     "requires_user_interaction": true
   },
   {
@@ -955,7 +955,7 @@
     },
     "description": "Runs a read- or operator-tier command declared in the target policy with arguments matching one of its templates and optional standard input, and returns its exit status and redacted, size-capped output.",
     "input_schema_sha256": "a276977466e287aa0f695f47312080c93477de0408e80e5621281eb2fb0abc6c",
-    "output_schema_sha256": "902ef605c4c66f3dafc616c51ea84be4dc924f3a23a42fbee5d93d6921f631e6",
+    "output_schema_sha256": "0111e607580b4f7aec40dd1851170909157587c89fa8d22fd0c6f8c07189da49",
     "requires_user_interaction": false
   },
   {
@@ -975,7 +975,7 @@
     },
     "description": "Runs a read-, operator- or destructive-tier command declared in the target policy with arguments matching one of its templates and optional standard input, exactly as its approved preview resolved it, and returns its exit status and redacted, size-capped output.",
     "input_schema_sha256": "2b13f0545e9257fe5de4233e551977174d7f6a9b379633863597b7dac393cd4f",
-    "output_schema_sha256": "902ef605c4c66f3dafc616c51ea84be4dc924f3a23a42fbee5d93d6921f631e6",
+    "output_schema_sha256": "0111e607580b4f7aec40dd1851170909157587c89fa8d22fd0c6f8c07189da49",
     "requires_user_interaction": true
   },
   {
@@ -997,7 +997,7 @@
     },
     "description": "Runs a read-tier command declared in the target policy with arguments matching one of its templates, and returns its exit status and redacted, size-capped output.",
     "input_schema_sha256": "590715efe716d349a69a5f0214a3312c08d76f9f6b018d00c7475b4a75fbe483",
-    "output_schema_sha256": "0f128ad826c1b9e1c1532826832e027902534bda0837da3890c3b77173a51636",
+    "output_schema_sha256": "f2f6858c28d9f80c476426244f78e7918b7f628fd971e28f0288a1fe6d868c07",
     "requires_user_interaction": false
   },
   {

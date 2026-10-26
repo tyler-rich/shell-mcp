@@ -95,7 +95,7 @@ func drainPower(t *testing.T) bool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	req := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"read","op":"priv_power_cancel","args":{},"timeout_ms":30000}`+"\n", newID())
+	req := fmt.Sprintf(`{"v":2,"id":%q,"ceiling":"read","op":"priv_power_cancel","args":{},"timeout_ms":30000}`+"\n", newID())
 	cmd := exec.CommandContext(ctx, gateBin, "serve", "--policy", gatePolicy, "--principal", "e2e")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, svcShell)}
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin"}
@@ -333,7 +333,7 @@ func TestPowerNotDelivered(t *testing.T) {
 	start := time.Now()
 	p := powerPreview(t)
 	id := newID()
-	line := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":"priv_power","args":{"action":"reboot","expected_preview_sha256":%q},"timeout_ms":30000}`+"\n", id, p.PreviewSHA256)
+	line := fmt.Sprintf(`{"v":2,"id":%q,"ceiling":"destructive","op":"priv_power","args":{"action":"reboot","expected_preview_sha256":%q},"timeout_ms":30000}`+"\n", id, p.PreviewSHA256)
 	cl, _ := hangupClient(t, "drop", broadSocket, line, 3*time.Second)
 	_ = cl.Wait()
 	findJournal(t, "shell-mcp-privd", start, `"id":"`+id+`"`, `"power":"not_delivered"`, `"answered_early":true`)

@@ -193,7 +193,7 @@ func (g *gate) serve(in string, extraEnv ...string) *resp {
 func (g *gate) call(op string, args any, extraEnv ...string) *resp {
 	g.t.Helper()
 	a, _ := json.Marshal(args)
-	return g.serve(fmt.Sprintf(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":%q,"args":%s,"timeout_ms":10000}`+"\n", op, a), extraEnv...)
+	return g.serve(fmt.Sprintf(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":%q,"args":%s,"timeout_ms":10000}`+"\n", op, a), extraEnv...)
 }
 
 func (g *gate) want(r *resp, code string) *resp {
@@ -361,10 +361,10 @@ func TestIntegrationTiersAndDecoding(t *testing.T) {
 	g.want(g.call("write_file", m{"path": filepath.Join(g.write, "x"), "content_b64": ""}), "tier_denied")
 	g.want(g.call("delete", m{"path": filepath.Join(g.write, "x")}), "tier_denied")
 	g.want(g.call("priv_read_file", m{"path": "/etc/example-app/x"}), "privileged_disabled")
-	g.want(g.serve(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`+strings.Repeat(" ", protocol.MaxRequestBytes)+"\n"), "too_large")
-	g.want(g.serve(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","op":"write_file"}`+"\n"), "bad_request")
-	g.want(g.serve(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","unknown":true}`+"\n"), "bad_request")
-	g.want(g.serve(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"made_up"}`+"\n"), "unknown_op")
+	g.want(g.serve(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`+strings.Repeat(" ", protocol.MaxRequestBytes)+"\n"), "too_large")
+	g.want(g.serve(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","op":"write_file"}`+"\n"), "bad_request")
+	g.want(g.serve(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","unknown":true}`+"\n"), "bad_request")
+	g.want(g.serve(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"made_up"}`+"\n"), "unknown_op")
 }
 
 func TestIntegrationIdentity(t *testing.T) {
@@ -396,7 +396,7 @@ func grandchildDead(t *testing.T, pid int) {
 
 func TestIntegrationExecLimits(t *testing.T) {
 	g := newGate(t)
-	r := g.want(g.serve(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"exec","args":{"command_id":"probe","args":["fork-sleep","60s"]},"timeout_ms":800}`+"\n"), "")
+	r := g.want(g.serve(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"exec","args":{"command_id":"probe","args":["fork-sleep","60s"]},"timeout_ms":800}`+"\n"), "")
 	var d execOut
 	if json.Unmarshal(r.Data, &d) != nil || !d.TimedOut || d.Signal == nil {
 		t.Fatalf("timeout %s", r.Data)
@@ -492,7 +492,7 @@ func TestIntegrationSandboxPdeathsigEveryRun(t *testing.T) {
 			for range next {
 				cmd := exec.CommandContext(t.Context(), bin, "serve", "--policy", g.pol, "--principal", "test") //nolint:gosec // G204: the test's own harness
 				cmd.Env = append([]string{"PATH=/usr/bin:/bin"}, g.env...)
-				cmd.Stdin = strings.NewReader(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000003","ceiling":"destructive","op":"exec","args":{"command_id":"probe","args":["procattrs"]},"timeout_ms":10000}` + "\n")
+				cmd.Stdin = strings.NewReader(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000003","ceiling":"destructive","op":"exec","args":{"command_id":"probe","args":["procattrs"]},"timeout_ms":10000}` + "\n")
 				out, err := cmd.Output()
 				var r resp
 				var d execOut
@@ -540,7 +540,7 @@ func TestIntegrationSandboxPdeathsigEveryRun(t *testing.T) {
 func TestIntegrationSandboxCommandDiesWithGate(t *testing.T) {
 	needABI(t, 1)
 	g := newGate(t)
-	req := `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000002","ceiling":"destructive","op":"exec","args":{"command_id":"probe","args":["ignore-term","60s"]},"timeout_ms":120000}` + "\n"
+	req := `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000002","ceiling":"destructive","op":"exec","args":{"command_id":"probe","args":["ignore-term","60s"]},"timeout_ms":120000}` + "\n"
 	cmd := exec.CommandContext(t.Context(), harness(t), "serve", "--policy", g.pol, "--principal", "test") //nolint:gosec // G204: the test's own harness
 	cmd.Env = append([]string{"PATH=/usr/bin:/bin"}, g.env...)
 	cmd.Stdin = strings.NewReader(req)
@@ -679,7 +679,7 @@ func TestProductionBinaryRefusesTestOwnedPolicy(t *testing.T) {
 	g := newGate(t)
 	bin := gatetest.Build(t, "cmd/shell-mcp-gate", g.dir, "real-gate", nil)
 	cmd := exec.CommandContext(t.Context(), bin, "serve", "--policy", g.pol) //nolint:gosec // G204: the binary this test built
-	cmd.Stdin = strings.NewReader(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}` + "\n")
+	cmd.Stdin = strings.NewReader(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}` + "\n")
 	cmd.Env = []string{"PATH=/usr/bin:/bin"}
 	out, err := cmd.Output()
 	var r resp
@@ -707,7 +707,7 @@ func TestCGOBuiltGateRefuses(t *testing.T) {
 	cgoHarness := gatetest.BuildTest(t, "cmd/shell-mcp-gate", dir, "cgo-gate", []string{"CGO_ENABLED=1"})
 	gateCmd := exec.CommandContext(t.Context(), cgoHarness, "serve", "--policy", g.pol, "--principal", "test") //nolint:gosec // G204: built by this test
 	gateCmd.Env = append([]string{"PATH=/usr/bin:/bin"}, g.env...)
-	gateCmd.Stdin = strings.NewReader(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}` + "\n")
+	gateCmd.Stdin = strings.NewReader(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}` + "\n")
 	out, err = gateCmd.Output()
 	var r resp
 	if err != nil || json.Unmarshal(out, &r) != nil {

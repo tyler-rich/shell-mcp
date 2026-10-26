@@ -624,6 +624,13 @@ func (v *validator) command(field string, rc *rawCommand, maxTier Tier) (Command
 		case tpl.UsesUnit():
 			v.fail(fmt.Sprintf("%s.templates[%d]", field, j), "{unit} placeholders are not available in the privileged policy, which declares no units")
 			ok = false
+		case tpl.UsesPathReadFD():
+			// N-10's chain rule leaves no account but root able to change
+			// what a root command's path names, so a descriptor would add
+			// nothing there (handoff N-22).
+			v.fail(fmt.Sprintf("%s.templates[%d]", field, j), "{path:read:fd} is not available in the privileged policy: root commands get closed paths only "+
+				"(every directory from / to a path is root's and closed), so use {path:read}")
+			ok = false
 		default:
 			c.Templates = append(c.Templates, tpl)
 		}

@@ -22,7 +22,7 @@ func requestAt(ceiling, op string, args any) string {
 	if ceiling != "" {
 		field = fmt.Sprintf(`"ceiling":%q,`, ceiling)
 	}
-	return fmt.Sprintf(`{"v":1,"id":%q,%s"op":%q,"args":%s,"timeout_ms":5000}`+"\n", reqID, field, op, a)
+	return fmt.Sprintf(`{"v":2,"id":%q,%s"op":%q,"args":%s,"timeout_ms":5000}`+"\n", reqID, field, op, a)
 }
 
 func (f *fixture) serveAt(ceiling, op string, args any) response {

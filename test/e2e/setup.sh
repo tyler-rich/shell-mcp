@@ -351,6 +351,31 @@ EOF
 chmod 0644 /etc/shell-mcp/gate-hardening.yaml
 /usr/local/bin/shell-mcp-gate check-policy --policy /etc/shell-mcp/gate-hardening.yaml >/dev/null
 
+# The {path:read:fd} policy (read_fd_test.go, handoff N-22): the
+# hardening layout's roots, with commands given the gate's open
+# descriptor, and the string form for comparison. It is not checked here:
+# the tests check it, and before N-22 the gate refuses the placeholder.
+cat >/etc/shell-mcp/gate-fd.yaml <<EOF
+version: 1
+max_tier: operator
+sandbox:
+  landlock: $landlock
+paths:
+  read: [/srv/e2e-gate]
+  write: [/srv/e2e-gate/work]
+  deny: ["/srv/e2e-gate/work/denied/**"]
+commands:
+  - id: probe-fd
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["cat", "{path:read:fd}"], ["procattrs", "{path:read:fd}"], ["write", "{path:read:fd}"], ["sleep-cat", "{enum:3s}", "{path:read:fd}"]]
+  - id: probe-cat
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["cat", "{path:read}"]]
+EOF
+chmod 0644 /etc/shell-mcp/gate-fd.yaml
+
 # The multi-call policy (multicall_test.go, S-MC): commands on this
 # machine's own coreutils (on Ubuntu 26.04 the uutils multi-call binary).
 # It is not checked here: the tests check it, and before S-MC it is

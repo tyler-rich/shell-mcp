@@ -656,6 +656,7 @@ func (v *validator) commands(p *Policy, raw []rawCommand, opts *LoadOptions) {
 			continue
 		}
 		bad := false
+		fdWarned := false
 		for j, tokens := range rc.Templates {
 			tpl, err := template.Parse(tokens)
 			if err != nil {
@@ -664,6 +665,12 @@ func (v *validator) commands(p *Policy, raw []rawCommand, opts *LoadOptions) {
 				continue
 			}
 			c.Templates = append(c.Templates, tpl)
+			// A program measured to give wrong results with a descriptor
+			// (handoff N-22): one warning per command.
+			if w := DescriptorWarning(field, tpl.String(), CanonicalName(filepath.Base(rc.Path)), CanonicalName(filepath.Base(c.Resolved))); w != "" && !fdWarned {
+				v.warn("%s", w)
+				fdWarned = true
+			}
 			if tpl.UsesPathWrite() && c.Tier == TierRead {
 				v.warn("%s: read-tier command takes a {path:write} placeholder", field)
 			}

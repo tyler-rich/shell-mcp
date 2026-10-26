@@ -77,6 +77,13 @@ func (r resolver) ResolvePath(v string, write bool) (string, error) {
 	return r.s.fs.ResolveRead(v)
 }
 
+// ResolveReadFD refuses: the privileged policy refuses {path:read:fd} at
+// load (root commands get closed paths only), and this keeps a template
+// that reached the helper anyway from running.
+func (resolver) ResolveReadFD(string) (*os.File, string, error) {
+	return nil, "", &fsx.Error{Code: protocol.CodePolicyDenied, Msg: "{path:read:fd} is not available in the privileged policy; nothing was run"}
+}
+
 func (resolver) MatchUnit(string) bool { return false }
 
 // responseBudget leaves room for the envelope inside MaxResponseBytes.

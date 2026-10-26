@@ -541,7 +541,7 @@ func wrongUnit(t *testing.T, socket, op string, args any) string {
 	t.Helper()
 	a, _ := json.Marshal(args)
 	id := newID()
-	out := directTo(t, svcShell, socket, fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":%q,"args":%s,"timeout_ms":30000}`+"\n", id, op, a))
+	out := directTo(t, svcShell, socket, fmt.Sprintf(`{"v":2,"id":%q,"ceiling":"destructive","op":%q,"args":%s,"timeout_ms":30000}`+"\n", id, op, a))
 	var r response
 	if err := json.Unmarshal([]byte(out), &r); err != nil || r.code() != "helper_wrong_unit" || r.ID != id {
 		t.Fatalf("%s %s on %s: %q", op, a, socket, out)
@@ -629,7 +629,7 @@ func TestHelperExecTrampoline(t *testing.T) {
 func startGate(t *testing.T, policy, principal, ceiling, op string, args any) *exec.Cmd {
 	t.Helper()
 	a, _ := json.Marshal(args)
-	req := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":%q,"op":%q,"args":%s,"timeout_ms":30000}`+"\n", newID(), ceiling, op, a)
+	req := fmt.Sprintf(`{"v":2,"id":%q,"ceiling":%q,"op":%q,"args":%s,"timeout_ms":30000}`+"\n", newID(), ceiling, op, a)
 	cmd := exec.CommandContext(t.Context(), gateBin, "serve", "--policy", policy, "--principal", principal) //nolint:gosec // G204: the installed gate; policy and principal are this file's constants
 	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, svcShell)}
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin"}

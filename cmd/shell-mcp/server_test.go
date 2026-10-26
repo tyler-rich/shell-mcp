@@ -50,7 +50,7 @@ func fakeGate(_ context.Context, s *sshtest.Session) uint32 {
 	if req.Op == protocol.OpPolicy {
 		data = fakePolicy
 	}
-	_, _ = fmt.Fprintf(s.Stdout, `{"v":1,"id":%q,"ok":true,"data":%s,"warnings":[],"gate":{"version":"0.1.0","principal":"readonly-key","policy_sha256":"ab12","max_tier":"read","duration_ms":1}}`+"\n", req.ID, data)
+	_, _ = fmt.Fprintf(s.Stdout, `{"v":2,"id":%q,"ok":true,"data":%s,"warnings":[],"gate":{"version":"0.1.0","principal":"readonly-key","policy_sha256":"ab12","max_tier":"read","duration_ms":1}}`+"\n", req.ID, data)
 	return 0
 }
 
@@ -152,7 +152,7 @@ func TestCheckFailsOnHostKeyMismatch(t *testing.T) {
 
 func TestCheckFailsOnGateRefusal(t *testing.T) {
 	env, _ := gateEnv(t, func(_ context.Context, s *sshtest.Session) uint32 {
-		_, _ = io.WriteString(s.Stdout, `{"v":1,"id":"","ok":false,"error":{"code":"install_insecure","message":"policy is group-writable"}}`+"\n")
+		_, _ = io.WriteString(s.Stdout, `{"v":2,"id":"","ok":false,"error":{"code":"install_insecure","message":"policy is group-writable"}}`+"\n")
 		return 0
 	})
 	code, c, raw := runCheck(t, env)

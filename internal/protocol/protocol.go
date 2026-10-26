@@ -16,11 +16,23 @@ import (
 )
 
 // Version is the wire protocol version. A request with any other "v" is
-// answered with CodeProtocolMismatch.
-const Version = 1
+// answered with CodeProtocolMismatch, and a response with any other "v" is
+// refused the same way (ARCHITECTURE §4).
+//
+//   - 1: shell-mcp 0.1.x.
+//   - 2: shell-mcp 0.2.0: exec_preview and exec report the descriptors a
+//     command is given ({path:read:fd}, fds), and exec previews hash them
+//     (domain "shell-mcp exec preview v2"). Until v0.2.0 is tagged,
+//     version 2 may be extended in place with additions only; after the
+//     tag, any wire change is a new version.
+const Version = 2
 
 // Hello is the exec request the server sends; sshd passes it to the forced
-// command in SSH_ORIGINAL_COMMAND.
+// command in SSH_ORIGINAL_COMMAND. It names the session's framing (one
+// request line, one response line), not the protocol version, and stays
+// "shell-mcp-gate/1": a 0.1.0 gate refuses any other hello as
+// install_insecure before it reads the request, so a server of another
+// version would never learn that the versions differ.
 const Hello = "shell-mcp-gate/1"
 
 // Size limits.
@@ -296,6 +308,47 @@ type GateInfo struct {
 type DecodeError struct {
 	Code string
 	Msg  string
+	// Peer is the protocol version the peer sent, for CodeProtocolMismatch
+	// (0 when it sent none).
+	Peer int
+}
+
+// FrameVersion is the version a refusal of a request of version peer is
+// framed in: version 1's frame for a version 1 peer, so that it can decode
+// the refusal and show its message (version 1's failure frame is version
+// 2's: the same fields, with a closed-set code and a one-line message);
+// this version's otherwise.
+func FrameVersion(peer int) int {
+	if peer == 1 {
+		return 1
+	}
+	return Version
+}
+
+// VersionRefusal is the message of a refusal of a request of version peer
+// by self (the gate, the privileged helper): what to upgrade when the
+// request is older (olderFix) or newer (newerFix) than this version.
+func VersionRefusal(self string, peer int, olderFix, newerFix string) string {
+	switch {
+	case peer < 1:
+		return fmt.Sprintf("this %s speaks protocol version %d and the request names no version", self, Version)
+	case peer < Version:
+		return fmt.Sprintf("this %s speaks protocol version %d and the request is version %d: %s", self, Version, peer, olderFix)
+	}
+	return fmt.Sprintf("this %s speaks protocol version %d and the request is version %d: %s", self, Version, peer, newerFix)
+}
+
+// PeerVersionMessage is the message about a response of version peer from
+// the peer named peerName, as self (this server, this gate) reports it:
+// what to upgrade when the peer is older (olderFix) or newer (newerFix).
+func PeerVersionMessage(peerName, self string, peer int, olderFix, newerFix string) string {
+	switch {
+	case peer < 1:
+		return fmt.Sprintf("%s answered without a protocol version (%s speaks version %d)", peerName, self, Version)
+	case peer < Version:
+		return fmt.Sprintf("%s speaks protocol version %d and %s version %d: %s", peerName, peer, self, Version, olderFix)
+	}
+	return fmt.Sprintf("%s speaks protocol version %d and %s version %d: %s", peerName, peer, self, Version, newerFix)
 }
 
 func (e *DecodeError) Error() string { return e.Code + ": " + e.Msg }
@@ -311,10 +364,10 @@ func (e *DecodeError) Error() string { return e.Code + ": " + e.Msg }
 func DecodeRequest(r io.Reader) (*Request, error) {
 	data, err := readLine(r, MaxRequestBytes+1)
 	if err != nil {
-		return nil, &DecodeError{CodeBadRequest, "request could not be read"}
+		return nil, &DecodeError{Code: CodeBadRequest, Msg: "request could not be read"}
 	}
 	if len(data) > MaxRequestBytes {
-		return nil, &DecodeError{CodeTooLarge, "request exceeds 2 MiB"}
+		return nil, &DecodeError{Code: CodeTooLarge, Msg: "request exceeds 2 MiB"}
 	}
 	var req Request
 	if err := json.Unmarshal(data, &req, json.RejectUnknownMembers(true)); err != nil {
@@ -324,24 +377,24 @@ func DecodeRequest(r io.Reader) (*Request, error) {
 			V *int `json:"v"`
 		}
 		if json.Unmarshal(data, &peek) == nil && peek.V != nil && *peek.V != Version {
-			return nil, &DecodeError{CodeProtocolMismatch, "unsupported protocol version"}
+			return nil, &DecodeError{Code: CodeProtocolMismatch, Msg: "unsupported protocol version", Peer: *peek.V}
 		}
-		return nil, &DecodeError{CodeBadRequest, "request is not one strict JSON object with known fields"}
+		return nil, &DecodeError{Code: CodeBadRequest, Msg: "request is not one strict JSON object with known fields"}
 	}
 	if req.V != Version {
-		return nil, &DecodeError{CodeProtocolMismatch, "unsupported protocol version"}
+		return nil, &DecodeError{Code: CodeProtocolMismatch, Msg: "unsupported protocol version", Peer: req.V}
 	}
 	if !validID(req.ID) {
-		return nil, &DecodeError{CodeBadRequest, "id must be a lowercase UUID v4"}
+		return nil, &DecodeError{Code: CodeBadRequest, Msg: "id must be a lowercase UUID v4"}
 	}
 	if !slices.Contains(Ceilings, req.Ceiling) {
-		return nil, &DecodeError{CodeBadRequest, "ceiling is missing or not read, operator or destructive"}
+		return nil, &DecodeError{Code: CodeBadRequest, Msg: "ceiling is missing or not read, operator or destructive"}
 	}
 	if !validOp(req.Op) {
-		return nil, &DecodeError{CodeBadRequest, "op is missing or malformed"}
+		return nil, &DecodeError{Code: CodeBadRequest, Msg: "op is missing or malformed"}
 	}
 	if req.TimeoutMS < 0 {
-		return nil, &DecodeError{CodeBadRequest, "timeout_ms must not be negative"}
+		return nil, &DecodeError{Code: CodeBadRequest, Msg: "timeout_ms must not be negative"}
 	}
 	if len(req.Args) > 0 {
 		switch req.Args.Kind() {
@@ -349,7 +402,7 @@ func DecodeRequest(r io.Reader) (*Request, error) {
 		case 'n':
 			req.Args = nil
 		default:
-			return nil, &DecodeError{CodeBadRequest, "args must be an object"}
+			return nil, &DecodeError{Code: CodeBadRequest, Msg: "args must be an object"}
 		}
 	}
 	return &req, nil
@@ -479,6 +532,11 @@ const maxMessageBytes = 1024
 // answered before the request was read (it is then empty). A peer that
 // closes without sending anything gives ErrNoResponse.
 func DecodeResponse(r io.Reader) (*Response, error) {
+	return decodeResponse(r, Version)
+}
+
+// decodeResponse is DecodeResponse for a peer of protocol version want.
+func decodeResponse(r io.Reader, want int) (*Response, error) {
 	data, err := readLine(r, MaxResponseBytes+1)
 	switch {
 	case len(data) == 0 && errors.Is(err, syscall.ECONNRESET):
@@ -491,26 +549,35 @@ func DecodeResponse(r io.Reader) (*Response, error) {
 	case len(data) == 0:
 		return nil, ErrNoResponse
 	case len(data) > MaxResponseBytes:
-		return nil, &DecodeError{CodeTooLarge, "response exceeds 4 MiB"}
+		return nil, &DecodeError{Code: CodeTooLarge, Msg: "response exceeds 4 MiB"}
+	}
+	// The version first: a peer of another version may send fields this
+	// version does not know, and its answer is a refusal of this one's
+	// request, never something to decode.
+	var peek struct {
+		V *int `json:"v"`
+	}
+	if json.Unmarshal(data, &peek) == nil && peek.V != nil && *peek.V != want {
+		return nil, &DecodeError{Code: CodeProtocolMismatch, Msg: "unsupported protocol version", Peer: *peek.V}
 	}
 	var resp Response
 	if err := json.Unmarshal(data, &resp, json.RejectUnknownMembers(true)); err != nil {
-		return nil, &DecodeError{CodeBadRequest, "response is not one strict JSON object with known fields"}
+		return nil, &DecodeError{Code: CodeBadRequest, Msg: "response is not one strict JSON object with known fields"}
 	}
 	switch {
-	case resp.V != Version:
-		return nil, &DecodeError{CodeProtocolMismatch, "unsupported protocol version"}
+	case resp.V != want:
+		return nil, &DecodeError{Code: CodeProtocolMismatch, Msg: "unsupported protocol version", Peer: resp.V}
 	case resp.OK && resp.Error != nil, !resp.OK && resp.Error == nil:
-		return nil, &DecodeError{CodeBadRequest, "response has an inconsistent ok and error"}
+		return nil, &DecodeError{Code: CodeBadRequest, Msg: "response has an inconsistent ok and error"}
 	case resp.OK && !validID(resp.ID), resp.ID != "" && !validID(resp.ID):
-		return nil, &DecodeError{CodeBadRequest, "response id is malformed"}
+		return nil, &DecodeError{Code: CodeBadRequest, Msg: "response id is malformed"}
 	}
 	if e := resp.Error; e != nil {
 		if !slices.Contains(Codes, e.Code) {
-			return nil, &DecodeError{CodeBadRequest, "response error code is not in the closed set"}
+			return nil, &DecodeError{Code: CodeBadRequest, Msg: "response error code is not in the closed set"}
 		}
 		if len(e.Message) > maxMessageBytes || strings.ContainsAny(e.Message, "\r\n") {
-			return nil, &DecodeError{CodeBadRequest, "response error message is not one bounded line"}
+			return nil, &DecodeError{Code: CodeBadRequest, Msg: "response error message is not one bounded line"}
 		}
 	}
 	return &resp, nil

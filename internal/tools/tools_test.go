@@ -267,7 +267,7 @@ func fakeGate(hello, policy string) sshtest.Exec {
 		if err := json.Compact(&one, []byte(data)); err != nil {
 			return 1
 		}
-		_, _ = fmt.Fprintf(s.Stdout, `{"v":1,"id":%q,"ok":true,"data":%s,"warnings":[],"gate":{"version":"0.1.0","principal":"readonly-key","policy_sha256":"ab12","max_tier":"read","duration_ms":2}}`+"\n", req.ID, one.String())
+		_, _ = fmt.Fprintf(s.Stdout, `{"v":2,"id":%q,"ok":true,"data":%s,"warnings":[],"gate":{"version":"0.1.0","principal":"readonly-key","policy_sha256":"ab12","max_tier":"read","duration_ms":2}}`+"\n", req.ID, one.String())
 		return 0
 	}
 }
@@ -315,7 +315,7 @@ func TestGetPolicy(t *testing.T) {
 
 func TestGetPolicyGateRefusalPassesThrough(t *testing.T) {
 	tg, c := sshTarget(t, func(_ context.Context, s *sshtest.Session) uint32 {
-		_, _ = io.WriteString(s.Stdout, `{"v":1,"id":"","ok":false,"error":{"code":"sandbox_unavailable","message":"Landlock is unavailable"}}`+"\n")
+		_, _ = io.WriteString(s.Stdout, `{"v":2,"id":"","ok":false,"error":{"code":"sandbox_unavailable","message":"Landlock is unavailable"}}`+"\n")
 		return 0
 	})
 	h := newHarness(t, []config.Target{tg}, map[string]*sshx.Client{"app-host": c}, "")
