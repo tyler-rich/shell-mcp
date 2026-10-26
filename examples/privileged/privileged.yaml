@@ -40,6 +40,8 @@ limits:
   default_timeout_s: 60
   max_timeout_s: 900           # package operations can be slow; ≤ 1800
   max_delete_entries: 1000     # recursive delete ceiling, ≤ 10000
+  max_memory_mb: 1024          # RLIMIT_DATA of every command and apt-get, 128..16384;
+                               # both units' MemoryMax= is this + 256
 
 paths:
   # Roots root may read. A read root may contain credential files (the deny

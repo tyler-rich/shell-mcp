@@ -40,6 +40,9 @@ const (
 	// ChildExtraTasks bounds how many tasks a child and its descendants may
 	// add to the service user's count (RLIMIT_NPROC = current + this).
 	ChildExtraTasks = 256
+	// MaxMemoryMB bounds Spec.MaxMemoryMB (the policies' own ceiling,
+	// limits.max_memory_mb ≤ 16384).
+	MaxMemoryMB = 16384
 	// maxProcScan bounds the /proc walk that counts the user's tasks.
 	maxProcScan = 1 << 16
 )
@@ -170,6 +173,10 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	if !filepath.IsAbs(s.Path) {
 		return Result{}, fmt.Errorf("%w: path is not absolute", ErrStart)
 	}
+	// Fail closed: nothing runs without a memory limit (handoff N-30).
+	if s.MaxMemoryMB < 1 || s.MaxMemoryMB > MaxMemoryMB {
+		return Result{}, fmt.Errorf("%w: no valid memory limit (MaxMemoryMB %d)", ErrStart, s.MaxMemoryMB)
+	}
 	if !filepath.IsAbs(s.Trampoline) {
 		return Result{}, fmt.Errorf("%w: no exec trampoline", ErrStart)
 	}
@@ -190,7 +197,7 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	if env == nil {
 		env = []string{}
 	}
-	cfg, err := encodeConfig(&trampolineConfig{Path: s.Path, Argv: append([]string{s.Path}, s.Args...), Env: env, Dir: dir, Limits: childLimits()})
+	cfg, err := encodeConfig(&trampolineConfig{Path: s.Path, Argv: append([]string{s.Path}, s.Args...), Env: env, Dir: dir, Limits: childLimits(s.MaxMemoryMB)})
 	if err != nil {
 		return Result{}, startError(err)
 	}
@@ -291,10 +298,15 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 // ChildNofile, and RLIMIT_NPROC = the service user's current task count +
 // ChildExtraTasks. RLIMIT_NPROC counts every task of the real uid, so a
 // fixed value would fail concurrent gates; relative to the current count it
-// bounds what one command can add. Each is only ever lowered, which needs no
-// privilege.
-func childLimits() []childLimit {
-	l := []childLimit{{Resource: unix.RLIMIT_CORE, Max: 0}, {Resource: unix.RLIMIT_NOFILE, Max: ChildNofile}}
+// bounds what one command can add. RLIMIT_DATA is the policy's
+// limits.max_memory_mb (handoff N-30): it bounds the heap and every private
+// writable mapping (mmap(2) since Linux 4.7), not read-only file mappings
+// such as git's packs. Soft and hard limits are both set, so the command
+// cannot raise them without CAP_SYS_RESOURCE. Each is only ever lowered,
+// which needs no privilege.
+func childLimits(memoryMB int) []childLimit {
+	l := []childLimit{{Resource: unix.RLIMIT_CORE, Max: 0}, {Resource: unix.RLIMIT_NOFILE, Max: ChildNofile},
+		{Resource: unix.RLIMIT_DATA, Max: uint64(memoryMB) << 20}} //nolint:gosec // G115: memoryMB is checked to be 1..MaxMemoryMB by run
 	if n := userTasks(os.Getuid()); n > 0 {
 		l = append(l, childLimit{Resource: unix.RLIMIT_NPROC, Max: n + ChildExtraTasks})
 	}

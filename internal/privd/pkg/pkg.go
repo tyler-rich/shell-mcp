@@ -291,7 +291,8 @@ func (r *Runner) Run(ctx context.Context, timeout time.Duration, args []string) 
 		if run == nil {
 			run = execx.Run
 		}
-		er, err := run(ctx, &execx.Spec{Path: r.AptGet, Trampoline: r.Trampoline, Args: args, Env: r.Env, Dir: "/", Timeout: remaining, MaxOutput: r.MaxOutput})
+		er, err := run(ctx, &execx.Spec{Path: r.AptGet, Trampoline: r.Trampoline, Args: args, Env: r.Env, Dir: "/", Timeout: remaining, MaxOutput: r.MaxOutput,
+			MaxMemoryMB: r.MaxMemoryMB})
 		if err != nil {
 			return res, err
 		}

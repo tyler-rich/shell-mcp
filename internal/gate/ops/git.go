@@ -104,6 +104,12 @@ func GitArgs(repo, caFile string, sub ...string) []string {
 	for _, o := range gitx.SubmoduleOverrides() {
 		a = append(a, "-c", o)
 	}
+	// Fixed thread and job counts (handoff N-30): every thread's stack
+	// counts against the memory limit (RLIMIT_DATA), so a git process must
+	// not start more of them on a host with more CPUs.
+	for _, o := range gitx.ThreadOverrides() {
+		a = append(a, "-c", o)
+	}
 	if caFile != "" {
 		a = append(a, "-c", "http.sslCAInfo="+caFile)
 	}
@@ -187,7 +193,7 @@ func (r *gitRepo) runWith(env []string, stdin []byte, maxOut int, sub ...string)
 	}
 	res, err := execx.Run(context.Background(), &execx.Spec{
 		Path: bin, Trampoline: s.o.Executable, Args: GitArgs(r.real, s.o.TestGitCAFile, sub...), Env: append(GitEnv(s.p.ServiceHome, r.real), env...),
-		Dir: r.real, Stdin: stdin, Timeout: left, MaxOutput: maxOut,
+		Dir: r.real, Stdin: stdin, Timeout: left, MaxOutput: maxOut, MaxMemoryMB: s.p.Limits.MaxMemoryMB,
 	})
 	if err != nil {
 		return execx.Result{}, err
@@ -209,12 +215,21 @@ func (r *gitRepo) outputWith(env []string, sub ...string) ([]byte, error) {
 		return nil, err
 	}
 	if !exited(&res, 0) {
-		return nil, errf(protocol.CodeExecFailed, "git %s failed (%s)", sub[0], exitStatus(&res))
+		return nil, r.s.gitFailed(sub[0], &res)
 	}
 	if res.StdoutTruncated {
 		return nil, errf(protocol.CodeTooLarge, "git %s output exceeds max_output_bytes", sub[0])
 	}
 	return res.Stdout, nil
+}
+
+// gitFailed is exec_failed for a git command that did not exit 0. It names
+// the memory limit every git process runs under (handoff N-30), which a
+// very large repository or a large file another account planted in a
+// submodule's .git (N-25) can reach; git's own message stays out of the
+// answer.
+func (s *server) gitFailed(sub string, res *execx.Result) error {
+	return errf(protocol.CodeExecFailed, "git %s failed (%s); its memory limit is limits.max_memory_mb (%d MiB)", sub, exitStatus(res), s.p.Limits.MaxMemoryMB)
 }
 
 // safeKey bounds a configuration key for a one-line message.
@@ -471,7 +486,7 @@ func (s *server) gitDiff(raw jsontext.Value) (data any, warns []string, failure 
 		return nil, nil, err
 	}
 	if !exited(&res, 0) {
-		return nil, nil, errf(protocol.CodeExecFailed, "git diff failed (%s)", exitStatus(&res))
+		return nil, nil, r.s.gitFailed("diff", &res)
 	}
 	out, cut := s.red.Truncate(res.Stdout, maxOut)
 	return gitDiffData{Repo: a.Repo, Staged: a.Staged, Diff: string(out), Truncated: cut || res.StdoutTruncated}, nil, nil
@@ -536,7 +551,7 @@ func (s *server) gitPull(raw jsontext.Value) (data any, warns []string, failure 
 				return nil, nil, errf(protocol.CodePolicyDenied, "the pull is not a fast-forward (local and remote history diverge); nothing was changed")
 			}
 		}
-		return nil, nil, errf(protocol.CodeExecFailed, "git pull failed (%s)", exitStatus(&res))
+		return nil, nil, r.s.gitFailed("pull", &res)
 	}
 	nw, err := r.head()
 	if err != nil {

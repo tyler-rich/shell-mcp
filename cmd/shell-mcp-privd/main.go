@@ -19,6 +19,7 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
@@ -71,7 +72,8 @@ func productionEnv() (*loadEnv, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot resolve own path: %w", err)
 	}
-	return &loadEnv{trust: gpolicy.RootTrust(), executable: exe, lookups: policy.ProductionLookups, varRun: "/var/run"}, nil
+	return &loadEnv{trust: gpolicy.RootTrust(), executable: exe, lookups: policy.ProductionLookups, varRun: "/var/run",
+		ignoreRLimitData: execx.IgnoreRLimitDataPath}, nil
 }
 
 // checkVarRun requires e.varRun (/var/run) to resolve to /run. The core unit
@@ -305,6 +307,17 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 	pr("client_uid: %d   socket_group: %s (gid %d)   max_tier: %s", p.ClientUID, p.SocketGroup, p.SocketGID, p.MaxTier)
 	pr("limits: read %d, write %d, output %d bytes; timeout default %ds, max %ds; delete entries %d",
 		p.Limits.MaxReadBytes, p.Limits.MaxWriteBytes, p.Limits.MaxOutputBytes, p.Limits.DefaultTimeoutS, p.Limits.MaxTimeoutS, p.Limits.MaxDeleteEntries)
+	// The child memory limit and the units' second layer (handoff N-30).
+	mem := "core unit MemoryMax=" + units.MemoryMax(p)
+	if p.UsesBroad() {
+		mem += ", broad unit MemoryMax=" + units.MemoryMax(p)
+	}
+	pr("memory: limits.max_memory_mb %d MiB, the memory limit (RLIMIT_DATA, soft and hard) of every command and apt-get; %s (OOMPolicy=continue)", p.Limits.MaxMemoryMB, mem)
+	if set, err := execx.IgnoreRLimitData(env.ignoreRLimitData); err != nil {
+		pr("WARN kernel: could not read ignore_rlimit_data (%v); if the boot option is set, limits.max_memory_mb binds brk(2) only, not mmap(2)", err)
+	} else if set {
+		pr("WARN kernel: ignore_rlimit_data is set (boot option); mmap(2) past limits.max_memory_mb only logs a warning, so the limit binds brk(2) only; remove the boot option")
+	}
 	pr("read roots: %s", strings.Join(p.Paths.Read, " "))
 	pr("write roots: %s", strings.Join(p.Paths.Write, " "))
 	for _, e := range p.Paths.Persistence {

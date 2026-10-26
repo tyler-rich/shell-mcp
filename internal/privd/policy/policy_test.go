@@ -139,7 +139,7 @@ func TestLoadMinimalDefaults(t *testing.T) {
 	if p.Landlock != policy.LandlockRequired {
 		t.Errorf("landlock default %q", p.Landlock)
 	}
-	want := policy.Limits{MaxReadBytes: 1 << 20, MaxWriteBytes: 1 << 20, MaxOutputBytes: 1 << 20, DefaultTimeoutS: 60, MaxTimeoutS: 900, MaxDeleteEntries: 1000}
+	want := policy.Limits{MaxReadBytes: 1 << 20, MaxWriteBytes: 1 << 20, MaxOutputBytes: 1 << 20, DefaultTimeoutS: 60, MaxTimeoutS: 900, MaxDeleteEntries: 1000, MaxMemoryMB: 1024}
 	if p.Limits != want {
 		t.Errorf("limits %+v, want %+v", p.Limits, want)
 	}
@@ -340,7 +340,7 @@ func TestLimits(t *testing.T) {
 	if p := f.mustLoad(t, head+"limits:\n  max_memory_mb: 256\n"); p.Limits.MaxMemoryMB != 256 {
 		t.Errorf("max_memory_mb 256: %d", p.Limits.MaxMemoryMB)
 	}
-	f.mustFail(t, head+"limits:\n  max_memory_mb: unlimited\n", "limits")
+	f.mustFail(t, head+"limits:\n  max_memory_mb: unlimited\n", "cannot unmarshal")
 }
 
 func TestRootRules(t *testing.T) {

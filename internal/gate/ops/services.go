@@ -70,7 +70,7 @@ func (s *server) runBuiltin(bin, name string, args []string) (execx.Result, erro
 	}
 	res, err := execx.Run(context.Background(), &execx.Spec{
 		Path: rp, Trampoline: s.o.Executable, Args: args, Env: execx.Environment(s.p.ServiceHome), Dir: "/",
-		Timeout: s.timeout(), MaxOutput: s.p.Limits.MaxOutputBytes,
+		Timeout: s.timeout(), MaxOutput: s.p.Limits.MaxOutputBytes, MaxMemoryMB: s.p.Limits.MaxMemoryMB,
 	})
 	if err != nil {
 		return execx.Result{}, err

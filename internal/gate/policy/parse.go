@@ -71,6 +71,7 @@ type rawLimits struct {
 	MaxFindDepth     *int `yaml:"max_find_depth"`
 	MaxDeleteEntries *int `yaml:"max_delete_entries"`
 	MaxProcesses     *int `yaml:"max_processes"`
+	MaxMemoryMB      *int `yaml:"max_memory_mb"`
 }
 
 type rawPaths struct {
@@ -273,6 +274,7 @@ func (v *validator) limits(p *Policy, raw *rawLimits) {
 	set(&l.MaxFindDepth, raw.MaxFindDepth, "max_find_depth", 8, 1, 32)
 	set(&l.MaxDeleteEntries, raw.MaxDeleteEntries, "max_delete_entries", 1000, 1, 10000)
 	set(&l.MaxProcesses, raw.MaxProcesses, "max_processes", 2000, 1, 100000)
+	set(&l.MaxMemoryMB, raw.MaxMemoryMB, "max_memory_mb", MaxMemoryMBDefault, MaxMemoryMBMin, MaxMemoryMBMax)
 	if l.DefaultTimeoutS > l.MaxTimeoutS {
 		if raw.DefaultTimeoutS == nil {
 			l.DefaultTimeoutS = l.MaxTimeoutS

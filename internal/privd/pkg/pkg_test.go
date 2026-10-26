@@ -181,7 +181,7 @@ func calls(t *testing.T, log string) []call {
 // =noninteractive) and argv.
 func TestRunEnvironment(t *testing.T) {
 	bin, log := fake(t, "ok")
-	r := pkg.Runner{AptGet: bin, Trampoline: trampoline(t), Env: pkg.Env("/root"), MaxOutput: 4096, LockWait: time.Second, Retry: 10 * time.Millisecond}
+	r := pkg.Runner{AptGet: bin, Trampoline: trampoline(t), Env: pkg.Env("/root"), MaxOutput: 4096, MaxMemoryMB: 1024, LockWait: time.Second, Retry: 10 * time.Millisecond}
 	res, err := r.Run(context.Background(), 10*time.Second, []string{"-q", "update"})
 	if err != nil || res.ExitCode == nil || *res.ExitCode != 0 || res.Attempts != 1 {
 		t.Fatalf("run %+v %v", res, err)
@@ -205,7 +205,7 @@ func TestRunEnvironment(t *testing.T) {
 // refuses before changing anything when it cannot lock, so retrying is safe.
 func TestRunLockWait(t *testing.T) {
 	bin, log := fake(t, "lock 2")
-	r := pkg.Runner{AptGet: bin, Trampoline: trampoline(t), Env: pkg.Env("/root"), MaxOutput: 4096, LockWait: 5 * time.Second, Retry: 20 * time.Millisecond}
+	r := pkg.Runner{AptGet: bin, Trampoline: trampoline(t), Env: pkg.Env("/root"), MaxOutput: 4096, MaxMemoryMB: 1024, LockWait: 5 * time.Second, Retry: 20 * time.Millisecond}
 	res, err := r.Run(context.Background(), 10*time.Second, []string{"-q", "update"})
 	if err != nil || res.ExitCode == nil || *res.ExitCode != 0 || res.Attempts != 3 || len(calls(t, log)) != 3 || res.LockWait <= 0 {
 		t.Fatalf("run %+v %v, %d calls", res, err, len(calls(t, log)))
@@ -215,7 +215,7 @@ func TestRunLockWait(t *testing.T) {
 	// far slower than the helper does.
 	for _, mode := range []string{"lockforever", "listslock"} {
 		mbin, mlog := fake(t, mode)
-		mr := pkg.Runner{AptGet: mbin, Trampoline: trampoline(t), Env: pkg.Env("/root"), MaxOutput: 4096, LockWait: 2 * time.Second, Retry: 50 * time.Millisecond}
+		mr := pkg.Runner{AptGet: mbin, Trampoline: trampoline(t), Env: pkg.Env("/root"), MaxOutput: 4096, MaxMemoryMB: 1024, LockWait: 2 * time.Second, Retry: 50 * time.Millisecond}
 		start := time.Now()
 		mres, merr := mr.Run(context.Background(), 10*time.Second, []string{"-q", "update"})
 		if !errors.Is(merr, pkg.ErrLockHeld) || mres.Attempts < 2 {

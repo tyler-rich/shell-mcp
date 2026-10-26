@@ -18,6 +18,7 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/install"
 	"github.com/tyler-rich/shell-mcp/internal/gate/ops"
@@ -186,14 +187,13 @@ var (
 	probeExchange  = fsx.ProbeExchange
 )
 
+func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust, home string) int {
+	return checkPolicyWithParam(args, stdout, stderr, trust, home, execx.IgnoreRLimitDataPath)
+}
+
 // checkPolicyWithParam is checkPolicyWith reading the kernel's
 // ignore_rlimit_data parameter from param.
 func checkPolicyWithParam(args []string, stdout, stderr io.Writer, trust policy.Trust, home, param string) int {
-	_ = param
-	return checkPolicyWith(args, stdout, stderr, trust, home)
-}
-
-func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust, home string) int {
 	fs := flag.NewFlagSet("check-policy", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	policyPath := fs.String("policy", "", "")
@@ -256,6 +256,10 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust
 			}
 		}
 		for _, w := range p.Warnings {
+			pr("WARN %s", w)
+		}
+		pr("ok   limits.max_memory_mb: %d MiB, the memory limit (RLIMIT_DATA, soft and hard) of every command, git, systemctl and journalctl process", p.Limits.MaxMemoryMB)
+		if w := rlimitDataWarning(param); w != "" {
 			pr("WARN %s", w)
 		}
 		// delete and every move (its stage, and without overwrite its commit)
@@ -356,4 +360,17 @@ func gitRefusal(repo string, err error) string {
 	}
 	msg := strings.TrimPrefix(fe.Msg, fmt.Sprintf("git is not run in the repository %q: ", repo))
 	return strings.TrimSuffix(msg, "; nothing was run")
+}
+
+// rlimitDataWarning is check-policy's warning about the kernel's
+// ignore_rlimit_data parameter at param, or "" when it is not set.
+func rlimitDataWarning(param string) string {
+	set, err := execx.IgnoreRLimitData(param)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("kernel: could not read ignore_rlimit_data (%v); if the boot option is set, limits.max_memory_mb binds brk(2) only, not mmap(2)", err)
+	case set:
+		return "kernel: ignore_rlimit_data is set (boot option); mmap(2) past limits.max_memory_mb only logs a warning, so the limit binds brk(2) only; remove the boot option"
+	}
+	return ""
 }

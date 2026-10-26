@@ -254,13 +254,14 @@ func (s *server) exec(raw jsontext.Value) (data any, warns []string, failure err
 		maxOut = a.MaxOutputBytes
 	}
 	res, err := s.runCommand(&execx.Spec{
-		Trampoline: s.o.Executable,
-		Path:       rx.c.Resolved,
-		Args:       rx.args,
-		Env:        execx.Environment(execHome),
-		Dir:        rx.dir,
-		Timeout:    s.timeout(),
-		MaxOutput:  maxOut,
+		Trampoline:  s.o.Executable,
+		Path:        rx.c.Resolved,
+		Args:        rx.args,
+		Env:         execx.Environment(execHome),
+		Dir:         rx.dir,
+		Timeout:     s.timeout(),
+		MaxOutput:   maxOut,
+		MaxMemoryMB: s.p.Limits.MaxMemoryMB,
 	}, rx.c.Tier > policy.TierRead)
 	if err != nil {
 		return nil, nil, err

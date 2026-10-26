@@ -37,6 +37,9 @@ func testEnv(t *testing.T, y string) (env *loadEnv, policyPath string) {
 		executable:    exe,
 		systemBinDirs: []string{filepath.Join(d, "sysbin")},
 		varRun:        filepath.Join(d, "var-run"),
+		// The host's own parameter; TestCheckPolicyReportsMemoryLimit
+		// passes its own.
+		ignoreRLimitData: execx.IgnoreRLimitDataPath,
 		lookups: func(o *policy.LoadOptions) {
 			o.LookupUser = func(n string) (uint32, error) {
 				if n == "root" {
