@@ -6,7 +6,12 @@ All notable changes to shell-mcp. Versions follow [Semantic Versioning](https://
 
 **Added**
 
+- **A memory limit for every child of the gate and the helper** (handoff N-30, N-25's memory half; PR #61): `limits.max_memory_mb` in the gate policy and in the privileged policy (default 1024 MiB, 128 to 16384, never unlimited), applied as `RLIMIT_DATA`, soft and hard, to every command, git, systemctl and journalctl process before its first instruction. The helper's generated units set `MemoryMax=` to the key plus 256M, with `MemorySwapMax=0` and `OOMPolicy=continue`, so a command that reaches the cgroup's limit is killed and the helper still answers. git's thread counts are pinned (`pack.threads=4`, `index.threads=1`, `checkout.workers=1` and the others in `gitx`), so a git operation's memory need does not follow the host's CPU count. `check-policy` reports the limit and warns when the kernel's `ignore_rlimit_data` is set. POLICY §4a, PRIVILEGED §5.
 - **`{path:read:fd}`** (handoff N-22): an opt-in placeholder for gate commands that passes the file as the gate's open descriptor (`/dev/fd/4` and up) instead of a path, so a command that reads its argument reads the file the gate checked, whatever happens to its name afterwards. It closes the owner-matched `{path:read}` redirect for such commands. Regular files only, at most 8 per template; the privileged policy refuses it. `exec_preview`, `exec`, `shell_run_read_command` and `shell_run_command` report the descriptors (`fds`), and an approved command is bound to the file's identity. `check-policy` warns about programs measured to give wrong results with a descriptor (`stat`, `du`, `file`, `ls` and `find` without following links; `cp -a`/`-P`/`-r`; `tar` adding a member; `findmnt`; `nginx`; `docker compose`) and checks `/dev/fd`. POLICY §4.
+
+**Fixed**
+
+- **The helper's reap of a command's leftover processes** (PR #61): it lists a command's children with the real error when a listing fails (it hid it before), retries within its bound and falls back to scanning `/proc` by parent pid, and still answers `outcome_unknown` unless `wait4` confirms none is left. Listings over `/proc` that swallowed errors no longer give a wrong success: the gate's check that no_new_privs holds on all its threads fails when a thread cannot be read, and the child task count behind `RLIMIT_NPROC` refuses to start a command when `/proc` cannot be counted, rather than dropping the limit.
 
 **Changed**
 
@@ -15,6 +20,7 @@ All notable changes to shell-mcp. Versions follow [Semantic Versioning](https://
 **Upgrade notes**
 
 - **Upgrade the server, the gate and the helper together.** A 0.1.0 server and a gate of this release, or the reverse, refuse each other with `protocol_mismatch` (the message says which to upgrade); so do a gate and a helper of different releases.
+- **Regenerate the helper's units after upgrading** (`shell-mcp-privd units --policy /etc/shell-mcp/privileged.yaml --out /etc/systemd/system`, then `systemctl daemon-reload`): the new units carry `MemoryMax=`, `MemorySwapMax=0` and `OOMPolicy=continue` derived from `limits.max_memory_mb`. A gate or privileged policy that sets `limits.max_memory_mb` is refused by a 0.1.0 gate or helper (unknown key). Commands that need more than 1024 MiB of data (for example `jq` on very large files) need the key raised.
 - A gate policy that uses `{path:read:fd}` is refused by a 0.1.0 gate (unknown placeholder).
 
 ## [0.1.0]
