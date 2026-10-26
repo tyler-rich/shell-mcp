@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/install"
@@ -202,12 +203,38 @@ func Self(t testing.TB) string {
 	return exe
 }
 
-// LinkSelf puts this test binary at dst (a hard link, or a copy across
-// file systems), so that a fixture's gate or helper binary is a real binary
-// that execx can use as its trampoline.
+var (
+	trampolineOnce sync.Once
+	trampolinePath string
+)
+
+// Trampoline returns the test exec trampoline (testdata/trampoline), built
+// once per test binary: a binary that serves execx as its trampoline, built
+// as the release binaries are (no race detector, no cgo). Tests use it
+// rather than this test binary, which under -race carries ThreadSanitizer:
+// that runtime may map memory after the trampoline has lowered the child
+// memory limit and abort before execve(2) (handoff N-30).
+func Trampoline(t testing.TB) string {
+	t.Helper()
+	trampolineOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "gatetest-trampoline")
+		if err != nil {
+			t.Fatalf("trampoline directory: %v", err)
+		}
+		trampolinePath = Build(t, "internal/gate/gatetest/testdata/trampoline", dir, "trampoline", nil)
+	})
+	if trampolinePath == "" {
+		t.Fatal("the test exec trampoline failed to build earlier")
+	}
+	return trampolinePath
+}
+
+// LinkSelf puts the test exec trampoline (Trampoline) at dst (a hard link,
+// or a copy across file systems), so that a fixture's gate or helper binary
+// is a real binary that execx can use as its trampoline.
 func LinkSelf(t testing.TB, dst string) {
 	t.Helper()
-	src := Self(t)
+	src := Trampoline(t)
 	if err := os.Link(src, dst); err == nil {
 		// The gate and the helper refuse a group- or other-writable binary;
 		// go test may leave its binary 0775.
@@ -216,7 +243,7 @@ func LinkSelf(t testing.TB, dst string) {
 		}
 		return
 	}
-	b, err := os.ReadFile(src) //nolint:gosec // G304: this test binary
+	b, err := os.ReadFile(src) //nolint:gosec // G304: the test exec trampoline
 	if err != nil {
 		t.Fatal(err)
 	}

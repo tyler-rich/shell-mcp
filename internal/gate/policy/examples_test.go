@@ -82,7 +82,7 @@ func TestExampleCommandsRunUnderTheDefaultLimit(t *testing.T) {
 			for _, tpl := range c.Templates {
 				args := gatetest.FillTemplate(tpl.String(), target)
 				r, err := execx.Run(context.Background(), &execx.Spec{Path: c.Resolved, Args: args, Env: execx.Environment(t.TempDir()),
-					Trampoline: gatetest.Self(t), Timeout: time.Minute, MaxOutput: 1 << 20, MaxMemoryMB: p.Limits.MaxMemoryMB})
+					Trampoline: gatetest.Trampoline(t), Timeout: time.Minute, MaxOutput: 1 << 20, MaxMemoryMB: p.Limits.MaxMemoryMB})
 				if err != nil || r.ExitCode == nil || *r.ExitCode != 0 {
 					t.Errorf("%s %s %q under %d MiB: %v exit %v signal %q stderr %q", name, c.ID, args, p.Limits.MaxMemoryMB, err, r.ExitCode, r.Signal, r.Stderr)
 				}

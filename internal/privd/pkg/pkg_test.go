@@ -238,4 +238,4 @@ func TestRunLockWait(t *testing.T) {
 }
 
 // trampoline is this test binary, the exec trampoline for the runs here.
-func trampoline(t *testing.T) string { return gatetest.Self(t) }
+func trampoline(t *testing.T) string { return gatetest.Trampoline(t) }

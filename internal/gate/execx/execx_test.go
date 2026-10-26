@@ -84,7 +84,7 @@ func run(t *testing.T, s *execx.Spec) execx.Result {
 		s.Env = execx.Environment("/nonexistent-home")
 	}
 	if s.Trampoline == "" {
-		s.Trampoline = self
+		s.Trampoline = gatetest.Trampoline(t)
 	}
 	r, err := execx.Run(context.Background(), s)
 	if err != nil {
@@ -420,7 +420,7 @@ func childLimitsError(out []byte) error {
 func TestChildRlimitsBeforeFirstInstruction(t *testing.T) {
 	p := probePath(t)
 	requireDiscriminating(t, raiseOwnLimits(t))
-	r, err := execx.RunWithStartDelay(context.Background(), &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Trampoline: self, Args: []string{"rlimits"},
+	r, err := execx.RunWithStartDelay(context.Background(), &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Trampoline: gatetest.Trampoline(t), Args: []string{"rlimits"},
 		Env: execx.Environment("/nonexistent-home"), Timeout: 10 * time.Second, MaxOutput: 1 << 20}, 300*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -446,7 +446,7 @@ func TestChildRlimitsNeverRace(t *testing.T) {
 	for range workers {
 		wg.Go(func() {
 			for range next {
-				r, err := execx.Run(context.Background(), &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Trampoline: self, Args: []string{"rlimits"},
+				r, err := execx.Run(context.Background(), &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Trampoline: gatetest.Trampoline(t), Args: []string{"rlimits"},
 					Env: execx.Environment("/nonexistent-home"), Timeout: 10 * time.Second, MaxOutput: 1 << 20})
 				if err == nil {
 					err = childLimitsError(r.Stdout)
@@ -645,7 +645,7 @@ func TestCommandPdeathsigEveryRun(t *testing.T) {
 	for range workers {
 		wg.Go(func() {
 			for range next {
-				r, err := execx.Run(context.Background(), &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Trampoline: self, Args: []string{"procattrs"},
+				r, err := execx.Run(context.Background(), &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Trampoline: gatetest.Trampoline(t), Args: []string{"procattrs"},
 					Env: execx.Environment("/nonexistent-home"), Timeout: 10 * time.Second, MaxOutput: 1 << 20})
 				var got string
 				if err != nil {
@@ -732,7 +732,7 @@ func TestTrampolineStartErrors(t *testing.T) {
 				s.MaxMemoryMB = 0
 			}
 			if s.Trampoline == "" {
-				s.Trampoline = self
+				s.Trampoline = gatetest.Trampoline(t)
 			}
 			_, err := execx.Run(context.Background(), &s)
 			if !errors.Is(err, execx.ErrStart) || !strings.Contains(err.Error(), c.want) {
@@ -743,11 +743,11 @@ func TestTrampolineStartErrors(t *testing.T) {
 }
 
 func TestStartFailure(t *testing.T) {
-	_, err := execx.Run(context.Background(), &execx.Spec{MaxMemoryMB: testMemoryMB, Path: "/nonexistent/binary", Trampoline: self, Timeout: time.Second, MaxOutput: 10, Env: execx.Environment("/")})
+	_, err := execx.Run(context.Background(), &execx.Spec{MaxMemoryMB: testMemoryMB, Path: "/nonexistent/binary", Trampoline: gatetest.Trampoline(t), Timeout: time.Second, MaxOutput: 10, Env: execx.Environment("/")})
 	if !errors.Is(err, execx.ErrStart) {
 		t.Fatalf("err %v", err)
 	}
-	if _, err := execx.Run(context.Background(), &execx.Spec{MaxMemoryMB: testMemoryMB, Path: "relative", Trampoline: self, Timeout: time.Second, MaxOutput: 10}); !errors.Is(err, execx.ErrStart) {
+	if _, err := execx.Run(context.Background(), &execx.Spec{MaxMemoryMB: testMemoryMB, Path: "relative", Trampoline: gatetest.Trampoline(t), Timeout: time.Second, MaxOutput: 10}); !errors.Is(err, execx.ErrStart) {
 		t.Fatalf("relative path: %v", err)
 	}
 }

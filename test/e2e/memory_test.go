@@ -140,7 +140,9 @@ func TestPrivCoreMemoryLimit(t *testing.T) {
 	if d := privExecData(t, "probe-mem", "raise-data"); strings.TrimSpace(d.Stdout) != "raise=EPERM unlimited=EPERM" {
 		t.Fatalf("raise-data as root in the core unit: %q", d.Stdout)
 	}
-	big := "/var/log/example-app/e2e-memory.json"
+	// /etc/example-app: a closed root-owned read root (the runner's /var/log
+	// is group-writable, which the helper's chain rule refuses).
+	big := "/etc/example-app/e2e-memory.json"
 	sparseFile(t, big, 0, 1<<30)
 	d := privExecData(t, "jq-keys", "-c", "keys", big)
 	if !strings.Contains(d.Stderr, "cannot allocate memory") || strings.Contains(d.Stderr, "parse error") {
@@ -157,7 +159,8 @@ func TestPrivCoreOOMPolicyContinue(t *testing.T) {
 	start := time.Now()
 	d := privExecData(t, "probe-mem", "alloc-tree", "2", "300", "1000")
 	if d.Signal == nil || *d.Signal != "SIGKILL" || strings.Contains(d.Stdout, "not stopped") {
-		t.Fatalf("a tree past MemoryMax=: %+v", d)
+		t.Fatalf("a tree past MemoryMax=: exit %v signal %v stdout %q stderr %q; this host's swap: %s",
+			deref(d.ExitCode), deref(d.Signal), d.Stdout, firstLine(d.Stderr), swapTotal(t))
 	}
 	if el := time.Since(start); el > 25*time.Second {
 		t.Fatalf("took %v", el)
@@ -166,4 +169,28 @@ func TestPrivCoreOOMPolicyContinue(t *testing.T) {
 	if out := privExec(t, "probe-echo", "", "echo", "after-oom"); out != "after-oom" {
 		t.Fatalf("after the OOM kill: %q", out)
 	}
+}
+
+// deref is *p for messages, or "<nil>".
+func deref[T any](p *T) any {
+	if p == nil {
+		return "<nil>"
+	}
+	return *p
+}
+
+// swapTotal is /proc/meminfo's SwapTotal line: with swap, a cgroup past
+// MemoryMax= is pushed into swap rather than OOM-killed.
+func swapTotal(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return err.Error()
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(l, "SwapTotal:") {
+			return strings.Join(strings.Fields(l), " ")
+		}
+	}
+	return "no SwapTotal line"
 }
