@@ -401,28 +401,36 @@ func ApplyRules(mode policy.LandlockMode, rules *Rules) (Report, error) {
 		}
 		r.MPTCP = "not blocked: seccomp is unavailable"
 	}
-	if err := allThreadsNoNewPrivs(r.MPTCP == MPTCPStatus); err != nil {
+	if err := allThreadsNoNewPrivsIn("/proc/self/task", r.MPTCP == MPTCPStatus); err != nil {
 		return r, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	r.NoNewPrivs = true
 	return r, nil
 }
 
-// allThreadsNoNewPrivs checks /proc/self/task/*/status: NoNewPrivs is 1,
-// and (when the MPTCP filter was installed) Seccomp is 2 (filter mode).
-func allThreadsNoNewPrivs(wantSeccomp bool) error {
-	tasks, err := os.ReadDir("/proc/self/task")
+// allThreadsNoNewPrivsIn checks taskDir/*/status (production:
+// /proc/self/task): NoNewPrivs is 1, and (when the MPTCP filter was
+// installed) Seccomp is 2 (filter mode).
+func allThreadsNoNewPrivsIn(taskDir string, wantSeccomp bool) error {
+	tasks, err := os.ReadDir(taskDir)
 	if err != nil {
 		return fmt.Errorf("cannot list threads: %w", err)
 	}
 	if len(tasks) == 0 {
 		return errors.New("no threads listed")
 	}
+	checked := 0
 	for _, t := range tasks {
-		b, err := os.ReadFile("/proc/self/task/" + t.Name() + "/status")
-		if err != nil {
-			continue // thread exited
+		b, err := os.ReadFile(taskDir + "/" + t.Name() + "/status") //nolint:gosec // G304: a task entry of the fixed task directory
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ESRCH) {
+			continue // the thread ended between the listing and the read
 		}
+		if err != nil {
+			// A live thread whose state cannot be read is not a thread
+			// checked (handoff N-30's audit).
+			return fmt.Errorf("thread %s: %w", t.Name(), err)
+		}
+		checked++
 		nnp, filtered := false, false
 		for _, line := range strings.Split(string(b), "\n") {
 			k, v, found := strings.Cut(line, ":")
@@ -439,6 +447,9 @@ func allThreadsNoNewPrivs(wantSeccomp bool) error {
 		if wantSeccomp && !filtered {
 			return fmt.Errorf("thread %s has no seccomp filter", t.Name())
 		}
+	}
+	if checked == 0 {
+		return errors.New("no thread's status could be read")
 	}
 	return nil
 }

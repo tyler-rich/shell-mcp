@@ -294,7 +294,7 @@ func (s *server) pkgUpdate(raw jsontext.Value) (data any, warns []string, failur
 	timeout := s.timeout()
 	r := pkg.Runner{
 		AptGet: s.o.AptGet, Trampoline: s.o.Executable, Env: s.aptEnv(), MaxOutput: s.p.Limits.MaxOutputBytes,
-		LockWait: min(maxLockWait, timeout/2), Retry: s.o.PkgLockRetry,
+		MaxMemoryMB: s.p.Limits.MaxMemoryMB, LockWait: min(maxLockWait, timeout/2), Retry: s.o.PkgLockRetry,
 		Exec: func(_ context.Context, sp *execx.Spec) (execx.Result, error) { return s.runCommand(sp, true) },
 	}
 	res, err := r.Run(context.Background(), timeout, argv)
@@ -356,7 +356,7 @@ func (s *server) simulate(argv []string, deadline time.Time) (*simulation, error
 		return nil, errf(protocol.CodeTimeout, "the request's time ran out before apt-get changed anything; nothing was changed")
 	}
 	res, err := s.runCommand(&execx.Spec{Trampoline: s.o.Executable, Path: s.o.AptGet, Args: argv, Env: s.aptEnv(), Dir: "/", Timeout: left,
-		MaxOutput: s.p.Limits.MaxOutputBytes}, false)
+		MaxOutput: s.p.Limits.MaxOutputBytes, MaxMemoryMB: s.p.Limits.MaxMemoryMB}, false)
 	if s.hungUp {
 		return nil, errf(protocol.CodeTimeout, "the gate stopped waiting before apt-get changed anything; nothing was changed")
 	}
@@ -713,7 +713,7 @@ func (s *server) runApt(argv []string, st pkgStages) (execx.Result, error) {
 	var proc *os.Process
 	spec := &execx.Spec{
 		Trampoline: s.o.Executable, Path: s.o.AptGet, Args: argv, Env: s.aptEnv(), Dir: "/",
-		Timeout: time.Until(st.killAt), MaxOutput: s.p.Limits.MaxOutputBytes,
+		Timeout: time.Until(st.killAt), MaxOutput: s.p.Limits.MaxOutputBytes, MaxMemoryMB: s.p.Limits.MaxMemoryMB,
 		Started: func(p *os.Process) { mu.Lock(); proc = p; mu.Unlock() },
 	}
 	done := make(chan struct{})

@@ -32,6 +32,7 @@ type summaryWire struct {
 		DefaultTimeoutS  int `json:"default_timeout_s"`
 		MaxTimeoutS      int `json:"max_timeout_s"`
 		MaxDeleteEntries int `json:"max_delete_entries"`
+		MaxMemoryMB      int `json:"max_memory_mb"`
 	} `json:"limits"`
 	Roots struct {
 		Read        []string `json:"read"`
@@ -140,7 +141,8 @@ func TestPrivPolicySummary(t *testing.T) {
 		t.Fatalf("summary hash %s, helper block %s, policy file %s", s.PolicySHA256, helperSHA, want)
 	}
 	if s.MaxTier != "destructive" || s.Limits.MaxReadBytes != 65536 || s.Limits.MaxOutputBytes != 4096 || s.Limits.MaxTimeoutS != 10 ||
-		s.Limits.DefaultTimeoutS != 5 || s.Limits.MaxDeleteEntries != 20 || s.Limits.MaxWriteBytes != 65536 {
+		s.Limits.DefaultTimeoutS != 5 || s.Limits.MaxDeleteEntries != 20 || s.Limits.MaxWriteBytes != 65536 ||
+		s.Limits.MaxMemoryMB != 1024 {
 		t.Fatalf("tier and limits: %+v %+v", s.MaxTier, s.Limits)
 	}
 	if !slices.Equal(s.Roots.Read, []string{f.read}) || !slices.Equal(s.Roots.Write, []string{f.write}) || len(s.Roots.Persistence) != 0 || s.DenyPatterns != 1 {

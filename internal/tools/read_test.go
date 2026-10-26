@@ -254,7 +254,7 @@ func fakeExec(stdout string, exit int) string {
 // command.
 const fakePolicyCommands = `{"version":1,"max_tier":"operator","sha256":"ab12","sandbox":{"landlock":"required","system_read_exec":[],"tcp_connect_ports":[]},
 "limits":{"DefaultTimeoutS":30,"MaxTimeoutS":300,"MaxOutputBytes":1048576,"MaxStdinBytes":1048576,"MaxReadBytes":1048576,"MaxWriteBytes":1048576,
-"MaxFindResults":1000,"MaxFindDepth":8,"MaxDeleteEntries":1000,"MaxProcesses":2000},
+"MaxFindResults":1000,"MaxFindDepth":8,"MaxDeleteEntries":1000,"MaxProcesses":2000,"MaxMemoryMB":1024},
 "paths":{"read":["/srv/app"],"write":[],"deny":[]},"services":{"status":[],"control_units":[],"control_verbs":[]},
 "journal":{"units":[],"max_lines":200},"git":{"repos":[]},"privileged":{"enabled":false,"max_tier":"read"},"redact_patterns":0,
 "commands":[{"id":"app-status","description":"Application status","tier":"read","root_equivalent":false,"templates":[["status","--json"],["status","{enum:web|worker}"]]},

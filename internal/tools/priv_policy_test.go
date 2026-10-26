@@ -21,7 +21,7 @@ const fakeHelloPriv = `{"gate_version":"0.1.0","protocol":1,"principal":"readonl
 
 func fakePrivPolicy(sha string) string {
 	return `{"policy_sha256":"` + sha + `","max_tier":"destructive",
-"limits":{"max_read_bytes":1048576,"max_write_bytes":1048576,"max_output_bytes":1048576,"default_timeout_s":60,"max_timeout_s":900,"max_delete_entries":1000},
+"limits":{"max_read_bytes":1048576,"max_write_bytes":1048576,"max_output_bytes":1048576,"default_timeout_s":60,"max_timeout_s":900,"max_delete_entries":1000,"max_memory_mb":1024},
 "roots":{"read":["/var/log/example-app"],"write":["/etc/example-app"],"persistence":["/etc/systemd/system/example-app.service.d"]},
 "deny_patterns":2,"owners":{"users":["root","example-app"],"groups":["root","example-app"]},"modes_max":"0755","backups_keep":10,
 "backups_max_store_bytes":1073741824,
@@ -78,7 +78,8 @@ func TestGetPolicyPrivilegedSummary(t *testing.T) {
 		t.Fatalf("no privileged.policy: %v", env)
 	}
 	if !d.Privileged.Enabled || d.Gate.PolicySHA256 != "ab12" || p.PolicySHA256 != "cafe" || p.MaxTier != "destructive" ||
-		p.DenyPatterns != 2 || len(p.Roots.Persistence) != 1 || p.ModesMax != "0755" || p.BackupsMaxStoreBytes != 1073741824 || !p.Packages.Enabled {
+		p.DenyPatterns != 2 || len(p.Roots.Persistence) != 1 || p.ModesMax != "0755" || p.BackupsMaxStoreBytes != 1073741824 || !p.Packages.Enabled ||
+		p.Limits.MaxMemoryMB != 1024 {
 		t.Fatalf("summary %+v", p)
 	}
 	approval := map[string]bool{}

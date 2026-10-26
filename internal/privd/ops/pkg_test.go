@@ -778,15 +778,21 @@ func TestPkgReapFailureIsOutcomeUnknown(t *testing.T) {
 	f.opts.ReapOrphans = true
 	calls := 0
 	f.opts.ReapHooks = &ops.ReapHooks{
-		// The two simulations reap cleanly; the run's reaping fails.
+		// The two simulations reap cleanly; the run's reaping cannot list
+		// a child that is left and never ends.
 		Children: func() ([]int, error) {
 			calls++
-			if calls == 3 {
+			if calls >= 3 {
 				return nil, errors.New("injected: children unreadable")
 			}
 			return []int{}, nil
 		},
-		Wait: func() (int, error) { return 0, unix.ECHILD },
+		Wait: func() (int, error) {
+			if calls >= 3 {
+				return 0, nil
+			}
+			return 0, unix.ECHILD
+		},
 	}
 	f.fail("priv_pkg_install", bound(hello, p), "outcome_unknown")
 	l := f.lastAudit()

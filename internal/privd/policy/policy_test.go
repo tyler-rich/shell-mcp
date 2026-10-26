@@ -139,7 +139,7 @@ func TestLoadMinimalDefaults(t *testing.T) {
 	if p.Landlock != policy.LandlockRequired {
 		t.Errorf("landlock default %q", p.Landlock)
 	}
-	want := policy.Limits{MaxReadBytes: 1 << 20, MaxWriteBytes: 1 << 20, MaxOutputBytes: 1 << 20, DefaultTimeoutS: 60, MaxTimeoutS: 900, MaxDeleteEntries: 1000}
+	want := policy.Limits{MaxReadBytes: 1 << 20, MaxWriteBytes: 1 << 20, MaxOutputBytes: 1 << 20, DefaultTimeoutS: 60, MaxTimeoutS: 900, MaxDeleteEntries: 1000, MaxMemoryMB: 1024}
 	if p.Limits != want {
 		t.Errorf("limits %+v, want %+v", p.Limits, want)
 	}
@@ -318,6 +318,7 @@ func TestLimits(t *testing.T) {
 		{"max_timeout_s", []int{0, 1801}, []int{60, 1800}},
 		{"max_delete_entries", []int{0, 10001}, []int{1, 10000}},
 		{"default_timeout_s", []int{0, 1801}, []int{1, 900}},
+		{"max_memory_mb", []int{0, -1, 127, 16385}, []int{128, 1024, 16384}},
 	} {
 		for _, v := range c.bad {
 			f.mustFail(t, head+fmt.Sprintf("limits:\n  %s: %d\n", c.key, v), "limits."+c.key)
@@ -331,6 +332,15 @@ func TestLimits(t *testing.T) {
 	if p := f.mustLoad(t, head+"limits:\n  max_timeout_s: 30\n"); p.Limits.DefaultTimeoutS != 30 {
 		t.Errorf("default %d", p.Limits.DefaultTimeoutS)
 	}
+	// limits.max_memory_mb (handoff N-30): 1024 when absent, as given
+	// otherwise, never unlimited.
+	if p := f.mustLoad(t, head); p.Limits.MaxMemoryMB != 1024 {
+		t.Errorf("max_memory_mb absent: %d, want 1024", p.Limits.MaxMemoryMB)
+	}
+	if p := f.mustLoad(t, head+"limits:\n  max_memory_mb: 256\n"); p.Limits.MaxMemoryMB != 256 {
+		t.Errorf("max_memory_mb 256: %d", p.Limits.MaxMemoryMB)
+	}
+	f.mustFail(t, head+"limits:\n  max_memory_mb: unlimited\n", "cannot unmarshal")
 }
 
 func TestRootRules(t *testing.T) {

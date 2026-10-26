@@ -41,6 +41,7 @@ type summaryLimits struct {
 	DefaultTimeoutS  int `json:"default_timeout_s"`
 	MaxTimeoutS      int `json:"max_timeout_s"`
 	MaxDeleteEntries int `json:"max_delete_entries"`
+	MaxMemoryMB      int `json:"max_memory_mb"`
 }
 
 type summaryRoots struct {
@@ -140,6 +141,7 @@ func (s *server) summary() summaryData {
 		Limits: summaryLimits{
 			MaxReadBytes: p.Limits.MaxReadBytes, MaxWriteBytes: p.Limits.MaxWriteBytes, MaxOutputBytes: p.Limits.MaxOutputBytes,
 			DefaultTimeoutS: p.Limits.DefaultTimeoutS, MaxTimeoutS: p.Limits.MaxTimeoutS, MaxDeleteEntries: p.Limits.MaxDeleteEntries,
+			MaxMemoryMB: p.Limits.MaxMemoryMB,
 		},
 		Roots:        summaryRoots{Read: orEmpty(p.Paths.Read), Write: orEmpty(p.Paths.Write), Persistence: []string{}},
 		DenyPatterns: len(p.Paths.DenyUser),

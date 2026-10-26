@@ -74,6 +74,7 @@ type rawLimits struct {
 	DefaultTimeoutS  *int `yaml:"default_timeout_s"`
 	MaxTimeoutS      *int `yaml:"max_timeout_s"`
 	MaxDeleteEntries *int `yaml:"max_delete_entries"`
+	MaxMemoryMB      *int `yaml:"max_memory_mb"`
 }
 
 type rawPaths struct {
@@ -323,6 +324,15 @@ func (v *validator) limits(p *Policy, raw *rawLimits) {
 	set(&l.MaxTimeoutS, raw.MaxTimeoutS, "max_timeout_s", 900, MaxTimeoutCeiling)
 	set(&l.DefaultTimeoutS, raw.DefaultTimeoutS, "default_timeout_s", 60, MaxTimeoutCeiling)
 	set(&l.MaxDeleteEntries, raw.MaxDeleteEntries, "max_delete_entries", 1000, 10000)
+	// The same key, default and range as the gate's (handoff N-30).
+	l.MaxMemoryMB = gpolicy.MaxMemoryMBDefault
+	if m := raw.MaxMemoryMB; m != nil {
+		if *m < gpolicy.MaxMemoryMBMin || *m > gpolicy.MaxMemoryMBMax {
+			v.fail("limits.max_memory_mb", "%d is not in %d..%d", *m, gpolicy.MaxMemoryMBMin, gpolicy.MaxMemoryMBMax)
+		} else {
+			l.MaxMemoryMB = *m
+		}
+	}
 	if l.DefaultTimeoutS > l.MaxTimeoutS {
 		if raw.DefaultTimeoutS == nil {
 			l.DefaultTimeoutS = l.MaxTimeoutS

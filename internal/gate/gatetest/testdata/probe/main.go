@@ -245,15 +245,95 @@ func main() {
 		for _, r := range []struct {
 			name string
 			res  int
-		}{{"core", unix.RLIMIT_CORE}, {"nofile", unix.RLIMIT_NOFILE}, {"nproc", unix.RLIMIT_NPROC}} {
+		}{{"core", unix.RLIMIT_CORE}, {"nofile", unix.RLIMIT_NOFILE}, {"nproc", unix.RLIMIT_NPROC}, {"data", unix.RLIMIT_DATA}} {
 			var l unix.Rlimit
 			_ = unix.Getrlimit(r.res, &l)
 			fmt.Printf("%s=%d/%d\n", r.name, l.Cur, l.Max)
 		}
+	case "child-rlimits":
+		// The limits a child of this process gets (inherited across fork
+		// and execve).
+		self, _ := os.Executable()
+		out, err := exec.Command(self, "rlimits").Output() //nolint:gosec,noctx // G204: this probe itself, fixed arguments
+		report(err, strings.TrimSpace(string(out)))
+	case "raise-data":
+		// Try to raise this process's own RLIMIT_DATA: the hard limit, then
+		// both to unlimited. A child of the gate or of the core unit must
+		// get EPERM (no CAP_SYS_RESOURCE).
+		var l unix.Rlimit
+		_ = unix.Getrlimit(unix.RLIMIT_DATA, &l)
+		up := unix.Rlimit{Cur: l.Max, Max: l.Max}
+		if l.Max < 1<<62 {
+			up = unix.Rlimit{Cur: 2 * l.Max, Max: 2 * l.Max}
+		}
+		err1 := unix.Setrlimit(unix.RLIMIT_DATA, &up)
+		err2 := unix.Setrlimit(unix.RLIMIT_DATA, &unix.Rlimit{Cur: unix.RLIM_INFINITY, Max: unix.RLIM_INFINITY})
+		fmt.Printf("raise=%s unlimited=%s\n", errName(err1), errName(err2))
+	case "alloc":
+		// Allocate and touch args[0] MiB; a Go program past RLIMIT_DATA
+		// ends with "fatal error: runtime: out of memory" (exit 2).
+		n, _ := strconv.Atoi(args[0])
+		allocMiB(n)
+		fmt.Printf("allocated %d MiB\n", n)
+	case "alloc-tree":
+		// args[0] children each allocate and hold args[1] MiB; then this
+		// process allocates args[2] MiB, more than any child, so when the
+		// tree reaches its cgroup's MemoryMax= the kernel's OOM killer
+		// chooses this process (the largest).
+		n, _ := strconv.Atoi(args[0])
+		self, _ := os.Executable()
+		for range n {
+			cmd := exec.Command(self, "alloc-hold", args[1]) //nolint:gosec,noctx // G204: this probe itself
+			out, err := cmd.StdoutPipe()
+			if err == nil {
+				err = cmd.Start()
+			}
+			if err != nil {
+				fmt.Println("spawn failed:", err)
+				os.Exit(1)
+			}
+			_, _ = bufio.NewReader(out).ReadString('\n')
+		}
+		m, _ := strconv.Atoi(args[2])
+		allocMiB(m)
+		time.Sleep(120 * time.Second)
+		fmt.Println("the tree was not stopped")
+	case "alloc-hold":
+		n, _ := strconv.Atoi(args[0])
+		allocMiB(n)
+		fmt.Println("ready")
+		time.Sleep(120 * time.Second)
 	default:
 		fmt.Println("unknown")
 		os.Exit(2)
 	}
+}
+
+// held keeps what allocMiB allocated reachable.
+var held [][]byte
+
+// allocMiB allocates n MiB in 1 MiB pieces and writes every page, so the
+// memory is resident, not only reserved.
+func allocMiB(n int) {
+	for range n {
+		b := make([]byte, 1<<20)
+		for i := 0; i < len(b); i += 4096 {
+			b[i] = 1
+		}
+		held = append(held, b)
+	}
+}
+
+// errName is "ok" or the errno's name.
+func errName(err error) string {
+	if err == nil {
+		return "ok"
+	}
+	var e unix.Errno
+	if errors.As(err, &e) {
+		return unix.ErrnoName(e)
+	}
+	return err.Error()
 }
 
 func flood(w io.Writer, n int64) {

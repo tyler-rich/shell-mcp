@@ -9,8 +9,8 @@
 
 | Item | What | Severity (this review) | Decision (maintainer, 2026-10-25) | Schema / protocol / other impact | Session |
 |---|---|---|---|---|---|
-| **N-30** (new) | Nothing bounds the memory of the gate's children: git, and every declared command | **Medium** | **Next version, first:** `limits.max_memory_mb` in the gate policy and in the privileged policy, applied as `RLIMIT_DATA` to the gate's and the helper's children, default measured to fit every example policy's commands (about 1 GiB); the helper units' `MemoryMax=` as the second layer, the unit change shown to the maintainer before it is implemented | Gate and privileged policy: one `limits` key each. execx: one more child rlimit. Generated units: `MemoryMax=` (proposal first). No protocol, error-code, envelope or Landlock change | S6-1 |
-| **N-25** (revised) | A gitlink's own `.git` stalls git (FIFO) **or makes it allocate without bound (a large sparse ref file)** | **Medium** (was low: the memory half is new) | The memory half fixed by N-30 (S6-1); **the FIFO stall accepted** as bounded by the request timeout, and documented | None beyond N-30 | S6-1 |
+| **N-30** (new) — **done (S6-1, PR #61)** | Nothing bounds the memory of the gate's children: git, and every declared command | **Medium** | **Next version, first:** `limits.max_memory_mb` in the gate policy and in the privileged policy, applied as `RLIMIT_DATA` to the gate's and the helper's children, default measured to fit every example policy's commands (about 1 GiB); the helper units' `MemoryMax=` as the second layer, the unit change shown to the maintainer before it is implemented | Gate and privileged policy: one `limits` key each. execx: one more child rlimit. Generated units: `MemoryMax=` (proposal first). No protocol, error-code, envelope or Landlock change | S6-1 |
+| **N-25** (revised) — **done (S6-1, PR #61): memory half fixed, FIFO stall documented** | A gitlink's own `.git` stalls git (FIFO) **or makes it allocate without bound (a large sparse ref file)** | **Medium** (was low: the memory half is new) | The memory half fixed by N-30 (S6-1); **the FIFO stall accepted** as bounded by the request timeout, and documented | None beyond N-30 | S6-1 |
 | **N-22** | A command's `{path:read}` passed as the gate's open descriptor | Low–medium (closes an accepted residual) | **Next version, opt-in `{path:read:fd}`** (name approved), with a `check-policy` WARN for programs measured to give wrong or no-gain results with a descriptor | Gate policy: a new placeholder (approved). **Protocol version bumped** (approved): `exec_preview` gains `fds` and a v2 hash domain. execx passes descriptors. No error code, envelope, Landlock or unit change | S6-2 |
 | **N-26** (+ **N-31**, new) | What a `#!` script runs is not looked at; the GTFOBins warning ignores a script's interpreter | Low (needs root to declare; a review gap, not a bypass) | **Next version:** every `#!` script in the privileged policy needs `acknowledge`; the gate keeps its WARN; the GTFOBins warning also checks the interpreter (N-31) | Privileged policy: no new key, the acknowledge list (list B) extended (approved). Existing privileged policies with scripts stop loading until acknowledged | S6-3 |
 | **N-5** (refined) | Overwrite previews hash the destination through the read op | Low | **The private-key half only** (option b): a private-key file can be rotated with `shell_priv_write_file` and approved; the 256 MiB cap and the gate move's commit-side cap are **deferred** | Protocol: two read-tier ops `hash_file`, `priv_hash_file`, in the bumped version. No schema, error-code, envelope, Landlock or unit change | S6-4 |
@@ -19,6 +19,7 @@
 | X-5, X-6 | Privileged redaction patterns; the gate's audit line for `priv_*` | Documented | **Dropped as work items** (reasons in §7) | — | — |
 | plan §6, S4d | Other package managers, seccomp, OAuth, multi-principal, non-Linux; approval front ends | — | Deferred, unchanged; N-30 is not a reason to start seccomp | — | — |
 | N-29 | Pin the reference deployment to the released digest | Process | Repeat for every release, in its own PR after the tag | — | after each release |
+| **N-32** (new, S6-1) | A command's whole process tree is ended and accounted for from the helper's own view (`/proc` listings and `wait4`), inside the same cgroup as the helper | Informational (design option) | **Recorded as a future design option** (maintainer, 2026-10-26): a per-command sub-cgroup with `Delegate=yes` and `cgroup.kill` | A unit change (`Delegate=`, cgroupfs access), a Landlock change, the exposure score | — |
 
 **Next version: `0.2.0`** (decided), released when S6-1, S6-2 and S6-3 are merged; S6-4 and S6-5 are in it if they are merged by then (§7, §8).
 
@@ -48,6 +49,8 @@
 - **The same key in the privileged policy**, applied to the helper's commands (`priv_exec`) and, where the helper runs a program for a built-in operation (apt-get, dpkg), to that program too, unless S6-1's measurements show a package transaction needs more than the broad unit allows (then it says so before implementing).
 - **The helper units' `MemoryMax=` as the second layer.** Found while recording this: the generated units already carry `MemoryMax=256M` (core) and `MemoryMax=1G` (broad), fixed in `internal/privd/units/units.go`. So the layer exists, but its values do not follow the policy: under a core-unit `MemoryMax=256M`, a 1 GiB `RLIMIT_DATA` would never be reached, and the cgroup's OOM kill would end the whole instance (the helper with its command) instead of failing the command's allocation. S6-1 therefore proposes, and shows the maintainer before implementing, how `MemoryMax=` relates to the key: derived from it with room for the helper itself (for example `max_memory_mb` plus a fixed allowance per unit), or kept fixed with the key's range capped below it. Either is a generated-unit directive change (STOP, approved to propose).
 - TARGET-SETUP recommends `MemoryMax=` on the service account's slice (option d) as the operator's outer bound for the gate.
+
+**Done (S6-1, PR #61, 2026-10-25).** As decided, with the unit change approved by the maintainer: `limits.max_memory_mb` (default 1024, 128..16384, never unlimited) in both policies; `RLIMIT_DATA`, soft and hard, on every child of the gate (declared commands, git, systemctl, journalctl) and of the helper (commands, apt-get); execx refuses a command without one. Both helper units: `MemoryMax=<max_memory_mb + 256>M` and `OOMPolicy=continue`. git's thread counts pinned (`gitx.ThreadKeys`, the maintainer's addition), so its memory need does not follow the CPU count. The gate's git failures name the limit; a command at its limit is its own result (never `outcome_unknown`). `check-policy` reports the limit (and the units' `MemoryMax=`) and warns on `ignore_rlimit_data`. TARGET-SETUP §4 recommends the slice's `MemoryMax=` (option d). Measurements and tests: ARCHIVE §14, S6-1.
 
 **Impact.** Gate policy schema: one optional key (STOP). execx: a fourth child limit, which the helper's commands would also get unless the helper passes its own value (its units already bound it; proposal: the helper keeps relying on `MemoryMax=`, so no privileged schema change; superseded by the decision below, which adds the key to the privileged policy too). No protocol, error-code or envelope change: a command killed or failing on its limit reports its exit status or signal as today; a git operation whose git fails reports the existing failure mapping (to confirm in the session).
 
@@ -82,6 +85,8 @@ A device node cannot be planted (it needs `CAP_MKNOD`), and a symlink to the dev
 **Tests:** S6-1's e2e case above; the stall needs no new test (the timeout path is covered).
 
 **Decision (maintainer, 2026-10-25):** as recommended. The memory half is fixed by N-30 in S6-1; the FIFO stall is accepted as bounded by the request timeout, and S6-1 documents it (POLICY §7, the git tools in TOOLS.md, and the handoff's N-25): a FIFO among a gitlink's git files makes a git operation answer `timeout` after the request's limit, with git's process group killed and nothing run.
+
+**Done (S6-1, PR #61, 2026-10-25).** The memory half: a 1 GiB sparse ref named by the gitlink's `HEAD` now makes `git_status` answer `exec_failed` within a second, naming `limits.max_memory_mb` (unit test and e2e-host). Found while testing: a large `commondir` is read into memory the same way and is stopped the same way. The FIFO stall: accepted and documented (POLICY §7, TOOLS "Memory and the git tools"), as decided.
 
 ## 3. N-22: a `{path:read}` passed as the gate's open descriptor
 
@@ -203,6 +208,23 @@ So the opt-in helps commands that just read their file (the common read-only sha
 - **The threshold follows the new score.** The e2e privileged policy has no root under `/home` (its roots are `/etc/example-app`, `/var/log/example-app` and `/srv/e2e-priv-exec/root`, `test/e2e/setup.sh`), so its core unit should rate 1.3; S6-5 measures it on the runner and sets `E2E_SECURITY_MAX` to the measured value, recorded in ARCHIVE with the systemd version, still with no slack.
 - Tests, failing first: the generator's golden files gain a policy with a `/home` read root (keeps `read-only`) and one with a `/home` write root (keeps `read-only`), and the existing goldens change to `yes` (today's generator fails them); the offline check fails on a broadened copy (above).
 
+## 6a. N-32 (new, S6-1): a per-command sub-cgroup (future design option)
+
+**What, from S6-1.** The helper ends what a command left by listing its own children (per-thread `children` files, or a `/proc` scan) and killing and reaping them until `wait4` reports none (PRIVILEGED §6). In CI, after an OOM kill inside the instance (`MemoryMax=` reached by a tree of processes), that listing failed and the reap answered `outcome_unknown` (fail closed); S6-1 retries the listing within the 5 s bound and adds a `/proc/[0-9]*/stat` fallback (which the core unit's Landlock ruleset does not let read), and success still needs `wait4`'s `ECHILD`.
+
+**The option.** Run each command in a sub-cgroup of the instance: the unit gets `Delegate=yes`, the helper creates `<instance cgroup>/command`, moves the command into it before `execve`, and sets that cgroup's own `memory.max` (and `memory.swap.max` 0). Then:
+- the command's tree is ended atomically with `cgroup.kill` (Linux 5.14+) and its end confirmed by `cgroup.events` reporting `populated 0`, with no `/proc` listing and no reliance on the subreaper;
+- an OOM in the command's cgroup never charges the helper's own memory, so the helper keeps room to answer;
+- `memory.events` of that cgroup tells the helper that the command was OOM-killed, for the answer.
+
+**Trade-offs.**
+- A unit change: `Delegate=yes`, and write access to the instance's own cgroup directory, which `ProtectControlGroups=yes` forbids today (it would need `ProtectControlGroups=private` on systemd 257+ or a narrower `ReadWritePaths=`); the core unit's exposure score would move and its threshold be reconsidered.
+- A Landlock change: the helper's ruleset would need write access to its cgroup directory under `/sys/fs/cgroup`.
+- `OOMPolicy=` then applies to the sub-cgroup's kills as well; `memory.oom.group` on the sub-cgroup would kill the whole command tree at once, which may be what is wanted.
+- More code in the helper's start path (cgroup creation, migration, cleanup on every exit path), all of it root's.
+
+**Decision (maintainer, 2026-10-26):** recorded as a future design option; not scheduled.
+
 ## 7. Other open items, and the next version
 
 - **N-14** (no operation for `dpkg --configure -a`): the documented broad-unit template works and is the operator's reviewed exception. Defer; a new op would be a protocol change for a rare recovery.
@@ -221,7 +243,7 @@ So the opt-in helps commands that just read their file (the common read-only sha
 
 | Order | Session | Branch | Concern | Stops inside the session |
 |---|---|---|---|---|
-| 1 | **S6-1** | `sec/gate-child-memory` | N-30 and N-25's memory half: `limits.max_memory_mb` in the gate and privileged policies, `RLIMIT_DATA` for the gate's and the helper's children, the default measured against every example policy; TARGET-SETUP's slice `MemoryMax=`; N-25's FIFO stall documented as accepted | **Before implementing the unit change:** show the maintainer how the helper units' `MemoryMax=` (today fixed at 256M and 1G) relates to the key |
+| 1 | **S6-1** (done, PR #61, branch `feat/memory-limit`) | `sec/gate-child-memory` | N-30 and N-25's memory half: `limits.max_memory_mb` in the gate and privileged policies, `RLIMIT_DATA` for the gate's and the helper's children, the default measured against every example policy; TARGET-SETUP's slice `MemoryMax=`; N-25's FIFO stall documented as accepted | **Before implementing the unit change:** show the maintainer how the helper units' `MemoryMax=` (today fixed at 256M and 1G) relates to the key |
 | 2 | **S6-2** | `feat/gate-read-fd` | N-22: `{path:read:fd}`, descriptors through execx, `exec_preview`'s `fds` and v2 hash, the descriptor `check-policy` WARN; the protocol version bump | **First:** confirm at the source what `hello` and the server's version check support, then design the bump from it |
 | 3 | **S6-3** | `sec/script-acknowledge` | N-26 (c) and N-31 | — |
 | 4 | S6-4 | `feat/priv-key-preview-hash` | N-5 (b): `hash_file` and `priv_hash_file` for overwrite previews, the 256 MiB cap kept | in the protocol version S6-2 introduced, if before the release; else a further bump |

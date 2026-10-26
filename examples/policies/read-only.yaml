@@ -33,6 +33,9 @@ limits:
   max_output_bytes: 262144
   max_read_bytes: 1048576
   max_processes: 2000
+  # The memory limit (RLIMIT_DATA) of every command and git process, in MiB:
+  # 128..16384, 1024 when omitted (measured to fit these commands).
+  max_memory_mb: 1024
 
 paths:
   # Read roots. /, /proc, /sys, /dev and /run can never be roots.

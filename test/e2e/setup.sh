@@ -337,6 +337,16 @@ commands:
     path: /usr/local/bin/example-probe
     tier: operator
     templates: [["write", "{path:write}"], ["echo", "{path:write}"]]
+  # The child memory limit (memory_test.go, handoff N-30): the probe reports,
+  # tries to raise and tests it; jq reads an owner-matched {path:read}.
+  - id: probe-mem
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["rlimits"], ["child-rlimits"], ["raise-data"], ["alloc", "{int:1-4096}"]]
+  - id: jq-keys
+    path: /usr/bin/jq
+    tier: read
+    templates: [["-c", "keys", "{path:read}"]]
 EOF
 chmod 0644 /etc/shell-mcp/gate-hardening.yaml
 /usr/local/bin/shell-mcp-gate check-policy --policy /etc/shell-mcp/gate-hardening.yaml >/dev/null
@@ -452,6 +462,17 @@ commands:
     path: /usr/local/bin/example-probe
     tier: read
     templates: [["rlimits"], ["procattrs"], ["ignore-term", "60s"]]
+  # The child memory limit in the core unit (memory_test.go, handoff N-30):
+  # reported, not raisable, inherited, and a child tree that reaches the
+  # unit's MemoryMax=; jq reading a large root-owned fixture.
+  - id: probe-mem
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["rlimits"], ["child-rlimits"], ["raise-data"], ["alloc-tree", "{int:1-8}", "{int:1-4096}", "{int:1-4096}"]]
+  - id: jq-keys
+    path: /usr/bin/jq
+    tier: read
+    templates: [["-c", "keys", "{path:read}"]]
   - id: probe-read-outside
     path: /usr/local/bin/example-probe
     tier: read

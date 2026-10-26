@@ -23,7 +23,7 @@ func minimalPolicy() *policy.Policy {
 	return &policy.Policy{
 		ClientUID: 60123, SocketGroup: "svc-shell-priv", SocketGID: 60124,
 		MaxTier: policy.TierRead, Landlock: policy.LandlockRequired,
-		Limits:       policy.Limits{MaxReadBytes: 1 << 20, MaxWriteBytes: 1 << 20, MaxOutputBytes: 1 << 20, DefaultTimeoutS: 60, MaxTimeoutS: 900, MaxDeleteEntries: 1000},
+		Limits:       policy.Limits{MaxReadBytes: 1 << 20, MaxWriteBytes: 1 << 20, MaxOutputBytes: 1 << 20, DefaultTimeoutS: 60, MaxTimeoutS: 900, MaxDeleteEntries: 1000, MaxMemoryMB: 1024},
 		ModesMax:     0o755,
 		BackupsKeep:  10,
 		Capabilities: append([]string(nil), policy.BaseCapabilities...),
@@ -171,7 +171,14 @@ func TestServiceDirectives(t *testing.T) {
 	want(t, d, s+"UMask", "0077")
 	want(t, d, s+"RuntimeMaxSec", "150")
 	want(t, d, s+"TasksMax", "64")
-	want(t, d, s+"MemoryMax", "256M")
+	// MemoryMax= is limits.max_memory_mb plus room for the helper itself, and
+	// an OOM kill in the instance ends the process it chose, not the
+	// instance (N-30).
+	want(t, d, s+"MemoryMax", "1280M")
+	// No swap: MemoryMax= bounds memory and swap together, so the OOM
+	// killer acts at it on a host with swap too.
+	want(t, d, s+"MemorySwapMax", "0")
+	want(t, d, s+"OOMPolicy", "continue")
 	// A helper instance that dies leaves nothing behind for long: whatever
 	// is left in its cgroup gets SIGTERM, then SIGKILL after 5 s, including a
 	// command that switched user and so lost its parent-death signal.
@@ -179,13 +186,13 @@ func TestServiceDirectives(t *testing.T) {
 	want(t, d, s+"TimeoutStopSec", "5")
 	want(t, d, "[Unit]CollectMode", "inactive-or-failed")
 	// Nothing else: a directive the generator adds must be added here.
-	if n := len(d); n != 43 {
+	if n := len(d); n != 45 {
 		keys := make([]string, 0, n)
 		for k := range d {
 			keys = append(keys, k)
 		}
 		slices.Sort(keys)
-		t.Errorf("%d directives, want 43: %q", n, keys)
+		t.Errorf("%d directives, want 45: %q", n, keys)
 	}
 }
 
@@ -303,6 +310,37 @@ func broadPolicy() *policy.Policy {
 	return p
 }
 
+// TestMemoryMaxFollowsKey: both units' MemoryMax= is limits.max_memory_mb
+// plus units.HelperMemoryMB (256 MiB for the helper itself), so a command
+// reaches its own RLIMIT_DATA before the instance's cgroup limit (N-30);
+// a policy without the limit set makes no units.
+func TestMemoryMaxFollowsKey(t *testing.T) {
+	for _, c := range []struct {
+		mb   int
+		want string
+	}{{128, "384M"}, {256, "512M"}, {1024, "1280M"}, {16384, "16640M"}} {
+		p := broadPolicy()
+		p.Limits.MaxMemoryMB = c.mb
+		for unit, svc := range map[string]string{"core": generate(t, p).Service, "broad": generateBroad(t, p).Service} {
+			d := directives(t, svc)
+			want(t, d, "[Service]MemoryMax", c.want)
+			want(t, d, "[Service]MemorySwapMax", "0")
+			want(t, d, "[Service]OOMPolicy", "continue")
+			if t.Failed() {
+				t.Fatalf("%s unit, max_memory_mb %d", unit, c.mb)
+			}
+		}
+	}
+	p := broadPolicy()
+	p.Limits.MaxMemoryMB = 0
+	if _, err := units.Core(p); err == nil {
+		t.Fatal("a core unit without a memory limit")
+	}
+	if _, err := units.Broad(p); err == nil {
+		t.Fatal("a broad unit without a memory limit")
+	}
+}
+
 func generateBroad(t *testing.T, p *policy.Policy) units.Files {
 	t.Helper()
 	f, err := units.Broad(p)
@@ -375,7 +413,9 @@ func TestBroadServiceDirectives(t *testing.T) {
 	}
 	want(t, d, s+"RuntimeMaxSec", "150")
 	want(t, d, s+"TasksMax", "256")
-	want(t, d, s+"MemoryMax", "1G")
+	want(t, d, s+"MemoryMax", "1280M")
+	want(t, d, s+"MemorySwapMax", "0")
+	want(t, d, s+"OOMPolicy", "continue")
 	want(t, d, s+"KillMode", "control-group")
 	want(t, d, s+"TimeoutStopSec", "5")
 	want(t, d, "[Unit]CollectMode", "inactive-or-failed")
@@ -388,13 +428,13 @@ func TestBroadServiceDirectives(t *testing.T) {
 			t.Errorf("the broad unit sets %s=%v, which §5.2 does not list", k, v)
 		}
 	}
-	if n := len(d); n != 19 {
+	if n := len(d); n != 21 {
 		keys := make([]string, 0, n)
 		for k := range d {
 			keys = append(keys, k)
 		}
 		slices.Sort(keys)
-		t.Errorf("%d directives, want 19: %q", n, keys)
+		t.Errorf("%d directives, want 21: %q", n, keys)
 	}
 }
 

@@ -37,6 +37,9 @@ func testEnv(t *testing.T, y string) (env *loadEnv, policyPath string) {
 		executable:    exe,
 		systemBinDirs: []string{filepath.Join(d, "sysbin")},
 		varRun:        filepath.Join(d, "var-run"),
+		// The host's own parameter; TestCheckPolicyReportsMemoryLimit
+		// passes its own.
+		ignoreRLimitData: execx.IgnoreRLimitDataPath,
 		lookups: func(o *policy.LoadOptions) {
 			o.LookupUser = func(n string) (uint32, error) {
 				if n == "root" {
@@ -467,5 +470,31 @@ func TestCheckPolicyReportsMultiCall(t *testing.T) {
 	if !strings.Contains(so.String(), "command owner: tier read, unit core, "+filepath.Join(bin, "chown")+" [uutils applet chown]") ||
 		!strings.Contains(so.String(), "command renew: tier read, unit core, "+filepath.Join(bin, "renew")+" [#! script run by "+filepath.Join(bin, "example-interp")+"]") {
 		t.Fatalf("check-policy:\n%s\n%s", so.String(), se.String())
+	}
+}
+
+// TestCheckPolicyReportsMemoryLimit: check-policy reports the effective
+// memory limit of the helper's commands and the MemoryMax= its units get
+// (the limit plus 256 MiB for the helper itself), and warns when the
+// kernel's ignore_rlimit_data parameter is set (handoff N-30).
+func TestCheckPolicyReportsMemoryLimit(t *testing.T) {
+	env, p := testEnv(t, validPolicy)
+	env.ignoreRLimitData = filepath.Join(t.TempDir(), "ignore_rlimit_data")
+	if err := os.WriteFile(env.ignoreRLimitData, []byte("N\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var so, se bytes.Buffer
+	checkPolicyWith([]string{"--policy", p}, &so, &se, env)
+	if !strings.Contains(so.String(), "memory: limits.max_memory_mb 1024 MiB") || !strings.Contains(so.String(), "MemoryMax=1280M") ||
+		strings.Contains(so.String(), "ignore_rlimit_data") {
+		t.Fatalf("report:\n%s", so.String())
+	}
+	if err := os.WriteFile(env.ignoreRLimitData, []byte("Y\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	so.Reset()
+	checkPolicyWith([]string{"--policy", p}, &so, &se, env)
+	if !strings.Contains(so.String(), "WARN kernel: ignore_rlimit_data is set") {
+		t.Fatalf("ignore_rlimit_data=Y not flagged:\n%s", so.String())
 	}
 }

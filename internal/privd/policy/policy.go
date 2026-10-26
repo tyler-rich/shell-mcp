@@ -106,6 +106,9 @@ type Limits struct {
 	DefaultTimeoutS  int
 	MaxTimeoutS      int
 	MaxDeleteEntries int
+	// MaxMemoryMB is every command's RLIMIT_DATA, soft and hard, in MiB;
+	// the units' MemoryMax= is it plus units.HelperMemoryMB.
+	MaxMemoryMB int
 }
 
 // Paths holds the roots and the matchers the helper's fsx uses.

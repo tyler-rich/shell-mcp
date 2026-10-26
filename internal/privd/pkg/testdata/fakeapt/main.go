@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // logPath is set with -ldflags "-X main.logPath=…".
@@ -40,6 +41,14 @@ func main() {
 	if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil { //nolint:gosec // G304: test log path baked in by the test
 		b, _ := json.Marshal(map[string][]string{"args": os.Args[1:], "env": env})
 		_, _ = f.Write(append(b, '\n'))
+		_ = f.Close()
+	}
+	// The memory limit it runs with, one line per run in a log of its own
+	// (logPath.limits): data=<soft>/<hard>.
+	if f, err := os.OpenFile(logPath+".limits", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil { //nolint:gosec // G304: test log path baked in by the test
+		var l syscall.Rlimit
+		_ = syscall.Getrlimit(syscall.RLIMIT_DATA, &l)
+		_, _ = fmt.Fprintf(f, "data=%d/%d\n", l.Cur, l.Max)
 		_ = f.Close()
 	}
 	mode, _ := os.ReadFile(logPath + ".mode") //nolint:gosec // G304: test control file

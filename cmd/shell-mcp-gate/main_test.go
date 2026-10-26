@@ -360,3 +360,41 @@ func TestCheckPolicyReportsMultiCall(t *testing.T) {
 		t.Fatalf("check-policy:\n%s", out.String())
 	}
 }
+
+// TestCheckPolicyReportsMemoryLimit: check-policy reports the effective
+// child memory limit (default and set), and warns when the kernel's
+// ignore_rlimit_data parameter is set or unreadable (handoff N-30).
+func TestCheckPolicyReportsMemoryLimit(t *testing.T) {
+	d := gatetest.SecureDir(t)
+	gatetest.Mkdir(t, filepath.Join(d, "home"), 0o755)
+	param := filepath.Join(d, "ignore_rlimit_data")
+	p := filepath.Join(d, "etc", "policy.yaml")
+	check := func(policyYAML, paramValue string) string {
+		t.Helper()
+		gatetest.WriteFile(t, p, policyYAML, 0o644)
+		_ = os.Remove(param)
+		if paramValue != "" {
+			gatetest.WriteFile(t, param, paramValue, 0o644)
+		}
+		var out, errb bytes.Buffer
+		checkPolicyWithParam([]string{"--policy", p}, &out, &errb, gatetest.Trust(), filepath.Join(d, "home"), param)
+		return out.String()
+	}
+	base := "version: 1\nmax_tier: read\nsandbox:\n  landlock: best-effort\n"
+	out := check(base, "N\n")
+	if !strings.Contains(out, "ok   limits.max_memory_mb: 1024 MiB") || strings.Contains(out, "ignore_rlimit_data") {
+		t.Fatalf("default limit:\n%s", out)
+	}
+	out = check(base+"limits:\n  max_memory_mb: 256\n", "N\n")
+	if !strings.Contains(out, "ok   limits.max_memory_mb: 256 MiB") {
+		t.Fatalf("limit 256:\n%s", out)
+	}
+	out = check(base, "Y\n")
+	if !strings.Contains(out, "WARN kernel: ignore_rlimit_data is set") {
+		t.Fatalf("ignore_rlimit_data=Y not flagged:\n%s", out)
+	}
+	out = check(base, "")
+	if !strings.Contains(out, "WARN kernel: could not read ignore_rlimit_data") {
+		t.Fatalf("an unreadable parameter not flagged:\n%s", out)
+	}
+}

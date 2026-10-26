@@ -52,6 +52,7 @@ type limitsWire struct {
 	MaxFindDepth     int `json:"MaxFindDepth"`
 	MaxDeleteEntries int `json:"MaxDeleteEntries"`
 	MaxProcesses     int `json:"MaxProcesses"`
+	MaxMemoryMB      int `json:"MaxMemoryMB"`
 }
 
 // PolicyData is shell_get_policy's data.
@@ -97,6 +98,7 @@ type PrivLimits struct {
 	DefaultTimeoutS  int `json:"default_timeout_s" jsonschema:"Default operation timeout in seconds."`
 	MaxTimeoutS      int `json:"max_timeout_s" jsonschema:"Longest operation timeout in seconds."`
 	MaxDeleteEntries int `json:"max_delete_entries" jsonschema:"Most entries of a recursive delete, chown or chmod."`
+	MaxMemoryMB      int `json:"max_memory_mb" jsonschema:"Memory limit (RLIMIT_DATA) of every root command, apt-get included, in MiB."`
 }
 
 // PrivRoots are the privileged roots.
@@ -228,6 +230,7 @@ type Limits struct {
 	MaxFindDepth     int `json:"max_find_depth" jsonschema:"Deepest find walk."`
 	MaxDeleteEntries int `json:"max_delete_entries" jsonschema:"Most entries of a recursive delete."`
 	MaxProcesses     int `json:"max_processes" jsonschema:"Most processes listed."`
+	MaxMemoryMB      int `json:"max_memory_mb" jsonschema:"Memory limit (RLIMIT_DATA) of every command and git process, in MiB."`
 }
 
 // Paths are the policy's roots.
