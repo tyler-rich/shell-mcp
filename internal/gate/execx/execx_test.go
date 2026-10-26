@@ -758,6 +758,12 @@ func TestStartFailure(t *testing.T) {
 // silent 0, which would drop RLIMIT_NPROC (handoff N-30's audit).
 func TestUserTasksIn(t *testing.T) {
 	d := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(d, "sys", "kernel"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "sys", "kernel", "pid_max"), []byte("32768\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for pid, s := range map[string]string{
 		"100": "Name:\ta\nUid:\t4321\t4321\t4321\t4321\nThreads:\t3\n",
 		"101": "Name:\tb\nUid:\t4321\t4321\t4321\t4321\nThreads:\t2\n",
@@ -780,6 +786,50 @@ func TestUserTasksIn(t *testing.T) {
 	}
 	if n, err := execx.UserTasksIn(filepath.Join(d, "missing"), 4321); err == nil {
 		t.Fatalf("a /proc that cannot be listed counted %d tasks", n)
+	}
+}
+
+// TestUserTasksInBoundFromPidMax: the scan's bound follows the kernel's
+// pid_max (<proc>/sys/kernel/pid_max), not a fixed cap: a /proc with more
+// entries than 65,536 is counted when pid_max allows that many processes;
+// more entries than pid_max allows, or a pid_max that cannot be read, is
+// an error naming the reason.
+func TestUserTasksInBoundFromPidMax(t *testing.T) {
+	d := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(d, "sys", "kernel"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pidMax := filepath.Join(d, "sys", "kernel", "pid_max")
+	if err := os.WriteFile(pidMax, []byte("4194304\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const many = 1<<16 + 64 // more than the old fixed cap
+	for i := range many {
+		if err := os.Mkdir(filepath.Join(d, strconv.Itoa(1000+i)), 0o700); err != nil { // processes that went away
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(d, "1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(d, "1", "status"), []byte("Uid:\t4321\t4321\t4321\t4321\nThreads:\t7\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := execx.UserTasksIn(d, 4321); err != nil || n != 7 {
+		t.Fatalf("%d entries under pid_max 4194304: %d %v, want 7", many+1, n, err)
+	}
+	// More entries than pid_max allows processes: the scan's own bound.
+	if err := os.WriteFile(pidMax, []byte("1000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := execx.UserTasksIn(d, 4321); err == nil || !strings.Contains(err.Error(), "pid_max") {
+		t.Fatalf("more entries than pid_max allows: %v", err)
+	}
+	if err := os.Remove(pidMax); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := execx.UserTasksIn(d, 4321); err == nil || !strings.Contains(err.Error(), "pid_max") {
+		t.Fatalf("an unreadable pid_max: %v", err)
 	}
 }
 
