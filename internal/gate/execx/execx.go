@@ -165,6 +165,8 @@ func Run(ctx context.Context, spec *Spec) (Result, error) {
 type hooks struct {
 	// afterStart runs in the parent right after the child started.
 	afterStart func()
+	// procDir replaces /proc for counting the user's tasks.
+	procDir string
 }
 
 func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
@@ -197,7 +199,7 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	if env == nil {
 		env = []string{}
 	}
-	cfg, err := encodeConfig(&trampolineConfig{Path: s.Path, Argv: append([]string{s.Path}, s.Args...), Env: env, Dir: dir, Limits: childLimits(s.MaxMemoryMB)})
+	cfg, err := encodeConfig(&trampolineConfig{Path: s.Path, Argv: append([]string{s.Path}, s.Args...), Env: env, Dir: dir, Limits: childLimits(s.MaxMemoryMB, procDirOf(h))})
 	if err != nil {
 		return Result{}, startError(err)
 	}
@@ -304,10 +306,10 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 // such as git's packs. Soft and hard limits are both set, so the command
 // cannot raise them without CAP_SYS_RESOURCE. Each is only ever lowered,
 // which needs no privilege.
-func childLimits(memoryMB int) []childLimit {
+func childLimits(memoryMB int, procDir string) []childLimit {
 	l := []childLimit{{Resource: unix.RLIMIT_CORE, Max: 0}, {Resource: unix.RLIMIT_NOFILE, Max: ChildNofile},
 		{Resource: unix.RLIMIT_DATA, Max: uint64(memoryMB) << 20}} //nolint:gosec // G115: memoryMB is checked to be 1..MaxMemoryMB by run
-	if n := userTasks(os.Getuid()); n > 0 {
+	if n, _ := userTasksIn(procDir, os.Getuid()); n > 0 {
 		l = append(l, childLimit{Resource: unix.RLIMIT_NPROC, Max: n + ChildExtraTasks})
 	}
 	return l
@@ -352,18 +354,32 @@ func startError(err error) error {
 	return fmt.Errorf("%w", ErrStart)
 }
 
-// userTasks counts the tasks (threads) whose real uid is uid, from
-// /proc/<pid>/status. It returns 0 if /proc cannot be read or the scan
-// would exceed its bound.
+// procDirOf is the test hooks' /proc, or /proc.
+func procDirOf(h *hooks) string {
+	if h != nil && h.procDir != "" {
+		return h.procDir
+	}
+	return "/proc"
+}
+
+// userTasks counts uid's tasks under /proc (userTasksIn).
 func userTasks(uid int) uint64 {
-	d, err := os.Open("/proc")
+	n, _ := userTasksIn("/proc", uid)
+	return n
+}
+
+// userTasksIn counts the tasks (threads) whose real uid is uid, from
+// procDir/<pid>/status. It returns 0 if procDir cannot be read or the scan
+// would exceed its bound.
+func userTasksIn(procDir string, uid int) (uint64, error) {
+	d, err := os.Open(procDir) //nolint:gosec // G304: /proc, or the tests' own directory
 	if err != nil {
-		return 0
+		return 0, nil
 	}
 	defer func() { _ = d.Close() }()
 	names, err := d.Readdirnames(maxProcScan + 1)
 	if err != nil || len(names) > maxProcScan {
-		return 0
+		return 0, nil
 	}
 	want := strconv.Itoa(uid)
 	var total uint64
@@ -371,7 +387,7 @@ func userTasks(uid int) uint64 {
 		if n == "" || n[0] < '0' || n[0] > '9' {
 			continue
 		}
-		f, err := os.Open("/proc/" + n + "/status") //nolint:gosec // G304: n is a numeric /proc entry name
+		f, err := os.Open(procDir + "/" + n + "/status") //nolint:gosec // G304: n is a numeric /proc entry name
 		if err != nil {
 			continue
 		}
@@ -396,5 +412,5 @@ func userTasks(uid int) uint64 {
 			total += threads
 		}
 	}
-	return total
+	return total, nil
 }

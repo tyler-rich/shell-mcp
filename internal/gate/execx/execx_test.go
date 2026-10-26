@@ -751,3 +751,49 @@ func TestStartFailure(t *testing.T) {
 		t.Fatalf("relative path: %v", err)
 	}
 }
+
+// TestUserTasksIn counts uid's tasks from <proc>/<pid>/status (Threads of
+// every process whose real uid matches), skipping non-pid entries and a
+// process that went away, and fails when /proc cannot be listed: never a
+// silent 0, which would drop RLIMIT_NPROC (handoff N-30's audit).
+func TestUserTasksIn(t *testing.T) {
+	d := t.TempDir()
+	for pid, s := range map[string]string{
+		"100": "Name:\ta\nUid:\t4321\t4321\t4321\t4321\nThreads:\t3\n",
+		"101": "Name:\tb\nUid:\t4321\t4321\t4321\t4321\nThreads:\t2\n",
+		"102": "Name:\tc\nUid:\t7\t7\t7\t7\nThreads:\t9\n",
+	} {
+		if err := os.MkdirAll(filepath.Join(d, pid), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, pid, "status"), []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, n := range []string{"self", "103"} { // not a pid; a pid that went away
+		if err := os.MkdirAll(filepath.Join(d, n), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := execx.UserTasksIn(d, 4321); err != nil || n != 5 {
+		t.Fatalf("tasks of 4321: %d %v, want 5", n, err)
+	}
+	if n, err := execx.UserTasksIn(filepath.Join(d, "missing"), 4321); err == nil {
+		t.Fatalf("a /proc that cannot be listed counted %d tasks", n)
+	}
+}
+
+// TestRunRefusesWithoutTaskCount: when the service account's tasks cannot
+// be counted, Run refuses (ErrStart naming RLIMIT_NPROC) instead of starting
+// the command without the limit. Root is exempt from RLIMIT_NPROC in the
+// kernel, so the helper's commands do not need the count.
+func TestRunRefusesWithoutTaskCount(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("uid 0 is exempt from RLIMIT_NPROC")
+	}
+	_, err := execx.RunWithProcDir(context.Background(), &execx.Spec{MaxMemoryMB: testMemoryMB, Path: probePath(t), Args: []string{"echo", "x"},
+		Trampoline: gatetest.Trampoline(t), Env: execx.Environment("/"), Timeout: 10 * time.Second, MaxOutput: 1 << 10}, filepath.Join(t.TempDir(), "missing"))
+	if !errors.Is(err, execx.ErrStart) || !strings.Contains(err.Error(), "RLIMIT_NPROC") {
+		t.Fatalf("a command without its task count: %v, want ErrStart naming RLIMIT_NPROC", err)
+	}
+}

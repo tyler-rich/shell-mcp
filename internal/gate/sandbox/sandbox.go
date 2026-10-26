@@ -401,17 +401,18 @@ func ApplyRules(mode policy.LandlockMode, rules *Rules) (Report, error) {
 		}
 		r.MPTCP = "not blocked: seccomp is unavailable"
 	}
-	if err := allThreadsNoNewPrivs(r.MPTCP == MPTCPStatus); err != nil {
+	if err := allThreadsNoNewPrivsIn("/proc/self/task", r.MPTCP == MPTCPStatus); err != nil {
 		return r, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	r.NoNewPrivs = true
 	return r, nil
 }
 
-// allThreadsNoNewPrivs checks /proc/self/task/*/status: NoNewPrivs is 1,
-// and (when the MPTCP filter was installed) Seccomp is 2 (filter mode).
-func allThreadsNoNewPrivs(wantSeccomp bool) error {
-	tasks, err := os.ReadDir("/proc/self/task")
+// allThreadsNoNewPrivsIn checks taskDir/*/status (production:
+// /proc/self/task): NoNewPrivs is 1, and (when the MPTCP filter was
+// installed) Seccomp is 2 (filter mode).
+func allThreadsNoNewPrivsIn(taskDir string, wantSeccomp bool) error {
+	tasks, err := os.ReadDir(taskDir)
 	if err != nil {
 		return fmt.Errorf("cannot list threads: %w", err)
 	}
@@ -419,7 +420,7 @@ func allThreadsNoNewPrivs(wantSeccomp bool) error {
 		return errors.New("no threads listed")
 	}
 	for _, t := range tasks {
-		b, err := os.ReadFile("/proc/self/task/" + t.Name() + "/status")
+		b, err := os.ReadFile(taskDir + "/" + t.Name() + "/status") //nolint:gosec // G304: a task entry of the fixed task directory
 		if err != nil {
 			continue // thread exited
 		}

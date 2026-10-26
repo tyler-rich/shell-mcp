@@ -457,6 +457,9 @@ func watchHangup(c net.Conn) <-chan struct{} {
 type ReapHooks struct {
 	// Children lists the children (production: /proc/self/task/*/children).
 	Children func() ([]int, error)
+	// Fallback lists them another way (production: /proc/[0-9]*/stat);
+	// nil means none.
+	Fallback func() ([]int, error)
 	// Wait is wait4(-1, WNOHANG): the pid of a child that ended, 0 when
 	// children are left and none ended, or ECHILD when none is left.
 	Wait func() (int, error)
@@ -465,11 +468,14 @@ type ReapHooks struct {
 // reap kills and reaps every child left after a command (reapOrphans), with
 // the test hooks when set.
 func (s *server) reap() error {
-	list, wait := children, waitAnyChild
+	lists, wait := []func() ([]int, error){children}, waitAnyChild
 	if h := s.o.ReapHooks; h != nil {
-		list, wait = h.Children, h.Wait
+		lists, wait = []func() ([]int, error){h.Children}, h.Wait
+		if h.Fallback != nil {
+			lists = append(lists, h.Fallback)
+		}
 	}
-	return reapOrphans(reapBound, list, func(pid int) { _ = unix.Kill(pid, unix.SIGKILL) }, wait)
+	return reapOrphans(reapBound, lists, func(pid int) { _ = unix.Kill(pid, unix.SIGKILL) }, wait)
 }
 
 func waitAnyChild() (int, error) {
@@ -486,10 +492,10 @@ func waitAnyChild() (int, error) {
 // left. It fails closed: it returns nil only then, and an error when the
 // children cannot be listed (they could not be killed) or some are still
 // there after bound.
-func reapOrphans(bound time.Duration, list func() ([]int, error), kill func(int), wait func() (int, error)) error {
+func reapOrphans(bound time.Duration, lists []func() ([]int, error), kill func(int), wait func() (int, error)) error {
 	deadline := time.Now().Add(bound)
 	for {
-		pids, lerr := list()
+		pids, lerr := lists[0]()
 		for _, pid := range pids {
 			kill(pid)
 		}
@@ -522,8 +528,17 @@ const maxChildren = 4096
 // (the helper's own /proc/<pid>, which its Landlock ruleset and
 // ProcSubset=pid leave readable). Any file it cannot read, or finding none
 // (a kernel without CONFIG_PROC_CHILDREN), is an error.
-func children() ([]int, error) {
-	tasks, err := filepath.Glob("/proc/self/task/*/children")
+func children() ([]int, error) { return childrenIn("/proc/self/task") }
+
+// childrenByStatIn lists the processes under procDir whose parent is ppid.
+func childrenByStatIn(procDir string, ppid int) ([]int, error) {
+	_, _ = procDir, ppid
+	return nil, errors.New("not implemented")
+}
+
+// childrenIn lists the children from taskDir/*/children.
+func childrenIn(taskDir string) ([]int, error) {
+	tasks, err := filepath.Glob(taskDir + "/*/children")
 	if err != nil {
 		return nil, err
 	}
