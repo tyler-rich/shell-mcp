@@ -10,9 +10,9 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,6 +24,7 @@ import (
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
+	"github.com/tyler-rich/shell-mcp/internal/gate/procfs"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
 	"github.com/tyler-rich/shell-mcp/internal/template"
@@ -468,7 +469,7 @@ type ReapHooks struct {
 // reap kills and reaps every child left after a command (reapOrphans), with
 // the test hooks when set.
 func (s *server) reap() error {
-	lists, wait := []func() ([]int, error){children}, waitAnyChild
+	lists, wait := []func() ([]int, error){children, childrenByStat}, waitAnyChild
 	if h := s.o.ReapHooks; h != nil {
 		lists, wait = []func() ([]int, error){h.Children}, h.Wait
 		if h.Fallback != nil {
@@ -489,32 +490,34 @@ func waitAnyChild() (int, error) {
 // round lists the children (so one born of a process killed in the
 // previous round, reparented here, is killed in the next), kills them, and
 // reaps whatever has ended; the rounds go on until wait4 says no child is
-// left. It fails closed: it returns nil only then, and an error when the
-// children cannot be listed (they could not be killed) or some are still
-// there after bound.
+// left. Each round uses the first of lists that works (the per-thread
+// children files, then the /proc scan), and a round whose listings all
+// fail kills what they found and lists again in the next (handoff N-30:
+// after an OOM kill in the instance, the listing failed once and the reap
+// gave up). It fails closed: it returns nil only when wait4 reports ECHILD
+// (the kernel's own word that no child is left, whatever the listings
+// said), and after bound an error carrying the last round's listing error,
+// or saying that children were still there.
 func reapOrphans(bound time.Duration, lists []func() ([]int, error), kill func(int), wait func() (int, error)) error {
 	deadline := time.Now().Add(bound)
 	for {
-		pids, lerr := lists[0]()
+		pids, lerr := listChildren(lists)
 		for _, pid := range pids {
 			kill(pid)
 		}
 		for {
 			pid, err := wait()
 			if errors.Is(err, unix.ECHILD) {
-				if lerr != nil {
-					return fmt.Errorf("the children could not be listed: %w", lerr)
-				}
 				return nil
 			}
 			if err != nil || pid <= 0 {
 				break
 			}
 		}
-		if lerr != nil {
-			return fmt.Errorf("the children could not be listed, so some are left: %w", lerr)
-		}
 		if time.Now().After(deadline) {
+			if lerr != nil {
+				return fmt.Errorf("the children could not be listed, so some may be left: %w", lerr)
+			}
 			return fmt.Errorf("children of the command were still there %v after it ended", bound)
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -526,35 +529,44 @@ const maxChildren = 4096
 
 // children lists this process's children from /proc/self/task/*/children
 // (the helper's own /proc/<pid>, which its Landlock ruleset and
-// ProcSubset=pid leave readable). Any file it cannot read, or finding none
-// (a kernel without CONFIG_PROC_CHILDREN), is an error.
+// ProcSubset=pid leave readable).
 func children() ([]int, error) { return childrenIn("/proc/self/task") }
 
-// childrenByStatIn lists the processes under procDir whose parent is ppid.
-func childrenByStatIn(procDir string, ppid int) ([]int, error) {
-	_, _ = procDir, ppid
-	return nil, errors.New("not implemented")
-}
+// childrenByStat is the fallback listing: the processes in /proc whose
+// parent is this process. In the core unit Landlock grants no read of
+// other processes' /proc entries, so there it fails with the real error
+// (EACCES); it serves where no Landlock ruleset applies (the broad unit).
+func childrenByStat() ([]int, error) { return childrenByStatIn("/proc", os.Getpid()) }
 
-// childrenIn lists the children from taskDir/*/children.
+// ended reports an error that means the process or thread went away
+// between the listing and the read.
+func ended(err error) bool { return errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ESRCH) }
+
+// childrenIn lists the children from taskDir/<tid>/children, with the real
+// error: the task directory or a children file that cannot be read (its
+// errno included), or no children file read at all (a kernel without
+// CONFIG_PROC_CHILDREN). A thread that ended meanwhile is skipped.
 func childrenIn(taskDir string) ([]int, error) {
-	tasks, err := filepath.Glob(taskDir + "/*/children")
+	ents, err := os.ReadDir(taskDir)
 	if err != nil {
 		return nil, err
 	}
-	if len(tasks) == 0 {
-		return nil, errors.New("no /proc/self/task/*/children file")
-	}
 	var out []int
-	for _, t := range tasks {
-		b, err := os.ReadFile(t)                           //nolint:gosec // G304: a /proc/self path from a fixed pattern
-		if err != nil && !errors.Is(err, os.ErrNotExist) { // a thread that ended meanwhile
+	read := 0
+	for _, e := range ents {
+		p := taskDir + "/" + e.Name() + "/children"
+		b, err := os.ReadFile(p) //nolint:gosec // G304: a task entry of the fixed task directory
+		if ended(err) {
+			continue
+		}
+		if err != nil {
 			return out, err
 		}
+		read++
 		for _, f := range strings.Fields(string(b)) {
 			pid, err := strconv.Atoi(f)
 			if err != nil || pid <= 1 {
-				return out, fmt.Errorf("%s: not a child pid list", t)
+				return out, fmt.Errorf("%s: not a child pid list", p)
 			}
 			if len(out) == maxChildren {
 				return out, fmt.Errorf("more than %d children", maxChildren)
@@ -562,5 +574,77 @@ func childrenIn(taskDir string) ([]int, error) {
 			out = append(out, pid)
 		}
 	}
+	if read == 0 {
+		return nil, fmt.Errorf("no %s/*/children file could be read", taskDir)
+	}
 	return out, nil
+}
+
+// maxStatScan bounds the /proc entries childrenByStatIn reads.
+const maxStatScan = 1 << 16
+
+// childrenByStatIn lists the processes under procDir (/proc) whose parent
+// pid, from <pid>/stat, is ppid, with the real error: procDir that cannot
+// be listed, more entries than maxStatScan, or a stat file that cannot be
+// read or parsed. A process that ended meanwhile is skipped.
+func childrenByStatIn(procDir string, ppid int) ([]int, error) {
+	d, err := os.Open(procDir) //nolint:gosec // G304: /proc, or the tests' own directory
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = d.Close() }()
+	names, err := d.Readdirnames(maxStatScan + 1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	if len(names) > maxStatScan {
+		return nil, fmt.Errorf("%s has more than %d entries", procDir, maxStatScan)
+	}
+	var out []int
+	for _, n := range names {
+		pid, err := strconv.Atoi(n)
+		if err != nil || pid <= 0 {
+			continue // not a process
+		}
+		p := procDir + "/" + n + "/stat"
+		b, err := os.ReadFile(p) //nolint:gosec // G304: a numeric entry of the fixed /proc directory
+		if ended(err) {
+			continue
+		}
+		if err != nil {
+			return out, err
+		}
+		st, err := procfs.ParsePIDStat(b)
+		if err != nil || st.PID != pid {
+			return out, fmt.Errorf("%s: not a stat line", p)
+		}
+		if st.PPID == ppid {
+			if len(out) == maxChildren {
+				return out, fmt.Errorf("more than %d children", maxChildren)
+			}
+			out = append(out, pid)
+		}
+	}
+	return out, nil
+}
+
+// listChildren kills nothing; it returns the children from the first
+// listing that works, or, when every listing fails, what they found and all
+// their errors (each with its errno).
+func listChildren(lists []func() ([]int, error)) ([]int, error) {
+	var found []int
+	var errs error
+	for _, l := range lists {
+		pids, err := l()
+		if err == nil {
+			return pids, nil
+		}
+		found = append(found, pids...)
+		if errs == nil {
+			errs = err
+		} else {
+			errs = fmt.Errorf("%w; fallback: %w", errs, err)
+		}
+	}
+	return found, errs
 }

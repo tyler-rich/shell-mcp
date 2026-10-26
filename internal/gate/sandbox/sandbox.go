@@ -419,11 +419,18 @@ func allThreadsNoNewPrivsIn(taskDir string, wantSeccomp bool) error {
 	if len(tasks) == 0 {
 		return errors.New("no threads listed")
 	}
+	checked := 0
 	for _, t := range tasks {
 		b, err := os.ReadFile(taskDir + "/" + t.Name() + "/status") //nolint:gosec // G304: a task entry of the fixed task directory
-		if err != nil {
-			continue // thread exited
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ESRCH) {
+			continue // the thread ended between the listing and the read
 		}
+		if err != nil {
+			// A live thread whose state cannot be read is not a thread
+			// checked (handoff N-30's audit).
+			return fmt.Errorf("thread %s: %w", t.Name(), err)
+		}
+		checked++
 		nnp, filtered := false, false
 		for _, line := range strings.Split(string(b), "\n") {
 			k, v, found := strings.Cut(line, ":")
@@ -440,6 +447,9 @@ func allThreadsNoNewPrivsIn(taskDir string, wantSeccomp bool) error {
 		if wantSeccomp && !filtered {
 			return fmt.Errorf("thread %s has no seccomp filter", t.Name())
 		}
+	}
+	if checked == 0 {
+		return errors.New("no thread's status could be read")
 	}
 	return nil
 }

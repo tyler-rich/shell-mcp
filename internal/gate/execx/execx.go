@@ -199,7 +199,11 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	if env == nil {
 		env = []string{}
 	}
-	cfg, err := encodeConfig(&trampolineConfig{Path: s.Path, Argv: append([]string{s.Path}, s.Args...), Env: env, Dir: dir, Limits: childLimits(s.MaxMemoryMB, procDirOf(h))})
+	limits, err := childLimits(s.MaxMemoryMB, procDirOf(h))
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: %w", ErrStart, err)
+	}
+	cfg, err := encodeConfig(&trampolineConfig{Path: s.Path, Argv: append([]string{s.Path}, s.Args...), Env: env, Dir: dir, Limits: limits})
 	if err != nil {
 		return Result{}, startError(err)
 	}
@@ -306,13 +310,23 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 // such as git's packs. Soft and hard limits are both set, so the command
 // cannot raise them without CAP_SYS_RESOURCE. Each is only ever lowered,
 // which needs no privilege.
-func childLimits(memoryMB int, procDir string) []childLimit {
+//
+// When the tasks cannot be counted, the command is refused rather than
+// started without RLIMIT_NPROC (handoff N-30's audit), except for uid 0:
+// the kernel never applies RLIMIT_NPROC to root's processes (copy_process
+// exempts INIT_USER), and the helper's core unit may read only its own
+// /proc/<pid>, so it is not counted there.
+func childLimits(memoryMB int, procDir string) ([]childLimit, error) {
 	l := []childLimit{{Resource: unix.RLIMIT_CORE, Max: 0}, {Resource: unix.RLIMIT_NOFILE, Max: ChildNofile},
 		{Resource: unix.RLIMIT_DATA, Max: uint64(memoryMB) << 20}} //nolint:gosec // G115: memoryMB is checked to be 1..MaxMemoryMB by run
-	if n, _ := userTasksIn(procDir, os.Getuid()); n > 0 {
+	if uid := os.Getuid(); uid != 0 {
+		n, err := userTasksIn(procDir, uid)
+		if err != nil {
+			return nil, fmt.Errorf("cannot count the user's tasks for RLIMIT_NPROC: %w", err)
+		}
 		l = append(l, childLimit{Resource: unix.RLIMIT_NPROC, Max: n + ChildExtraTasks})
 	}
-	return l
+	return l, nil
 }
 
 // handshake sends the encoded command to the trampoline, closes the
@@ -369,17 +383,22 @@ func userTasks(uid int) uint64 {
 }
 
 // userTasksIn counts the tasks (threads) whose real uid is uid, from
-// procDir/<pid>/status. It returns 0 if procDir cannot be read or the scan
-// would exceed its bound.
+// procDir/<pid>/status. A process that went away, or whose status it
+// cannot read, is not counted (a lower count only lowers RLIMIT_NPROC); a
+// procDir it cannot list, or one with more entries than maxProcScan, is an
+// error, never a count of 0.
 func userTasksIn(procDir string, uid int) (uint64, error) {
 	d, err := os.Open(procDir) //nolint:gosec // G304: /proc, or the tests' own directory
 	if err != nil {
-		return 0, nil
+		return 0, err
 	}
 	defer func() { _ = d.Close() }()
 	names, err := d.Readdirnames(maxProcScan + 1)
-	if err != nil || len(names) > maxProcScan {
-		return 0, nil
+	if err != nil && !errors.Is(err, io.EOF) {
+		return 0, err
+	}
+	if len(names) > maxProcScan {
+		return 0, fmt.Errorf("%s has more than %d entries", procDir, maxProcScan)
 	}
 	want := strconv.Itoa(uid)
 	var total uint64
