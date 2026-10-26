@@ -561,12 +561,15 @@ func TestTrampolineRefusesOutsiders(t *testing.T) {
 // own binary with the trampoline argument, but it has neither an empty
 // environment nor the control descriptor (fd 3 is close-on-exec), so the
 // trampoline refuses.
+// The command is this test binary, which under -race (ThreadSanitizer)
+// maps hundreds of MiB of shadow memory as it starts: it gets the highest
+// limit.
 func TestCommandCannotReachTrampoline(t *testing.T) {
-	r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: self, Args: []string{execx.TrampolineArg}})
+	r := run(t, &execx.Spec{MaxMemoryMB: execx.MaxMemoryMB, Path: self, Args: []string{execx.TrampolineArg}})
 	if r.ExitCode == nil || *r.ExitCode != execx.TrampolineRefused || !strings.Contains(string(r.Stderr), "empty environment") {
 		t.Fatalf("with the command environment: %+v, stderr %q", r.ExitCode, r.Stderr)
 	}
-	r = run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: self, Args: []string{execx.TrampolineArg}, Env: []string{}})
+	r = run(t, &execx.Spec{MaxMemoryMB: execx.MaxMemoryMB, Path: self, Args: []string{execx.TrampolineArg}, Env: []string{}})
 	if r.ExitCode == nil || *r.ExitCode != execx.TrampolineRefused || !strings.Contains(string(r.Stderr), "fd 3 is not") {
 		t.Fatalf("with an empty environment: %+v, stderr %q", r.ExitCode, r.Stderr)
 	}
