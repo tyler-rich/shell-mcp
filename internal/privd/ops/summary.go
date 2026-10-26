@@ -41,6 +41,7 @@ type summaryLimits struct {
 	DefaultTimeoutS  int `json:"default_timeout_s"`
 	MaxTimeoutS      int `json:"max_timeout_s"`
 	MaxDeleteEntries int `json:"max_delete_entries"`
+	MaxMemoryMB      int `json:"max_memory_mb"`
 }
 
 type summaryRoots struct {

@@ -3,12 +3,15 @@
 package policy_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
 )
@@ -50,5 +53,40 @@ func TestExamplePolicies(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestExampleCommandsRunUnderTheDefaultLimit: every template of every
+// example policy's commands runs through the exec engine under the default
+// limits.max_memory_mb (1024 MiB) and exits 0 (handoff N-30: the default is
+// measured to fit them). Placeholders get a temporary directory, an
+// enum's first value, an int's lowest and, for a regex, "localhost".
+func TestExampleCommandsRunUnderTheDefaultLimit(t *testing.T) {
+	dir := filepath.Join("..", "..", "..", "examples", "policies")
+	target := t.TempDir()
+	for _, name := range []string{"read-only.yaml", "operator.yaml", "admin.yaml"} {
+		data, err := os.ReadFile(filepath.Join(dir, name)) //nolint:gosec // G304: this repository's example files
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := policy.Parse(data, "/etc/shell-mcp/"+name, &policy.LoadOptions{
+			Trust: gatetest.Trust(), GateExecutable: "/usr/local/bin/shell-mcp-gate", ServiceHome: "/home/svc-shell",
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if p.Limits.MaxMemoryMB != policy.MaxMemoryMBDefault || policy.MaxMemoryMBDefault != 1024 {
+			t.Fatalf("%s: max_memory_mb %d, want the default 1024", name, p.Limits.MaxMemoryMB)
+		}
+		for _, c := range p.Commands {
+			for _, tpl := range c.Templates {
+				args := gatetest.FillTemplate(tpl.String(), target)
+				r, err := execx.Run(context.Background(), &execx.Spec{Path: c.Resolved, Args: args, Env: execx.Environment(t.TempDir()),
+					Trampoline: gatetest.Self(t), Timeout: time.Minute, MaxOutput: 1 << 20, MaxMemoryMB: p.Limits.MaxMemoryMB})
+				if err != nil || r.ExitCode == nil || *r.ExitCode != 0 {
+					t.Errorf("%s %s %q under %d MiB: %v exit %v signal %q stderr %q", name, c.ID, args, p.Limits.MaxMemoryMB, err, r.ExitCode, r.Signal, r.Stderr)
+				}
+			}
+		}
 	}
 }

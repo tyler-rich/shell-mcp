@@ -251,6 +251,9 @@ type Runner struct {
 	Trampoline string
 	Env        []string
 	MaxOutput  int
+	// MaxMemoryMB is apt-get's RLIMIT_DATA (execx.Spec.MaxMemoryMB),
+	// inherited by dpkg and the maintainer scripts.
+	MaxMemoryMB int
 	// LockWait bounds how long a held lock is waited for.
 	LockWait time.Duration
 	// Retry is the pause between attempts (0 means DefaultRetry).

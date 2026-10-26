@@ -98,7 +98,7 @@ func lines(b []byte) []string { return strings.Split(strings.TrimSpace(string(b)
 func TestEnvironmentExact(t *testing.T) {
 	p := probePath(t)
 	t.Setenv("SHOULD_NOT_LEAK", "1")
-	r := run(t, &execx.Spec{Path: p, Args: []string{"env"}, Env: execx.Environment("/home/svc-shell")})
+	r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"env"}, Env: execx.Environment("/home/svc-shell")})
 	want := []string{
 		"GIT_TERMINAL_PROMPT=0", "HOME=/home/svc-shell", "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "NO_COLOR=1", "PAGER=cat",
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "SYSTEMD_COLORS=0", "SYSTEMD_PAGER=", "TERM=dumb",
@@ -111,7 +111,7 @@ func TestEnvironmentExact(t *testing.T) {
 func TestArgvIsLiteral(t *testing.T) {
 	p := probePath(t)
 	args := []string{"echo", "a b", "$HOME", "; rm -rf /", "`id`", "*"}
-	r := run(t, &execx.Spec{Path: p, Args: args})
+	r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: args})
 	if got := lines(r.Stdout); !slices.Equal(got, args[1:]) {
 		t.Fatalf("argv %q", got)
 	}
@@ -120,19 +120,19 @@ func TestArgvIsLiteral(t *testing.T) {
 func TestCwdStdinExit(t *testing.T) {
 	p := probePath(t)
 	d, _ := filepath.EvalSymlinks(t.TempDir())
-	if r := run(t, &execx.Spec{Path: p, Args: []string{"pwd"}, Dir: d}); strings.TrimSpace(string(r.Stdout)) != d {
+	if r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"pwd"}, Dir: d}); strings.TrimSpace(string(r.Stdout)) != d {
 		t.Fatalf("pwd %q", r.Stdout)
 	}
-	if r := run(t, &execx.Spec{Path: p, Args: []string{"pwd"}}); strings.TrimSpace(string(r.Stdout)) != "/" {
+	if r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"pwd"}}); strings.TrimSpace(string(r.Stdout)) != "/" {
 		t.Fatalf("default cwd %q", r.Stdout)
 	}
-	if r := run(t, &execx.Spec{Path: p, Args: []string{"stdin"}, Stdin: []byte("in\x00put")}); string(r.Stdout) != "in\x00put" {
+	if r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"stdin"}, Stdin: []byte("in\x00put")}); string(r.Stdout) != "in\x00put" {
 		t.Fatalf("stdin %q", r.Stdout)
 	}
-	if r := run(t, &execx.Spec{Path: p, Args: []string{"stdin"}}); len(r.Stdout) != 0 {
+	if r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"stdin"}}); len(r.Stdout) != 0 {
 		t.Fatalf("no stdin must be /dev/null: %q", r.Stdout)
 	}
-	r := run(t, &execx.Spec{Path: p, Args: []string{"exit", "3"}})
+	r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"exit", "3"}})
 	if r.ExitCode == nil || *r.ExitCode != 3 || r.Signal != "" || r.TimedOut {
 		t.Fatalf("exit %+v", r)
 	}
@@ -165,7 +165,7 @@ func waitDead(t *testing.T, pid int) {
 func TestTimeoutKillsProcessGroup(t *testing.T) {
 	p := probePath(t)
 	start := time.Now()
-	r := run(t, &execx.Spec{Path: p, Args: []string{"fork-sleep", "60s"}, Timeout: 500 * time.Millisecond, KillGrace: 300 * time.Millisecond})
+	r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"fork-sleep", "60s"}, Timeout: 500 * time.Millisecond, KillGrace: 300 * time.Millisecond})
 	if !r.TimedOut || r.ExitCode != nil || r.Signal == "" {
 		t.Fatalf("timeout %+v", r)
 	}
@@ -181,7 +181,7 @@ func TestTimeoutKillsProcessGroup(t *testing.T) {
 
 func TestTimeoutEscalatesToKill(t *testing.T) {
 	p := probePath(t)
-	r := run(t, &execx.Spec{Path: p, Args: []string{"ignore-term", "60s"}, Timeout: 300 * time.Millisecond, KillGrace: 300 * time.Millisecond})
+	r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"ignore-term", "60s"}, Timeout: 300 * time.Millisecond, KillGrace: 300 * time.Millisecond})
 	if !r.TimedOut || r.Signal != "SIGKILL" {
 		t.Fatalf("escalation %+v", r)
 	}
@@ -190,7 +190,7 @@ func TestTimeoutEscalatesToKill(t *testing.T) {
 func TestOrphanHoldingPipesCannotHang(t *testing.T) {
 	p := probePath(t)
 	start := time.Now()
-	r := run(t, &execx.Spec{Path: p, Args: []string{"orphan", "60s"}, KillGrace: 300 * time.Millisecond})
+	r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"orphan", "60s"}, KillGrace: 300 * time.Millisecond})
 	if time.Since(start) > 5*time.Second {
 		t.Fatalf("hung for %v", time.Since(start))
 	}
@@ -206,15 +206,15 @@ func TestOrphanHoldingPipesCannotHang(t *testing.T) {
 
 func TestOutputCap(t *testing.T) {
 	p := probePath(t)
-	r := run(t, &execx.Spec{Path: p, Args: []string{"flood", "10000000"}, MaxOutput: 1000, Lookahead: 100})
+	r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"flood", "10000000"}, MaxOutput: 1000, Lookahead: 100})
 	if !r.StdoutTruncated || len(r.Stdout) > 1100 || r.OutputCeilingHit || r.ExitCode == nil || *r.ExitCode != 0 {
 		t.Fatalf("cap: truncated=%v len=%d ceiling=%v exit=%v", r.StdoutTruncated, len(r.Stdout), r.OutputCeilingHit, r.ExitCode)
 	}
-	r = run(t, &execx.Spec{Path: p, Args: []string{"flood-err", "5000"}, MaxOutput: 1000, Lookahead: 100})
+	r = run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"flood-err", "5000"}, MaxOutput: 1000, Lookahead: 100})
 	if !r.StderrTruncated || r.StdoutTruncated || len(r.Stderr) > 1100 {
 		t.Fatalf("stderr cap: %+v", r.StderrTruncated)
 	}
-	r = run(t, &execx.Spec{Path: p, Args: []string{"echo", "short"}, MaxOutput: 1000})
+	r = run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"echo", "short"}, MaxOutput: 1000})
 	if r.StdoutTruncated || string(r.Stdout) != "short\n" {
 		t.Fatalf("short: %+v", r)
 	}
@@ -223,7 +223,7 @@ func TestOutputCap(t *testing.T) {
 func TestHardCeilingKills(t *testing.T) {
 	p := probePath(t)
 	start := time.Now()
-	r := run(t, &execx.Spec{Path: p, Args: []string{"flood", "100000000000"}, MaxOutput: 1000, HardCeiling: 1 << 20})
+	r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"flood", "100000000000"}, MaxOutput: 1000, HardCeiling: 1 << 20})
 	if !r.OutputCeilingHit || !r.StdoutTruncated || len(r.Stdout) > 1000+execx.DefaultLookahead {
 		t.Fatalf("ceiling %+v", r.OutputCeilingHit)
 	}
@@ -234,7 +234,7 @@ func TestHardCeilingKills(t *testing.T) {
 
 func TestChildRlimits(t *testing.T) {
 	p := probePath(t)
-	r := run(t, &execx.Spec{Path: p, Args: []string{"rlimits"}})
+	r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"rlimits"}})
 	got := map[string]string{}
 	for _, l := range lines(r.Stdout) {
 		k, v, _ := strings.Cut(l, "=")
@@ -251,6 +251,88 @@ func TestChildRlimits(t *testing.T) {
 	if n, err := strconv.ParseUint(cur, 10, 64); err != nil || n == 0 || n > 1<<22 {
 		t.Fatalf("nproc must be bounded: %q", got["nproc"])
 	}
+	// The memory limit (N-30): RLIMIT_DATA at the Spec's value, soft and
+	// hard, so that the command cannot raise it.
+	if want := fmt.Sprintf("%d/%d", testMemoryMB<<20, testMemoryMB<<20); got["data"] != want {
+		t.Fatalf("data %q, want %s", got["data"], want)
+	}
+}
+
+// testMemoryMB is the memory limit of the tests' commands: above what the
+// Go probe needs to start (about 45 MiB), well below the host's.
+const testMemoryMB = 256
+
+// TestChildMemoryLimitStopsAllocation: a command that allocates past its
+// limit fails at the limit (the Go probe: "out of memory", exit 2) and does
+// so quickly, while one that stays under it is unaffected (N-30).
+func TestChildMemoryLimitStopsAllocation(t *testing.T) {
+	p := probePath(t)
+	if r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"alloc", "32"}}); r.ExitCode == nil || *r.ExitCode != 0 ||
+		!strings.Contains(string(r.Stdout), "allocated 32 MiB") {
+		t.Fatalf("32 MiB under a %d MiB limit: exit %v, %q %q", testMemoryMB, r.ExitCode, r.Stdout, r.Stderr)
+	}
+	start := time.Now()
+	r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"alloc", "2048"}, Timeout: 30 * time.Second})
+	if r.ExitCode == nil || *r.ExitCode == 0 || strings.Contains(string(r.Stdout), "allocated") || !strings.Contains(string(r.Stderr), "out of memory") {
+		t.Fatalf("2048 MiB under a %d MiB limit: exit %v signal %q, %q %q", testMemoryMB, r.ExitCode, r.Signal, r.Stdout, firstLine(r.Stderr))
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("stopping the allocation took %v", d)
+	}
+}
+
+// TestChildCannotRaiseMemoryLimit: the hard limit is set too, so the
+// command (without CAP_SYS_RESOURCE) can neither raise it nor remove it.
+func TestChildCannotRaiseMemoryLimit(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root may hold CAP_SYS_RESOURCE")
+	}
+	r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: probePath(t), Args: []string{"raise-data"}})
+	if got := strings.TrimSpace(string(r.Stdout)); got != "raise=EPERM unlimited=EPERM" {
+		t.Fatalf("raising RLIMIT_DATA: %q", got)
+	}
+}
+
+// TestChildMemoryLimitInherited: what the command starts gets the same
+// limit (fork and execve keep it).
+func TestChildMemoryLimitInherited(t *testing.T) {
+	r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: probePath(t), Args: []string{"child-rlimits"}})
+	if err := childLimitsError(r.Stdout); err != nil {
+		t.Fatalf("the command's child: %v (%q)", err, r.Stdout)
+	}
+}
+
+// TestIgnoreRLimitData reads the kernel's ignore_rlimit_data parameter
+// (Y or N); a missing parameter is an error, never "not set".
+func TestIgnoreRLimitData(t *testing.T) {
+	d := t.TempDir()
+	for _, c := range []struct {
+		content string
+		want    bool
+	}{{"Y\n", true}, {"N\n", false}, {"1\n", true}, {"0\n", false}} {
+		p := filepath.Join(d, "param")
+		if err := os.WriteFile(p, []byte(c.content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := execx.IgnoreRLimitData(p); err != nil || got != c.want {
+			t.Fatalf("%q: %v %v, want %v", c.content, got, err, c.want)
+		}
+	}
+	if _, err := execx.IgnoreRLimitData(filepath.Join(d, "missing")); err == nil {
+		t.Fatal("a missing parameter read as not set")
+	}
+	if err := os.WriteFile(filepath.Join(d, "bad"), []byte("maybe\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := execx.IgnoreRLimitData(filepath.Join(d, "bad")); err == nil {
+		t.Fatal("an unknown value read as a setting")
+	}
+}
+
+// firstLine is the first line of b, for messages.
+func firstLine(b []byte) string {
+	l, _, _ := strings.Cut(string(b), "\n")
+	return l
 }
 
 // raiseOwnLimits sets this process's soft core, open-file and process
@@ -260,7 +342,7 @@ func TestChildRlimits(t *testing.T) {
 func raiseOwnLimits(t *testing.T) map[string]syscall.Rlimit {
 	t.Helper()
 	got := map[string]syscall.Rlimit{}
-	for name, res := range map[string]int{"core": unix.RLIMIT_CORE, "nofile": unix.RLIMIT_NOFILE, "nproc": unix.RLIMIT_NPROC} {
+	for name, res := range map[string]int{"core": unix.RLIMIT_CORE, "nofile": unix.RLIMIT_NOFILE, "nproc": unix.RLIMIT_NPROC, "data": unix.RLIMIT_DATA} {
 		var l syscall.Rlimit
 		if err := syscall.Getrlimit(res, &l); err != nil {
 			t.Fatalf("getrlimit %s: %v", name, err)
@@ -287,7 +369,8 @@ func nprocBound() uint64 {
 // from the parent's, because the limit tests could then pass vacuously.
 func requireDiscriminating(t *testing.T, parent map[string]syscall.Rlimit) {
 	t.Helper()
-	if parent["core"].Max == 0 && parent["nofile"].Max <= execx.ChildNofile && parent["nproc"].Max <= nprocBound() {
+	if parent["core"].Max == 0 && parent["nofile"].Max <= execx.ChildNofile && parent["nproc"].Max <= nprocBound() &&
+		parent["data"].Max <= uint64(testMemoryMB)<<20 {
 		t.Fatalf("this host's hard limits (%+v) equal the child limits; the rlimit tests cannot tell them apart", parent)
 	}
 }
@@ -307,8 +390,11 @@ func childLimitsError(out []byte) error {
 		}
 		got[k] = [2]uint64{cur, maxv}
 	}
-	if len(got) != 3 {
+	if len(got) != 4 {
 		return fmt.Errorf("unparsable probe output %q", out)
+	}
+	if n, b := got["data"], uint64(testMemoryMB)<<20; n[0] != b || n[1] != b {
+		return fmt.Errorf("data %d/%d, want %d/%d (the Spec's MaxMemoryMB, soft and hard)", n[0], n[1], b, b)
 	}
 	var errs []string
 	if got["core"] != [2]uint64{0, 0} {
@@ -334,7 +420,7 @@ func childLimitsError(out []byte) error {
 func TestChildRlimitsBeforeFirstInstruction(t *testing.T) {
 	p := probePath(t)
 	requireDiscriminating(t, raiseOwnLimits(t))
-	r, err := execx.RunWithStartDelay(context.Background(), &execx.Spec{Path: p, Trampoline: self, Args: []string{"rlimits"},
+	r, err := execx.RunWithStartDelay(context.Background(), &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Trampoline: self, Args: []string{"rlimits"},
 		Env: execx.Environment("/nonexistent-home"), Timeout: 10 * time.Second, MaxOutput: 1 << 20}, 300*time.Millisecond)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -360,7 +446,7 @@ func TestChildRlimitsNeverRace(t *testing.T) {
 	for range workers {
 		wg.Go(func() {
 			for range next {
-				r, err := execx.Run(context.Background(), &execx.Spec{Path: p, Trampoline: self, Args: []string{"rlimits"},
+				r, err := execx.Run(context.Background(), &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Trampoline: self, Args: []string{"rlimits"},
 					Env: execx.Environment("/nonexistent-home"), Timeout: 10 * time.Second, MaxOutput: 1 << 20})
 				if err == nil {
 					err = childLimitsError(r.Stdout)
@@ -476,11 +562,11 @@ func TestTrampolineRefusesOutsiders(t *testing.T) {
 // environment nor the control descriptor (fd 3 is close-on-exec), so the
 // trampoline refuses.
 func TestCommandCannotReachTrampoline(t *testing.T) {
-	r := run(t, &execx.Spec{Path: self, Args: []string{execx.TrampolineArg}})
+	r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: self, Args: []string{execx.TrampolineArg}})
 	if r.ExitCode == nil || *r.ExitCode != execx.TrampolineRefused || !strings.Contains(string(r.Stderr), "empty environment") {
 		t.Fatalf("with the command environment: %+v, stderr %q", r.ExitCode, r.Stderr)
 	}
-	r = run(t, &execx.Spec{Path: self, Args: []string{execx.TrampolineArg}, Env: []string{}})
+	r = run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: self, Args: []string{execx.TrampolineArg}, Env: []string{}})
 	if r.ExitCode == nil || *r.ExitCode != execx.TrampolineRefused || !strings.Contains(string(r.Stderr), "fd 3 is not") {
 		t.Fatalf("with an empty environment: %+v, stderr %q", r.ExitCode, r.Stderr)
 	}
@@ -516,7 +602,7 @@ func extraFDs(fds string) []string {
 // (the control socket does not leak).
 func TestCommandProcessAttributes(t *testing.T) {
 	p := probePath(t)
-	a := procAttrs(run(t, &execx.Spec{Path: p, Args: []string{"procattrs"}}).Stdout)
+	a := procAttrs(run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"procattrs"}}).Stdout)
 	if a["pdeathsig"] != "9" || a["pdeathsig_thread"] != "main" || a["pgid_is_pid"] != "true" || a["sigblk"] != "0000000000000000" {
 		t.Fatalf("attributes %v", a)
 	}
@@ -534,7 +620,7 @@ func TestCommandProcessAttributes(t *testing.T) {
 // thread that holds a signal (forget_original_parent).
 func TestPdeathsigIsPerThread(t *testing.T) {
 	p := probePath(t)
-	out := lines(run(t, &execx.Spec{Path: p, Args: []string{"pdeathsig-threads"}}).Stdout)
+	out := lines(run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"pdeathsig-threads"}}).Stdout)
 	if want := []string{"main=9 main", "other=0 other"}; !slices.Equal(out, want) {
 		t.Fatalf("pdeathsig-threads: %q, want %q", out, want)
 	}
@@ -556,7 +642,7 @@ func TestCommandPdeathsigEveryRun(t *testing.T) {
 	for range workers {
 		wg.Go(func() {
 			for range next {
-				r, err := execx.Run(context.Background(), &execx.Spec{Path: p, Trampoline: self, Args: []string{"procattrs"},
+				r, err := execx.Run(context.Background(), &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Trampoline: self, Args: []string{"procattrs"},
 					Env: execx.Environment("/nonexistent-home"), Timeout: 10 * time.Second, MaxOutput: 1 << 20})
 				var got string
 				if err != nil {
@@ -607,7 +693,7 @@ func TestCommandGetsNoInheritedDescriptor(t *testing.T) {
 	if !strings.Contains(procAttrs(out)["fds"], leaked) {
 		t.Fatalf("control: the direct child does not hold fd %s: %s", leaked, out)
 	}
-	a := procAttrs(run(t, &execx.Spec{Path: p, Args: []string{"procattrs"}}).Stdout)
+	a := procAttrs(run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"procattrs"}}).Stdout)
 	if extra := extraFDs(a["fds"]); len(extra) > 0 {
 		t.Fatalf("the command inherited descriptors: %v", extra)
 	}
@@ -630,10 +716,18 @@ func TestTrampolineStartErrors(t *testing.T) {
 		{"no trampoline", execx.Spec{Path: p, Trampoline: "relative"}, "no exec trampoline"},
 		{"missing trampoline", execx.Spec{Path: p, Trampoline: "/nonexistent/trampoline"}, "ENOENT"},
 		{"NUL in an argument", execx.Spec{Path: p, Args: []string{"echo", "a\x00b"}}, "EINVAL"},
+		// Fail closed: no command runs without a memory limit (N-30).
+		{"no memory limit", execx.Spec{Path: p, Args: []string{"echo", "x"}, MaxMemoryMB: -1}, "memory limit"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := c.spec
 			s.Timeout, s.MaxOutput, s.Env = 10*time.Second, 1<<20, execx.Environment("/")
+			switch {
+			case s.MaxMemoryMB == 0:
+				s.MaxMemoryMB = testMemoryMB
+			case s.MaxMemoryMB < 0:
+				s.MaxMemoryMB = 0
+			}
 			if s.Trampoline == "" {
 				s.Trampoline = self
 			}
@@ -646,11 +740,11 @@ func TestTrampolineStartErrors(t *testing.T) {
 }
 
 func TestStartFailure(t *testing.T) {
-	_, err := execx.Run(context.Background(), &execx.Spec{Path: "/nonexistent/binary", Trampoline: self, Timeout: time.Second, MaxOutput: 10, Env: execx.Environment("/")})
+	_, err := execx.Run(context.Background(), &execx.Spec{MaxMemoryMB: testMemoryMB, Path: "/nonexistent/binary", Trampoline: self, Timeout: time.Second, MaxOutput: 10, Env: execx.Environment("/")})
 	if !errors.Is(err, execx.ErrStart) {
 		t.Fatalf("err %v", err)
 	}
-	if _, err := execx.Run(context.Background(), &execx.Spec{Path: "relative", Trampoline: self, Timeout: time.Second, MaxOutput: 10}); !errors.Is(err, execx.ErrStart) {
+	if _, err := execx.Run(context.Background(), &execx.Spec{MaxMemoryMB: testMemoryMB, Path: "relative", Trampoline: self, Timeout: time.Second, MaxOutput: 10}); !errors.Is(err, execx.ErrStart) {
 		t.Fatalf("relative path: %v", err)
 	}
 }

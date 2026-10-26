@@ -35,6 +35,14 @@ func main() {
 			_, _ = f.Write(append(b, '\n'))
 			_ = f.Close()
 		}
+		// The memory limit it was started with, as one line in a log of
+		// its own (logPath.limits): name data=<soft>/<hard>.
+		if f, err := os.OpenFile(logPath+".limits", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil { //nolint:gosec // G304: test log path baked in by the test
+			var l syscall.Rlimit
+			_ = syscall.Getrlimit(syscall.RLIMIT_DATA, &l)
+			_, _ = fmt.Fprintf(f, "%s data=%d/%d\n", filepath.Base(os.Args[0]), l.Cur, l.Max)
+			_ = f.Close()
+		}
 	}
 	args := os.Args[1:]
 	switch filepath.Base(os.Args[0]) {

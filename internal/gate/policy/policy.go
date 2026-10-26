@@ -103,7 +103,17 @@ type Limits struct {
 	MaxFindDepth     int
 	MaxDeleteEntries int
 	MaxProcesses     int
+	// MaxMemoryMB is every child's RLIMIT_DATA, soft and hard, in MiB.
+	MaxMemoryMB int
 }
+
+// limits.max_memory_mb: the default and the range, the same in the
+// privileged policy (handoff N-30).
+const (
+	MaxMemoryMBDefault = 1024
+	MaxMemoryMBMin     = 128
+	MaxMemoryMBMax     = 16384
+)
 
 // Paths holds the roots, the deny matcher (built-ins plus policy
 // patterns) and the protected matcher.

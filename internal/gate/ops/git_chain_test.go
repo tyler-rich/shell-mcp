@@ -54,6 +54,12 @@ func gitOverrides() []string {
 			}
 		}
 	}
+	// The thread counts pinned so memory need not follow the CPUs (N-30).
+	for _, p := range gitx.ThreadOverrides() {
+		if !slices.Contains(o, p) {
+			o = append(o, p)
+		}
+	}
 	return o
 }
 

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -250,6 +251,23 @@ func TestSandboxAndLimits(t *testing.T) {
 	p := f.mustLoad(t, minimal+"limits:\n  max_timeout_s: 600\n  max_output_bytes: 4194304\n  max_read_bytes: 4194304\n  max_stdin_bytes: 0\n")
 	if p.Limits.MaxTimeoutS != 600 || p.Limits.MaxStdinBytes != 0 {
 		t.Fatalf("ceilings: %+v", p.Limits)
+	}
+}
+
+// TestMaxMemoryMB: limits.max_memory_mb (handoff N-30) is 1024 when absent,
+// 128..16384 when given, and never unlimited.
+func TestMaxMemoryMB(t *testing.T) {
+	f := newFixture(t)
+	if p := f.mustLoad(t, minimal); p.Limits.MaxMemoryMB != 1024 {
+		t.Fatalf("absent: %d MiB, want 1024", p.Limits.MaxMemoryMB)
+	}
+	for _, v := range []int{128, 1024, 16384} {
+		if p := f.mustLoad(t, minimal+fmt.Sprintf("limits:\n  max_memory_mb: %d\n", v)); p.Limits.MaxMemoryMB != v {
+			t.Fatalf("%d: got %d", v, p.Limits.MaxMemoryMB)
+		}
+	}
+	for _, v := range []string{"0", "-1", "127", "16385", "unlimited", "1.5"} {
+		f.mustFail(t, minimal+"limits:\n  max_memory_mb: "+v+"\n", "limits")
 	}
 }
 

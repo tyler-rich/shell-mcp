@@ -58,6 +58,9 @@ type loadEnv struct {
 	// varRun is the path that must resolve to /run (production: /var/run).
 	varRun  string
 	lookups func(*policy.LoadOptions)
+	// ignoreRLimitData is the kernel's ignore_rlimit_data parameter
+	// (production: execx.IgnoreRLimitDataPath).
+	ignoreRLimitData string
 }
 
 func productionEnv() (*loadEnv, error) {

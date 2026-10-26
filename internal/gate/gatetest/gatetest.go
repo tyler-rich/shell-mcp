@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/install"
@@ -225,4 +226,28 @@ func LinkSelf(t testing.TB, dst string) {
 	if err := os.Chmod(dst, 0o755); err != nil { //nolint:gosec // G302: an executable fixture, exact mode (not subject to umask)
 		t.Fatal(err)
 	}
+}
+
+// FillTemplate gives a template's tokens (template.Template.String) values
+// that run: {path:read} and {path:write} become path, an enum its first
+// option, an int its lowest value, a regex "localhost"; literals stay.
+func FillTemplate(tokens []string, path string) []string {
+	out := make([]string, len(tokens))
+	for i, tok := range tokens {
+		switch {
+		case tok == "{path:read}" || tok == "{path:write}":
+			out[i] = path
+		case strings.HasPrefix(tok, "{enum:"):
+			first, _, _ := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(tok, "{enum:"), "}"), "|")
+			out[i] = first
+		case strings.HasPrefix(tok, "{int:"):
+			lo, _, _ := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(tok, "{int:"), "}"), "-")
+			out[i] = lo
+		case strings.HasPrefix(tok, "{regex:"):
+			out[i] = "localhost"
+		default:
+			out[i] = tok
+		}
+	}
+	return out
 }

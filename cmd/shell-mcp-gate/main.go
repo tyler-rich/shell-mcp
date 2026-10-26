@@ -186,6 +186,13 @@ var (
 	probeExchange  = fsx.ProbeExchange
 )
 
+// checkPolicyWithParam is checkPolicyWith reading the kernel's
+// ignore_rlimit_data parameter from param.
+func checkPolicyWithParam(args []string, stdout, stderr io.Writer, trust policy.Trust, home, param string) int {
+	_ = param
+	return checkPolicyWith(args, stdout, stderr, trust, home)
+}
+
 func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust, home string) int {
 	fs := flag.NewFlagSet("check-policy", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)

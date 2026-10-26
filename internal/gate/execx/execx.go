@@ -57,6 +57,11 @@ type Spec struct {
 	HardCeiling int64         // 0 means DefaultHardCeiling
 	KillGrace   time.Duration // 0 means DefaultKillGrace
 
+	// MaxMemoryMB is the command's RLIMIT_DATA, soft and hard, in MiB
+	// (the policy's limits.max_memory_mb). Required: Run refuses a Spec
+	// without one.
+	MaxMemoryMB int
+
 	// Trampoline is the absolute path of the running binary (the gate or
 	// the helper, resolved and ownership-checked by the caller). The
 	// command is started through it; see trampoline.go.

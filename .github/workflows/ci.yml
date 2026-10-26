@@ -369,11 +369,12 @@ jobs:
             echo "- $(systemctl --version | head -n1)"
             echo "- landlock: $(go run ./scripts/probe/landlock 2>&1 | tail -n1)"
           } | tee -a "$GITHUB_STEP_SUMMARY"
-      - name: install polkitd and openssh-server (if the image lacks them)
+      - name: install polkitd, openssh-server and jq (if the image lacks them)
         run: |
           missing=""
           test -x /usr/lib/polkit-1/polkitd || missing="$missing polkitd"
           test -x /usr/sbin/sshd || missing="$missing openssh-server"
+          test -x /usr/bin/jq || missing="$missing jq"
           if [ -n "$missing" ]; then
             sudo apt-get update
             # shellcheck disable=SC2086 # one package per word
@@ -381,6 +382,7 @@ jobs:
           fi
           echo "- polkit: $(dpkg-query -W -f='${Package} ${Version}' polkitd)" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- OpenSSH (server tests): $(/usr/sbin/sshd -V 2>&1 | head -n1)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- jq (memory tests): $(/usr/bin/jq --version)" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: setup (as root)
         run: |
           sudo install -d -o root -g root -m 0755 /opt/e2e-bin

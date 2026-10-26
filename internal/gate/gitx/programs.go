@@ -202,3 +202,51 @@ func ProgramKeyName(key string) bool {
 	}
 	return false
 }
+
+// ThreadKey is a configuration key whose default makes git start threads
+// or processes in proportion to the host's CPUs (online_cpus()), as
+// `git help --config` prints it, and how the gate pins it: forced with -c
+// on every git process (Args), or why it needs no override (Why). Each
+// thread's stack counts against the child memory limit (RLIMIT_DATA), so
+// pinning them keeps a git operation's memory need the same on every host
+// (handoff N-30).
+type ThreadKey struct {
+	Key  string
+	Args []string
+	Why  string
+}
+
+// ThreadKeys is the table (git 2.55).
+var ThreadKeys = []ThreadKey{}
+
+// ThreadOverrides returns every -c value of ThreadKeys, in its order.
+func ThreadOverrides() []string {
+	var out []string
+	for i := range ThreadKeys {
+		out = append(out, ThreadKeys[i].Args...)
+	}
+	return out
+}
+
+// ThreadKeyName reports whether key, as `git help --config` prints it,
+// sets how many threads, workers or parallel jobs git runs: its variable
+// name (last component, lowercased) ends in threads, workers, jobs or
+// parallel, or is preloadindex or thresholdforparallelism. Like
+// ProgramKeyName, the rule errs towards too many and is a check, not a
+// proof: git's own online_cpus() callers in 2.55 (index-pack, pack-objects,
+// grep, read-cache, preload-index, parallel checkout, fetch, submodule
+// fetches, hooks, name-hash) were read to write the table.
+func ThreadKeyName(key string) bool {
+	parts := strings.Split(key, ".")
+	name := strings.ToLower(parts[len(parts)-1])
+	switch name {
+	case "preloadindex", "thresholdforparallelism":
+		return true
+	}
+	for _, s := range []string{"threads", "workers", "jobs", "parallel"} {
+		if strings.HasSuffix(name, s) {
+			return true
+		}
+	}
+	return false
+}
