@@ -119,6 +119,17 @@ usermod -aG svc-shell-priv svc-shell
 id svc-shell
 ```
 
+**Bound the account's memory as a whole** (recommended). The gate gives each process it starts its own memory limit (`limits.max_memory_mb`, POLICY §4a), but several requests, or a command that starts several processes, each get one. A `MemoryMax=` on the account's slice bounds them all together, so the host's OOM killer never has to choose a victim outside it. sshd places each login in `user-<uid>.slice` through `pam_systemd` (`UsePAM yes`, the distributions' default):
+
+```bash
+mkdir -p /etc/systemd/system/user-60123.slice.d
+printf '[Slice]\nMemoryMax=4G\n' >/etc/systemd/system/user-60123.slice.d/50-shell-mcp.conf
+systemctl daemon-reload
+systemctl show -p MemoryMax user-60123.slice
+```
+
+Choose the value from the requests you expect at once times `limits.max_memory_mb` (4G fits three requests at the default 1024 MiB). The helper's units carry their own `MemoryMax=` (PRIVILEGED §5).
+
 ## 5. Write the gate policy *(container)*
 
 One policy per SSH key, so each server instance gets its own ceiling. Start from the example closest to what you need (`read-only.yaml`, `operator.yaml`, `admin.yaml`), edit every placeholder, and write it for the worst case: what would you accept a fully compromised MCP server doing with this key? (POLICY §1.)
