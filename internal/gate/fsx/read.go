@@ -378,6 +378,13 @@ func (f *FS) ResolveRead(p string) (string, error) {
 	return l.targetReal(), nil
 }
 
+// ResolveReadFD resolves a {path:read:fd} (POLICY §4): as ResolveRead, but
+// it returns the descriptor it opened and checked with the real path; the
+// caller must close it.
+func (f *FS) ResolveReadFD(_ string) (*os.File, string, error) {
+	return nil, "", errf(protocol.CodeBadRequest, "{path:read:fd} is not implemented")
+}
+
 // ResolveDir returns the real path of a directory under a read or write
 // root (for an exec cwd), under the chain rule with GuardExecPaths
 // (exec_chain.go).

@@ -14,7 +14,7 @@ func FuzzDecodeRequest(f *testing.F) {
 	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}` + "\n"))
 	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"read_file","args":{"path":"/srv/app/x","max_bytes":10},"timeout_ms":3000}`))
 	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","op":"write_file"}`))
-	f.Add([]byte(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","x":1}`))
+	f.Add([]byte(`{"v":3,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","x":1}`))
 	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"exec","args":{"args":["a","b"],"a":{"b":{"c":[1,2,{"d":null}]}}}}`))
 	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"exec","args":{"command_id":"probe-op"}}`))
 	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"admin","op":"hello"}`))
@@ -25,6 +25,9 @@ func FuzzDecodeRequest(f *testing.F) {
 			var de *DecodeError
 			if !errors.As(err, &de) {
 				t.Fatalf("error is not a DecodeError: %v", err)
+			}
+			if de.Peer != 0 && (de.Code != CodeProtocolMismatch || de.Peer == Version) {
+				t.Fatalf("a refusal names peer version %d: %+v", de.Peer, de)
 			}
 			return
 		}
@@ -62,6 +65,7 @@ func FuzzDecodeResponse(f *testing.F) {
 	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000003","ok":true,"data":{"x":1},"warnings":[]}` + "\n"))
 	f.Add([]byte(`{"v":1,"id":"","ok":false,"error":{"code":"sandbox_unavailable","message":"m"},"warnings":[]}` + "\n"))
 	f.Add([]byte(`{"v":1,"id":"x","ok":true}`))
+	f.Add([]byte(`{"v":3,"id":"","ok":false,"error":{"code":"protocol_mismatch","message":"m"},"warnings":[],"later":1}` + "\n"))
 	f.Add([]byte(""))
 	// A forwarded response with the helper's block (handoff P-1).
 	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000003","ok":true,"data":{},"warnings":[],` +
@@ -70,6 +74,10 @@ func FuzzDecodeResponse(f *testing.F) {
 	f.Fuzz(func(t *testing.T, b []byte) {
 		r, err := DecodeResponse(bytes.NewReader(b))
 		if err != nil {
+			var de *DecodeError
+			if errors.As(err, &de) && de.Code == CodeProtocolMismatch && de.Peer == Version {
+				t.Fatalf("a response of this version refused as another version: %+v", de)
+			}
 			return
 		}
 		if r.OK == (r.Error != nil) || (r.ID != "" || r.OK) && !validID(r.ID) {

@@ -219,8 +219,9 @@ func TestExecPreviewTier(t *testing.T) {
 
 // FuzzExecPreviewMatchesExec: for any command id, arguments and cwd,
 // exec_preview and exec agree: the same refusal code and message, or the
-// same resolved argv (exec runs the probe, which only echoes, exits or
-// prints its cwd). One directory of the write root's tree (above the roots,
+// same resolved argv and descriptors (exec runs the probe, which only
+// echoes, reads, exits or prints its cwd; probe-fd takes {path:read:fd},
+// handoff N-22). One directory of the write root's tree (above the roots,
 // the read root, the write root, an intermediate directory, a parent, or a
 // directory given as a placeholder or the cwd) may be open for the
 // iteration (handoff N-11): world-writable, group-writable, or sticky and
@@ -229,7 +230,10 @@ func TestExecPreviewTier(t *testing.T) {
 // target is it: the owner-matched exception for {path:read} never covers a
 // group- or world-writable or sticky directory.
 func FuzzExecPreviewMatchesExec(f *testing.F) {
-	fx := execPreviewFixture(f, "operator")
+	fx := execPreviewFDFixture(f, "operator")
+	// The policy loads: otherwise preview and exec agree on its refusal
+	// and the fuzzer proves nothing.
+	fx.ok("hello", nil, nil)
 	b := filepath.Join(fx.write, "a", "b")
 	gatetest.Mkdir(f, filepath.Join(fx.write, "a"), 0o755)
 	gatetest.Mkdir(f, b, 0o755)
@@ -246,6 +250,9 @@ func FuzzExecPreviewMatchesExec(f *testing.F) {
 			f.Add("probe-echo", "echo", "path", "config", "", o, md)
 			f.Add("probe-io", "pwd", "", "", "config", o, md)
 			f.Add("probe-io", "pwd", "", "", "config/a/b/c", o, md)
+			f.Add("probe-fd", "cat", "config/a/b/t", "", "", o, md)
+			f.Add("probe-fd", "cat", "config/a/b/c", "", "", o, md)
+			f.Add("probe-fd", "echo", "hello.txt", "config/a/b/t", "", o, md)
 		}
 	}
 	f.Add("probe-echo", "echo", "unit", "example-app.service", "", uint8(0), uint8(0))
@@ -295,15 +302,19 @@ func FuzzExecPreviewMatchesExec(f *testing.F) {
 				t.Fatalf("%v: preview %+v, exec %+v", req, p.Error, e.Error)
 			}
 		default:
-			var pv execPreview
-			var d execData
-			if json.Unmarshal(p.Data, &pv) != nil || json.Unmarshal(e.Data, &d) != nil || !slices.Equal(pv.Argv, d.Argv) {
-				t.Fatalf("%v: preview argv %v, exec argv %v", req, pv.Argv, d.Argv)
+			var pv fdPreview
+			var d fdExec
+			if json.Unmarshal(p.Data, &pv) != nil || json.Unmarshal(e.Data, &d) != nil || !slices.Equal(pv.Argv, d.Argv) || !slices.Equal(pv.Fds, d.Fds) {
+				t.Fatalf("%v: preview argv %v fds %v, exec argv %v fds %v", req, pv.Argv, pv.Fds, d.Argv, d.Fds)
 			}
 			if open == "" {
 				return
 			}
-			for _, x := range append(slices.Clone(pv.Argv[1:]), pv.Cwd) {
+			checked := append(slices.Clone(pv.Argv[1:]), pv.Cwd)
+			for _, x := range pv.Fds {
+				checked = append(checked, x.Path)
+			}
+			for _, x := range checked {
 				if strings.HasPrefix(x, "/") && pathx.Within(open, path.Dir(x)) && x != "/" {
 					t.Fatalf("%q resolved with the directory %s on its chain open", x, open)
 				}
@@ -339,4 +350,20 @@ func TestExecRaisedTierStopsAtTheCeiling(t *testing.T) {
 	if exists(out) {
 		t.Fatal("a command raised to destructive ran unapproved")
 	}
+}
+
+// fdFuzzCommand is a read command with {path:read:fd} placeholders, for
+// the fuzzer (handoff N-22): it reads one file, or echoes a descriptor and
+// a path.
+const fdFuzzCommand = `  - id: probe-fd
+    path: {BIN}/probe
+    tier: read
+    templates: [["cat", "{path:read:fd}"], ["echo", "{path:read:fd}", "{path:read}"]]
+`
+
+func execPreviewFDFixture(t testing.TB, tier string) *fixture {
+	t.Helper()
+	f := newFixture(t, tier)
+	f.rawPolicy(strings.NewReplacer("{TIER}", tier, "{PRIV}", "", "{R}", f.read, "{W}", f.write, "{BIN}", f.bin).Replace(basePolicy + wipeCommand + fdFuzzCommand))
+	return f
 }

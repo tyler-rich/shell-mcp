@@ -2,6 +2,7 @@ package template
 
 import (
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -24,6 +25,8 @@ func (f fakeResolver) ResolvePath(v string, write bool) (string, error) {
 		return "", errDenied
 	}
 }
+
+func (f fakeResolver) ResolveReadFD(string) (*os.File, string, error) { return nil, "", errDenied }
 
 func (f fakeResolver) MatchUnit(v string) bool { return slices.Contains(f.units, v) }
 

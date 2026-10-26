@@ -294,7 +294,7 @@ func TestDecodeErrors(t *testing.T) {
 	for in, code := range map[string]string{
 		`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","op":"write_file"}` + "\n":            "bad_request",
 		`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","x":1}` + "\n":                        "bad_request",
-		`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}` + "\n":                              "protocol_mismatch",
+		`{"v":3,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}` + "\n":                              "protocol_mismatch",
 		`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"} {}` + "\n":                           "bad_request",
 		`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","args":{"x":1}}` + "\n":               "bad_request",
 		`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}` + strings.Repeat(" ", 2<<20) + "\n": "too_large",
@@ -512,7 +512,7 @@ func TestProductionOptionsHaveNoTestHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.TestGitCAFile != "" || o.InjectReadBackFault != nil || o.InjectBeforeCommit != nil || o.InjectNoReplaceFault != nil || o.InjectDeleteStep != nil || o.InjectDiscardStep != nil || o.InjectMetadataReadBackFault != nil || o.Audit == nil ||
+	if o.TestGitCAFile != "" || o.InjectReadBackFault != nil || o.InjectBeforeCommit != nil || o.InjectNoReplaceFault != nil || o.InjectDeleteStep != nil || o.InjectDiscardStep != nil || o.InjectMetadataReadBackFault != nil || o.InjectBeforeExec != nil || o.Audit == nil ||
 		o.Systemctl != ops.SystemctlPath || o.Journalctl != ops.JournalctlPath || o.Git != ops.GitPath {
 		t.Fatalf("production options %+v", o)
 	}

@@ -37,6 +37,10 @@ const (
 	DefaultKillGrace   = 2 * time.Second
 	// ChildNofile is the RLIMIT_NOFILE applied to every child.
 	ChildNofile = 1024
+	// FirstFile is the descriptor Spec.Files[0] is passed as (fd 3 is the
+	// trampoline's control socket); MaxFiles bounds Spec.Files.
+	FirstFile = 4
+	MaxFiles  = 8
 	// ChildExtraTasks bounds how many tasks a child and its descendants may
 	// add to the service user's count (RLIMIT_NPROC = current + this).
 	ChildExtraTasks = 256
@@ -68,6 +72,12 @@ type Spec struct {
 	// (the policy's limits.max_memory_mb). Required: Run refuses a Spec
 	// without one.
 	MaxMemoryMB int
+
+	// Files are passed to the command as descriptors FirstFile,
+	// FirstFile+1, … in order (at most MaxFiles), each a regular file
+	// open read-only: the gate's {path:read:fd} placeholders (POLICY §4).
+	// Every other descriptor above stderr stays close-on-exec.
+	Files []*os.File
 
 	// Trampoline is the absolute path of the running binary (the gate or
 	// the helper, resolved and ownership-checked by the caller). The

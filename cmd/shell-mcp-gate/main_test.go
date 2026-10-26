@@ -398,3 +398,56 @@ func TestCheckPolicyReportsMemoryLimit(t *testing.T) {
 		t.Fatalf("an unreadable parameter not flagged:\n%s", out)
 	}
 }
+
+// TestCheckPolicyReportsPathReadFD (handoff N-22): check-policy names each
+// command that takes a {path:read:fd} and, only when one does, checks that
+// /dev/fd is the link to /proc/self/fd that commands reopen the descriptor
+// through, and warns otherwise.
+func TestCheckPolicyReportsPathReadFD(t *testing.T) {
+	d := gatetest.SecureDir(t)
+	gatetest.Mkdir(t, filepath.Join(d, "home"), 0o755)
+	bin := filepath.Join(d, "bin")
+	gatetest.WriteFile(t, filepath.Join(bin, "cat"), "invented binary\n", 0o755)
+	p := filepath.Join(d, "etc", "policy.yaml")
+	good := filepath.Join(d, "devfd-good")
+	if err := os.Symlink("/proc/self/fd", good); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(d, "devfd-other")
+	if err := os.Symlink("/proc/1/fd", other); err != nil {
+		t.Fatal(err)
+	}
+	base := "version: 1\nmax_tier: read\nsandbox:\n  landlock: best-effort\n  system_read_exec: [" + bin + "]\ncommands:\n" +
+		"  - id: plain\n    path: " + filepath.Join(bin, "cat") + "\n    tier: read\n    templates: [[\"{path:read}\"]]\n"
+	withFD := base + "  - id: cat-fd\n    path: " + filepath.Join(bin, "cat") + "\n    tier: read\n    templates: [[\"{path:read:fd}\"], [\"-n\", \"{path:read:fd}\", \"{path:read:fd}\"]]\n"
+	check := func(policyYAML, devfd string) string {
+		t.Helper()
+		gatetest.WriteFile(t, p, policyYAML, 0o644)
+		old := devFDPath
+		devFDPath = devfd
+		defer func() { devFDPath = old }()
+		var out, errb bytes.Buffer
+		checkPolicyWith([]string{"--policy", p}, &out, &errb, gatetest.Trust(), filepath.Join(d, "home"))
+		return out.String()
+	}
+	out := check(withFD, good)
+	for _, want := range []string{
+		"ok   commands[cat-fd]: {path:read:fd} is passed as the gate's open descriptor (/dev/fd/4 and up, in template order); POLICY §4 lists the programs that give wrong results with one",
+		"ok   " + good + ": a link to /proc/self/fd, through which commands reopen a {path:read:fd}",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "commands[plain]: {path:read:fd}") {
+		t.Fatalf("a command without a descriptor reported:\n%s", out)
+	}
+	for _, devfd := range []string{other, filepath.Join(d, "missing")} {
+		if out := check(withFD, devfd); !strings.Contains(out, "WARN "+devfd+": ") || !strings.Contains(out, "a command given a {path:read:fd} cannot reopen it") {
+			t.Fatalf("%s not flagged:\n%s", devfd, out)
+		}
+	}
+	if out := check(base, filepath.Join(d, "missing")); strings.Contains(out, filepath.Join(d, "missing")) {
+		t.Fatalf("/dev/fd checked for a policy without {path:read:fd}:\n%s", out)
+	}
+}

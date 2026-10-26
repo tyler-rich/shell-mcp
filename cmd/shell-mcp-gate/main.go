@@ -185,6 +185,9 @@ func polkitWith(args []string, stdout, stderr io.Writer, trust policy.Trust) int
 var (
 	probeNoReplace = fsx.ProbeNoReplace
 	probeExchange  = fsx.ProbeExchange
+	// devFDPath is where commands reopen a {path:read:fd}; tests replace
+	// it.
+	devFDPath = "/dev/fd"
 )
 
 func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust, home string) int {

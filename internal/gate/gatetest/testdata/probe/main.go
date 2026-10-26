@@ -122,6 +122,12 @@ func main() {
 	case "cat":
 		b, err := os.ReadFile(args[0])
 		report(err, "READ:"+string(b))
+	case "sleep-cat":
+		// Sleeps for args[0], then reads args[1]: the test changes the
+		// file's name meanwhile.
+		sleep(args[0])
+		b, err := os.ReadFile(args[1])
+		report(err, "READ:"+string(b))
 	case "nnp":
 		fmt.Println(statusField("NoNewPrivs"))
 	case "connect":

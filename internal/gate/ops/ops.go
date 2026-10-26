@@ -59,6 +59,9 @@ type Options struct {
 	InjectMetadataReadBackFault func(fsx.Meta) fsx.Meta
 	// InjectDiscardStep is called at the points of a git_discard; tests only.
 	InjectDiscardStep func(step fsx.DiscardStep, path string)
+	// InjectBeforeExec is called by exec after the command was resolved
+	// (and its preview hash checked), just before it starts; tests only.
+	InjectBeforeExec func()
 	// testHooks is empty except in a test build (testhooks_gitconfig.go).
 	testHooks
 

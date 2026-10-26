@@ -101,15 +101,15 @@ func TestDecodeRequestCeiling(t *testing.T) {
 		})
 	}
 	// Another version is reported as such, ceiling or not.
-	if de := decodeErr(t, `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}`+"\n"); de.Code != CodeProtocolMismatch {
-		t.Fatalf("v2 without a ceiling: %q", de.Code)
+	if de := decodeErr(t, `{"v":3,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}`+"\n"); de.Code != CodeProtocolMismatch {
+		t.Fatalf("v3 without a ceiling: %q", de.Code)
 	}
 }
 
 func TestDecodeRequestVersionMismatch(t *testing.T) {
 	for _, in := range []string{
-		`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`,
-		`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","new_field":true}`, // a newer protocol's field must not mask the mismatch
+		`{"v":3,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`,
+		`{"v":3,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","new_field":true}`, // a newer protocol's field must not mask the mismatch
 		`{"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`,
 	} {
 		if de := decodeErr(t, in); de.Code != CodeProtocolMismatch {
@@ -328,7 +328,7 @@ func TestDecodeResponse(t *testing.T) {
 		"not json":           "nope\n",
 		"unknown field":      `{"v":1,"id":"` + respID + `","ok":true,"warnings":[],"extra":1}` + "\n",
 		"duplicate key":      `{"v":1,"v":1,"id":"` + respID + `","ok":true,"warnings":[]}` + "\n",
-		"wrong version":      `{"v":2,"id":"` + respID + `","ok":true,"warnings":[]}` + "\n",
+		"wrong version":      `{"v":3,"id":"` + respID + `","ok":true,"warnings":[]}` + "\n",
 		"ok with error":      `{"v":1,"id":"` + respID + `","ok":true,"error":{"code":"internal","message":"m"},"warnings":[]}` + "\n",
 		"failure no error":   `{"v":1,"id":"` + respID + `","ok":false,"warnings":[]}` + "\n",
 		"unknown code":       `{"v":1,"id":"` + respID + `","ok":false,"error":{"code":"root_now","message":"m"},"warnings":[]}` + "\n",

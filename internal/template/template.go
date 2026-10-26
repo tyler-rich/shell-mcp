@@ -7,6 +7,7 @@ package template
 import (
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,6 +23,11 @@ const (
 	MaxEnumOptions   = 64
 	MaxTemplateCount = 64 // templates per command
 	maxUnitBytes     = 256
+	// MaxFDTokens bounds the {path:read:fd} placeholders of one template.
+	MaxFDTokens = 8
+	// FirstFD is the descriptor the first {path:read:fd} of a template is
+	// passed as; the k-th (from 0, left to right) is FirstFD+k.
+	FirstFD = 4
 )
 
 // Kind is a token kind.
@@ -36,6 +42,7 @@ const (
 	Int
 	Enum
 	Regex
+	PathReadFD
 )
 
 // Token is one parsed template token.
@@ -59,6 +66,10 @@ type Resolver interface {
 	// clean value, resolved under the caller's read (write=false) or write
 	// roots, or an error (typically a path-denied error).
 	ResolvePath(value string, write bool) (string, error)
+	// ResolveReadFD opens a {path:read:fd} value under the caller's read
+	// roots and returns the open file and its real path, or an error
+	// (typically a path-denied error).
+	ResolveReadFD(value string) (*os.File, string, error)
 	// MatchUnit reports whether a unit name is allowed.
 	MatchUnit(value string) bool
 }
@@ -200,6 +211,10 @@ func (t Template) String() []string {
 // UsesPathWrite reports whether the template has a {path:write} placeholder.
 func (t Template) UsesPathWrite() bool { return t.uses(PathWrite) }
 
+// UsesPathReadFD reports whether the template has a {path:read:fd}
+// placeholder.
+func (t Template) UsesPathReadFD() bool { return false }
+
 // UsesUnit reports whether the template has a {unit} placeholder.
 func (t Template) UsesUnit() bool { return t.uses(Unit) }
 
@@ -233,6 +248,45 @@ func CheckValue(v string) error {
 func Match(templates []Template, args []string, r Resolver) ([]string, error) {
 	_, out, err := MatchIndex(templates, args, r)
 	return out, err
+}
+
+// Descriptor is a {path:read:fd} value opened for a command: the
+// descriptor number it is passed as, the real path the caller resolved,
+// and the open file.
+type Descriptor struct {
+	FD   int
+	Path string
+	File *os.File
+}
+
+// Matched is a template match: the template's index, the resolved
+// arguments and the descriptors opened for its {path:read:fd}
+// placeholders, which the caller must Close.
+type Matched struct {
+	Index       int
+	Args        []string
+	Descriptors []Descriptor
+}
+
+// Close closes the match's descriptors.
+func (m *Matched) Close() {
+	for _, d := range m.Descriptors {
+		_ = d.File.Close()
+	}
+	m.Descriptors = nil
+}
+
+// FDPath is the argument a {path:read:fd} passed as descriptor n becomes.
+func FDPath(n int) string { return "/dev/fd/" + strconv.Itoa(n) }
+
+// MatchFD is MatchIndex that also opens each {path:read:fd} placeholder's
+// file. The caller must Close the result.
+func MatchFD(templates []Template, args []string, r Resolver) (*Matched, error) {
+	i, out, err := MatchIndex(templates, args, r)
+	if err != nil {
+		return nil, err
+	}
+	return &Matched{Index: i, Args: out}, nil
 }
 
 // MatchIndex is Match that also returns the index of the template that

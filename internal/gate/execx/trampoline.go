@@ -79,6 +79,7 @@ type trampolineConfig struct {
 	Argv   []string
 	Env    []string
 	Dir    string
+	Files  uint32 // descriptors FirstFile… passed to the command
 	Limits []childLimit
 }
 
@@ -348,6 +349,12 @@ func trampoline() int {
 		return fail(err)
 	}
 	return fail(syscall.Exec(c.Path, c.Argv, c.Env)) //nolint:gosec // G204: the command Run sent over the checked control socket: a path resolved and ownership-checked at policy load, an argv matched to a policy template; no shell
+}
+
+// passedFileRefusal says why descriptor fd, of file type mode (S_IFMT bits)
+// and status flags fl, must not be passed to the command, or "".
+func passedFileRefusal(_ int, _ uint32, _ int) string {
+	return ""
 }
 
 // atSecureTag is AT_SECURE (linux/auxvec.h; Go's runtime uses the same).

@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json/jsontext"
+	"os"
 	"path"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
@@ -52,6 +53,10 @@ func (r resolver) ResolvePath(v string, write bool) (string, error) {
 		return r.s.execFS.ResolveWrite(v)
 	}
 	return r.s.execFS.ResolveRead(v)
+}
+
+func (r resolver) ResolveReadFD(v string) (*os.File, string, error) {
+	return r.s.execFS.ResolveReadFD(v)
 }
 
 func (r resolver) MatchUnit(v string) bool {

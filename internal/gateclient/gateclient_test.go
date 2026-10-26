@@ -162,24 +162,41 @@ func TestResponseIDMismatch(t *testing.T) {
 	}
 }
 
+// TestProtocolVersionMismatch: a gate answering in another protocol version
+// refused the request (a 0.1.0 gate answers a version 2 request with
+// protocol_mismatch in version 1; a newer one may add fields). The server
+// names both versions and the side to upgrade, and the failure is not
+// marked as sent: the request never ran, so a privileged write's outcome
+// is known.
 func TestProtocolVersionMismatch(t *testing.T) {
-	// A gate speaking another version.
-	c, _ := target(t, gate(func(req *protocol.Request) string {
-		return `{"v":2,"id":"` + req.ID + `","ok":true,"data":{},"warnings":[]}` + "\n"
-	}), 1)
-	_, err := newClient().Call(t.Context(), c, protocol.OpHello, "read", nil, time.Second)
-	e := wantError(t, err, envelope.CodeProtocolMismatch)
-	if !strings.Contains(e.Message, "version") {
-		t.Fatalf("message = %q", e.Message)
-	}
-	// The gate refusing our version answers protocol_mismatch itself.
-	c, _ = target(t, func(_ context.Context, s *sshtest.Session) uint32 {
-		_, _ = io.WriteString(s.Stdout, `{"v":1,"id":"","ok":false,"error":{"code":"protocol_mismatch","message":"unsupported protocol version"}}`+"\n")
-		return 0
-	}, 1)
-	resp, err := newClient().Call(t.Context(), c, protocol.OpHello, "read", nil, time.Second)
-	if err != nil || resp.Error.Code != protocol.CodeProtocolMismatch {
-		t.Fatalf("resp %+v err %v", resp, err)
+	for _, c := range []struct {
+		name, answer string
+		message      []string
+	}{
+		{"a 0.1.0 gate", `{"v":1,"id":"","ok":false,"error":{"code":"protocol_mismatch","message":"unsupported protocol version"}}`,
+			[]string{"the gate speaks protocol version 1", "this server version 2", "upgrade shell-mcp-gate and shell-mcp-privd on the target"}},
+		{"a 0.1.0 gate's success", `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ok":true,"data":{},"warnings":[]}`,
+			[]string{"the gate speaks protocol version 1", "upgrade shell-mcp-gate and shell-mcp-privd on the target"}},
+		{"a newer gate", `{"v":3,"id":"","ok":false,"error":{"code":"protocol_mismatch","message":"m"},"warnings":[],"later":{"x":1}}`,
+			[]string{"the gate speaks protocol version 3", "this server version 2", "upgrade this server (shell-mcp)"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tg, _ := target(t, func(_ context.Context, s *sshtest.Session) uint32 {
+				_, _ = protocol.DecodeRequest(s.Stdin)
+				_, _ = io.WriteString(s.Stdout, c.answer+"\n")
+				return 0
+			}, 1)
+			_, err := newClient().Call(t.Context(), tg, protocol.OpPrivWriteFile, "operator", nil, time.Second)
+			e := wantError(t, err, envelope.CodeProtocolMismatch)
+			for _, w := range c.message {
+				if !strings.Contains(e.Message, w) {
+					t.Fatalf("message %q lacks %q", e.Message, w)
+				}
+			}
+			if RequestSent(err) {
+				t.Fatal("a refusal of the version is marked as sent (its outcome would be reported unknown)")
+			}
+		})
 	}
 }
 
