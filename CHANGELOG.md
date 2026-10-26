@@ -2,6 +2,21 @@
 
 All notable changes to shell-mcp. Versions follow [Semantic Versioning](https://semver.org); a release is the tag `vX.Y.Z` on `main`. The design record behind each change is `docs/ARCHIVE.md` §14.
 
+## [Unreleased]
+
+**Added**
+
+- **`{path:read:fd}`** (handoff N-22): an opt-in placeholder for gate commands that passes the file as the gate's open descriptor (`/dev/fd/4` and up) instead of a path, so a command that reads its argument reads the file the gate checked, whatever happens to its name afterwards. It closes the owner-matched `{path:read}` redirect for such commands. Regular files only, at most 8 per template; the privileged policy refuses it. `exec_preview`, `exec`, `shell_run_read_command` and `shell_run_command` report the descriptors (`fds`), and an approved command is bound to the file's identity. `check-policy` warns about programs measured to give wrong results with a descriptor (`stat`, `du`, `file`, `ls` and `find` without following links; `cp -a`/`-P`/`-r`; `tar` adding a member; `findmnt`; `nginx`; `docker compose`) and checks `/dev/fd`. POLICY §4.
+
+**Changed**
+
+- **Protocol version 2** (ARCHITECTURE §4.0). A server, gate or helper of another version refuses with `protocol_mismatch`, naming both versions and which side to upgrade; a 0.1.0 server or gate gets that message in its own version's frame. A refusal of the version is never reported as `outcome_unknown`. The session hello is unchanged.
+
+**Upgrade notes**
+
+- **Upgrade the server, the gate and the helper together.** A 0.1.0 server and a gate of this release, or the reverse, refuse each other with `protocol_mismatch` (the message says which to upgrade); so do a gate and a helper of different releases.
+- A gate policy that uses `{path:read:fd}` is refused by a 0.1.0 gate (unknown placeholder).
+
 ## [0.1.0]
 
 The first release: an MCP server that gives AI clients bounded, audited read and write access to Linux hosts over SSH, without a shell.

@@ -51,7 +51,7 @@ Python remains viable for the server alone, but one language for all three binar
 | `internal/tools` | Registry: `Register(tool, tier)`; at startup registers tiers allowed by the profile minus `SHELL_MCP_DISABLE_TOOLS`. One file per domain. Tools validate inputs, call the gate, shape results — no host logic. |
 | `internal/envelope` | Uniform result builders; the closed error-code set. |
 | `internal/redact` | Shared with the gate: PEM private-key blocks, bearer/`Authorization`, configured secrets, `key=value` secret patterns. |
-| `internal/protocol` | Shared wire types, protocol version constant, size limits. |
+| `internal/protocol` | Shared wire types, protocol version constant (and the version refusals both sides send, §4), size limits. |
 
 ### Gate (`cmd/shell-mcp-gate`)
 
@@ -59,7 +59,7 @@ Python remains viable for the server alone, but one language for all three binar
 |---|---|
 | `internal/gate/policy` | Strict YAML load (unknown keys are errors), schema validation, hard-deny list, protected-path set, template compilation, binary resolution and ownership checks, policy SHA-256. |
 | `internal/gate/fsx` | Root selection (longest matching root), `os.Root` operations, `/proc/self/fd/N` real-path re-check, O_NOFOLLOW final component, deny matching, bounded reads, atomic writes with read-back, mode/owner preservation, setuid/setgid refusal. |
-| `internal/gate/execx` | Template matching, argv construction, scrubbed env, `SysProcAttr{Setpgid, Pdeathsig}`, rlimits in force before the command's first instruction (`RLIMIT_CORE=0`, `RLIMIT_NOFILE`, `RLIMIT_NPROC` and `RLIMIT_DATA` at the policy's `limits.max_memory_mb`, soft and hard, without which nothing runs; POLICY §4a) (the running binary re-executes itself as a trampoline: it reads the command from an inherited socketpair, lowers its own limits with `setrlimit(2)`, marks every descriptor above stderr close-on-exec and `execve(2)`s the command; it refuses any other way of being started), output capture with per-stream caps, timeout SIGTERM→SIGKILL on the process group, exit-code/signal reporting. Used by the gate and the helper. |
+| `internal/gate/execx` | Template matching, argv construction, scrubbed env, `SysProcAttr{Setpgid, Pdeathsig}`, rlimits in force before the command's first instruction (`RLIMIT_CORE=0`, `RLIMIT_NOFILE`, `RLIMIT_NPROC` and `RLIMIT_DATA` at the policy's `limits.max_memory_mb`, soft and hard, without which nothing runs; POLICY §4a) (the running binary re-executes itself as a trampoline: it reads the command from an inherited socketpair, lowers its own limits with `setrlimit(2)`, marks every descriptor above stderr close-on-exec, clears the flag on exactly the files passed for `{path:read:fd}` (descriptors 4 and up, each checked to be a regular file open read-only; POLICY §4) and `execve(2)`s the command; it refuses any other way of being started), output capture with per-stream caps, timeout SIGTERM→SIGKILL on the process group, exit-code/signal reporting. Used by the gate and the helper. |
 | `internal/gate/ops` | One file per op (§4.3). Each op declares its tier; the dispatcher refuses ops above min(`max_tier`, the request's `ceiling`) before doing anything else. |
 | `internal/gate/audit` | One syslog line per request (authpriv; info on success, notice on refusal): request id, the request's tier `ceiling` (empty when the request was refused before it was read), principal, client address (`SSH_CONNECTION`), op, sanitized args (paths, units, ids, flags; an argument list only as its count), outcome, duration and, for a delete or a discard that set an entry aside and could not put it back, that entry's temporary path (`set_aside`), as one JSON object. Never content, stdin, output or environment. One datagram to `/dev/log` with a 250 ms dial and write deadline: a missing socket or full queue never blocks the request. |
 | `internal/gate/procfs`, `systemd`, `gitx`, `certs` | Bounded, fuzzed parsers for `/proc` and os-release, systemctl/journalctl arguments and output, git output and repository configuration, and certificates. |
@@ -95,15 +95,32 @@ Python remains viable for the server alone, but one language for all three binar
 
 Every failure at steps 2–6 becomes a tool error in the envelope, never a transport error.
 
-## 4. Gate wire protocol (version 1)
+## 4. Gate wire protocol (version 2)
 
 One request per SSH session, UTF-8 JSON, newline-terminated, on stdin. One response, same encoding, on stdout. The gate writes nothing else to stdout. Stderr is unused (the gate logs to syslog).
+
+### 4.0 Versions
+
+- **Version 1** is shell-mcp 0.1.x. **Version 2** is shell-mcp 0.2.0 (handoff N-22, maintainer decision 2026-10-25: a new version, not amended in place). Its wire changes: `exec_preview` and `exec` report `fds`, the descriptors a command is given (`{path:read:fd}`, POLICY §4), and `exec_preview`'s hash moves to the domain `shell-mcp exec preview v2`, which covers each descriptor's number, path, device and inode. No op, request field, error code or envelope changed.
+- **Version 2 is open for additions until `v0.2.0` is tagged** (maintainer decision 2026-10-26): a change made before the tag, such as handoff N-5's hash operations (S6-4), adds to version 2 in place, and only additively; after the tag, any wire change is a new version. No operation is reserved for it.
+- **The session hello stays `shell-mcp-gate/1`.** It names the session's framing (one request line, one response line), not the protocol version: a 0.1.0 gate refuses any other `SSH_ORIGINAL_COMMAND` as `install_insecure` before it reads the request, so a changed hello would hide the version mismatch behind an install error. The version is the request's and the response's `v`.
+- **A mismatch fails with a message naming both versions and the side to upgrade**, never as anything that could hide it:
+  - A gate or helper given a request of another version answers `protocol_mismatch` without running anything ("this gate speaks protocol version 2 and the request is version 1: upgrade the server (shell-mcp) to the gate's release"; for a newer request, upgrade shell-mcp-gate and shell-mcp-privd, or for the helper shell-mcp-privd). It frames that answer in version 1 when the request was version 1 (version 1's failure frame is version 2's), so a 0.1.0 server or gate decodes it and passes the message on; otherwise in its own version.
+  - A server or gate given a response of another version reads `v` before decoding strictly (a newer peer's unknown fields do not hide its version) and reports `protocol_mismatch` naming both versions and the side to upgrade: "the gate speaks protocol version 1 and this server version 2: upgrade shell-mcp-gate and shell-mcp-privd on the target to this server's release", or, from the gate, the same about the privileged helper, adding "the helper refused the request, so nothing ran".
+  - Such a refusal is never `outcome_unknown`, even for a privileged request that can change the host: a peer of another version decodes the version before anything else and runs nothing (every released version does), so the server does not mark it as sent (§6).
+
+  | Server | Gate | Helper | What the user sees |
+  |---|---|---|---|
+  | 0.1.0 | 0.2.0 | any | the gate's message, framed in version 1: upgrade the server |
+  | 0.2.0 | 0.1.0 | any | the server's: upgrade shell-mcp-gate and shell-mcp-privd on the target (the 0.1.0 gate's journal says `protocol_mismatch`) |
+  | 0.2.0 | 0.2.0 | 0.1.0 | the gate's: upgrade shell-mcp-privd on this host; nothing ran |
+  | 0.1.0 | 0.1.0 | 0.2.0 | the helper's message, framed in version 1, passed on by the gate: upgrade shell-mcp-gate |
 
 ### 4.1 Request
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "id": "0b5c…(uuid v4)",
   "ceiling": "read",
   "op": "read_file",
@@ -112,7 +129,7 @@ One request per SSH session, UTF-8 JSON, newline-terminated, on stdin. One respo
 }
 ```
 
-- `v` must equal the gate's protocol version, else `{"ok":false,"error":{"code":"protocol_mismatch"}}`.
+- `v` must equal the gate's protocol version, else `{"ok":false,"error":{"code":"protocol_mismatch","message":"…"}}`, the message naming both versions and the side to upgrade, framed in version 1 for a version 1 request (§4.0).
 - `id` must be a UUID v4 in lowercase canonical form (`xxxxxxxx-xxxx-4xxx-[89ab]xxx-xxxxxxxxxxxx`, exactly 36 characters); anything else is `bad_request`. It is echoed in the response and written into the gate's and the helper's audit lines, which join on it.
 - `ceiling` is required: `read`, `operator` or `destructive`, the tier of the tool that made the request. A request without it, or with any other value, is `bad_request` before anything else about it is looked at (the response has no id). The gate refuses any op, and any `exec` command, whose tier is above min(`max_tier`, `ceiling`) with `tier_denied`, as its first check on the request; a `priv_*` op is checked against min(`privileged.max_tier`, `ceiling`) and forwarded with the ceiling unchanged, and the helper applies min(its own `max_tier`, `ceiling`) to the operation or the `priv_exec` command. The refusal's message names the limit that applied (the policy's `max_tier`, `privileged.max_tier`, or the request's ceiling). The ceiling is defence in depth against server mistakes and races (a policy edited between two requests), not against a compromised server, which can send any ceiling; the policies remain the boundary for that (POLICY §2, PRIVILEGED §6). Protocol v1 was amended in place to add it before any release (ARCHIVE §14, 2026-10-16).
 - `op` must be a known op; `args` are op-specific and strictly decoded (unknown fields are errors).
@@ -134,7 +151,7 @@ One request per SSH session, UTF-8 JSON, newline-terminated, on stdin. One respo
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "id": "0b5c…",
   "ok": true,
   "data": { … op-specific … },
@@ -146,7 +163,7 @@ One request per SSH session, UTF-8 JSON, newline-terminated, on stdin. One respo
 A response the gate forwarded from the privileged helper also carries `helper`, the helper's own block as the helper sent it: `version`, `principal` (`shell-mcp-privd`), `policy_sha256` (the privileged policy's), `max_tier`, `unit` (`core` or `broad`: the unit whose instance answered; empty only when it refused before knowing) and `duration_ms`. `gate` stays the gate's own. A response the gate answered itself, including a `priv_*` op it refused before connecting, has no `helper`; nor has a helper refusal that carried no block. `unit` appears only in a helper's block. The server binds `helper.policy_sha256` into approvals of privileged operations (§3 step 2). `helper` and `unit` were added to protocol v1 in place, before any release (ARCHIVE §14, 2026-10-18 S4c-1); an older server refuses `helper` as an unknown field (`protocol_mismatch`), never ignores it.
 
 ```json
-{ "v": 1, "id": "0b5c…", "ok": true, "data": { … }, "warnings": [],
+{ "v": 2, "id": "0b5c…", "ok": true, "data": { … }, "warnings": [],
   "gate":   { "version": "0.1.0", "principal": "admin-key", "policy_sha256": "…", "max_tier": "destructive", "duration_ms": 31 },
   "helper": { "version": "0.1.0", "principal": "shell-mcp-privd", "policy_sha256": "…", "max_tier": "operator", "unit": "core", "duration_ms": 9 } }
 ```
@@ -177,8 +194,8 @@ Helper self-check codes (PRIVILEGED §7), answered by the privileged helper to a
 | `git_pull` | operator | `git pull --ff-only --no-rebase --no-recurse-submodules` with hardening flags; the repo must be inside a write root; `remote.origin.url` and the URL git would use must equal the policy's (https) remote; refused on uncommitted tracked changes or a non-fast-forward. |
 | `delete` | destructive | Native via `fsx` within `paths.write`; files and empty dirs, or recursive with `recursive: true` bounded by `limits.max_delete_entries`. The read-tier `delete_preview` returns type, entries, bytes, the first 50 entries and `preview_sha256` over the complete list; `delete` requires that hash as `expected_preview_sha256` and removes exactly the listed entries, or stops (POLICY §3). Never a root, a mount point, `.git` or the protected set; symlinks are removed, never followed. |
 | `git_discard` | destructive | On a repo inside a write root, with git's index lock held: recompute `git_discard_preview` (read tier: tracked paths differing from HEAD with their work-tree identity and content hash, untracked paths as delete previews with `include_untracked`, and `preview_sha256`) and require `expected_preview_sha256`; set each listed file aside and check it; remove untracked paths through the delete; git builds HEAD's index in a temporary index and writes the restored files create-only (`checkout-index` without `-f`); verify with `status`; rename the temporary index onto `.git/index`. Never `reset --hard` or `clean -f`; no hook runs (POLICY §7). |
-| `exec` | per command | Policy command by `id` + argv matched against its templates; tier from the command entry. With `expected_preview_sha256`, refused (`exists`) unless `exec_preview` would return that hash now. |
-| `exec_preview` | read (the command's own tier is checked as for `exec`) | The same resolution as `exec` (tier, template, path placeholders, `cwd`), nothing run: command id, tier, description, `root_equivalent`, matched template, resolved argv and `cwd`, policy hash and `preview_sha256` (POLICY §4). |
+| `exec` | per command | Policy command by `id` + argv matched against its templates; tier from the command entry. With `expected_preview_sha256`, refused (`exists`) unless `exec_preview` would return that hash now, computed from the descriptors it then passes. Its result carries `argv` (a `{path:read:fd}` as `/dev/fd/<n>`) and `fds` (`[{fd, path}]`, empty without one). |
+| `exec_preview` | read (the command's own tier is checked as for `exec`) | The same resolution as `exec` (tier, template, path placeholders, `cwd`), nothing run: command id, tier, description, `root_equivalent`, matched template, resolved argv and `cwd`, `fds` (each `{path:read:fd}` as `{fd, path}`), policy hash and `preview_sha256`, which also covers each passed file's device and inode (domain `shell-mcp exec preview v2`; POLICY §4). |
 | `priv_*` | per op | Forwarded to the helper when the gate policy enables it; the helper's op table is `docs/PRIVILEGED.md` §6, including the read-tier `priv_backup_check` the write tools' previews use, the read-tier `priv_chown_preview` and `priv_chmod_preview`, the read-tier `priv_delete_preview`, the read-tier `priv_restore_preview`, the read-tier `priv_exec_preview` (core socket; for commands of either unit), the read-tier `priv_policy` (core socket: the privileged policy summary, handoff P-8), the read-tier `priv_pkg_update_index_preview` (broad socket), and the read-tier `priv_power_preview` and `priv_power_cancel` (broad socket; the cancel is read tier only so that it is never approval-gated, and is not one of the operations that change nothing). |
 
 ## 5. Configuration (server)
@@ -252,7 +269,7 @@ targets:
 
 Server error codes (closed set, defined in Session 2): `validation_error`, `unknown_target`, `target_unreachable`, `host_key_mismatch`, `auth_failed_ssh`, `gate_unavailable`, `protocol_mismatch`, `approval_pending`, `approval_declined`, `approval_invalid`, `approval_unavailable`, `timeout`, `outcome_unknown` (also a gate code; S4c-6), plus every gate code passed through unchanged. `profile_denied` exists for defence in depth only — tools outside the profile are not registered.
 
-**Outcome unknown (`outcome_unknown`).** For a privileged request that can change the host (`protocol.PrivMayChange`: an operation above read tier, or `priv_exec` above ceiling `read`), the result is `outcome_unknown` whenever the operation may or may not have run: the gate's answer to a helper answer lost after the request was written (none by its deadline, a close without a byte, an unreadable or mismatched answer), the helper's answer for an operator or destructive command stopped by the gate's hang-up or whose leftover processes it could not confirm ended, and the server's own for a failure after the session started (its time budget, a session closed without an answer, an unreadable answer). It is never a refusal code. The message is human-readable: what to check on the host before retrying, that the approval was used, and the cause. `timeout` stays for read requests and for a privileged command the helper never started ("nothing was run"). It was added to the closed set in place, before any release (handoff must-fix (b), approved by the maintainer).
+**Outcome unknown (`outcome_unknown`).** For a privileged request that can change the host (`protocol.PrivMayChange`: an operation above read tier, or `priv_exec` above ceiling `read`), the result is `outcome_unknown` whenever the operation may or may not have run: the gate's answer to a helper answer lost after the request was written (none by its deadline, a close without a byte, an unreadable or mismatched answer), the helper's answer for an operator or destructive command stopped by the gate's hang-up or whose leftover processes it could not confirm ended, and the server's own for a failure after the session started (its time budget, a session closed without an answer, an unreadable answer). An answer in another protocol version is not one of these: the peer refused the request before running anything, and it is `protocol_mismatch` (§4.0). It is never a refusal code. The message is human-readable: what to check on the host before retrying, that the approval was used, and the cause. `timeout` stays for read requests and for a privileged command the helper never started ("nothing was run"). It was added to the closed set in place, before any release (handoff must-fix (b), approved by the maintainer).
 
 **Approval.** `approval_pending` has `ok: false`, since nothing ran. Envelopes of approval-gated tools may carry an `approval` object, `{id, status, url, expires_at, summary}`, with status `pending`, `approved`, `declined`, `expired` or `used` (`url` only under `SHELL_MCP_APPROVAL_METHOD=web`):
 
