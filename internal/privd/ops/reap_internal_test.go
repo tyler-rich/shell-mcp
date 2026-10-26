@@ -200,7 +200,7 @@ func TestChildrenIn(t *testing.T) {
 		if err := os.Chmod(locked, 0); err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+		t.Cleanup(func() { _ = os.Chmod(locked, 0o700) }) //nolint:gosec // G302: the test's own directory, back to its mode for cleanup
 		if _, err := childrenIn(locked); err == nil || !strings.Contains(err.Error(), "permission denied") {
 			t.Fatalf("an unreadable task directory: %v (the error must carry the errno)", err)
 		}

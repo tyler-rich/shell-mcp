@@ -62,7 +62,7 @@ func TestPrivExecMemoryLimit(t *testing.T) {
 	}
 	start := time.Now()
 	f.ok("priv_exec", m{"command_id": "probe-mem", "args": []string{"alloc", "2048"}}, &d)
-	if d.ExitCode == nil || *d.ExitCode == 0 || !strings.Contains(d.Stderr, "out of memory") {
+	if d.ExitCode == nil || *d.ExitCode == 0 || !goOOM(d.Stderr) {
 		t.Fatalf("2048 MiB under %d MiB: %+v", privMemMB, d)
 	}
 	if el := time.Since(start); el > 10*time.Second {
@@ -104,4 +104,12 @@ func (f *fixture) aptRunsLogged() int {
 	f.t.Helper()
 	b, _ := os.ReadFile(f.aptLog)
 	return strings.Count(string(b), "\n")
+}
+
+// goOOM reports a Go program's fatal error at its memory limit: "out of
+// memory" when the heap cannot grow, "cannot allocate memory" when the
+// runtime's own metadata cannot (where the limit is met decides which).
+func goOOM(stderr string) bool {
+	return strings.Contains(stderr, "fatal error: runtime: out of memory") || strings.Contains(stderr, "fatal error: out of memory") ||
+		strings.Contains(stderr, "fatal error: runtime: cannot allocate memory")
 }

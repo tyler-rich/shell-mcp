@@ -69,7 +69,7 @@ func TestExecMemoryLimit(t *testing.T) {
 	}
 	start := time.Now()
 	f.ok("exec", m{"command_id": "probe-mem", "args": []string{"alloc", "2048"}}, &d)
-	if d.ExitCode == nil || *d.ExitCode == 0 || strings.Contains(d.Stdout, "allocated") || !strings.Contains(d.Stderr, "out of memory") {
+	if d.ExitCode == nil || *d.ExitCode == 0 || strings.Contains(d.Stdout, "allocated") || !goOOM(d.Stderr) {
 		t.Fatalf("2048 MiB under %d MiB: %+v", memMB, d)
 	}
 	if el := time.Since(start); el > 10*time.Second {
@@ -269,4 +269,12 @@ func TestGitThreadsIndependentOfCPUs(t *testing.T) {
 		}
 	}
 	t.Logf("threads started at 2/64 CPUs: %s", strings.Join(report, ", "))
+}
+
+// goOOM reports a Go program's fatal error at its memory limit: "out of
+// memory" when the heap cannot grow, "cannot allocate memory" when the
+// runtime's own metadata cannot (where the limit is met decides which).
+func goOOM(stderr string) bool {
+	return strings.Contains(stderr, "fatal error: runtime: out of memory") || strings.Contains(stderr, "fatal error: out of memory") ||
+		strings.Contains(stderr, "fatal error: runtime: cannot allocate memory")
 }

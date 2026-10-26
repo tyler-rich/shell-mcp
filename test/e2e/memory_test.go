@@ -72,7 +72,7 @@ func TestGateChildMemoryLimit(t *testing.T) {
 	start := time.Now()
 	_, r = hardExec(t, "probe-mem", []string{"alloc", "2048"}, "")
 	d := execDataOf(t, &r)
-	if d.ExitCode == nil || *d.ExitCode == 0 || !strings.Contains(d.Stderr, "out of memory") {
+	if d.ExitCode == nil || *d.ExitCode == 0 || !goOOM(d.Stderr) {
 		t.Fatalf("2048 MiB under the default: %+v", d)
 	}
 	if el := time.Since(start); el > 20*time.Second {
@@ -373,4 +373,12 @@ func oomDiagnostic(t *testing.T, id string, start time.Time, sliceBefore map[str
 			s, sliceBefore[s]["memory.events"], after["memory.events"], after["memory.swap.events"])
 	}
 	return b.String()
+}
+
+// goOOM reports a Go program's fatal error at its memory limit: "out of
+// memory" when the heap cannot grow, "cannot allocate memory" when the
+// runtime's own metadata cannot (where the limit is met decides which).
+func goOOM(stderr string) bool {
+	return strings.Contains(stderr, "fatal error: runtime: out of memory") || strings.Contains(stderr, "fatal error: out of memory") ||
+		strings.Contains(stderr, "fatal error: runtime: cannot allocate memory")
 }

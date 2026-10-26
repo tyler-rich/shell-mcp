@@ -263,7 +263,7 @@ func TestChildRlimits(t *testing.T) {
 const testMemoryMB = 256
 
 // TestChildMemoryLimitStopsAllocation: a command that allocates past its
-// limit fails at the limit (the Go probe: "out of memory", exit 2) and does
+// limit fails at the limit (the Go probe: a fatal runtime error, exit 2) and does
 // so quickly, while one that stays under it is unaffected (N-30).
 func TestChildMemoryLimitStopsAllocation(t *testing.T) {
 	p := probePath(t)
@@ -273,7 +273,7 @@ func TestChildMemoryLimitStopsAllocation(t *testing.T) {
 	}
 	start := time.Now()
 	r := run(t, &execx.Spec{MaxMemoryMB: testMemoryMB, Path: p, Args: []string{"alloc", "2048"}, Timeout: 30 * time.Second})
-	if r.ExitCode == nil || *r.ExitCode == 0 || strings.Contains(string(r.Stdout), "allocated") || !strings.Contains(string(r.Stderr), "out of memory") {
+	if r.ExitCode == nil || *r.ExitCode == 0 || strings.Contains(string(r.Stdout), "allocated") || !goOOM(string(r.Stderr)) {
 		t.Fatalf("2048 MiB under a %d MiB limit: exit %v signal %q, %q %q", testMemoryMB, r.ExitCode, r.Signal, r.Stdout, firstLine(r.Stderr))
 	}
 	if d := time.Since(start); d > 10*time.Second {
@@ -796,4 +796,12 @@ func TestRunRefusesWithoutTaskCount(t *testing.T) {
 	if !errors.Is(err, execx.ErrStart) || !strings.Contains(err.Error(), "RLIMIT_NPROC") {
 		t.Fatalf("a command without its task count: %v, want ErrStart naming RLIMIT_NPROC", err)
 	}
+}
+
+// goOOM reports a Go program's fatal error at its memory limit: "out of
+// memory" when the heap cannot grow, "cannot allocate memory" when the
+// runtime's own metadata cannot (where the limit is met decides which).
+func goOOM(stderr string) bool {
+	return strings.Contains(stderr, "fatal error: runtime: out of memory") || strings.Contains(stderr, "fatal error: out of memory") ||
+		strings.Contains(stderr, "fatal error: runtime: cannot allocate memory")
 }
