@@ -25,6 +25,7 @@ ProtectClock=yes
 RuntimeMaxSec=150
 TasksMax=256
 MemoryMax=1280M
+MemorySwapMax=0
 OOMPolicy=continue
 KillMode=control-group
 TimeoutStopSec=5

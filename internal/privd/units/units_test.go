@@ -175,6 +175,9 @@ func TestServiceDirectives(t *testing.T) {
 	// an OOM kill in the instance ends the process it chose, not the
 	// instance (N-30).
 	want(t, d, s+"MemoryMax", "1280M")
+	// No swap: MemoryMax= bounds memory and swap together, so the OOM
+	// killer acts at it on a host with swap too.
+	want(t, d, s+"MemorySwapMax", "0")
 	want(t, d, s+"OOMPolicy", "continue")
 	// A helper instance that dies leaves nothing behind for long: whatever
 	// is left in its cgroup gets SIGTERM, then SIGKILL after 5 s, including a
@@ -183,13 +186,13 @@ func TestServiceDirectives(t *testing.T) {
 	want(t, d, s+"TimeoutStopSec", "5")
 	want(t, d, "[Unit]CollectMode", "inactive-or-failed")
 	// Nothing else: a directive the generator adds must be added here.
-	if n := len(d); n != 44 {
+	if n := len(d); n != 45 {
 		keys := make([]string, 0, n)
 		for k := range d {
 			keys = append(keys, k)
 		}
 		slices.Sort(keys)
-		t.Errorf("%d directives, want 44: %q", n, keys)
+		t.Errorf("%d directives, want 45: %q", n, keys)
 	}
 }
 
@@ -321,6 +324,7 @@ func TestMemoryMaxFollowsKey(t *testing.T) {
 		for unit, svc := range map[string]string{"core": generate(t, p).Service, "broad": generateBroad(t, p).Service} {
 			d := directives(t, svc)
 			want(t, d, "[Service]MemoryMax", c.want)
+			want(t, d, "[Service]MemorySwapMax", "0")
 			want(t, d, "[Service]OOMPolicy", "continue")
 			if t.Failed() {
 				t.Fatalf("%s unit, max_memory_mb %d", unit, c.mb)
@@ -410,6 +414,7 @@ func TestBroadServiceDirectives(t *testing.T) {
 	want(t, d, s+"RuntimeMaxSec", "150")
 	want(t, d, s+"TasksMax", "256")
 	want(t, d, s+"MemoryMax", "1280M")
+	want(t, d, s+"MemorySwapMax", "0")
 	want(t, d, s+"OOMPolicy", "continue")
 	want(t, d, s+"KillMode", "control-group")
 	want(t, d, s+"TimeoutStopSec", "5")
@@ -423,13 +428,13 @@ func TestBroadServiceDirectives(t *testing.T) {
 			t.Errorf("the broad unit sets %s=%v, which §5.2 does not list", k, v)
 		}
 	}
-	if n := len(d); n != 20 {
+	if n := len(d); n != 21 {
 		keys := make([]string, 0, n)
 		for k := range d {
 			keys = append(keys, k)
 		}
 		slices.Sort(keys)
-		t.Errorf("%d directives, want 20: %q", n, keys)
+		t.Errorf("%d directives, want 21: %q", n, keys)
 	}
 }
 
