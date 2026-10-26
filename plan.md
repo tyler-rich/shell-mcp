@@ -1,6 +1,6 @@
 # shell-mcp — Project Plan
 
-> Status: **every v1 session is done (S0–S5b); next, the owner's `dev → main` release PR and the `v0.1.0` tag.** Last updated 2026-10-25.
+> Status: **`v0.1.0` is released (every v1 session done, S0–S5b). The open items after it are verified and planned, as proposals awaiting the maintainer's decisions, in `docs/handoff/POST-RELEASE.md`: sessions S6-1 to S6-5 and a proposed `0.2.0`.** Last updated 2026-10-25.
 > Read `CLAUDE.md` first, then this file, then `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/POLICY.md` and `docs/PRIVILEGED.md`.
 
 ## 1. What this is
