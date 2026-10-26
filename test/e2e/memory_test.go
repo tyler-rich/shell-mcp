@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -157,10 +160,19 @@ func TestPrivCoreMemoryLimit(t *testing.T) {
 // so the helper ends what is left and answers with the signal.
 func TestPrivCoreOOMPolicyContinue(t *testing.T) {
 	start := time.Now()
-	d := privExecData(t, "probe-mem", "alloc-tree", "2", "300", "1000")
+	sliceBefore := sliceMemoryEvents()
+	stop, snaps := make(chan struct{}), make(chan map[string]cgroupSnap, 1)
+	go pollInstanceCgroups(stop, snaps)
+	r, id := gate(t, svcShell, "priv_exec", map[string]any{"command_id": "probe-mem", "args": []string{"alloc-tree", "2", "300", "1000"}})
+	close(stop) // one last read right after the answer, then the poller returns
+	last := <-snaps
+	var d memExecData
+	if !r.OK || json.Unmarshal(r.Data, &d) != nil {
+		t.Fatalf("a tree past MemoryMax=: %s %+v\n%s", r.code(), r.Error, oomDiagnostic(t, id, start, sliceBefore, last))
+	}
 	if d.Signal == nil || *d.Signal != "SIGKILL" || strings.Contains(d.Stdout, "not stopped") {
-		t.Fatalf("a tree past MemoryMax=: exit %v signal %v stdout %q stderr %q; this host's swap: %s",
-			deref(d.ExitCode), deref(d.Signal), d.Stdout, firstLine(d.Stderr), swapTotal(t))
+		t.Fatalf("a tree past MemoryMax=: exit %v signal %v stdout %q stderr %q; this host's swap: %s\n%s",
+			deref(d.ExitCode), deref(d.Signal), d.Stdout, firstLine(d.Stderr), swapTotal(t), oomDiagnostic(t, id, start, sliceBefore, last))
 	}
 	if el := time.Since(start); el > 25*time.Second {
 		t.Fatalf("took %v", el)
@@ -193,4 +205,172 @@ func swapTotal(t *testing.T) string {
 		}
 	}
 	return "no SwapTotal line"
+}
+
+// The OOM diagnostic (test only): what TestPrivCoreOOMPolicyContinue
+// prints when it fails, to find why the helper's reap of the command's
+// leftover processes failed after the OOM kill.
+
+// cgroupRoot holds the helper instances' cgroups: systemd places every
+// instance of a template unit under system-<escaped prefix>.slice.
+const cgroupRoot = "/sys/fs/cgroup/system.slice"
+
+// cgroupMemoryFiles are the memory controller files read from an instance
+// and from the instances' slice.
+var cgroupMemoryFiles = []string{"memory.events", "memory.current", "memory.peak", "memory.swap.events", "memory.max", "memory.swap.max"}
+
+// cgroupSnap is one read of a cgroup's memory files, and when.
+type cgroupSnap struct {
+	at    time.Time
+	files map[string]string
+}
+
+// helperSlices are the cgroup directories of the helper instances' slices.
+func helperSlices() []string {
+	ents, err := os.ReadDir(cgroupRoot)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range ents {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "system-shell") && strings.HasSuffix(e.Name(), ".slice") {
+			out = append(out, cgroupRoot+"/"+e.Name())
+		}
+	}
+	return out
+}
+
+// readCgroup reads dir's memory files ("" for one it cannot read).
+func readCgroup(dir string) map[string]string {
+	m := map[string]string{}
+	for _, f := range cgroupMemoryFiles {
+		b, err := os.ReadFile(dir + "/" + f) //nolint:gosec // G304: the runner's own cgroup files
+		if err != nil {
+			m[f] = "(" + err.Error() + ")"
+			continue
+		}
+		m[f] = strings.Join(strings.Fields(string(b)), " ")
+	}
+	return m
+}
+
+// sliceMemoryEvents reads every helper slice's memory files (memory.events
+// in a parent is hierarchical: it counts its instances' events).
+func sliceMemoryEvents() map[string]map[string]string {
+	out := map[string]map[string]string{}
+	for _, s := range helperSlices() {
+		out[s] = readCgroup(s)
+	}
+	return out
+}
+
+// pollInstanceCgroups reads every helper instance cgroup's memory files
+// every 10 ms, keeping the last read of each (an instance's cgroup goes
+// away when it is collected, soon after it answers); once stop is closed
+// it reads once more and sends what it kept.
+func pollInstanceCgroups(stop <-chan struct{}, out chan<- map[string]cgroupSnap) {
+	kept := map[string]cgroupSnap{}
+	read := func() {
+		for _, s := range helperSlices() {
+			ents, err := os.ReadDir(s)
+			if err != nil {
+				continue
+			}
+			for _, e := range ents {
+				if e.IsDir() && strings.HasSuffix(e.Name(), ".service") {
+					kept[s+"/"+e.Name()] = cgroupSnap{at: time.Now(), files: readCgroup(s + "/" + e.Name())}
+				}
+			}
+		}
+	}
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-stop:
+			read()
+			out <- kept
+			return
+		case <-tick.C:
+			read()
+		}
+	}
+}
+
+// oomKillRE matches the kernel's OOM kill lines, for the victim's pid and
+// name: "Killed process <pid> (<name>)" and "oom-kill:…,task=<name>,pid=<pid>".
+var oomKillRE = []*regexp.Regexp{
+	regexp.MustCompile(`Killed process (\d+) \(([^)]*)\)`),
+	regexp.MustCompile(`oom-kill:.*task=([^,]*),pid=(\d+)`),
+}
+
+// oomDiagnostic describes the request id's OOM case: the helper's journal
+// line for it and its other lines, the kernel log since start, the OOM
+// victim, the instance cgroup's last memory files, the slices' memory files
+// before and after, and whether the helper itself met an allocation failure.
+func oomDiagnostic(t *testing.T, id string, start time.Time, sliceBefore map[string]map[string]string, last map[string]cgroupSnap) string {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString("---- OOM diagnostic (request " + id + ")\n")
+	// The helper's line for the request, and every line of its process.
+	var line journalEntry
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline) && line.Message == ""; time.Sleep(200 * time.Millisecond) {
+		for _, e := range journal(t, "shell-mcp-privd", start) {
+			if strings.Contains(e.Message, id) {
+				line = e
+			}
+		}
+	}
+	helperPID := line.PID
+	fmt.Fprintf(&b, "helper journal line (pid %s, unit %s, priority %s):\n  %s\n", line.PID, line.Unit, line.Priority, line.Message)
+	if helperPID != "" {
+		for _, e := range journal(t, "shell-mcp-privd", start) {
+			if e.PID == helperPID && e.Message != line.Message {
+				fmt.Fprintf(&b, "  other helper line: %s\n", e.Message)
+			}
+		}
+	}
+	// The kernel log for the window.
+	kout, err := exec.CommandContext(t.Context(), "journalctl", "-k", "--no-pager", "-o", "short-monotonic", //nolint:gosec // G204: fixed test command
+		"--since", "@"+strconv.FormatInt(start.Unix()-1, 10)).CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(&b, "journalctl -k: %v\n", err)
+	}
+	var victims, helperAlloc []string
+	b.WriteString("kernel log (memory and OOM lines):\n")
+	for _, l := range strings.Split(string(kout), "\n") {
+		low := strings.ToLower(l)
+		if !strings.Contains(low, "oom") && !strings.Contains(low, "memory") && !strings.Contains(low, "killed process") &&
+			!strings.Contains(low, "allocation failure") && !strings.Contains(low, "shell-mcp") {
+			continue
+		}
+		b.WriteString("  " + l + "\n")
+		for _, re := range oomKillRE {
+			if m := re.FindStringSubmatch(l); m != nil {
+				victims = append(victims, strings.Join(m[1:], " "))
+			}
+		}
+		if (strings.Contains(low, "allocation failure") || strings.Contains(low, "invoked oom-killer")) &&
+			(strings.Contains(l, "shell-mcp-privd") || (helperPID != "" && strings.Contains(l, "pid="+helperPID))) {
+			helperAlloc = append(helperAlloc, l)
+		}
+	}
+	fmt.Fprintf(&b, "OOM victims (pid name / name pid): %q\n", victims)
+	fmt.Fprintf(&b, "helper allocation failures in the kernel log: %q; in its journal line: %v\n", helperAlloc,
+		strings.Contains(line.Message, "cannot allocate") || strings.Contains(line.Message, "ENOMEM") || strings.Contains(line.Message, "out of memory"))
+	// The instance's cgroup as last read, and the slices before and after.
+	for dir, s := range last {
+		fmt.Fprintf(&b, "instance cgroup %s (read %v after the request started):\n", dir, s.at.Sub(start).Round(time.Millisecond))
+		for _, f := range cgroupMemoryFiles {
+			fmt.Fprintf(&b, "  %s: %s\n", f, s.files[f])
+		}
+	}
+	if len(last) == 0 {
+		b.WriteString("no instance cgroup was seen under " + cgroupRoot + "\n")
+	}
+	for s, after := range sliceMemoryEvents() {
+		fmt.Fprintf(&b, "slice %s:\n  memory.events before: %s\n  memory.events after:  %s\n  memory.swap.events after: %s\n",
+			s, sliceBefore[s]["memory.events"], after["memory.events"], after["memory.swap.events"])
+	}
+	return b.String()
 }
