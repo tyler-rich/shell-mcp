@@ -312,7 +312,7 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 	if p.UsesBroad() {
 		mem += ", broad unit MemoryMax=" + units.MemoryMax(p)
 	}
-	pr("memory: limits.max_memory_mb %d MiB, the memory limit (RLIMIT_DATA, soft and hard) of every command and apt-get; %s (OOMPolicy=continue)", p.Limits.MaxMemoryMB, mem)
+	pr("memory: limits.max_memory_mb %d MiB, the memory limit (RLIMIT_DATA, soft and hard) of every command and apt-get; %s (MemorySwapMax=0, OOMPolicy=continue)", p.Limits.MaxMemoryMB, mem)
 	if set, err := execx.IgnoreRLimitData(env.ignoreRLimitData); err != nil {
 		pr("WARN kernel: could not read ignore_rlimit_data (%v); if the boot option is set, limits.max_memory_mb binds brk(2) only, not mmap(2)", err)
 	} else if set {

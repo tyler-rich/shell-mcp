@@ -123,12 +123,12 @@ id svc-shell
 
 ```bash
 mkdir -p /etc/systemd/system/user-60123.slice.d
-printf '[Slice]\nMemoryMax=4G\n' >/etc/systemd/system/user-60123.slice.d/50-shell-mcp.conf
+printf '[Slice]\nMemoryMax=4G\nMemorySwapMax=0\n' >/etc/systemd/system/user-60123.slice.d/50-shell-mcp.conf
 systemctl daemon-reload
-systemctl show -p MemoryMax user-60123.slice
+systemctl show -p MemoryMax -p MemorySwapMax user-60123.slice
 ```
 
-Choose the value from the requests you expect at once times `limits.max_memory_mb` (4G fits three requests at the default 1024 MiB). The helper's units carry their own `MemoryMax=` (PRIVILEGED §5).
+Choose the value from the requests you expect at once times `limits.max_memory_mb` (4G fits three requests at the default 1024 MiB). Set `MemorySwapMax=0` with it: without it, on a host with swap, a runaway command is pushed into swap and slows the whole host until the request times out, instead of being killed at `MemoryMax=`. The helper's units carry their own `MemoryMax=` and `MemorySwapMax=0` (PRIVILEGED §5).
 
 ## 5. Write the gate policy *(container)*
 

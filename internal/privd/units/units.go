@@ -219,6 +219,7 @@ func Core(p *policy.Policy) (Files, error) {
 		{"RuntimeMaxSec", strconv.Itoa(p.Limits.MaxTimeoutS + RuntimeSlackS)},
 		{"TasksMax", "64"},
 		{"MemoryMax", MemoryMax(p)},
+		{"MemorySwapMax", "0"},
 		{"OOMPolicy", "continue"},
 		// A dead instance leaves nothing running for long: systemd sends
 		// SIGTERM to everything left in its cgroup, then SIGKILL after
@@ -251,6 +252,10 @@ const HelperMemoryMB = 256
 // leaves the instance running after the kernel kills the process it
 // chose, so the helper answers with the command's signal and ends what is
 // left, instead of systemd stopping the instance (and the answer).
+// MemorySwapMax=0 (both units) makes MemoryMax= bound memory and swap
+// together: on a host with swap, the kernel would otherwise push the
+// instance's pages into swap past MemoryMax= instead of killing anything,
+// slowing the whole host until the request timed out.
 func MemoryMax(p *policy.Policy) string {
 	return strconv.Itoa(p.Limits.MaxMemoryMB+HelperMemoryMB) + "M"
 }
@@ -294,6 +299,7 @@ func Broad(p *policy.Policy) (Files, error) {
 		{"RuntimeMaxSec", strconv.Itoa(p.Limits.MaxTimeoutS + RuntimeSlackS)},
 		{"TasksMax", BroadTasksMax},
 		{"MemoryMax", MemoryMax(p)},
+		{"MemorySwapMax", "0"},
 		{"OOMPolicy", "continue"},
 		{"KillMode", "control-group"},
 		{"TimeoutStopSec", strconv.Itoa(StopTimeoutS)},
