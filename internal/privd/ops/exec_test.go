@@ -81,7 +81,7 @@ func TestExecBoundedByOwnTimeout(t *testing.T) {
 			*s = strings.Replace(*s, "  - id: probe-op\n", "  - id: probe-sleep\n    path: "+f.probe+"\n    tier: read\n    templates: [[\"ignore-term\", \"30s\"]]\n  - id: probe-op\n", 1)
 		})
 	start := time.Now()
-	out, _ := f.serveRaw(`{"v":1,"id":"` + reqID + `","ceiling":"read","op":"priv_exec","args":{"command_id":"probe-sleep","args":["ignore-term","30s"]},"timeout_ms":600000}` + "\n")
+	out, _ := f.serveRaw(`{"v":2,"id":"` + reqID + `","ceiling":"read","op":"priv_exec","args":{"command_id":"probe-sleep","args":["ignore-term","30s"]},"timeout_ms":600000}` + "\n")
 	took := time.Since(start)
 	var r struct {
 		OK   bool `json:"ok"`

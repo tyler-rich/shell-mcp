@@ -35,7 +35,7 @@ func TestPolkitUsage(t *testing.T) {
 // server gets install_insecure, not a broken session), and exits 0.
 func TestServeMalformedForcedCommand(t *testing.T) {
 	for _, args := range [][]string{{"serve"}, {"serve", "--policy"}, {"serve", "--policy", "/x", "--bogus"}, {"serve", "--policy", "/x", "extra"}} {
-		code, out, errb := runCmd(args, `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`+"\n")
+		code, out, errb := runCmd(args, `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`+"\n")
 		var r struct {
 			OK    bool `json:"ok"`
 			Error struct {

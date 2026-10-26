@@ -24,7 +24,7 @@ import (
 
 // fdEnv is a gate FS for commands over <d>/x/w (closed, the test's uid
 // trusted as the service account), with a deny rule for w/denied/**.
-func fdEnv(t *testing.T, trusted func(uint32) bool) (fs *FS, root string) {
+func fdEnv(t testing.TB, trusted func(uint32) bool) (fs *FS, root string) {
 	t.Helper()
 	e := newExecChainEnv(t)
 	deny, err := pathx.NewMatcher([]string{e.root + "/denied/**"})
@@ -182,11 +182,60 @@ func TestResolveReadFDKeepsTheFile(t *testing.T) {
 }
 
 // openFDs counts this process's open descriptors.
-func openFDs(t *testing.T) int {
+func openFDs(t testing.TB) int {
 	t.Helper()
 	ents, err := os.ReadDir("/proc/self/fd")
 	if err != nil {
 		t.Skipf("no /proc/self/fd: %v", err)
 	}
 	return len(ents)
+}
+
+// FuzzResolveReadFD: for any path under a fixture tree (files, a
+// directory, a FIFO, symlinks, a denied file), ResolveReadFD accepts
+// exactly the paths ResolveRead accepts that are regular files, returns
+// ResolveRead's real path and a descriptor on that very file, refuses the
+// rest with ResolveRead's refusal when ResolveRead refuses, and leaves no
+// descriptor open.
+func FuzzResolveReadFD(f *testing.F) {
+	fs, root := fdEnv(f, selfTrust)
+	mkdirMode(f, filepath.Join(root, "d"), 0o755)
+	putMode(f, filepath.Join(root, "d", "f"), "f\n", 0o644)
+	putMode(f, filepath.Join(root, "t"), "t\n", 0o600)
+	must(f, unix.Mkfifo(filepath.Join(root, "fifo"), 0o644))
+	must(f, os.Symlink("t", filepath.Join(root, "link")))
+	must(f, os.Symlink("d", filepath.Join(root, "dlink")))
+	mkdirMode(f, filepath.Join(root, "denied"), 0o755)
+	putMode(f, filepath.Join(root, "denied", "s"), "s\n", 0o644)
+	for _, s := range []string{"t", "d", "d/f", "fifo", "link", "dlink/f", "denied/s", "missing", "", "../x", "d/../t", "/etc/hostname", "t/"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, rel string) {
+		p := rel
+		if !strings.HasPrefix(rel, "/") {
+			p = root + "/" + rel
+		}
+		before := openFDs(t)
+		file, rp, errFD := fs.ResolveReadFD(p)
+		want, errStr := fs.ResolveRead(p)
+		switch {
+		case errFD == nil:
+			defer func() { _ = file.Close() }()
+			var a, b unix.Stat_t
+			if errStr != nil || rp != want || unix.Fstat(int(file.Fd()), &a) != nil || unix.Stat(want, &b) != nil ||
+				a.Dev != b.Dev || a.Ino != b.Ino || a.Mode&unix.S_IFMT != unix.S_IFREG {
+				t.Fatalf("%q: {path:read:fd} %q, {path:read} %q %v", p, rp, want, errStr)
+			}
+			return
+		case errStr != nil && errFD.Error() != errStr.Error():
+			t.Fatalf("%q: {path:read:fd} %v, {path:read} %v", p, errFD, errStr)
+		case errStr == nil:
+			if fi, err := os.Stat(want); err == nil && fi.Mode().IsRegular() {
+				t.Fatalf("%q: a regular file refused: %v", p, errFD)
+			}
+		}
+		if after := openFDs(t); after != before {
+			t.Fatalf("%q: %d descriptors open before, %d after", p, before, after)
+		}
+	})
 }

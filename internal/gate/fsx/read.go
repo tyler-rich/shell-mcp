@@ -378,11 +378,64 @@ func (f *FS) ResolveRead(p string) (string, error) {
 	return l.targetReal(), nil
 }
 
-// ResolveReadFD resolves a {path:read:fd} (POLICY §4): as ResolveRead, but
-// it returns the descriptor it opened and checked with the real path; the
-// caller must close it.
-func (f *FS) ResolveReadFD(_ string) (*os.File, string, error) {
-	return nil, "", errf(protocol.CodeBadRequest, "{path:read:fd} is not implemented")
+// ResolveReadFD resolves a {path:read:fd} (POLICY §4, handoff N-22) exactly
+// as ResolveRead does (the roots, the deny list, a final symlink refused,
+// the chain rule with the owner-matched exception), but keeps the
+// descriptor it opened and checked and returns it with the real path; the
+// caller must close it. A command given it as /dev/fd/N reopens that file,
+// whatever happens to its name afterwards. Only a regular file is given: a
+// directory is is_a_directory (a command treats /dev/fd/N as a symlink, and
+// looks up everything below a directory by name again), anything else
+// path_denied (a FIFO could block the command, and a socket cannot be
+// opened). The type is checked before the open, where open(2) would fail
+// on a socket or block on a device, and again on the descriptor.
+func (f *FS) ResolveReadFD(p string) (*os.File, string, error) {
+	l, err := f.locate(p, false)
+	if err != nil {
+		return nil, "", err
+	}
+	defer l.close()
+	// A final symlink, or a name that is gone, is left to openTarget, so
+	// that its refusal is ResolveRead's.
+	if fi, lerr := l.lstat(); lerr == nil && fi.Mode()&fs.ModeSymlink == 0 {
+		if e := regularForFD(p, fi.Mode()); e != nil {
+			return nil, "", e
+		}
+	}
+	file, err := f.openTarget(l)
+	if err != nil {
+		return nil, "", err
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			_ = file.Close()
+		}
+	}()
+	fi, err := file.Stat()
+	if err != nil {
+		return nil, "", mapErr(err)
+	}
+	if e := regularForFD(p, fi.Mode()); e != nil {
+		return nil, "", e
+	}
+	if err := f.execChain(l, file, true); err != nil {
+		return nil, "", err
+	}
+	keep = true
+	return file, l.targetReal(), nil
+}
+
+// regularForFD refuses anything but a regular file for {path:read:fd}.
+func regularForFD(p string, m fs.FileMode) error {
+	switch {
+	case m.IsDir():
+		return errf(protocol.CodeIsADirectory, "%q is a directory; {path:read:fd} takes a regular file: a command given a directory as /dev/fd/N "+
+			"treats it as a symlink, and looks up everything below it by name again; nothing was run", p)
+	case !m.IsRegular():
+		return errf(protocol.CodePathDenied, "%q is not a regular file (a FIFO, socket or device); {path:read:fd} takes a regular file; nothing was run", p)
+	}
+	return nil
 }
 
 // ResolveDir returns the real path of a directory under a read or write

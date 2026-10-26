@@ -24,12 +24,12 @@ func decodeErr(t *testing.T, in string) *DecodeError {
 }
 
 func TestDecodeRequestValid(t *testing.T) {
-	in := `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000000","ceiling":"destructive","op":"read_file","args":{"path":"/srv/app/x","max_bytes":10},"timeout_ms":3000}` + "\n"
+	in := `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000000","ceiling":"destructive","op":"read_file","args":{"path":"/srv/app/x","max_bytes":10},"timeout_ms":3000}` + "\n"
 	req, err := DecodeRequest(strings.NewReader(in))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if req.V != 1 || req.Op != "read_file" || req.TimeoutMS != 3000 || req.ID != "0b5c0000-0000-4000-8000-000000000000" {
+	if req.V != 2 || req.Op != "read_file" || req.TimeoutMS != 3000 || req.ID != "0b5c0000-0000-4000-8000-000000000000" {
 		t.Fatalf("decoded %+v", req)
 	}
 	var args struct {
@@ -43,20 +43,20 @@ func TestDecodeRequestValid(t *testing.T) {
 
 func TestDecodeRequestRejects(t *testing.T) {
 	cases := map[string]string{
-		"duplicate op":          `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","op":"write_file"}`,
-		"duplicate nested key":  `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"read_file","args":{"path":"/a","path":"/b"}}`,
-		"unknown field":         `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","extra":1}`,
-		"trailing data":         `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"} x`,
-		"second value":          `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`,
+		"duplicate op":          `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","op":"write_file"}`,
+		"duplicate nested key":  `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"read_file","args":{"path":"/a","path":"/b"}}`,
+		"unknown field":         `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","extra":1}`,
+		"trailing data":         `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"} x`,
+		"second value":          `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`,
 		"empty":                 ``,
 		"not an object":         `[1]`,
 		"invalid utf8":          "{\"v\":1,\"id\":\"a\",\"op\":\"hel\xfflo\"}",
 		"case-insensitive name": `{"V":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`,
-		"bad id":                `{"v":1,"id":"a b","ceiling":"destructive","op":"hello"}`,
-		"long id":               `{"v":1,"id":"` + strings.Repeat("a", IDBytes+1) + `","op":"hello"}`,
-		"missing op":            `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001"}`,
-		"args not object":       `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","args":[1]}`,
-		"negative timeout":      `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","timeout_ms":-1}`,
+		"bad id":                `{"v":2,"id":"a b","ceiling":"destructive","op":"hello"}`,
+		"long id":               `{"v":2,"id":"` + strings.Repeat("a", IDBytes+1) + `","op":"hello"}`,
+		"missing op":            `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001"}`,
+		"args not object":       `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","args":[1]}`,
+		"negative timeout":      `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","timeout_ms":-1}`,
 	}
 	for name, in := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -73,25 +73,25 @@ func TestDecodeRequestRejects(t *testing.T) {
 // looked at.
 func TestDecodeRequestCeiling(t *testing.T) {
 	for _, c := range []string{"read", "operator", "destructive"} {
-		in := `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"` + c + `","op":"hello"}` + "\n"
+		in := `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"` + c + `","op":"hello"}` + "\n"
 		req, err := DecodeRequest(strings.NewReader(in))
 		if err != nil || req.Ceiling != c {
 			t.Errorf("ceiling %q: %+v %v", c, req, err)
 		}
 	}
 	for name, in := range map[string]string{
-		"missing":          `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}`,
-		"missing, exec":    `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"exec","args":{"command_id":"probe-op","args":[]}}`,
-		"empty":            `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"","op":"hello"}`,
-		"null":             `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":null,"op":"hello"}`,
-		"admin (reserved)": `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"admin","op":"hello"}`,
-		"excluded":         `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"excluded","op":"hello"}`,
-		"uppercase":        `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"READ","op":"hello"}`,
-		"padded":           `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":" read","op":"hello"}`,
-		"profile name":     `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read-only","op":"hello"}`,
-		"number":           `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":1,"op":"hello"}`,
-		"list":             `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":["read"],"op":"hello"}`,
-		"duplicate":        `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","ceiling":"destructive","op":"hello"}`,
+		"missing":          `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","op":"hello"}`,
+		"missing, exec":    `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","op":"exec","args":{"command_id":"probe-op","args":[]}}`,
+		"empty":            `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"","op":"hello"}`,
+		"null":             `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":null,"op":"hello"}`,
+		"admin (reserved)": `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"admin","op":"hello"}`,
+		"excluded":         `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"excluded","op":"hello"}`,
+		"uppercase":        `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"READ","op":"hello"}`,
+		"padded":           `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":" read","op":"hello"}`,
+		"profile name":     `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read-only","op":"hello"}`,
+		"number":           `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":1,"op":"hello"}`,
+		"list":             `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":["read"],"op":"hello"}`,
+		"duplicate":        `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","ceiling":"destructive","op":"hello"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			de := decodeErr(t, in+"\n")
@@ -120,11 +120,11 @@ func TestDecodeRequestVersionMismatch(t *testing.T) {
 
 func TestDecodeRequestTooLarge(t *testing.T) {
 	pad := strings.Repeat(" ", MaxRequestBytes)
-	if de := decodeErr(t, `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`+pad); de.Code != CodeTooLarge {
+	if de := decodeErr(t, `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`+pad); de.Code != CodeTooLarge {
 		t.Fatalf("code %q", de.Code)
 	}
 	// Exactly at the limit is accepted.
-	body := `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`
+	body := `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`
 	if _, err := DecodeRequest(strings.NewReader(body + strings.Repeat(" ", MaxRequestBytes-len(body)))); err != nil {
 		t.Fatalf("at limit: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestDecodeRequestStopsAtNewline(t *testing.T) {
 	pr, pw := io.Pipe()
 	defer func() { _ = pw.Close() }()
 	go func() {
-		_, _ = pw.Write([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}` + "\n"))
+		_, _ = pw.Write([]byte(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}` + "\n"))
 	}()
 	done := make(chan error, 1)
 	go func() {
@@ -266,7 +266,7 @@ func TestDecodeRequestIDIsUUIDv4(t *testing.T) {
 		"00000000-0000-4000-b000-000000000000",
 		"ffffffff-ffff-4fff-9fff-ffffffffffff",
 	} {
-		in := `{"v":1,"id":"` + id + `","ceiling":"destructive","op":"hello"}` + "\n"
+		in := `{"v":2,"id":"` + id + `","ceiling":"destructive","op":"hello"}` + "\n"
 		req, err := DecodeRequest(strings.NewReader(in))
 		if err != nil || req.ID != id {
 			t.Errorf("valid id %q: %v", id, err)
@@ -295,7 +295,7 @@ func TestDecodeRequestIDIsUUIDv4(t *testing.T) {
 		"trailing space pad": "f47ac10b-58cc-4372-a567-0e02b2c3d47 ",
 	} {
 		t.Run(name, func(t *testing.T) {
-			in := `{"v":1,"id":"` + id + `","ceiling":"destructive","op":"hello"}` + "\n"
+			in := `{"v":2,"id":"` + id + `","ceiling":"destructive","op":"hello"}` + "\n"
 			if de := decodeErr(t, in); de.Code != CodeBadRequest {
 				t.Fatalf("code %q, want %q", de.Code, CodeBadRequest)
 			}
@@ -312,12 +312,12 @@ func TestIDBytes(t *testing.T) {
 const respID = "0b5c0000-0000-4000-8000-000000000003"
 
 func TestDecodeResponse(t *testing.T) {
-	ok := `{"v":1,"id":"` + respID + `","ok":true,"data":{"x":1},"warnings":["w"],"gate":{"version":"dev","principal":"p","duration_ms":1}}` + "\n"
+	ok := `{"v":2,"id":"` + respID + `","ok":true,"data":{"x":1},"warnings":["w"],"gate":{"version":"dev","principal":"p","duration_ms":1}}` + "\n"
 	r, err := DecodeResponse(strings.NewReader(ok))
 	if err != nil || !r.OK || r.ID != respID || string(r.Data) != `{"x":1}` || len(r.Warnings) != 1 {
 		t.Fatalf("%+v %v", r, err)
 	}
-	fail := `{"v":1,"id":"","ok":false,"error":{"code":"sandbox_unavailable","message":"m"},"warnings":[]}` + "\n"
+	fail := `{"v":2,"id":"","ok":false,"error":{"code":"sandbox_unavailable","message":"m"},"warnings":[]}` + "\n"
 	if r, err := DecodeResponse(strings.NewReader(fail)); err != nil || r.OK || r.Error.Code != CodeSandboxUnavailable {
 		t.Fatalf("%+v %v", r, err)
 	}
@@ -326,17 +326,17 @@ func TestDecodeResponse(t *testing.T) {
 	}
 	for name, in := range map[string]string{
 		"not json":           "nope\n",
-		"unknown field":      `{"v":1,"id":"` + respID + `","ok":true,"warnings":[],"extra":1}` + "\n",
-		"duplicate key":      `{"v":1,"v":1,"id":"` + respID + `","ok":true,"warnings":[]}` + "\n",
+		"unknown field":      `{"v":2,"id":"` + respID + `","ok":true,"warnings":[],"extra":1}` + "\n",
+		"duplicate key":      `{"v":2,"v":2,"id":"` + respID + `","ok":true,"warnings":[]}` + "\n",
 		"wrong version":      `{"v":3,"id":"` + respID + `","ok":true,"warnings":[]}` + "\n",
-		"ok with error":      `{"v":1,"id":"` + respID + `","ok":true,"error":{"code":"internal","message":"m"},"warnings":[]}` + "\n",
-		"failure no error":   `{"v":1,"id":"` + respID + `","ok":false,"warnings":[]}` + "\n",
-		"unknown code":       `{"v":1,"id":"` + respID + `","ok":false,"error":{"code":"root_now","message":"m"},"warnings":[]}` + "\n",
-		"bad id":             `{"v":1,"id":"x","ok":true,"warnings":[]}` + "\n",
-		"ok without id":      `{"v":1,"id":"","ok":true,"warnings":[]}` + "\n",
-		"two values":         `{"v":1,"id":"` + respID + `","ok":true,"warnings":[]} {}` + "\n",
-		"too large":          `{"v":1,"id":"` + respID + `","ok":true,"warnings":["` + strings.Repeat("a", MaxResponseBytes) + `"]}` + "\n",
-		"multi-line message": `{"v":1,"id":"` + respID + `","ok":false,"error":{"code":"internal","message":"a\nb"},"warnings":[]}` + "\n",
+		"ok with error":      `{"v":2,"id":"` + respID + `","ok":true,"error":{"code":"internal","message":"m"},"warnings":[]}` + "\n",
+		"failure no error":   `{"v":2,"id":"` + respID + `","ok":false,"warnings":[]}` + "\n",
+		"unknown code":       `{"v":2,"id":"` + respID + `","ok":false,"error":{"code":"root_now","message":"m"},"warnings":[]}` + "\n",
+		"bad id":             `{"v":2,"id":"x","ok":true,"warnings":[]}` + "\n",
+		"ok without id":      `{"v":2,"id":"","ok":true,"warnings":[]}` + "\n",
+		"two values":         `{"v":2,"id":"` + respID + `","ok":true,"warnings":[]} {}` + "\n",
+		"too large":          `{"v":2,"id":"` + respID + `","ok":true,"warnings":["` + strings.Repeat("a", MaxResponseBytes) + `"]}` + "\n",
+		"multi-line message": `{"v":2,"id":"` + respID + `","ok":false,"error":{"code":"internal","message":"a\nb"},"warnings":[]}` + "\n",
 	} {
 		if _, err := DecodeResponse(strings.NewReader(in)); err == nil || errors.Is(err, ErrNoResponse) {
 			t.Errorf("%s: accepted (%v)", name, err)

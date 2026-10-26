@@ -102,7 +102,7 @@ func TestPrivRunCommandToolApproval(t *testing.T) {
 // instance refuses the other unit's commands, whatever the label says.
 func TestPrivExecPreviewMisrouted(t *testing.T) {
 	line := func(op, args string) string {
-		return fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"operator","op":%q,"args":%s,"timeout_ms":5000}`+"\n", newID(), op, args)
+		return fmt.Sprintf(`{"v":2,"id":%q,"ceiling":"operator","op":%q,"args":%s,"timeout_ms":5000}`+"\n", newID(), op, args)
 	}
 	for _, c := range []struct{ socket, op, args string }{
 		{broadSocket, "priv_exec_preview", `{"command_id":"probe-broad-op","args":["write","/etc/example-app/x"]}`},
@@ -170,7 +170,7 @@ func TestPrivExecKilledOnHangup(t *testing.T) {
 					}
 					b, _ := json.Marshal(a)
 					reqID := newID()
-					line := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"operator","op":"priv_exec","args":%s,"timeout_ms":60000}`+"\n", reqID, b)
+					line := fmt.Sprintf(`{"v":2,"id":%q,"ceiling":"operator","op":"priv_exec","args":%s,"timeout_ms":60000}`+"\n", reqID, b)
 					cl, out := hangupClient(t, mode, c.socket, line, 3*time.Second)
 					p := gatetest.FindChild(t, 0, args...)
 					t.Cleanup(p.Kill)
@@ -226,7 +226,7 @@ func TestPrivExecGateKilled(t *testing.T) {
 				a["unit"] = "broad"
 			}
 			b, _ := json.Marshal(a)
-			req := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"operator","op":"priv_exec","args":%s,"timeout_ms":60000}`+"\n", newID(), b)
+			req := fmt.Sprintf(`{"v":2,"id":%q,"ceiling":"operator","op":"priv_exec","args":%s,"timeout_ms":60000}`+"\n", newID(), b)
 			cmd := exec.CommandContext(t.Context(), gateBin, "serve", "--policy", gatePolicy, "--principal", "e2e")
 			cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, svcShell)}
 			cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin"}

@@ -358,7 +358,7 @@ type m = map[string]any
 
 func request(op string, args any) string {
 	a, _ := json.Marshal(args)
-	return fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":%q,"args":%s,"timeout_ms":5000}`+"\n", reqID, op, a)
+	return fmt.Sprintf(`{"v":2,"id":%q,"ceiling":"destructive","op":%q,"args":%s,"timeout_ms":5000}`+"\n", reqID, op, a)
 }
 
 func (f *fixture) serve(op string, args any) response {
@@ -368,7 +368,7 @@ func (f *fixture) serve(op string, args any) response {
 	if err := json.Unmarshal([]byte(out), &r); err != nil {
 		f.t.Fatalf("%s: response %q (exit %d) is not JSON: %v", op, out, code, err)
 	}
-	if code != 0 || r.V != 1 || r.ID != reqID || !strings.HasSuffix(out, "\n") || strings.Count(out, "\n") != 1 {
+	if code != 0 || r.V != 2 || r.ID != reqID || !strings.HasSuffix(out, "\n") || strings.Count(out, "\n") != 1 {
 		f.t.Fatalf("%s: exit %d envelope %q", op, code, out)
 	}
 	return r

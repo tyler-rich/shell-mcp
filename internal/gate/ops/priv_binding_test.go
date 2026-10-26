@@ -24,7 +24,7 @@ func helperBlock(unit string) func(string, net.Conn) {
 			ID string `json:"id"`
 		}
 		_ = json.Unmarshal([]byte(req), &r)
-		_, _ = c.Write([]byte(`{"v":1,"id":"` + r.ID + `","ok":true,"data":{"from":"helper"},"warnings":[],` +
+		_, _ = c.Write([]byte(`{"v":2,"id":"` + r.ID + `","ok":true,"data":{"from":"helper"},"warnings":[],` +
 			`"gate":{"version":"h1","principal":"shell-mcp-privd","policy_sha256":"beef","max_tier":"operator","unit":"` + unit + `","duration_ms":1}}` + "\n"))
 	}
 }
@@ -71,7 +71,7 @@ func TestForwardHelperBlock(t *testing.T) {
 				ID string `json:"id"`
 			}
 			_ = json.Unmarshal([]byte(req), &r)
-			_, _ = c.Write([]byte(`{"v":1,"id":"` + r.ID + `","ok":false,"error":{"code":"path_denied","message":"m"},"warnings":[],` +
+			_, _ = c.Write([]byte(`{"v":2,"id":"` + r.ID + `","ok":false,"error":{"code":"path_denied","message":"m"},"warnings":[],` +
 				`"gate":{"version":"h1","principal":"shell-mcp-privd","policy_sha256":"beef","max_tier":"operator","unit":"core","duration_ms":1}}` + "\n"))
 		})
 		r := f.call("priv_stat", m{"path": "/etc/example-app"})
@@ -110,7 +110,7 @@ func TestForwardClampsTimeout(t *testing.T) {
 			f := newFixture(t, "destructive")
 			h := startHelper(t, f, helperBlock("core"))
 			f.setLimits(2, 1)
-			if r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"operator","op":"priv_stat","args":` + args + c.field + `}` + "\n"); !r.OK {
+			if r, _ := f.serveRaw(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"operator","op":"priv_stat","args":` + args + c.field + `}` + "\n"); !r.OK {
 				t.Fatalf("%+v", r.Error)
 			}
 			h.mu.Lock()
@@ -129,7 +129,7 @@ func TestForwardClampsTimeout(t *testing.T) {
 			if got.TimeoutMS != c.want {
 				t.Fatalf("forwarded timeout_ms %d, want %d", got.TimeoutMS, c.want)
 			}
-			if got.V != 1 || got.ID != "0b5c0000-0000-4000-8000-000000000001" || got.Ceiling != "operator" || got.Op != "priv_stat" || string(got.Args) != args {
+			if got.V != 2 || got.ID != "0b5c0000-0000-4000-8000-000000000001" || got.Ceiling != "operator" || got.Op != "priv_stat" || string(got.Args) != args {
 				t.Fatalf("forwarded request changed beyond timeout_ms: %q", h.got[0])
 			}
 		})
@@ -157,12 +157,12 @@ func TestForwardAnswerAfterHelperRun(t *testing.T) {
 		mu.Lock()
 		ended = time.Now()
 		mu.Unlock()
-		_, _ = c.Write([]byte(`{"v":1,"id":"` + r.ID + `","ok":true,"data":{"timed_out":true},"warnings":[],` +
+		_, _ = c.Write([]byte(`{"v":2,"id":"` + r.ID + `","ok":true,"data":{"timed_out":true},"warnings":[],` +
 			`"gate":{"version":"h1","principal":"shell-mcp-privd","policy_sha256":"beef","max_tier":"destructive","unit":"core","duration_ms":1}}` + "\n"))
 	})
 	f.setLimits(1, 1)
 	f.opts.HelperGrace = 2 * time.Second
-	r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"priv_exec","args":{"command_id":"probe-sleep"},"timeout_ms":30000}` + "\n")
+	r, _ := f.serveRaw(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"priv_exec","args":{"command_id":"probe-sleep"},"timeout_ms":30000}` + "\n")
 	answered := time.Now()
 	mu.Lock()
 	e := ended

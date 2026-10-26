@@ -97,10 +97,10 @@ func echoID(code string) func(string, net.Conn) {
 		}
 		_ = json.Unmarshal([]byte(req), &r)
 		if code == "" {
-			_, _ = c.Write([]byte(`{"v":1,"id":"` + r.ID + `","ok":true,"data":{"from":"helper"},"warnings":["helper warning"],"gate":{"version":"h","principal":"shell-mcp-privd","duration_ms":1}}` + "\n"))
+			_, _ = c.Write([]byte(`{"v":2,"id":"` + r.ID + `","ok":true,"data":{"from":"helper"},"warnings":["helper warning"],"gate":{"version":"h","principal":"shell-mcp-privd","duration_ms":1}}` + "\n"))
 			return
 		}
-		_, _ = c.Write([]byte(`{"v":1,"id":"` + r.ID + `","ok":false,"error":{"code":"` + code + `","message":"refused by the helper"},"warnings":[]}` + "\n"))
+		_, _ = c.Write([]byte(`{"v":2,"id":"` + r.ID + `","ok":false,"error":{"code":"` + code + `","message":"refused by the helper"},"warnings":[]}` + "\n"))
 	}
 }
 
@@ -108,7 +108,7 @@ func TestForwardRequestUnchanged(t *testing.T) {
 	f := newFixture(t, "destructive")
 	h := startHelper(t, f, echoID(""))
 	args := `{"path":"/etc/example-app/app.conf","content_b64":"eA==","mode":"0640","owner":"root"}`
-	in := `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"priv_write_file","args":` + args + `,"timeout_ms":5000}` + "\n"
+	in := `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"priv_write_file","args":` + args + `,"timeout_ms":5000}` + "\n"
 	r, _ := f.serveRaw(in)
 	if !r.OK || string(r.Data) != `{"from":"helper"}` || len(r.Warnings) != 1 || r.Warnings[0] != "helper warning" {
 		t.Fatalf("forwarded response %+v %s", r.Error, r.Data)
@@ -132,7 +132,7 @@ func TestForwardRequestUnchanged(t *testing.T) {
 	if err := json.Unmarshal([]byte(h.got[0]), &got); err != nil || !strings.HasSuffix(h.got[0], "\n") {
 		t.Fatalf("forwarded %q: %v", h.got[0], err)
 	}
-	if got.V != 1 || got.ID != "0b5c0000-0000-4000-8000-000000000001" || got.Op != "priv_write_file" || got.TimeoutMS != 5000 || string(got.Args) != args {
+	if got.V != 2 || got.ID != "0b5c0000-0000-4000-8000-000000000001" || got.Op != "priv_write_file" || got.TimeoutMS != 5000 || string(got.Args) != args {
 		t.Fatalf("forwarded request changed: %q", h.got[0])
 	}
 }
@@ -150,14 +150,14 @@ func TestForwardErrors(t *testing.T) {
 		// Never answers: the gate's deadline (timeout_ms plus the grace).
 		"no answer": {func(string, net.Conn) { time.Sleep(3 * time.Second) }, "timeout"},
 		// A sandbox refusal comes before the helper reads the request.
-		"sandbox refusal without id": {reply(`{"v":1,"id":"","ok":false,"error":{"code":"sandbox_unavailable","message":"no landlock"},"warnings":[]}` + "\n"), "sandbox_unavailable"},
+		"sandbox refusal without id": {reply(`{"v":2,"id":"","ok":false,"error":{"code":"sandbox_unavailable","message":"no landlock"},"warnings":[]}` + "\n"), "sandbox_unavailable"},
 		// Anything malformed is helper_unavailable.
 		"not json":      {reply("nope\n"), "helper_unavailable"},
-		"unknown field": {reply(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ok":true,"warnings":[],"root":true}` + "\n"), "helper_unavailable"},
-		"other id":      {reply(`{"v":1,"id":"0b5c0000-0000-4000-8000-00000000000f","ok":true,"warnings":[]}` + "\n"), "helper_unavailable"},
-		"ok without id": {reply(`{"v":1,"id":"","ok":true,"warnings":[]}` + "\n"), "helper_unavailable"},
-		"unknown code":  {reply(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ok":false,"error":{"code":"granted","message":"m"},"warnings":[]}` + "\n"), "helper_unavailable"},
-		"oversized":     {reply(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ok":true,"warnings":["` + strings.Repeat("a", 4<<20) + `"]}` + "\n"), "helper_unavailable"},
+		"unknown field": {reply(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ok":true,"warnings":[],"root":true}` + "\n"), "helper_unavailable"},
+		"other id":      {reply(`{"v":2,"id":"0b5c0000-0000-4000-8000-00000000000f","ok":true,"warnings":[]}` + "\n"), "helper_unavailable"},
+		"ok without id": {reply(`{"v":2,"id":"","ok":true,"warnings":[]}` + "\n"), "helper_unavailable"},
+		"unknown code":  {reply(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ok":false,"error":{"code":"granted","message":"m"},"warnings":[]}` + "\n"), "helper_unavailable"},
+		"oversized":     {reply(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ok":true,"warnings":["` + strings.Repeat("a", 4<<20) + `"]}` + "\n"), "helper_unavailable"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t, "destructive")
@@ -165,7 +165,7 @@ func TestForwardErrors(t *testing.T) {
 			start := time.Now()
 			// A 300 ms request timeout: the gate gives up at 300 ms plus the
 			// 200 ms grace, long before the silent helper closes.
-			r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"priv_stat","args":{"path":"/etc/example-app"},"timeout_ms":300}` + "\n")
+			r, _ := f.serveRaw(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"priv_stat","args":{"path":"/etc/example-app"},"timeout_ms":300}` + "\n")
 			if r.OK || r.Error == nil || r.Error.Code != c.code {
 				t.Fatalf("got %+v, want %s", r.Error, c.code)
 			}
@@ -292,9 +292,9 @@ func TestForwardHelperSelfCheckCodes(t *testing.T) {
 				f := newFixture(t, "destructive")
 				startHelper(t, f, echoID(""))
 				msg := "the privileged helper refused to serve: " + code
-				answerUnread(t, f, `{"v":1,"id":"","ok":false,"error":{"code":"`+code+`","message":"`+msg+`"},"warnings":[]}`+"\n", early)
+				answerUnread(t, f, `{"v":2,"id":"","ok":false,"error":{"code":"`+code+`","message":"`+msg+`"},"warnings":[]}`+"\n", early)
 				for range 3 {
-					r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"priv_stat","args":{"path":"/etc/example-app"},"timeout_ms":2000}` + "\n")
+					r, _ := f.serveRaw(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"priv_stat","args":{"path":"/etc/example-app"},"timeout_ms":2000}` + "\n")
 					if r.OK || r.Error == nil || r.Error.Code != code || r.Error.Message != msg {
 						t.Fatalf("got %+v, want %s", r.Error, code)
 					}

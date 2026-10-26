@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -196,6 +197,14 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	if !filepath.IsAbs(s.Trampoline) {
 		return Result{}, fmt.Errorf("%w: no exec trampoline", ErrStart)
 	}
+	// The trampoline checks each passed descriptor itself (a regular file
+	// open read-only); here only the count and that each is a file.
+	if len(s.Files) > MaxFiles {
+		return Result{}, fmt.Errorf("%w: %d descriptors to pass, at most %d", ErrStart, len(s.Files), MaxFiles)
+	}
+	if slices.Contains(s.Files, nil) {
+		return Result{}, fmt.Errorf("%w: a descriptor to pass is nil", ErrStart)
+	}
 	if s.Lookahead == 0 {
 		s.Lookahead = DefaultLookahead
 	}
@@ -217,7 +226,8 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: %w", ErrStart, err)
 	}
-	cfg, err := encodeConfig(&trampolineConfig{Path: s.Path, Argv: append([]string{s.Path}, s.Args...), Env: env, Dir: dir, Limits: limits})
+	cfg, err := encodeConfig(&trampolineConfig{Path: s.Path, Argv: append([]string{s.Path}, s.Args...), Env: env, Dir: dir,
+		Files: uint32(len(s.Files)), Limits: limits}) //nolint:gosec // G115: at most MaxFiles
 	if err != nil {
 		return Result{}, startError(err)
 	}
@@ -238,7 +248,11 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	cmd := exec.CommandContext(ctx, s.Trampoline, TrampolineArg) //nolint:gosec // G204: the trampoline is the running binary, resolved and ownership-checked by the caller; the command's path was resolved and ownership-checked at policy load and its argv matched a policy template; no shell is involved
 	cmd.Env = []string{}
 	cmd.Dir = "/"
-	cmd.ExtraFiles = []*os.File{childCtl}
+	// fd 3 is the control socket; Spec.Files follow it from FirstFile, and
+	// os/exec passes all of them without close-on-exec. The trampoline marks
+	// every descriptor from 3 up close-on-exec again and clears it on
+	// exactly the files.
+	cmd.ExtraFiles = append([]*os.File{childCtl}, s.Files...)
 	// The parent-death signal fires when the thread that forked the child
 	// exits (prctl(2)). That thread is whichever one runs this goroutine,
 	// and it needs no pinning here: when the gate or helper dies, every

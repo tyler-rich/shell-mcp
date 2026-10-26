@@ -54,7 +54,7 @@ func startTwoHelpers(t *testing.T, f *fixture, privileged string) *twoHelpers {
 					ID string `json:"id"`
 				}
 				_ = json.Unmarshal([]byte(line), &r)
-				_, _ = c.Write([]byte(`{"v":1,"id":"` + r.ID + `","ok":true,"data":{"from":"` + name + `"},"warnings":[]}` + "\n"))
+				_, _ = c.Write([]byte(`{"v":2,"id":"` + r.ID + `","ok":true,"data":{"from":"` + name + `"},"warnings":[]}` + "\n"))
 				_ = c.Close()
 			}
 		}()
@@ -121,7 +121,7 @@ func TestRouting(t *testing.T) {
 			if i := len("priv_exec/"); len(op) > i && op[:i] == "priv_exec/" {
 				name = "priv_exec"
 			}
-			r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"` + name + `","args":` + c.args + `,"timeout_ms":2000}` + "\n")
+			r, _ := f.serveRaw(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"` + name + `","args":` + c.args + `,"timeout_ms":2000}` + "\n")
 			if !r.OK || string(r.Data) != `{"from":"`+c.want+`"}` {
 				t.Fatalf("%s went to %s (error %+v), want %s", op, r.Data, r.Error, c.want)
 			}
@@ -150,7 +150,7 @@ func TestRoutingRefusals(t *testing.T) {
 		`{"command_id":"probe","args":[],"unit":7}`,
 		`{"command_id":"probe","args":[],"unit":"core","unit":"broad"}`,
 	} {
-		r, _ := f2.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"priv_exec","args":` + args + `,"timeout_ms":2000}` + "\n")
+		r, _ := f2.serveRaw(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"priv_exec","args":` + args + `,"timeout_ms":2000}` + "\n")
 		if r.OK || r.Error == nil || r.Error.Code != "bad_request" {
 			t.Errorf("%s: %+v", args, r.Error)
 		}
@@ -159,7 +159,7 @@ func TestRoutingRefusals(t *testing.T) {
 		t.Fatal("a malformed unit argument was forwarded")
 	}
 	args := `{"command_id":"renew","args":["--all"],"unit":"broad"}`
-	f2.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"priv_exec","args":` + args + `,"timeout_ms":2000}` + "\n")
+	f2.serveRaw(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"priv_exec","args":` + args + `,"timeout_ms":2000}` + "\n")
 	h2.mu.Lock()
 	defer h2.mu.Unlock()
 	var got struct {
@@ -197,7 +197,7 @@ func TestBackupCheckIsReadTier(t *testing.T) {
 	f := newFixture(t, "read")
 	h := startTwoHelpers(t, f, "privileged:\n  enabled: true\n  socket: "+coreSock+"\n  broad_socket: "+broadSock+"\n  max_tier: read\n")
 	f.writePolicy("read", "privileged:\n  enabled: true\n  socket: "+coreSock+"\n  broad_socket: "+broadSock+"\n  max_tier: read\n")
-	r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"priv_backup_check","args":{"path":"/etc/example-app/x"},"timeout_ms":2000}` + "\n")
+	r, _ := f.serveRaw(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"priv_backup_check","args":{"path":"/etc/example-app/x"},"timeout_ms":2000}` + "\n")
 	if !r.OK || string(r.Data) != `{"from":"core"}` || h.count(coreSock) != 1 {
 		t.Fatalf("priv_backup_check at ceiling read: %s %+v", r.Data, r.Error)
 	}
@@ -211,7 +211,7 @@ func TestPolicySummaryIsReadTier(t *testing.T) {
 	pol := "privileged:\n  enabled: true\n  socket: " + coreSock + "\n  broad_socket: " + broadSock + "\n  max_tier: read\n"
 	h := startTwoHelpers(t, f, pol)
 	f.writePolicy("read", pol)
-	r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"priv_policy","args":{},"timeout_ms":2000}` + "\n")
+	r, _ := f.serveRaw(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"priv_policy","args":{},"timeout_ms":2000}` + "\n")
 	if !r.OK || string(r.Data) != `{"from":"core"}` || h.count(coreSock) != 1 || h.count(broadSock) != 0 {
 		t.Fatalf("priv_policy at ceiling read: %s %+v", r.Data, r.Error)
 	}
@@ -226,13 +226,13 @@ func TestMetaPreviewsAreReadTier(t *testing.T) {
 	h := startTwoHelpers(t, f, pol)
 	f.writePolicy("read", pol)
 	for _, op := range []string{`"priv_chown_preview","args":{"path":"/etc/example-app/x","group":"root"}`, `"priv_chmod_preview","args":{"path":"/etc/example-app/x","mode":"0640"}`} {
-		r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":` + op + `,"timeout_ms":2000}` + "\n")
+		r, _ := f.serveRaw(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":` + op + `,"timeout_ms":2000}` + "\n")
 		if !r.OK || string(r.Data) != `{"from":"core"}` {
 			t.Fatalf("%s at ceiling read: %s %+v", op, r.Data, r.Error)
 		}
 	}
 	for _, op := range []string{`"priv_chown","args":{"path":"/etc/example-app/x","group":"root"}`, `"priv_chmod","args":{"path":"/etc/example-app/x","mode":"0640"}`} {
-		r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":` + op + `,"timeout_ms":2000}` + "\n")
+		r, _ := f.serveRaw(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":` + op + `,"timeout_ms":2000}` + "\n")
 		if r.OK || r.Error == nil || r.Error.Code != "tier_denied" {
 			t.Fatalf("%s at ceiling read: %+v", op, r.Error)
 		}
@@ -250,11 +250,11 @@ func TestRestorePreviewIsReadTier(t *testing.T) {
 	pol := "privileged:\n  enabled: true\n  socket: " + coreSock + "\n  broad_socket: " + broadSock + "\n  max_tier: read\n"
 	h := startTwoHelpers(t, f, pol)
 	f.writePolicy("read", pol)
-	r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"priv_restore_preview","args":{"id":"20261019T120000Z-0123456789abcdef"},"timeout_ms":2000}` + "\n")
+	r, _ := f.serveRaw(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"priv_restore_preview","args":{"id":"20261019T120000Z-0123456789abcdef"},"timeout_ms":2000}` + "\n")
 	if !r.OK || string(r.Data) != `{"from":"core"}` {
 		t.Fatalf("priv_restore_preview at ceiling read: %s %+v", r.Data, r.Error)
 	}
-	r, _ = f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"priv_restore_backup","args":{"id":"20261019T120000Z-0123456789abcdef"},"timeout_ms":2000}` + "\n")
+	r, _ = f.serveRaw(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"priv_restore_backup","args":{"id":"20261019T120000Z-0123456789abcdef"},"timeout_ms":2000}` + "\n")
 	if r.OK || r.Error == nil || r.Error.Code != "tier_denied" {
 		t.Fatalf("priv_restore_backup at ceiling read: %+v", r.Error)
 	}
@@ -271,11 +271,11 @@ func TestDeletePreviewIsReadTier(t *testing.T) {
 	pol := "privileged:\n  enabled: true\n  socket: " + coreSock + "\n  broad_socket: " + broadSock + "\n  max_tier: read\n"
 	h := startTwoHelpers(t, f, pol)
 	f.writePolicy("read", pol)
-	r, _ := f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"priv_delete_preview","args":{"path":"/etc/example-app/x","recursive":true},"timeout_ms":2000}` + "\n")
+	r, _ := f.serveRaw(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"priv_delete_preview","args":{"path":"/etc/example-app/x","recursive":true},"timeout_ms":2000}` + "\n")
 	if !r.OK || string(r.Data) != `{"from":"core"}` {
 		t.Fatalf("priv_delete_preview at ceiling read: %s %+v", r.Data, r.Error)
 	}
-	r, _ = f.serveRaw(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"priv_delete","args":{"path":"/etc/example-app/x"},"timeout_ms":2000}` + "\n")
+	r, _ = f.serveRaw(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"priv_delete","args":{"path":"/etc/example-app/x"},"timeout_ms":2000}` + "\n")
 	if r.OK || r.Error == nil || r.Error.Code != "tier_denied" {
 		t.Fatalf("priv_delete at ceiling read: %+v", r.Error)
 	}

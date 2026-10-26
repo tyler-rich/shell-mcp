@@ -11,14 +11,14 @@ import (
 // every documented constraint; re-encoding an accepted request decodes to
 // the same request; duplicate keys are never accepted.
 func FuzzDecodeRequest(f *testing.F) {
-	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}` + "\n"))
-	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"read_file","args":{"path":"/srv/app/x","max_bytes":10},"timeout_ms":3000}`))
-	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","op":"write_file"}`))
+	f.Add([]byte(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}` + "\n"))
+	f.Add([]byte(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"read_file","args":{"path":"/srv/app/x","max_bytes":10},"timeout_ms":3000}`))
+	f.Add([]byte(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","op":"write_file"}`))
 	f.Add([]byte(`{"v":3,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello","x":1}`))
-	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"exec","args":{"args":["a","b"],"a":{"b":{"c":[1,2,{"d":null}]}}}}`))
-	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","op":"exec","args":{"command_id":"probe-op"}}`))
-	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"admin","op":"hello"}`))
-	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","ceiling":"destructive","op":"hello"}`))
+	f.Add([]byte(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"exec","args":{"args":["a","b"],"a":{"b":{"c":[1,2,{"d":null}]}}}}`))
+	f.Add([]byte(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","op":"exec","args":{"command_id":"probe-op"}}`))
+	f.Add([]byte(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"admin","op":"hello"}`))
+	f.Add([]byte(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","ceiling":"destructive","op":"hello"}`))
 	f.Fuzz(func(t *testing.T, in []byte) {
 		req, err := DecodeRequest(bytes.NewReader(in))
 		if err != nil {
@@ -62,13 +62,13 @@ func FuzzDecodeRequest(f *testing.F) {
 // consistent: ok xor error, a closed-set code, a one-line bounded message,
 // and a valid id unless it is a failure answered before any request.
 func FuzzDecodeResponse(f *testing.F) {
-	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000003","ok":true,"data":{"x":1},"warnings":[]}` + "\n"))
-	f.Add([]byte(`{"v":1,"id":"","ok":false,"error":{"code":"sandbox_unavailable","message":"m"},"warnings":[]}` + "\n"))
-	f.Add([]byte(`{"v":1,"id":"x","ok":true}`))
+	f.Add([]byte(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000003","ok":true,"data":{"x":1},"warnings":[]}` + "\n"))
+	f.Add([]byte(`{"v":2,"id":"","ok":false,"error":{"code":"sandbox_unavailable","message":"m"},"warnings":[]}` + "\n"))
+	f.Add([]byte(`{"v":2,"id":"x","ok":true}`))
 	f.Add([]byte(`{"v":3,"id":"","ok":false,"error":{"code":"protocol_mismatch","message":"m"},"warnings":[],"later":1}` + "\n"))
 	f.Add([]byte(""))
 	// A forwarded response with the helper's block (handoff P-1).
-	f.Add([]byte(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000003","ok":true,"data":{},"warnings":[],` +
+	f.Add([]byte(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000003","ok":true,"data":{},"warnings":[],` +
 		`"gate":{"version":"0.1.0","principal":"p","policy_sha256":"ab","max_tier":"read","duration_ms":1},` +
 		`"helper":{"version":"0.1.0","principal":"shell-mcp-privd","policy_sha256":"cd","max_tier":"operator","unit":"core","duration_ms":1}}` + "\n"))
 	f.Fuzz(func(t *testing.T, b []byte) {

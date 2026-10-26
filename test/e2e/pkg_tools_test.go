@@ -183,7 +183,7 @@ func installRequest(t *testing.T, args map[string]any, timeoutMS int) (line, id 
 	t.Helper()
 	b, _ := json.Marshal(args)
 	id = newID()
-	return fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":"priv_pkg_install","args":%s,"timeout_ms":%d}`+"\n", id, b, timeoutMS), id
+	return fmt.Sprintf(`{"v":2,"id":%q,"ceiling":"destructive","op":"priv_pkg_install","args":%s,"timeout_ms":%d}`+"\n", id, b, timeoutMS), id
 }
 
 // TestPackageStopPoints (the maintainer's decision on item 5), in the

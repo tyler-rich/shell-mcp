@@ -56,7 +56,7 @@ func TestGetPolicyAgainstRealGate(t *testing.T) {
 	if err := json.Unmarshal(b, &d); err != nil {
 		t.Fatal(err)
 	}
-	if d.Gate.Principal != "readonly-test" || d.Gate.Protocol != 1 || d.Gate.MaxTier != "read" ||
+	if d.Gate.Principal != "readonly-test" || d.Gate.Protocol != 2 || d.Gate.MaxTier != "read" ||
 		d.Policy.MaxTier != "read" || d.Policy.SHA256 != d.Gate.PolicySHA256 || len(d.Policy.Paths.Read) != 1 ||
 		!strings.HasSuffix(d.Policy.Paths.Read[0], "/srv/app") || d.Policy.Limits.MaxTimeoutS == 0 || d.Sandbox.Mode == "" {
 		t.Fatalf("data %s", b)

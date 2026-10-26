@@ -124,7 +124,7 @@ func (a *asyncServe) ended(d time.Duration) time.Duration {
 
 func pkgLine(op string, args m, timeoutMS int) string {
 	b, _ := json.Marshal(args)
-	return fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":%q,"args":%s,"timeout_ms":%d}`+"\n", reqID, op, b, timeoutMS)
+	return fmt.Sprintf(`{"v":2,"id":%q,"ceiling":"destructive","op":%q,"args":%s,"timeout_ms":%d}`+"\n", reqID, op, b, timeoutMS)
 }
 
 var untilRE = regexp.MustCompile(`may run until \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ`)

@@ -192,6 +192,9 @@ type server struct {
 	red       *redact.Redactor
 	store     *store
 	req       *protocol.Request
+	// frame, when set, is the protocol version the response is framed in
+	// (a refusal of a request of another version: protocol.FrameVersion).
+	frame int
 	// backupIDs are the backups written for this request.
 	backupIDs []string
 	// precondition is the content hash the request's precondition named
@@ -312,6 +315,9 @@ func Serve(o *Options) int {
 // response's `helper` block; it returns 0 if the response was written.
 func (s *server) respond(nc net.Conn, resp *protocol.Response) int {
 	resp.V = protocol.Version
+	if s.frame != 0 {
+		resp.V = s.frame
+	}
 	resp.Gate = &protocol.GateInfo{Version: s.o.Version, Principal: "shell-mcp-privd", Unit: string(s.unit), DurationMS: time.Since(s.start).Milliseconds()}
 	if s.p != nil {
 		resp.Gate.PolicySHA256, resp.Gate.MaxTier = s.p.SHA256, s.p.MaxTier.String()
@@ -583,6 +589,14 @@ func (s *server) run(nc net.Conn) *protocol.Response {
 	req, err := protocol.DecodeRequest(nc)
 	if err != nil {
 		var de *protocol.DecodeError
+		if errors.As(err, &de) && de.Code == protocol.CodeProtocolMismatch {
+			// Framed in the request's version when that is 1, so a 0.1.0
+			// gate decodes the refusal and passes its message on.
+			s.frame = protocol.FrameVersion(de.Peer)
+			return failure(de.Code, protocol.VersionRefusal("privileged helper", de.Peer,
+				"upgrade shell-mcp-gate on this host to the helper's release",
+				"upgrade shell-mcp-privd on this host to the gate's release"))
+		}
 		if errors.As(err, &de) {
 			return failure(de.Code, de.Msg)
 		}

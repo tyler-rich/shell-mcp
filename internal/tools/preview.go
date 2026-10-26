@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"reflect"
 	"strings"
 
@@ -265,15 +266,16 @@ func (d *Deps) gitPullPreview(ctx context.Context, in repoIn, target string) (*p
 
 // execPreviewWire is the gate's exec_preview data and its arguments.
 type execPreviewWire struct {
-	CommandID      string   `json:"command_id"`
-	Tier           string   `json:"tier"`
-	Description    string   `json:"description"`
-	RootEquivalent bool     `json:"root_equivalent"`
-	Template       []string `json:"template"`
-	Argv           []string `json:"argv"`
-	Cwd            string   `json:"cwd"`
-	PolicySHA256   string   `json:"policy_sha256"`
-	PreviewSHA256  string   `json:"preview_sha256"`
+	CommandID      string      `json:"command_id"`
+	Tier           string      `json:"tier"`
+	Description    string      `json:"description"`
+	RootEquivalent bool        `json:"root_equivalent"`
+	Template       []string    `json:"template"`
+	Argv           []string    `json:"argv"`
+	Cwd            string      `json:"cwd"`
+	Fds            []CommandFD `json:"fds"`
+	PolicySHA256   string      `json:"policy_sha256"`
+	PreviewSHA256  string      `json:"preview_sha256"`
 }
 
 type execPreviewArgsWire struct {
@@ -287,9 +289,10 @@ type execPreviewArgsWire struct {
 // command's tier against the tool's ceiling, the template the arguments
 // match, path placeholders and the cwd resolved on the target) and runs
 // nothing: the command id, tier, description, root_equivalent flag, the
-// matched template, the resolved argv and cwd, and preview_sha256, which
-// the re-call sends to exec as expected_preview_sha256. The hash is taken
-// from the gate's answer before the server's redaction.
+// matched template, the resolved argv and cwd, the files passed as
+// descriptors ({path:read:fd}), and preview_sha256, which the re-call sends
+// to exec as expected_preview_sha256. The hash is taken from the gate's
+// answer before the server's redaction.
 func (d *Deps) runCommandPreview(ctx context.Context, in *runCommandIn, target string) (*preview, *envelope.Error) {
 	args := in.Args
 	if args == nil {
@@ -318,8 +321,13 @@ func (d *Deps) runCommandPreview(ctx context.Context, in *runCommandIn, target s
 			*l = []string{}
 		}
 	}
+	// Each passed descriptor as one line next to the argv's /dev/fd/N.
+	fds := make([]string, 0, len(x.Fds))
+	for _, f := range x.Fds {
+		fds = append(fds, fmt.Sprintf("fd %d: %s, opened read-only by the gate", f.FD, f.Path))
+	}
 	value := map[string]any{"command_id": x.CommandID, "tier": x.Tier, "description": x.Description, "root_equivalent": x.RootEquivalent,
-		"template": x.Template, "argv": x.Argv, "cwd": x.Cwd, "preview_sha256": hash}
+		"template": x.Template, "argv": x.Argv, "cwd": x.Cwd, "fds": fds, "preview_sha256": hash}
 	tier, ok := map[string]Tier{"read": TierRead, "operator": TierOperator, "destructive": TierDestructive}[env.Data.Tier]
 	if !ok {
 		return nil, envelope.Errorf("internal", "the gate's preview names no known tier")

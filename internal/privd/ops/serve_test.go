@@ -98,7 +98,7 @@ func TestSelfCheckFailuresAnswered(t *testing.T) {
 			if err := json.Unmarshal([]byte(out), &r); err != nil || code == 0 {
 				t.Fatalf("exit %d, response %q", code, out)
 			}
-			if r.V != 1 || r.ID != "" || r.OK || r.Error == nil || r.Error.Code != c.code || strings.Count(out, "\n") != 1 || !strings.HasSuffix(out, "\n") {
+			if r.V != 2 || r.ID != "" || r.OK || r.Error == nil || r.Error.Code != c.code || strings.Count(out, "\n") != 1 || !strings.HasSuffix(out, "\n") {
 				t.Fatalf("response %q, want one line with %s and no id", out, c.code)
 			}
 			if msg := r.Error.Message; msg == "" || strings.Contains(msg, f.d) || strings.ContainsAny(msg, "\r\n") {
@@ -300,9 +300,9 @@ func TestRequestErrors(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	for in, code := range map[string]string{
-		`{"v":1,"id":"` + reqID + `","ceiling":"destructive","op":"priv_stat","op":"priv_stat"}` + "\n": "bad_request",
+		`{"v":2,"id":"` + reqID + `","ceiling":"destructive","op":"priv_stat","op":"priv_stat"}` + "\n": "bad_request",
 		`{"v":3,"id":"` + reqID + `","ceiling":"destructive","op":"priv_stat"}` + "\n":                  "protocol_mismatch",
-		`{"v":1,"id":"a","ceiling":"destructive","op":"priv_stat"}` + "\n":                              "bad_request",
+		`{"v":2,"id":"a","ceiling":"destructive","op":"priv_stat"}` + "\n":                              "bad_request",
 		"not json\n": "bad_request",
 	} {
 		out, _ := f.serveRaw(in)

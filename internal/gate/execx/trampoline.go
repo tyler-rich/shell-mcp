@@ -38,7 +38,9 @@ import (
 // way with the gate binary, and then runs a command as themselves: the
 // AT_SECURE refusal is what keeps it from ever running one with more. A
 // command started through it inherits none of this: fd 3 is close-on-exec
-// and the command gets the environment of its Spec.
+// and the command gets the environment of its Spec. The only descriptors
+// it gets beyond 0–2 are Spec.Files, from FirstFile up, each checked to be
+// a regular file open read-only.
 
 // TrampolineArg is the trampoline's only argument.
 const TrampolineArg = "shell-mcp-execx-trampoline-v1"
@@ -64,7 +66,7 @@ const (
 // execve and the parent reads EOF.
 const statusAccepted = 0xA5
 
-var configMagic = [4]byte{'S', 'M', 'X', '1'}
+var configMagic = [4]byte{'S', 'M', 'X', '2'}
 
 // childLimit is one resource limit the trampoline lowers itself to: both
 // the soft and the hard limit become min(current, Max).
@@ -86,12 +88,13 @@ type trampolineConfig struct {
 var errConfig = errors.New("malformed trampoline command")
 
 // encodeConfig writes c in the trampoline's binary form: the magic, then
-// the path, argv, env and dir as length-prefixed strings, then the limits.
+// the path, argv, env and dir as length-prefixed strings, then the number
+// of passed descriptors, then the limits (SMX2; SMX1 had no descriptors).
 // Strings are bytes, so argv and paths need not be UTF-8. A string with a
 // NUL cannot reach execve(2) (EINVAL, as os/exec reports it); a command
 // over the bounds is E2BIG.
 func encodeConfig(c *trampolineConfig) ([]byte, error) {
-	if len(c.Argv) > maxConfigItems || len(c.Env) > maxConfigItems || len(c.Limits) > maxConfigLimits {
+	if len(c.Argv) > maxConfigItems || len(c.Env) > maxConfigItems || len(c.Limits) > maxConfigLimits || c.Files > MaxFiles {
 		return nil, unix.E2BIG
 	}
 	for _, s := range append(append([]string{c.Path, c.Dir}, c.Argv...), c.Env...) {
@@ -111,6 +114,7 @@ func encodeConfig(c *trampolineConfig) ([]byte, error) {
 	list(c.Argv)
 	list(c.Env)
 	str(c.Dir)
+	b = binary.LittleEndian.AppendUint32(b, c.Files)
 	b = binary.LittleEndian.AppendUint32(b, uint32(len(c.Limits))) //nolint:gosec // G115: bounded by maxConfigLimits
 	for _, l := range c.Limits {
 		b = binary.LittleEndian.AppendUint32(b, l.Resource)
@@ -175,6 +179,9 @@ func decodeConfig(b []byte) (*trampolineConfig, error) {
 		return nil, errConfig
 	}
 	if c.Dir, ok = str(); !ok {
+		return nil, errConfig
+	}
+	if c.Files, ok = u32(); !ok || c.Files > MaxFiles {
 		return nil, errConfig
 	}
 	n, ok := u32()
@@ -342,18 +349,44 @@ func trampoline() int {
 		}
 	}
 	// Every descriptor above stderr is close-on-exec: the control socket,
-	// and anything the gate or helper itself inherited without the flag
-	// (os/exec passes such descriptors on). The command gets exactly fd
-	// 0–2. CLOSE_RANGE_CLOEXEC needs Linux 5.11; without it nothing runs.
+	// the passed files, and anything the gate or helper itself inherited
+	// without the flag (os/exec passes such descriptors on).
+	// CLOSE_RANGE_CLOEXEC needs Linux 5.11; without it nothing runs.
 	if err := unix.CloseRange(trampolineFD, ^uint(0), unix.CLOSE_RANGE_CLOEXEC); err != nil {
 		return fail(err)
+	}
+	// Then exactly the passed files lose the flag, each checked here to be
+	// a regular file open read-only (the gate's {path:read:fd}, POLICY §4):
+	// the command gets fd 0–2 and FirstFile up to FirstFile+Files-1.
+	for fd := FirstFile; fd < FirstFile+int(c.Files); fd++ {
+		var st unix.Stat_t
+		if err := unix.Fstat(fd, &st); err != nil {
+			return fail(err)
+		}
+		fl, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
+		if err != nil {
+			return fail(err)
+		}
+		if why := passedFileRefusal(fd, st.Mode&unix.S_IFMT, fl); why != "" {
+			_, _ = fmt.Fprintf(os.Stderr, "%s: refusing to run the internal exec trampoline: %s\n", os.Args[0], why)
+			return fail(unix.EBADF)
+		}
+		if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, 0); err != nil {
+			return fail(err)
+		}
 	}
 	return fail(syscall.Exec(c.Path, c.Argv, c.Env)) //nolint:gosec // G204: the command Run sent over the checked control socket: a path resolved and ownership-checked at policy load, an argv matched to a policy template; no shell
 }
 
 // passedFileRefusal says why descriptor fd, of file type mode (S_IFMT bits)
 // and status flags fl, must not be passed to the command, or "".
-func passedFileRefusal(_ int, _ uint32, _ int) string {
+func passedFileRefusal(fd int, mode uint32, fl int) string {
+	switch {
+	case mode != unix.S_IFREG:
+		return fmt.Sprintf("fd %d is not a regular file", fd)
+	case fl&unix.O_ACCMODE != unix.O_RDONLY:
+		return fmt.Sprintf("fd %d is not open read-only", fd)
+	}
 	return ""
 }
 

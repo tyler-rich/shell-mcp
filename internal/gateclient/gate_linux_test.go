@@ -62,7 +62,7 @@ func TestRealGateHelloAndPolicy(t *testing.T) {
 		Principal string `json:"principal"`
 		MaxTier   string `json:"max_tier"`
 	}
-	if !resp.OK || json.Unmarshal(resp.Data, &hello) != nil || hello.Protocol != 1 || hello.Principal != "test-principal" || hello.MaxTier != "read" {
+	if !resp.OK || json.Unmarshal(resp.Data, &hello) != nil || hello.Protocol != 2 || hello.Principal != "test-principal" || hello.MaxTier != "read" {
 		t.Fatalf("hello: %+v %s", resp, resp.Data)
 	}
 	resp, err = cl.Call(t.Context(), c, protocol.OpPolicy, "read", nil, 10*time.Second)

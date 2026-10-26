@@ -237,7 +237,7 @@ func gatePolicyAt(t *testing.T, policy string, uid uint32, ceiling, op string, a
 	t.Helper()
 	id := newID()
 	a, _ := json.Marshal(args)
-	req := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":%q,"op":%q,"args":%s,"timeout_ms":30000}`+"\n", id, ceiling, op, a)
+	req := fmt.Sprintf(`{"v":2,"id":%q,"ceiling":%q,"op":%q,"args":%s,"timeout_ms":30000}`+"\n", id, ceiling, op, a)
 	cmd := exec.CommandContext(t.Context(), gateBin, "serve", "--policy", policy, "--principal", "e2e") //nolint:gosec // G204: the installed gate with one of setup.sh's policies
 	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, uid)}
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin"}
@@ -534,7 +534,7 @@ func TestHelperWrongPeerRefused(t *testing.T) {
 	start := time.Now()
 	mustGate(t, "priv_stat", map[string]any{"path": "/etc/example-app"}, nil) // control
 	wantGate(t, svcOther, "priv_stat", map[string]any{"path": "/etc/example-app"}, "helper_refused")
-	line := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":"priv_stat","args":{"path":"/etc/example-app"}}`+"\n", newID())
+	line := fmt.Sprintf(`{"v":2,"id":%q,"ceiling":"destructive","op":"priv_stat","args":{"path":"/etc/example-app"}}`+"\n", newID())
 	if out := direct(t, svcOther, line); out != "" {
 		t.Fatalf("wrong peer got %q", out)
 	}
@@ -672,7 +672,7 @@ func unitDropIn(t *testing.T, content string) {
 // serves nobody and says so in the journal.
 func TestHelperUnitClientUID(t *testing.T) {
 	line := func() string {
-		return fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":"priv_stat","args":{"path":"/etc/example-app"}}`+"\n", newID())
+		return fmt.Sprintf(`{"v":2,"id":%q,"ceiling":"destructive","op":"priv_stat","args":{"path":"/etc/example-app"}}`+"\n", newID())
 	}
 	if out := direct(t, svcShell, line()); !strings.Contains(out, `"ok":true`) { // control
 		t.Fatalf("client_uid got %q", out)
@@ -712,7 +712,7 @@ func TestHelperUnitClientUID(t *testing.T) {
 // from reading the credential paths in InaccessiblePaths=.
 func TestHelperSystemdConfinesWithoutOwnChecks(t *testing.T) {
 	raw := func(op, p string) string {
-		line := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":%q,"args":{"path":%q}}`+"\n", newID(), op, p)
+		line := fmt.Sprintf(`{"v":2,"id":%q,"ceiling":"destructive","op":%q,"args":{"path":%q}}`+"\n", newID(), op, p)
 		return direct(t, svcShell, line)
 	}
 	// The production binary has no such operation.
