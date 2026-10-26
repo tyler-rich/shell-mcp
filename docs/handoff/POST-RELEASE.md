@@ -19,6 +19,7 @@
 | X-5, X-6 | Privileged redaction patterns; the gate's audit line for `priv_*` | Documented | **Dropped as work items** (reasons in §7) | — | — |
 | plan §6, S4d | Other package managers, seccomp, OAuth, multi-principal, non-Linux; approval front ends | — | Deferred, unchanged; N-30 is not a reason to start seccomp | — | — |
 | N-29 | Pin the reference deployment to the released digest | Process | Repeat for every release, in its own PR after the tag | — | after each release |
+| **N-32** (new, S6-1) | A command's whole process tree is ended and accounted for from the helper's own view (`/proc` listings and `wait4`), inside the same cgroup as the helper | Informational (design option) | **Recorded as a future design option** (maintainer, 2026-10-26): a per-command sub-cgroup with `Delegate=yes` and `cgroup.kill` | A unit change (`Delegate=`, cgroupfs access), a Landlock change, the exposure score | — |
 
 **Next version: `0.2.0`** (decided), released when S6-1, S6-2 and S6-3 are merged; S6-4 and S6-5 are in it if they are merged by then (§7, §8).
 
@@ -206,6 +207,23 @@ So the opt-in helps commands that just read their file (the common read-only sha
 - **`ProtectHome=` conditional in the generated core unit.** What the analysis supports: `ProtectHome=yes` hides `/home`, `/root` and `/run/user` entirely, so it is safe only when **no privileged root, read or write, lies under any of them**. A read root there needs `read-only` (under `yes` it would be invisible), and so does a write root (`read-only` plus its `ReadWritePaths=` entry, as today). So: `yes` when no root is under `/home`, `/root` or `/run/user`; `read-only`, as today, otherwise, read root or write root alike. (A root under `/root` is already refused for writes by the protected set and for reads by the deny list, and `/run` is a read-only tmpfs in the core unit, so in practice the condition is `/home`.) The broad unit is unchanged. `check-policy` reports which one the policy gets.
 - **The threshold follows the new score.** The e2e privileged policy has no root under `/home` (its roots are `/etc/example-app`, `/var/log/example-app` and `/srv/e2e-priv-exec/root`, `test/e2e/setup.sh`), so its core unit should rate 1.3; S6-5 measures it on the runner and sets `E2E_SECURITY_MAX` to the measured value, recorded in ARCHIVE with the systemd version, still with no slack.
 - Tests, failing first: the generator's golden files gain a policy with a `/home` read root (keeps `read-only`) and one with a `/home` write root (keeps `read-only`), and the existing goldens change to `yes` (today's generator fails them); the offline check fails on a broadened copy (above).
+
+## 6a. N-32 (new, S6-1): a per-command sub-cgroup (future design option)
+
+**What, from S6-1.** The helper ends what a command left by listing its own children (per-thread `children` files, or a `/proc` scan) and killing and reaping them until `wait4` reports none (PRIVILEGED §6). In CI, after an OOM kill inside the instance (`MemoryMax=` reached by a tree of processes), that listing failed and the reap answered `outcome_unknown` (fail closed); S6-1 retries the listing within the 5 s bound and adds a `/proc/[0-9]*/stat` fallback (which the core unit's Landlock ruleset does not let read), and success still needs `wait4`'s `ECHILD`.
+
+**The option.** Run each command in a sub-cgroup of the instance: the unit gets `Delegate=yes`, the helper creates `<instance cgroup>/command`, moves the command into it before `execve`, and sets that cgroup's own `memory.max` (and `memory.swap.max` 0). Then:
+- the command's tree is ended atomically with `cgroup.kill` (Linux 5.14+) and its end confirmed by `cgroup.events` reporting `populated 0`, with no `/proc` listing and no reliance on the subreaper;
+- an OOM in the command's cgroup never charges the helper's own memory, so the helper keeps room to answer;
+- `memory.events` of that cgroup tells the helper that the command was OOM-killed, for the answer.
+
+**Trade-offs.**
+- A unit change: `Delegate=yes`, and write access to the instance's own cgroup directory, which `ProtectControlGroups=yes` forbids today (it would need `ProtectControlGroups=private` on systemd 257+ or a narrower `ReadWritePaths=`); the core unit's exposure score would move and its threshold be reconsidered.
+- A Landlock change: the helper's ruleset would need write access to its cgroup directory under `/sys/fs/cgroup`.
+- `OOMPolicy=` then applies to the sub-cgroup's kills as well; `memory.oom.group` on the sub-cgroup would kill the whole command tree at once, which may be what is wanted.
+- More code in the helper's start path (cgroup creation, migration, cleanup on every exit path), all of it root's.
+
+**Decision (maintainer, 2026-10-26):** recorded as a future design option; not scheduled.
 
 ## 7. Other open items, and the next version
 
