@@ -3916,3 +3916,4 @@ cosign is not installed on the workstation, so it ran from the official image `g
 **Alternatives rejected for the plan:** a pre-check of a gitlink's git files (unsound, above); `RLIMIT_AS` (breaks Go, Rust and git's pack `mmap`); a per-command descriptor key instead of a placeholder; refusing every script; judging script contents.
 
 **Versions:** no dependency or Go change in this docs-only branch (go.mod: Go 1.27.3); direct modules as in the previous entry.
+- **`scripts/ci-local.sh` on `afcae1e`: every step passed** (gofmt, vet and lint in both builds, `go test -race` in the release and every test build, the e2e runner-only guards, govulncheck, both platform builds, the release snapshot and scripts, `deps-current` and every self-test); `deps-current` found Go 1.27.3 and every module current, so the D-013 refresh changed nothing.
