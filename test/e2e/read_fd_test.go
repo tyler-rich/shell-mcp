@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -166,8 +167,12 @@ func TestGateExecPathReadFDRenamedOut(t *testing.T) {
 // TestGateExecOwnerMatchedReadRace with {path:read:fd}. example-app swaps
 // its target, or a directory above it, for a symlink to a file only the
 // service account can read, to a denied file, or to root's file; the
-// command reads the file the gate opened, or the request is refused, in
-// every round, while the string form (the existing test) reaches them.
+// command reads exactly the file the gate opened, or the request is refused
+// (path_denied with the symlink in place at the resolution, exists when
+// the swap lands between the preview and exec, not_a_directory), in every
+// round. A read before the racer starts is the control. The racer swaps
+// so often that most rounds are refused, as in the string form's test,
+// which may read the swapped-in file.
 func TestGateExecOwnerMatchedReadFDRace(t *testing.T) {
 	vault := hardWork + "/vault-read-fd"
 	ownDir(t, vault, svcShell, svcShell, 0o700)
@@ -195,9 +200,14 @@ func TestGateExecOwnerMatchedReadFDRace(t *testing.T) {
 			setDir(t, race+"/sub", exampleApp, exampleApp, 0o755)
 			ownFile(t, race+"/t", "decoy\n", exampleApp, 0o644)
 			ownFile(t, race+"/sub/t", "decoy\n", exampleApp, 0o644)
+			target := filepath.Join(race, c.target)
+			// Control, before the racer: the descriptor policy loads and the
+			// command reads the file through /dev/fd/4.
+			if _, r := fdExec(t, []string{"cat", target}); stdoutOf(t, &r) != "READ:decoy\n\n" {
+				t.Fatalf("control: %s", r.Data)
+			}
 			stop := startRacer(t, "SWAPS", "E2E_CLIENT=swap", "E2E_SWAP_NAME="+filepath.Join(race, c.swap),
 				"E2E_SWAP_ALT="+filepath.Join(race, c.swap+".alt"), "E2E_SWAP_TO="+c.to)
-			target := filepath.Join(race, c.target)
 			got := map[string]int{}
 			for i := range 60 {
 				pr, er := fdExec(t, []string{"cat", target})
@@ -217,7 +227,11 @@ func TestGateExecOwnerMatchedReadFDRace(t *testing.T) {
 				case out == "READ:decoy\n\n":
 					got["decoy"]++
 				case er.OK:
-					got["not read: "+strings.TrimSpace(out)]++
+					stop()
+					t.Fatalf("run %d: the command ran and read something other than the file the gate opened: %q", i, out)
+				case !slices.Contains([]string{"path_denied", "exists", "not_a_directory"}, er.code()):
+					stop()
+					t.Fatalf("run %d: preview %s %+v, exec %s %+v", i, pr.code(), pr.Error, er.code(), er.Error)
 				default:
 					got[er.code()]++
 				}
@@ -225,9 +239,6 @@ func TestGateExecOwnerMatchedReadFDRace(t *testing.T) {
 			n := stop()
 			if n == 0 {
 				t.Fatal("the racer did not swap")
-			}
-			if got["decoy"] == 0 {
-				t.Fatalf("no request read the file: %v", got)
 			}
 			t.Logf("reads %v; the racer made %d exchanges", got, n)
 		})
