@@ -87,7 +87,7 @@ func TestMulticallRunnerLayout(t *testing.T) {
 }
 
 // mcFixture makes root's fixtures under /usr/local/bin: a renamed copy of
-// GNU env and of GNU chown, an alias of GNU chown, and three #! scripts.
+// GNU env and of GNU chown, an alias of GNU chown, and four #! scripts.
 func mcFixture(t *testing.T) {
 	t.Helper()
 	cp := func(src, dst string) {
@@ -116,8 +116,9 @@ func mcFixture(t *testing.T) {
 	rootFile(t, "/usr/local/bin/e2e-mc-sh-script", "#!/bin/sh\necho invented\n", 0o755)
 	rootFile(t, "/usr/local/bin/e2e-mc-env-script", "#!/usr/bin/env bash\necho invented\n", 0o755)
 	rootFile(t, "/usr/local/bin/e2e-mc-probe-script", "#!/usr/local/bin/example-probe\n", 0o755)
+	rootFile(t, "/usr/local/bin/e2e-mc-sed-script", "#!/usr/bin/sed -f\ns/invented/invented/\n", 0o755)
 	t.Cleanup(func() {
-		for _, n := range []string{"renamed-env", "renamed-chown", "alias", "sh-script", "env-script", "probe-script"} {
+		for _, n := range []string{"renamed-env", "renamed-chown", "alias", "sh-script", "env-script", "probe-script", "sed-script"} {
 			_ = os.Remove("/usr/local/bin/e2e-mc-" + n)
 		}
 	})
@@ -130,6 +131,7 @@ type mcCase struct {
 	name, path, tpl     string
 	gate, priv, privAck string
 	gateNote, privNote  string // a line accepted policies must also print
+	privAckNote         string // a line the acknowledged helper policy must print
 }
 
 func mcCases() []mcCase {
@@ -150,8 +152,16 @@ func mcCases() []mcCase {
 		{name: "gnu-alias", path: "/usr/local/bin/e2e-mc-alias", tpl: `[["--version"]]`, gateNote: `runs as "gnuchown"`, privNote: `runs as "gnuchown"`},
 		{name: "script-sh", path: "/usr/local/bin/e2e-mc-sh-script", tpl: `[[]]`, gate: "hard-denied", priv: "never", privAck: "never"},
 		{name: "script-env", path: "/usr/local/bin/e2e-mc-env-script", tpl: `[[]]`, gate: "hard-denied", priv: "never", privAck: "never"},
+		// N-26: the helper needs an acknowledge for any script; the gate
+		// does not, and keeps its warning.
 		{name: "script-probe", path: "/usr/local/bin/e2e-mc-probe-script", tpl: `[[]]`,
-			gateNote: "is a #! script run by /usr/local/bin/example-probe", privNote: "[#! script run by /usr/local/bin/example-probe]"},
+			gateNote: "is a #! script run by /usr/local/bin/example-probe", priv: "acknowledge",
+			privAckNote: "[#! script run by /usr/local/bin/example-probe]"},
+		// N-31: the runner's own sed is on the GTFOBins list, so the script
+		// run by it gets the warning naming both, in the gate and the helper.
+		{name: "script-sed", path: "/usr/local/bin/e2e-mc-sed-script", tpl: `[[]]`,
+			gateNote: "/usr/local/bin/e2e-mc-sed-script is a #! script run by /usr/bin/sed, which has documented escape techniques",
+			priv:     "acknowledge", privAckNote: "/usr/local/bin/e2e-mc-sed-script is a #! script run by /usr/bin/sed, which has documented escape techniques"},
 		// F3: the gate has no rule for these options (POLICY §5); the helper
 		// needs an acknowledge for each.
 		{name: "sort-compress", path: "/usr/bin/sort", tpl: `[["--compress-program=gzip", "/etc/hostname"]]`, priv: "acknowledge"},
@@ -218,7 +228,7 @@ func TestMulticallCheckPolicy(t *testing.T) {
 			if c.priv == "acknowledge" || c.privAck != "" {
 				rootFile(t, pp, privHead+fmt.Sprintf(cmd, "    acknowledge: \"e2e: invented review note\"\n"), 0o600)
 				out = runAs(t, 0, privdBin, "check-policy", "--policy", pp)
-				wantCheck(t, "helper, acknowledged", out, c.privAck, "")
+				wantCheck(t, "helper, acknowledged", out, c.privAck, c.privAckNote)
 			}
 		})
 	}
