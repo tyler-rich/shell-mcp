@@ -43,8 +43,12 @@ const (
 	// MaxMemoryMB bounds Spec.MaxMemoryMB (the policies' own ceiling,
 	// limits.max_memory_mb ≤ 16384).
 	MaxMemoryMB = 16384
-	// maxProcScan bounds the /proc walk that counts the user's tasks.
-	maxProcScan = 1 << 16
+	// procNonPIDEntries is the room the task count's /proc walk leaves above
+	// pid_max for /proc's own entries that are not processes (self, sys,
+	// meminfo, …; about 70 on Linux 6.x).
+	procNonPIDEntries = 4096
+	// procReadChunk is how many /proc entries the walk reads at a time.
+	procReadChunk = 4096
 )
 
 // Spec describes one process.
@@ -384,52 +388,76 @@ func userTasks(uid int) uint64 {
 
 // userTasksIn counts the tasks (threads) whose real uid is uid, from
 // procDir/<pid>/status. A process that went away, or whose status it
-// cannot read, is not counted (a lower count only lowers RLIMIT_NPROC); a
-// procDir it cannot list, or one with more entries than maxProcScan, is an
-// error, never a count of 0.
+// cannot read, is not counted (a lower count only lowers RLIMIT_NPROC). The
+// scan is bounded by the kernel's own limit on processes, pid_max
+// (procDir/sys/kernel/pid_max), plus procNonPIDEntries for /proc's other
+// entries, and it reads procDir in chunks; a pid_max it cannot read, a
+// procDir it cannot list, or more entries than that bound is an error
+// naming the reason, never a count of 0.
 func userTasksIn(procDir string, uid int) (uint64, error) {
+	b, err := os.ReadFile(procDir + "/sys/kernel/pid_max") //nolint:gosec // G304: /proc's own, or the tests' own directory
+	if err != nil {
+		return 0, fmt.Errorf("pid_max: %w", err)
+	}
+	pidMax, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 32)
+	if err != nil || pidMax == 0 {
+		return 0, fmt.Errorf("pid_max is %q, not a process count", strings.TrimSpace(string(b)))
+	}
+	bound := pidMax + procNonPIDEntries
 	d, err := os.Open(procDir) //nolint:gosec // G304: /proc, or the tests' own directory
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = d.Close() }()
-	names, err := d.Readdirnames(maxProcScan + 1)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return 0, err
-	}
-	if len(names) > maxProcScan {
-		return 0, fmt.Errorf("%s has more than %d entries", procDir, maxProcScan)
-	}
 	want := strconv.Itoa(uid)
-	var total uint64
-	for _, n := range names {
-		if n == "" || n[0] < '0' || n[0] > '9' {
-			continue
+	var total, seen uint64
+	for {
+		names, rerr := d.Readdirnames(procReadChunk)
+		seen += uint64(len(names))
+		if seen > bound {
+			return 0, fmt.Errorf("%s has more than %d entries (pid_max %d)", procDir, bound, pidMax)
 		}
-		f, err := os.Open(procDir + "/" + n + "/status") //nolint:gosec // G304: n is a numeric /proc entry name
-		if err != nil {
-			continue
+		for _, n := range names {
+			total += taskCount(procDir, n, want)
 		}
-		var mine bool
-		var threads uint64
-		sc := bufio.NewScanner(f)
-		for sc.Scan() {
-			k, v, ok := strings.Cut(sc.Text(), ":")
-			if !ok {
-				continue
-			}
-			switch k {
-			case "Uid":
-				fields := strings.Fields(v)
-				mine = len(fields) > 0 && fields[0] == want
-			case "Threads":
-				threads, _ = strconv.ParseUint(strings.TrimSpace(v), 10, 64)
-			}
+		if errors.Is(rerr, io.EOF) || (rerr == nil && len(names) == 0) {
+			return total, nil
 		}
-		_ = f.Close()
-		if mine {
-			total += threads
+		if rerr != nil {
+			return 0, rerr
 		}
 	}
-	return total, nil
+}
+
+// taskCount is the Threads of procDir/<n>/status when n is a process whose
+// real uid is uid, else 0 (also for one that went away or cannot be read).
+func taskCount(procDir, n, uid string) uint64 {
+	if n == "" || n[0] < '0' || n[0] > '9' {
+		return 0
+	}
+	f, err := os.Open(procDir + "/" + n + "/status") //nolint:gosec // G304: n is a numeric /proc entry name
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = f.Close() }()
+	var mine bool
+	var threads uint64
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		k, v, ok := strings.Cut(sc.Text(), ":")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "Uid":
+			fields := strings.Fields(v)
+			mine = len(fields) > 0 && fields[0] == uid
+		case "Threads":
+			threads, _ = strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+		}
+	}
+	if !mine {
+		return 0
+	}
+	return threads
 }
