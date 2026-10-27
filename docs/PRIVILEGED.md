@@ -82,6 +82,7 @@ commands:                        # run as root, templates exactly as POLICY.md �
     tier: operator
     unit: broad                  # needs network → runs under the broad unit; core is the default
     root_equivalent: false
+    acknowledge: "example-renew is a #! script; reviewed, it only renews the listed certificates"   # required when the program is a #! script (§5.3 list B)
     templates: [["--all"]]
   - id: firewall-list
     path: /usr/sbin/nft          # a normally hard-denied binary (§5.3 list B)

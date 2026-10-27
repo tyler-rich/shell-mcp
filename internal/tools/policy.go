@@ -151,9 +151,9 @@ type PrivOp struct {
 // PrivFinding is a command whose program bypasses a bound operation.
 type PrivFinding struct {
 	CommandID string `json:"command_id" jsonschema:"Command id."`
-	Category  string `json:"category" jsonschema:"package (a package tool), power (a power binary) or exec (find with an action that runs, deletes or writes)."`
+	Category  string `json:"category" jsonschema:"package (a package tool), power (a power binary), exec (find with an action that runs, deletes or writes) or script (a #! script, run as root on whatever it contains)."`
 	Program   string `json:"program" jsonschema:"The program recognised."`
-	Match     string `json:"match" jsonschema:"How it was recognised: written (the path's name), resolved (the name it resolves to), identity (a copy of that program) or template (find's action in a template)."`
+	Match     string `json:"match" jsonschema:"How it was recognised: written (the path's name), resolved (the name it resolves to), identity (a copy of that program), template (find's action in a template) or script (the program is a #! script; program is then its innermost interpreter)."`
 }
 
 // GateHello identifies the gate.

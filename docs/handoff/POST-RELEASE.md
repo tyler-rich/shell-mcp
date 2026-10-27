@@ -20,6 +20,7 @@
 | plan §6, S4d | Other package managers, seccomp, OAuth, multi-principal, non-Linux; approval front ends | — | Deferred, unchanged; N-30 is not a reason to start seccomp | — | — |
 | N-29 | Pin the reference deployment to the released digest | Process | Repeat for every release, in its own PR after the tag | — | after each release |
 | **N-32** (new, S6-1) | A command's whole process tree is ended and accounted for from the helper's own view (`/proc` listings and `wait4`), inside the same cgroup as the helper | Informational (design option) | **Recorded as a future design option** (maintainer, 2026-10-26): a per-command sub-cgroup with `Delegate=yes` and `cgroup.kill` | A unit change (`Delegate=`, cgroupfs access), a Landlock change, the exposure score | — |
+| **N-33** (new, S6-3) | The GTFOBins warning does not match by identity (a renamed copy of a listed program or interpreter gets no warning), for programs and for a script's interpreter; the identity scan covers only the hard-deny list and the helper's names | Low (a review aid, not a bypass) | **Follow-up:** extend the identity scan to the GTFOBins list in both check-policies, then test a renamed copy of `make` and `sed` | None expected beyond more WARN lines | — |
 
 **Next version: `0.2.0`** (decided), released when S6-1, S6-2 and S6-3 are merged; S6-4 and S6-5 are in it if they are merged by then (§7, §8).
 
