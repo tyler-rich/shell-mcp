@@ -170,13 +170,25 @@ func TestPrivKeyRotation(t *testing.T) {
 	t.Run("rule R still applies to a key", func(t *testing.T) {
 		appDir := "/etc/example-app/e2e-key-app"
 		freshDir(t, appDir, exampleApp, 0o755)
+		// Root's key under the account's directory: priv_hash_file keeps the
+		// moved-in read rule, so it is refused before rule R, as the read
+		// was (the account could have moved it there).
 		k := appDir + "/server.key"
 		rootFile(t, k, keyA, 0o600)
 		env := call("shell_priv_write_file", map[string]any{"path": k, "content": keyB})
-		// Rule R's own refusal, not the read refusal a key once met first.
+		refusal(t, env, "path_denied", "is not read as root")
+		noApproval(t, env)
+		// The account's own key passes the read rule; giving it root's owner
+		// is rule R's refusal, at the preview, with no approval requested.
+		own := appDir + "/own.key"
+		rootFile(t, own, keyC, 0o600)
+		if err := os.Chown(own, exampleApp, exampleApp); err != nil {
+			t.Fatal(err)
+		}
+		env = call("shell_priv_write_file", map[string]any{"path": own, "content": keyB, "owner": "root", "group": "root"})
 		refusal(t, env, "path_denied", "is not left there as root")
 		noApproval(t, env)
-		if readFile(t, k) != keyA {
+		if readFile(t, k) != keyA || readFile(t, own) != keyC {
 			t.Fatal("changed")
 		}
 	})

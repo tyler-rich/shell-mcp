@@ -14,3 +14,8 @@ a53197e4d089d6c98ad594d5e09d75417438bcdc:internal/redact/fuzz_test.go:private-ke
 # invented OpenSSH private-key PEM block (a later commit on the branch
 # assembles it at run time).
 414d9bbc6419b178b21814a2d503bb881b46381d:internal/privd/pkg/testdata/fakeapt/main.go:private-key:79
+#
+# Branch feat/private-key-rotation (S6-4), the approval masking fuzz seed: an
+# invented PEM block whose body is "AAAA" (the next commit on the branch
+# assembles it at run time).
+9a2dcfe0d81eab35757825e2a172442b49872312:internal/approval/mask_test.go:private-key:82

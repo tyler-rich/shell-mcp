@@ -79,8 +79,11 @@ func TestFieldsMaskPrivateKey(t *testing.T) {
 // as it is (cut only by the field bound), and one with one as its size and
 // SHA-256.
 func FuzzFieldsMaskPrivateKey(f *testing.F) {
-	for _, s := range []string{"", "plain\n", "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n",
-		"x -----BEGIN RSA PRIVATE KEY----- y", "-----BEGIN PGP PRIVATE KEY BLOCK-----", "-----BEGIN private KEY-----", "PRIVATE KEY"} {
+	// The headers are assembled at run time, so no PEM block is a literal
+	// here (gitleaks; .gitleaksignore).
+	begin, end := "-----BEGIN ", "-----END "
+	for _, s := range []string{"", "plain\n", begin + "PRIVATE " + "KEY-----\nAAAA\n" + end + "PRIVATE " + "KEY-----\n",
+		"x " + begin + "RSA PRIVATE " + "KEY----- y", begin + "PGP PRIVATE " + "KEY BLOCK-----", begin + "private KEY-----", "PRIVATE KEY"} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
