@@ -499,3 +499,24 @@ func TestCheckPolicyReportsMemoryLimit(t *testing.T) {
 		t.Fatalf("ignore_rlimit_data=Y not flagged:\n%s", so.String())
 	}
 }
+
+// TestCheckPolicyReportsProtectHome (handoff N-28): check-policy says which
+// ProtectHome= the core unit gets — yes when nothing is under /home, /root
+// or /run/user, read-only naming the first root that is.
+func TestCheckPolicyReportsProtectHome(t *testing.T) {
+	env, p := testEnv(t, validPolicy)
+	var so, se bytes.Buffer
+	_ = checkPolicyWith([]string{"--policy", p}, &so, &se, env)
+	if want := "core unit: ProtectHome=yes"; !strings.Contains(so.String(), want) {
+		t.Errorf("report lacks %q:\n%s", want, so.String())
+	}
+
+	y := strings.Replace(validPolicy, "read: [{D}/srv/app]", "read: [{D}/srv/app, /home/example-app/data]", 1)
+	env, p = testEnv(t, y)
+	so.Reset()
+	se.Reset()
+	_ = checkPolicyWith([]string{"--policy", p}, &so, &se, env)
+	if want := "core unit: ProtectHome=read-only (/home/example-app/data is under /home, /root or /run/user"; !strings.Contains(so.String(), want) {
+		t.Errorf("report lacks %q:\n%s", want, so.String())
+	}
+}

@@ -169,6 +169,7 @@ func Core(p *policy.Policy) (Files, error) {
 			removed = append(removed, g)
 		}
 	}
+	protectHome, _ := ProtectHome(p)
 	inacc := make([]string, len(inaccessible))
 	for i, pth := range inaccessible {
 		inacc[i] = "-" + pth
@@ -187,7 +188,7 @@ func Core(p *policy.Policy) (Files, error) {
 		{"ProtectSystem", "strict"},
 		{"ReadWritePaths", strings.Join(rw, " ")},
 		{"InaccessiblePaths", strings.Join(inacc, " ")},
-		{"ProtectHome", "read-only"},
+		{"ProtectHome", protectHome},
 		// /run holds the system bus, systemd's private socket and other
 		// sockets that are root-equivalent to a root client; the core unit
 		// sees an empty read-only tmpfs there. (Not InaccessiblePaths=:

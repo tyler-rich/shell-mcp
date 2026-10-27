@@ -318,6 +318,12 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 	} else if set {
 		pr("WARN kernel: ignore_rlimit_data is set (boot option); mmap(2) past limits.max_memory_mb only logs a warning, so the limit binds brk(2) only; remove the boot option")
 	}
+	// The core unit's ProtectHome= and why (handoff N-28).
+	if v, because := units.ProtectHome(p); because == "" {
+		pr("core unit: ProtectHome=%s (no root, command or policy file is under /home, /root or /run/user)", v)
+	} else {
+		pr("core unit: ProtectHome=%s (%s is under /home, /root or /run/user, which 'yes' would hide entirely)", v, because)
+	}
 	pr("read roots: %s", strings.Join(p.Paths.Read, " "))
 	pr("write roots: %s", strings.Join(p.Paths.Write, " "))
 	for _, e := range p.Paths.Persistence {

@@ -89,8 +89,9 @@ func (resolver) MatchUnit(string) bool { return false }
 // responseBudget leaves room for the envelope inside MaxResponseBytes.
 const responseBudget = protocol.MaxResponseBytes - 256<<10
 
-// execHome is HOME for root commands: ProtectHome=read-only leaves /root
-// read-only, and the helper has no home of its own.
+// execHome is HOME for root commands: the helper has no home of its own.
+// The core unit hides /root (ProtectHome=yes) or leaves it read-only, and
+// the helper's Landlock domain grants nothing under it either way.
 const execHome = "/root"
 
 // resolvedExec is a privileged command resolved for one request: the
