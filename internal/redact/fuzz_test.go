@@ -61,7 +61,7 @@ func FuzzPrivateKeyBlocks(f *testing.F) {
 				t.Fatalf("%q: block %v after %d", s, r, last)
 			}
 			m := pemLabeled.FindStringSubmatchIndex(s[r[0]:])
-			if m == nil || m[0] != 0 {
+			if len(m) < 4 || m[0] != 0 {
 				t.Fatalf("%q: block %v does not start at a header", s, r)
 			}
 			closing := "-----END " + s[r[0]+m[2]:r[0]+m[3]] + "-----"
