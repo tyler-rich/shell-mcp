@@ -429,6 +429,9 @@ install -o svc-shell -g svc-shell -m 0755 -d "$ox/work/mounted" "$ox/work/mounte
 mount -t tmpfs -o size=1m,mode=0755,uid=4200001,gid=4200001 e2e-delete-mount "$ox/work/mounted/point"
 printf 'on the mount\n' >"$ox/work/mounted/point/inside.txt"
 
+# BEGIN privileged-policies: scripts/exposure/gen.sh extracts this block (up to
+# the matching END line) to generate the units of every policy below offline;
+# it may use only $bin, $landlock and the shell, and write only $bin/privileged*.yaml.
 # priv_policy <extra line for probe-signal> <extra line for probe-broad> <allow_upgrade>
 priv_policy() {
 	cat <<EOF
@@ -578,6 +581,7 @@ priv_policy '' '' false | awk '{ print } /^commands:$/ && !done { done = 1
 	print "    path: /usr/bin/chown"
 	print "    tier: read"
 	print "    templates: [[\"--version\"]]" }' >"$bin/privileged-multicall.yaml"
+# END privileged-policies
 chmod 0600 "$bin"/privileged*.yaml
 install -o root -g root -m 0600 "$bin/privileged.yaml" /etc/shell-mcp/privileged.yaml
 
