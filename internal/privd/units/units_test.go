@@ -74,7 +74,7 @@ func generate(t *testing.T, p *policy.Policy) units.Files {
 }
 
 func TestGolden(t *testing.T) {
-	for name, p := range map[string]*policy.Policy{"minimal": minimalPolicy(), "example": examplePolicy()} {
+	for name, p := range map[string]*policy.Policy{"minimal": minimalPolicy(), "example": examplePolicy(), "home-read": homePolicy("read", "/home/example-app/data"), "home-write": homePolicy("write", "/home/example-app/work")} {
 		f := generate(t, p)
 		golden(t, name+".socket.golden", f.Socket)
 		golden(t, name+".service.golden", f.Service)
@@ -145,7 +145,8 @@ func TestServiceDirectives(t *testing.T) {
 	want(t, d, s+"ProtectSystem", "strict")
 	want(t, d, s+"ReadWritePaths", "/etc/example-app/conf.d /srv/app/config /etc/systemd/system/example-app.service.d /var/lib/shell-mcp/backups")
 	want(t, d, s+"InaccessiblePaths", "-/etc/shadow -/etc/shadow- -/etc/gshadow -/etc/gshadow- -/etc/sudoers -/etc/sudoers.d -/etc/security/opasswd -/etc/ssh -/root/.ssh")
-	want(t, d, s+"ProtectHome", "read-only")
+	// No root under /home, /root or /run/user: those directories can be hidden entirely (N-28).
+	want(t, d, s+"ProtectHome", "yes")
 	// /run holds the system bus, systemd's private socket and other root-
 	// equivalent sockets; the core unit sees an empty read-only tmpfs there
 	// (TemporaryFileSystem=, not InaccessiblePaths=: systemd 257 remounts its
@@ -494,5 +495,152 @@ func TestBroadRefuses(t *testing.T) {
 				t.Fatalf("generated:\n%s", f.Service)
 			}
 		})
+	}
+}
+
+// homePolicy is the minimal policy with one root of the given kind ("read",
+// "write" or "persistence") at path.
+func homePolicy(kind, path string) *policy.Policy {
+	p := minimalPolicy()
+	switch kind {
+	case "read":
+		p.Paths.Read = []string{path}
+	case "write":
+		p.Paths.Write = []string{path}
+	case "persistence":
+		p.Paths.Persistence = []policy.Persistence{{Path: path, Acknowledge: "invented"}}
+	}
+	return p
+}
+
+func protectHome(t *testing.T, p *policy.Policy) string {
+	t.Helper()
+	d := directives(t, generate(t, p).Service)
+	v := d["[Service]ProtectHome"]
+	if len(v) != 1 {
+		t.Fatalf("ProtectHome = %q, want exactly one", v)
+	}
+	return v[0]
+}
+
+// TestProtectHomeYesOnlyWithoutRootsThere (N-28): ProtectHome=yes hides
+// /home, /root and /run/user entirely, so it is emitted only when no read,
+// write or persistence root lies in or under any of them; otherwise the
+// directive stays read-only (a write root there also has its
+// ReadWritePaths= entry). Look-alike names are not under them.
+func TestProtectHomeYesOnlyWithoutRootsThere(t *testing.T) {
+	for _, tc := range []struct {
+		kind, root, want string
+	}{
+		{"read", "/etc/example-app", "yes"},
+		{"write", "/srv/app", "yes"},
+		{"persistence", "/etc/systemd/system/example-app.service.d", "yes"},
+		{"read", "/homework", "yes"},
+		{"read", "/home2/example-app", "yes"},
+		{"write", "/rootfs/app", "yes"},
+		{"read", "/run/users/1000", "yes"},
+		{"read", "/srv/home", "yes"},
+		{"read", "/home", "read-only"},
+		{"read", "/home/example-app", "read-only"},
+		{"read", "/home/example-app/deep/er", "read-only"},
+		{"write", "/home/example-app/work", "read-only"},
+		{"persistence", "/home/example-app/.config/systemd/user", "read-only"},
+		{"read", "/root", "read-only"},
+		{"read", "/root/data", "read-only"},
+		{"write", "/root/work", "read-only"},
+		{"read", "/run/user", "read-only"},
+		{"read", "/run/user/1000/app", "read-only"},
+		{"write", "/run/user/1000/app", "read-only"},
+	} {
+		if got := protectHome(t, homePolicy(tc.kind, tc.root)); got != tc.want {
+			t.Errorf("%s root %s: ProtectHome=%s, want %s", tc.kind, tc.root, got, tc.want)
+		}
+	}
+}
+
+// One root in the directories is enough, whatever the other roots are.
+func TestProtectHomeOneRootIsEnough(t *testing.T) {
+	p := examplePolicy()
+	p.Paths.Read = append(p.Paths.Read, "/home/example-app/data")
+	if got := protectHome(t, p); got != "read-only" {
+		t.Errorf("ProtectHome=%s, want read-only", got)
+	}
+}
+
+// A write root under /home keeps its ReadWritePaths= entry next to the
+// read-only directive.
+func TestProtectHomeWriteRootKeepsReadWritePaths(t *testing.T) {
+	d := directives(t, generate(t, homePolicy("write", "/home/example-app/work")).Service)
+	want(t, d, "[Service]ReadWritePaths", "/home/example-app/work /var/lib/shell-mcp/backups")
+	want(t, d, "[Service]ProtectHome", "read-only")
+}
+
+// A root is judged by where it resolves (a symlink into /home is under
+// /home), also when part of it does not exist yet, and a path that cannot
+// be resolved is treated as exposed.
+func TestProtectHomeResolvesSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	mustLink := func(target, name string) string {
+		t.Helper()
+		l := filepath.Join(dir, name)
+		if err := os.Symlink(target, l); err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	toHome := mustLink("/home", "to-home")
+	toUsr := mustLink("/usr", "to-usr")
+	dangling := mustLink("/home/example-nonexistent-dir", "dangling")
+	loop := mustLink(filepath.Join(dir, "loop"), "loop")
+	for _, tc := range []struct{ name, kind, root, want string }{
+		{"read root through a link into /home", "read", toHome, "read-only"},
+		{"write root through a link into /home", "write", toHome, "read-only"},
+		{"persistence root through a link into /home", "persistence", toHome, "read-only"},
+		{"missing tail below a link into /home", "read", filepath.Join(toHome, "example-nonexistent-dir", "x"), "read-only"},
+		{"link outside the directories", "read", toUsr, "yes"},
+		{"missing tail below a link outside them", "write", filepath.Join(toUsr, "example-nonexistent-dir"), "yes"},
+		{"dangling link", "read", dangling, "read-only"},
+		{"link loop", "read", loop, "read-only"},
+		{"missing root, no link", "read", filepath.Join(dir, "missing", "deeper"), "yes"},
+	} {
+		if got := protectHome(t, homePolicy(tc.kind, tc.root)); got != tc.want {
+			t.Errorf("%s: ProtectHome=%s, want %s", tc.name, got, tc.want)
+		}
+	}
+}
+
+// What the instance itself must read or run is judged the same way: the
+// policy file its ExecStart= names, and each command's binary and
+// interpreter; any of them under the directories keeps read-only.
+func TestProtectHomeCommandsAndPolicyFile(t *testing.T) {
+	p := examplePolicy()
+	p.Commands[0].Resolved = "/home/example-app/bin/tool"
+	if got := protectHome(t, p); got != "read-only" {
+		t.Errorf("command binary under /home: ProtectHome=%s, want read-only", got)
+	}
+	p = examplePolicy()
+	p.Commands[1].Interpreter = "/root/bin/interp"
+	if got := protectHome(t, p); got != "read-only" {
+		t.Errorf("interpreter under /root: ProtectHome=%s, want read-only", got)
+	}
+	p = examplePolicy()
+	p.File = "/home/example-app/privileged.yaml"
+	if got := protectHome(t, p); got != "read-only" {
+		t.Errorf("policy file under /home: ProtectHome=%s, want read-only", got)
+	}
+	p = examplePolicy()
+	p.Commands[0].Resolved = "/usr/bin/example-tool"
+	if got := protectHome(t, p); got != "yes" {
+		t.Errorf("command binary under /usr: ProtectHome=%s, want yes", got)
+	}
+}
+
+// The broad unit sets no ProtectHome= (full root view), whatever the roots.
+func TestBroadHasNoProtectHome(t *testing.T) {
+	p := broadPolicy()
+	p.Paths.Read = []string{"/home/example-app"}
+	d := directives(t, generateBroad(t, p).Service)
+	if v, ok := d["[Service]ProtectHome"]; ok {
+		t.Errorf("broad unit sets ProtectHome=%q", v)
 	}
 }
