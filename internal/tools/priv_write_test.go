@@ -42,11 +42,17 @@ const (
 
 func privNotFound() gateReply { return gateReply{code: "not_found", msg: "no such file"} }
 
+// privHashed is priv_hash_file's answer for privConf with content hash sha.
+func privHashed(sha string) string {
+	return `{"path":"` + privConf + `","size":11,"sha256":"` + sha + `","binary":false,"lines":1,"private_key":false}`
+}
+
 // privWriteReplies answers the helper's preview reads and write ops.
 func privWriteReplies() map[string]gateReply {
 	r := privReplies(allReplies())
 	r["priv_stat"] = gateReply{data: privStat}
 	r["priv_read_file"] = gateReply{data: fakeReadSHA("key: value\n", shaOld)}
+	r["priv_hash_file"] = gateReply{data: privHashed(shaOld)}
 	r["priv_backup_check"] = gateReply{data: privCheck}
 	r["priv_write_file"] = gateReply{data: privWrote}
 	r["priv_copy"] = gateReply{data: privCopied}
@@ -222,6 +228,7 @@ func TestPrivWriteToolsChangeAfterApproval(t *testing.T) {
 		},
 		"destination content": func(g *recordingGate) {
 			g.set("priv_read_file", gateReply{data: fakeReadSHA("key: other\n", shaDest)})
+			g.set("priv_hash_file", gateReply{data: privHashed(shaDest)})
 		},
 	}
 	for _, name := range privWriteTools {
