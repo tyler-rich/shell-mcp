@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -154,4 +155,25 @@ func GTFOBinsNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// ScriptEscapeWarning is check-policy's warning for a #! script, at field,
+// whose interpreter (written in the #! line as written, resolved to
+// resolved) has documented escape techniques, naming both, or "" when
+// neither name is listed (handoff N-31). The interpreter gets the
+// template's arguments after the script, so a listed interpreter is as
+// reachable through a script as when declared itself. asRoot is as in
+// EscapeWarning.
+func ScriptEscapeWarning(field string, asRoot bool, script, written, resolved string) string {
+	for _, base := range []string{CanonicalName(filepath.Base(written)), CanonicalName(filepath.Base(resolved))} {
+		if cats := EscapeTechniques(base); cats != nil {
+			who := ""
+			if asRoot {
+				who = "it runs as root: "
+			}
+			return fmt.Sprintf("%s: %s is a #! script run by %s, which has documented escape techniques (GTFOBins: %s); %sreview the script and its templates, and never pass {path:write} to it (%s)",
+				field, script, resolved, strings.Join(cats, ", "), who, gtfobinsURL(base))
+		}
+	}
+	return ""
 }

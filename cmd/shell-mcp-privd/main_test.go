@@ -457,7 +457,7 @@ func TestCheckPolicyStickyIsOpen(t *testing.T) {
 func TestCheckPolicyReportsMultiCall(t *testing.T) {
 	y := validPolicy + "commands:\n" +
 		"  - id: owner\n    path: {D}/bin/chown\n    tier: read\n    templates: [[\"--version\"]]\n" +
-		"  - id: renew\n    path: {D}/bin/renew\n    tier: read\n    templates: [[]]\n"
+		"  - id: renew\n    path: {D}/bin/renew\n    tier: read\n    acknowledge: \"invented review note\"\n    templates: [[]]\n"
 	env, p := testEnv(t, y)
 	d := filepath.Dir(filepath.Dir(filepath.Dir(p)))
 	bin := filepath.Join(d, "bin")
@@ -468,7 +468,8 @@ func TestCheckPolicyReportsMultiCall(t *testing.T) {
 	var so, se bytes.Buffer
 	checkPolicyWith([]string{"--policy", p}, &so, &se, env)
 	if !strings.Contains(so.String(), "command owner: tier read, unit core, "+filepath.Join(bin, "chown")+" [uutils applet chown]") ||
-		!strings.Contains(so.String(), "command renew: tier read, unit core, "+filepath.Join(bin, "renew")+" [#! script run by "+filepath.Join(bin, "example-interp")+"]") {
+		!strings.Contains(so.String(), "command renew: tier read, unit core, "+filepath.Join(bin, "renew")+" [#! script run by "+filepath.Join(bin, "example-interp")+"] [script acknowledged: \"invented review note\"]") ||
+		!strings.Contains(so.String(), "REVIEW script renew: ") {
 		t.Fatalf("check-policy:\n%s\n%s", so.String(), se.String())
 	}
 }

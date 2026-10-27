@@ -690,7 +690,15 @@ func (v *validator) commands(p *Policy, raw []rawCommand, opts *LoadOptions) {
 
 // program is a resolved command binary: its real path, the uutils utility
 // it runs as, and a script's resolved interpreter.
-type program struct{ resolved, applet, interpreter string }
+type program struct {
+	resolved, applet, interpreter string
+	// scripts is the #! scripts on the way to the binary, outermost first.
+	scripts []scriptStep
+}
+
+// scriptStep is one #! script: its resolved path, the interpreter as its
+// first line writes it, and that interpreter resolved.
+type scriptStep struct{ script, written, interpreter string }
 
 // maxScripts is how many #! scripts the kernel follows in a chain:
 // "up to a limit of four recursions" (execve(2)).
@@ -698,7 +706,7 @@ const maxScripts = 5
 
 // resolveCommand resolves a command's binary (resolveProgram) and warns
 // when it runs as another name than the one written, or has documented
-// escape techniques.
+// escape techniques, its own or those of a script's interpreters.
 func (v *validator) resolveCommand(field string, rc *rawCommand, opts *LoadOptions) (program, bool) {
 	prog, ok := v.resolveProgram(field, rc.Path, rc.RootEquivalent, opts, 0, "")
 	if !ok {
@@ -710,6 +718,12 @@ func (v *validator) resolveCommand(field string, rc *rawCommand, opts *LoadOptio
 	}
 	if w := EscapeWarning(field, false, CanonicalName(written), CanonicalName(ran)); w != "" {
 		v.warn("%s", w)
+	}
+	// A script's interpreters get the template's arguments (handoff N-31).
+	for _, s := range prog.scripts {
+		if w := ScriptEscapeWarning(field, false, s.script, s.written, s.interpreter); w != "" {
+			v.warn("%s", w)
+		}
 	}
 	return prog, true
 }
@@ -797,6 +811,7 @@ func (v *validator) resolveProgram(field, p string, rootEquivalent bool, opts *L
 			return program{}, false
 		}
 		prog.interpreter = ip.resolved
+		prog.scripts = append([]scriptStep{{script: resolved, written: ct.Interpreter, interpreter: ip.resolved}}, ip.scripts...)
 		v.warn("%s: %s is a #! script run by %s; the interpreter reads the script and gets the template's arguments after it (POLICY §5)", field, resolved, ip.resolved)
 	}
 	if !v.identity(field, resolved, fi, opts, ct.Kind == ContentUutils, via) {

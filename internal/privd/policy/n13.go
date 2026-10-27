@@ -59,6 +59,8 @@ const (
 	FindingPackage = "package"
 	FindingPower   = "power"
 	FindingExec    = "exec"
+	// FindingScript: the command's program is a #! script (handoff N-26).
+	FindingScript = "script"
 )
 
 // How a program was recognised (CommandFinding.Match).
@@ -67,6 +69,8 @@ const (
 	MatchResolved = "resolved"
 	MatchIdentity = "identity"
 	MatchTemplate = "template"
+	// MatchScript: the program is a #! script, whatever its names.
+	MatchScript = "script"
 )
 
 // powerGroup is POLICY §5's power group.

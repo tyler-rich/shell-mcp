@@ -446,6 +446,7 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 		}
 		if c.Interpreter != "" {
 			extra += " [#! script run by " + c.Interpreter + "]"
+			extra += fmt.Sprintf(" [script acknowledged: %q]", c.Acknowledge)
 		}
 		pr("command %s: tier %s, unit %s, %s%s", c.ID, c.Tier, c.Unit, c.Resolved, extra)
 	}

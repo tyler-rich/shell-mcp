@@ -178,14 +178,16 @@ type Command struct {
 
 // CommandFinding is a declared command whose program defeats a bound
 // operation, declared with an acknowledge (handoff N-13): a package tool, a
-// power binary, or find with an action in a template.
+// power binary, find with an action in a template, or a #! script (N-26).
 type CommandFinding struct {
-	// Category is FindingPackage, FindingPower or FindingExec.
+	// Category is FindingPackage, FindingPower, FindingExec or FindingScript.
 	Category string
-	// Program is the listed name recognised (apt-get, reboot, find).
+	// Program is the listed name recognised (apt-get, reboot, find), or for
+	// FindingScript the innermost interpreter's resolved path.
 	Program string
 	// Match is how: MatchWritten, MatchResolved, MatchIdentity, or for
-	// find MatchTemplate (the action in a template is what decides).
+	// find MatchTemplate (the action in a template is what decides), or for a
+	// script MatchScript.
 	Match string
 }
 
