@@ -60,14 +60,14 @@ func TestGenerateUnits(t *testing.T) {
 		}
 		name := strings.TrimSuffix(filepath.Base(f), ".yaml")
 		dir := filepath.Join(out, name)
-		if err := os.MkdirAll(dir, 0o750); err != nil { //nolint:gosec // G703: the script's own private working directory
+		if err = os.MkdirAll(dir, 0o750); err != nil { //nolint:gosec // G703: the script's own private working directory
 			t.Fatal(err)
 		}
 		core, err := units.Core(p)
 		if err != nil {
 			t.Fatalf("%s: %v", f, err)
 		}
-		if err := os.WriteFile(filepath.Join(dir, units.ServiceUnit), []byte(core.Service), 0o600); err != nil { //nolint:gosec // G703: as above
+		if err = os.WriteFile(filepath.Join(dir, units.ServiceUnit), []byte(core.Service), 0o600); err != nil { //nolint:gosec // G703: as above
 			t.Fatal(err)
 		}
 		if p.UsesBroad() {
@@ -75,7 +75,7 @@ func TestGenerateUnits(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s: %v", f, err)
 			}
-			if err := os.WriteFile(filepath.Join(dir, units.BroadServiceUnit), []byte(b.Service), 0o600); err != nil { //nolint:gosec // G703: as above
+			if err = os.WriteFile(filepath.Join(dir, units.BroadServiceUnit), []byte(b.Service), 0o600); err != nil { //nolint:gosec // G703: as above
 				t.Fatal(err)
 			}
 		}
