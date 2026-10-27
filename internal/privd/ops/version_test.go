@@ -5,6 +5,7 @@ package ops_test
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -34,5 +35,25 @@ func TestHelperRefusesOtherVersions(t *testing.T) {
 				t.Fatalf("v%d: message %q lacks %q", c.v, r.Error.Message, w)
 			}
 		}
+	}
+}
+
+// TestHelperChecksVersionBeforeAnythingElse: "version mismatch means
+// nothing ran" (ARCHITECTURE §4.0) holds because the helper decodes the
+// request's version before it dispatches or touches the host on the
+// request's behalf: a state-changing request of another version is
+// protocol_mismatch and nothing is created. The gate's protocol_mismatch
+// (never outcome_unknown) relies on this order.
+func TestHelperChecksVersionBeforeAnythingElse(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	for _, v := range []int{1, 3} {
+		target := filepath.Join(f.write, fmt.Sprintf("created-by-v%d", v))
+		out, _ := f.serveRaw(fmt.Sprintf(`{"v":%d,"id":%q,"ceiling":"destructive","op":"priv_mkdir","args":{"path":%q}}`+"\n", v, reqID, target))
+		var r response
+		if err := json.Unmarshal([]byte(out), &r); err != nil || r.OK || r.Error == nil || r.Error.Code != "protocol_mismatch" {
+			t.Fatalf("v%d: answer %q, want protocol_mismatch", v, out)
+		}
+		absent(t, target)
 	}
 }
