@@ -173,12 +173,15 @@ func TestPrivKeyRotationBindings(t *testing.T) {
 	})
 }
 
-// TestApprovalMasksPrivateKeyArgs: a private key in a write's content is
-// shown on the approval page as its size and SHA-256 only, for both write
-// tools; the approved re-call sends the real content, which the arguments
-// hash bound.
+// TestApprovalMasksPrivateKeyArgs: a private-key block in a write's
+// content is shown on the approval page as its size and SHA-256 only, and
+// the rest of the content as it is, for both write tools; the approved
+// re-call sends the real content, which the arguments hash bound.
 func TestApprovalMasksPrivateKeyArgs(t *testing.T) {
-	key, body := testPrivateKey(t)
+	pemKey, body := testPrivateKey(t)
+	head, tail := "listen: 0.0.0.0:8443\ntls_key: |\n", "admin_token_file: /etc/example-app/token\n"
+	key := head + pemKey + tail
+	block := strings.TrimSuffix(pemKey, "\n")
 	for _, name := range []string{"shell_write_file", "shell_priv_write_file"} {
 		t.Run(name, func(t *testing.T) {
 			var a *approvalHarness
@@ -198,7 +201,7 @@ func TestApprovalMasksPrivateKeyArgs(t *testing.T) {
 					content = f.Value
 				}
 			}
-			if want := fmt.Sprintf("private key, not shown: %d bytes, sha256 %s", len(key), sha(key)); content != want {
+			if want := head + fmt.Sprintf("private key, not shown: %d bytes, sha256 %s", len(block), sha(block)) + "\n" + tail; content != want {
 				t.Fatalf("content field %q, want %q", content, want)
 			}
 			noKey(t, "approval record", recordText(a, id), body)

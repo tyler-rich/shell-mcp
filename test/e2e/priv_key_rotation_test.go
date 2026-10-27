@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -221,28 +222,36 @@ func TestPrivKeyRotation(t *testing.T) {
 }
 
 // TestWriteKeyMaskedOnApprovalPage: shell_write_file (the gate's write,
-// operator tier gated) shows a private key in its content as its size and
-// hash on the approval page, and writes the content approved.
+// operator tier gated) shows a private-key block in its content as the
+// block's size and hash on the approval page, and the rest of the content
+// as it is, so a key cannot hide the lines around it; it writes the
+// content approved.
 func TestWriteKeyMaskedOnApprovalPage(t *testing.T) {
 	opsServer(t)
 	h := newHuman(t, singleApprover)
 	srv := startApprovalServer(t, h, h.file(t), freeLoopbackPort(t))
 	t.Cleanup(func() { _ = srv.cs.Close() })
-	key, body := e2eKey(t)
-	p := opsWork + "/e2e-client.key"
+	pemKey, body := e2eKey(t)
+	head, tail := "listen: 0.0.0.0:8443\ntls_key: |\n", "admin_token_file: /etc/example-app/token\n"
+	content := head + pemKey + tail
+	block := strings.TrimSuffix(pemKey, "\n")
+	p := opsWork + "/e2e-client.conf"
 	_ = os.Remove(p)
 	t.Cleanup(func() { _ = os.Remove(p) })
-	args := map[string]any{"path": p, "content": key}
+	args := map[string]any{"path": p, "content": content}
 	first := srv.callTool(t, "shell_write_file", args)
 	id := pendingID(t, first)
 	pg := srv.page(t, id)
-	if !strings.Contains(pg, "private key, not shown") || !strings.Contains(pg, sha(key)) {
-		t.Fatalf("the approval page does not mask the key: %s", pg)
+	mask := "private key, not shown: " + strconv.Itoa(len(block)) + " bytes, sha256 " + sha(block)
+	for _, want := range []string{mask, "listen: 0.0.0.0:8443", "tls_key: |", "admin_token_file: /etc/example-app/token"} {
+		if !strings.Contains(pg, want) {
+			t.Fatalf("the approval page does not show %q: %s", want, pg)
+		}
 	}
 	srv.decide(t, h, id, "approve")
 	env := srv.callTool(t, "shell_write_file", withApproval(args, id))
 	okDataAs(t, env, opsWho)
-	if readFile(t, p) != key {
+	if readFile(t, p) != content {
 		t.Fatal("not written as approved")
 	}
 	for i, s := range []string{asJSON(first), pg, asJSON(env), srv.log.String()} {
