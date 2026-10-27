@@ -61,7 +61,8 @@ done
 # user, as ci-local does for its own run; under ci-local it already is.
 docker volume create shell-mcp-ci-cache >/dev/null
 if [[ -z "${SHELL_MCP_CI_LOCAL_LABEL:-}" ]]; then
-	docker run --rm --label "$label" -u 0:0 -v shell-mcp-ci-cache:/cache "$go_image" \n		sh -c "mkdir -p /cache/build /cache/mod && chown -R $run_as /cache/build /cache/mod && chown $run_as /cache" >/dev/null
+	docker run --rm --label "$label" -u 0:0 -v shell-mcp-ci-cache:/cache "$go_image" \
+		sh -c "mkdir -p /cache/build /cache/mod && chown -R $run_as /cache/build /cache/mod && chown $run_as /cache" >/dev/null
 fi
 
 # The generated units, as a tar on stdout of the Go image. The working

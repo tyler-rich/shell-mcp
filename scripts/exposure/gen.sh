@@ -43,4 +43,5 @@ for f in "$bin"/privileged*.yaml; do
 done
 
 mkdir -p "$out"
-go run ./scripts/exposure/gen "$out" "$work"/pol/*.yaml
+pols="$(printf '%s:' "$work"/pol/*.yaml)"
+EXPOSURE_OUT="$out" EXPOSURE_POLICIES="${pols%:}" go test -count=1 -v -run TestGenerateUnits ./scripts/exposure/gen >&2
