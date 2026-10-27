@@ -507,11 +507,18 @@ func TestCheckPolicyReportsProtectHome(t *testing.T) {
 	env, p := testEnv(t, validPolicy)
 	var so, se bytes.Buffer
 	_ = checkPolicyWith([]string{"--policy", p}, &so, &se, env)
-	if want := "core unit: ProtectHome=yes"; !strings.Contains(so.String(), want) {
+	// The line follows what the generator decides for this policy (the
+	// scratch directory may itself be under /home, as CI's is).
+	loaded, err := env.load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ := units.ProtectHome(loaded)
+	if want := "core unit: ProtectHome=" + v + " ("; !strings.Contains(so.String(), want) {
 		t.Errorf("report lacks %q:\n%s", want, so.String())
 	}
 
-	y := strings.Replace(validPolicy, "read: [{D}/srv/app]", "read: [{D}/srv/app, /home/example-app/data]", 1)
+	y := strings.Replace(validPolicy, "read: [{D}/srv/app]", "read: [/home/example-app/data, {D}/srv/app]", 1)
 	env, p = testEnv(t, y)
 	so.Reset()
 	se.Reset()

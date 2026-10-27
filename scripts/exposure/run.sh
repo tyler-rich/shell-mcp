@@ -7,7 +7,8 @@
 # Dockerfile. It fails when a core unit scores above the value recorded in
 # scores.txt for that image and policy; --record prints the lines to record.
 # Needs docker; used by scripts/ci-local.sh and CI. Containers carry a label,
-# run as a non-root user, and have no network (except the image builds).
+# run as a non-root user; the analysis has no network (the image builds and the
+# generator, which downloads Go modules on a cold cache, do).
 #
 # EXPOSURE_WEAKEN=<policy>:<sed expression> applies the expression to that
 # policy's core unit before it is rated, for the check's own negative test
@@ -69,7 +70,7 @@ fi
 # directory is a private tmpfs the container user owns (exec: go run).
 units_tar="$(mktemp)"
 trap 'rm -f "$units_tar"; remove_own_containers' EXIT
-docker run --rm --label "$label" -u "$run_as" --network none \
+docker run --rm --label "$label" -u "$run_as" \
 	-e HOME=/tmp -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local -e GOCACHE=/cache/build -e GOMODCACHE=/cache/mod \
 	--tmpfs "/work:exec,uid=${run_as%%:*},gid=${run_as##*:},mode=0700" -e TMPDIR=/work \
 	-v shell-mcp-ci-cache:/cache -v "$repo:/src:ro" -w /src "$go_image" \

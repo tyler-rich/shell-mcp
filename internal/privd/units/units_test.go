@@ -580,6 +580,13 @@ func TestProtectHomeWriteRootKeepsReadWritePaths(t *testing.T) {
 // be resolved is treated as exposed.
 func TestProtectHomeResolvesSymlinks(t *testing.T) {
 	dir := t.TempDir()
+	// The scratch directory may itself be under /home (CI's is), so the
+	// directories that count here are fakes inside it.
+	fakeHome := filepath.Join(dir, "fake-home")
+	if err := os.Mkdir(fakeHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	defer units.SetHomeDirs([]string{fakeHome})()
 	mustLink := func(target, name string) string {
 		t.Helper()
 		l := filepath.Join(dir, name)
@@ -588,9 +595,9 @@ func TestProtectHomeResolvesSymlinks(t *testing.T) {
 		}
 		return l
 	}
-	toHome := mustLink("/home", "to-home")
+	toHome := mustLink(fakeHome, "to-home")
 	toUsr := mustLink("/usr", "to-usr")
-	dangling := mustLink("/home/example-nonexistent-dir", "dangling")
+	dangling := mustLink(filepath.Join(fakeHome, "example-nonexistent-dir"), "dangling")
 	loop := mustLink(filepath.Join(dir, "loop"), "loop")
 	for _, tc := range []struct{ name, kind, root, want string }{
 		{"read root through a link into /home", "read", toHome, "read-only"},
