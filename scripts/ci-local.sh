@@ -162,6 +162,25 @@ step "go vet" "" in_go go vet ./...
 step "go vet (test-only build tags)" "" in_go sh -c "go vet -tags e2e ./test/e2e/ && go vet -tags shellmcp_e2e_bypass ./internal/privd/... ./cmd/shell-mcp-privd/ && go vet -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/ && go vet -tags landlock_forcepsx ./... && go vet -tags shellmcp_gitconfig_hook ./internal/gate/... ./cmd/shell-mcp-gate/ && go vet -tags shellmcp_confine_hook ./internal/gate/... ./internal/privd/... ./cmd/shell-mcp-gate/ ./cmd/shell-mcp-privd/"
 step "golangci-lint" "" in_lint run ./...
 step "golangci-lint (test-only build tags)" "" in_lint run --build-tags=e2e,shellmcp_e2e_bypass,shellmcp_diag,landlock_forcepsx,shellmcp_gitconfig_hook,shellmcp_confine_hook ./...
+# The offline exposure check (handoff N-28): the generated core units rated by
+# systemd-analyze security --offline in the systemd of Debian 13, Ubuntu 24.04
+# and 26.04, against scripts/exposure/scores.txt; and its negative control, a
+# unit with the ProtectHome=yes of N-28 undone, which must be refused.
+exposure_weakened_fails() {
+	local out
+	out="$(mktemp)"
+	if EXPOSURE_WEAKEN='e2e:s/^ProtectHome=yes$/ProtectHome=read-only/' bash scripts/exposure/run.sh >"$out" 2>&1; then
+		cat "$out"
+		rm -f "$out"
+		echo "exposure: a weakened unit passed the check"
+		return 1
+	fi
+	grep -h FAIL "$out"
+	rm -f "$out"
+	echo "exposure: the weakened unit was refused, as it must be"
+}
+step "exposure (offline, systemd 255/257/259)" "" bash scripts/exposure/run.sh
+step "exposure self-test (weakened unit)" "" exposure_weakened_fails
 step "go test -race" "" in_go go test -race -timeout 20m -count=1 ./...
 # The Landlock forced-psx test build, which CI's psx entry runs, for the
 # packages that apply the sandbox (the helper's unit tests stub it). This

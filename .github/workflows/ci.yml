@@ -187,7 +187,9 @@ jobs:
               grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|AddPath|LandlockThreadPath|ThreadPathDecision|IntegrationSandbox)' /tmp/go-test-forcepsx.log || true
               echo '```'
             fi
-          } | tee -a "$GITHUB_STEP_SUMMARY"
+          } |        run: |
+          set -o pipefail
+          bash scripts/exposure/run.sh | tee -a "$GITHUB_STEP_SUMMARY"
       - name: govulncheck
         run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
       - name: cross-build (linux/amd64, linux/arm64)
@@ -337,10 +339,11 @@ jobs:
     permissions:
       contents: read
     env:
-      # The core unit's measured score on this image (ARCHIVE §14, S1d; S1c was
-      # 1.6): the job fails if systemd-analyze security rates it worse. The
+      # The core unit's score on this image: the job fails if systemd-analyze
+      # security rates it worse (ARCHIVE §14: S1c 1.6, S1d 1.4, S6-5 1.3 with
+      # ProtectHome=yes, as the offline check in the exposure job predicts). The
       # broad unit's score is recorded, not enforced (root-equivalent by design).
-      E2E_SECURITY_MAX: "1.4"
+      E2E_SECURITY_MAX: "1.3"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -432,10 +435,39 @@ jobs:
           sudo journalctl --no-pager -n 60 -u 'shell-mcp-privd@*' -u polkit.service || true
           systemctl --failed --no-pager || true
 
+  exposure:
+    # The offline exposure check (handoff N-28): the helper's generated core
+    # units, for the example policy and every end-to-end policy, rated by
+    # systemd-analyze security --offline in the systemd of Debian 13 (257),
+    # Ubuntu 24.04 (255) and Ubuntu 26.04 (259), against the scores recorded in
+    # scripts/exposure/scores.txt. Unprivileged containers, no host mounts but
+    # the checkout (read-only) and the Go cache volume, no sudo.
+    name: exposure (offline, systemd 255, 257, 259)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: rate the core units offline
+        run: bash scripts/exposure/run.sh | tee -a "$GITHUB_STEP_SUMMARY"
+      # The check's negative control: the same units with ProtectHome=yes
+      # undone must be refused.
+      - name: a weakened unit is refused
+        run: |
+          if EXPOSURE_WEAKEN='e2e:s/^ProtectHome=yes$/ProtectHome=read-only/' bash scripts/exposure/run.sh > "$RUNNER_TEMP/weakened.out" 2>&1; then
+            cat "$RUNNER_TEMP/weakened.out"
+            echo "a weakened unit passed the exposure check"
+            exit 1
+          fi
+          grep -h FAIL "$RUNNER_TEMP/weakened.out"
+
   ci:
     name: ci
     if: always()
-    needs: [go, deps-current, gitleaks, image, e2e-host]
+    needs: [go, deps-current, gitleaks, image, e2e-host, exposure]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

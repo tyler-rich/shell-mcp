@@ -319,7 +319,7 @@ The directory is `root:root 0711` and each socket `srw-rw---- root svc-shell-pri
 systemd-analyze security shell-mcp-privd@.service
 ```
 
-CI measures the core unit at an exposure of 1.4 on Ubuntu 26.04 (systemd 259) and fails above that. The broad unit's score is high by design.
+CI rates the core unit of the example policy and every end-to-end policy offline on the systemd of Debian 13 (257), Ubuntu 24.04 (255) and Ubuntu 26.04 (259), and on Ubuntu 26.04 against the running systemd; the expected score is 1.3 (1.4 when a root, command or the policy file lies under `/home`, `/root` or `/run/user`, which keeps `ProtectHome=read-only`; 1.6 with a core command that declares `CAP_KILL`), and CI fails above the recorded value. The broad unit's score is high by design.
 
 ### 9.5 Let the gate forward to it *(container)*
 
