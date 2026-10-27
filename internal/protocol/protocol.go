@@ -155,6 +155,7 @@ const (
 // Privileged operations forwarded to the helper (PRIVILEGED.md §6).
 const (
 	OpPrivReadFile       = "priv_read_file"
+	OpPrivHashFile       = "priv_hash_file"
 	OpPrivListDir        = "priv_list_dir"
 	OpPrivStat           = "priv_stat"
 	OpPrivWriteFile      = "priv_write_file"
@@ -216,7 +217,7 @@ const (
 // on the host. Every other privileged operation can, including one added
 // later until it is listed here.
 var privReadOps = []string{
-	OpPrivReadFile, OpPrivListDir, OpPrivStat, OpPrivListBackups, OpPrivBackupCheck,
+	OpPrivReadFile, OpPrivHashFile, OpPrivListDir, OpPrivStat, OpPrivListBackups, OpPrivBackupCheck,
 	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview, OpPrivExecPreview,
 	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPkgUpdateIndexPreview, OpPrivPowerPreview, OpPrivPolicy,
 }
@@ -241,7 +242,7 @@ var PrivOps = []string{
 	OpPrivExec, OpPrivPkgUpdateIndex, OpPrivPkgInstall, OpPrivPkgUpgrade, OpPrivPkgRemove,
 	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPower, OpPrivBackupCheck,
 	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview, OpPrivExecPreview,
-	OpPrivPkgUpdateIndexPreview, OpPrivPowerPreview, OpPrivPowerCancel, OpPrivPolicy,
+	OpPrivPkgUpdateIndexPreview, OpPrivPowerPreview, OpPrivPowerCancel, OpPrivPolicy, OpPrivHashFile,
 }
 
 // Tier names on the wire: a request's ceiling, and max_tier in the gate

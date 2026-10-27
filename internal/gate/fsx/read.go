@@ -236,6 +236,78 @@ func (f *FS) ReadFile(p string, o ReadOptions) (ReadResult, error) {
 	return res, nil
 }
 
+// HashResult is a regular file's size, SHA-256 and line count, and whether
+// its first 64 KiB hold a private-key header: never its content (handoff
+// N-5, the helper's priv_hash_file).
+type HashResult struct {
+	Path   string `json:"path"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+	Binary bool   `json:"binary"`
+	// Lines is counted as a preview over read_file's default read did:
+	// for a text file no larger than that read (64 KiB, or max_read_bytes
+	// when smaller); nil otherwise.
+	Lines      *int `json:"lines"`
+	PrivateKey bool `json:"private_key"`
+}
+
+// HashFile hashes the regular file p under ReadFile's path rules (roots,
+// deny lists, symlinks, the moved-in read rule) without returning any of
+// its content, so a file holding a private key can be bound by its hash.
+// Files above 256 MiB are refused (too_large).
+func (f *FS) HashFile(p string) (HashResult, error) {
+	l, err := f.locate(p, false)
+	if err != nil {
+		return HashResult{}, err
+	}
+	defer l.close()
+	file, err := f.openTarget(l)
+	if err != nil {
+		return HashResult{}, err
+	}
+	defer func() { _ = file.Close() }()
+	fi, err := file.Stat()
+	if err != nil {
+		return HashResult{}, mapErr(err)
+	}
+	if fi.IsDir() {
+		return HashResult{}, errf(protocol.CodeIsADirectory, "is a directory")
+	}
+	if !fi.Mode().IsRegular() {
+		return HashResult{}, errf(protocol.CodeBadRequest, "not a regular file")
+	}
+	if err := f.movedInRead(l, fi); err != nil {
+		return HashResult{}, err
+	}
+	size := fi.Size()
+	if size > maxHashBytes {
+		return HashResult{}, errf(protocol.CodeTooLarge, "the file is larger than the %d MiB the helper hashes", maxHashBytes>>20)
+	}
+	head := make([]byte, min(int64(sniffKeyBytes), size))
+	if _, err := io.ReadFull(io.NewSectionReader(file, 0, size), head); err != nil {
+		return HashResult{}, mapErr(err)
+	}
+	h := sha256.New()
+	if _, err := io.Copy(h, io.NewSectionReader(file, 0, size)); err != nil {
+		return HashResult{}, mapErr(err)
+	}
+	res := HashResult{Path: p, Size: size, SHA256: hex.EncodeToString(h.Sum(nil)), PrivateKey: redact.ContainsPrivateKey(head)}
+	sniff := head[:min(len(head), sniffTextBytes)]
+	if len(sniff) < len(head) || int64(len(head)) < size {
+		sniff = validPrefix(sniff)
+	}
+	res.Binary = bytes.IndexByte(sniff, 0) >= 0 || !utf8.Valid(sniff)
+	if !res.Binary && size <= int64(min(defaultReadBytes, f.cfg.Limits.MaxReadBytes)) {
+		// A file this small is all in head.
+		lines := bytes.Count(head, []byte("\n"))
+		if len(head) > 0 && head[len(head)-1] != '\n' {
+			lines++
+		}
+		res.Lines = &lines
+	}
+	return res, nil
+}
+
 // Find walks the directory p: bounded depth, results and entries examined;
 // symlinked directories are never followed; denied entries are skipped and
 // not descended into.

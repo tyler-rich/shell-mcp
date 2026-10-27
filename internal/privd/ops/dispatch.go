@@ -49,6 +49,7 @@ type opSpec struct {
 func opTable() map[string]opSpec {
 	return map[string]opSpec{
 		protocol.OpPrivReadFile:       {policy.TierRead, (*server).readFile},
+		protocol.OpPrivHashFile:       {policy.TierRead, (*server).hashFile},
 		protocol.OpPrivListDir:        {policy.TierRead, (*server).listDir},
 		protocol.OpPrivStat:           {policy.TierRead, (*server).stat},
 		protocol.OpPrivListBackups:    {policy.TierRead, (*server).listBackups},

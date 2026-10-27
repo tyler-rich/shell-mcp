@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strconv"
 	"unicode/utf8"
+
+	"github.com/tyler-rich/shell-mcp/internal/redact"
 )
 
 // CanonicalJSON returns v's canonical JSON: v marshalled, decoded into
@@ -63,7 +65,8 @@ type Field struct {
 }
 
 // Fields flattens v's canonical JSON into fields: objects by key (sorted),
-// arrays by index, strings as they are, other values as JSON text. A value
+// arrays by index, strings as they are (one holding a private key only as
+// its size and SHA-256: shown), other values as JSON text. A value
 // longer than MaxFieldBytes is cut (on a rune boundary) and marked, and at
 // most maxTotal bytes of values are kept, then one field says what was left
 // out.
@@ -118,13 +121,25 @@ func flatten(key string, v any, out *[]Field) {
 			flatten(key+"["+strconv.Itoa(i)+"]", e, out)
 		}
 	case string:
-		*out = append(*out, Field{Key: orValue(key), Value: x})
+		*out = append(*out, Field{Key: orValue(key), Value: shown(x)})
 	case nil:
 		*out = append(*out, Field{Key: orValue(key), Value: "null"})
 	default:
 		b, _ := json.Marshal(x)
 		*out = append(*out, Field{Key: orValue(key), Value: string(b)})
 	}
+}
+
+// shown is a string value as the approval page shows it: a value holding a
+// PEM private key (redact.ContainsPrivateKey) only as its size and SHA-256
+// (handoff N-5). The key has already passed through the client; this keeps
+// it off the page and out of the record's fields, while the arguments hash
+// (HashOf, over the real value) still binds it.
+func shown(s string) string {
+	if !redact.ContainsPrivateKey([]byte(s)) {
+		return s
+	}
+	return fmt.Sprintf("private key, not shown: %d bytes, sha256 %s", len(s), SHA256Hex([]byte(s)))
 }
 
 func orValue(k string) string {

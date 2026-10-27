@@ -9,6 +9,9 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/tyler-rich/shell-mcp/internal/redact"
 )
 
 // freshKey is a private key generated for this test run only, PEM-encoded
@@ -69,4 +72,34 @@ func TestFieldsMaskPrivateKey(t *testing.T) {
 	if fs[0].Value != "PRIVATE KEY is mentioned here\n" {
 		t.Fatalf("plain text masked: %q", fs[0].Value)
 	}
+}
+
+// FuzzFieldsMaskPrivateKey: for any string argument, no field the approval
+// page shows holds a PEM private-key header; a value without one is shown
+// as it is (cut only by the field bound), and one with one as its size and
+// SHA-256.
+func FuzzFieldsMaskPrivateKey(f *testing.F) {
+	for _, s := range []string{"", "plain\n", "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n",
+		"x -----BEGIN RSA PRIVATE KEY----- y", "-----BEGIN PGP PRIVATE KEY BLOCK-----", "-----BEGIN private KEY-----", "PRIVATE KEY"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		fs, err := Fields(map[string]any{"content": s, "list": []any{s}}, MaxArgsBytes)
+		if err != nil {
+			return // not representable as JSON text
+		}
+		for _, x := range fs {
+			if redact.ContainsPrivateKey([]byte(x.Value)) {
+				t.Fatalf("field %s shows a private key: %q", x.Key, x.Value)
+			}
+		}
+		if !utf8.ValidString(s) || !redact.ContainsPrivateKey([]byte(s)) {
+			// (Invalid UTF-8 is shown as JSON decodes it, which the loop checked.)
+			return
+		}
+		want := "private key, not shown: " + strconv.Itoa(len(s)) + " bytes, sha256 " + SHA256Hex([]byte(s))
+		if fs[0].Value != want {
+			t.Fatalf("field %q, want %q", fs[0].Value, want)
+		}
+	})
 }

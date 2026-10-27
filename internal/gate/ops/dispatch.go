@@ -85,7 +85,7 @@ func opTable() map[string]opSpec {
 // checked as read here, and the helper checks the command's tier against
 // its max_tier and the forwarded ceiling.
 var privTiers = map[string]policy.Tier{
-	protocol.OpPrivReadFile: policy.TierRead, protocol.OpPrivListDir: policy.TierRead,
+	protocol.OpPrivReadFile: policy.TierRead, protocol.OpPrivHashFile: policy.TierRead, protocol.OpPrivListDir: policy.TierRead,
 	protocol.OpPrivStat: policy.TierRead, protocol.OpPrivListBackups: policy.TierRead,
 	protocol.OpPrivBackupCheck: policy.TierRead, protocol.OpPrivChownPreview: policy.TierRead, protocol.OpPrivChmodPreview: policy.TierRead,
 	protocol.OpPrivDeletePreview: policy.TierRead, protocol.OpPrivRestorePreview: policy.TierRead,

@@ -227,7 +227,7 @@ func TestPrivKeyOwnerRuleStillApplies(t *testing.T) {
 	keyOnDisk(a.g, oldKey)
 	a.g.set("priv_backup_check", backupCheckWith(ruleOnlyApp))
 	env, _ := a.call("shell_priv_write_file", map[string]any{"path": privConf, "content": newKey})
-	if errCode(env) != "path_denied" || env["approval"] != nil || !strings.Contains(envText(env), "example-app") {
+	if errCode(env) != "path_denied" || env["approval"] != nil || !strings.Contains(envText(env), "is not left there as root") {
 		t.Fatalf("rule R over a key: %v", env)
 	}
 	if len(a.privMutatingOps()) != 0 {

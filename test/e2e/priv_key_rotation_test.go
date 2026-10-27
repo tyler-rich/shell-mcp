@@ -173,7 +173,8 @@ func TestPrivKeyRotation(t *testing.T) {
 		k := appDir + "/server.key"
 		rootFile(t, k, keyA, 0o600)
 		env := call("shell_priv_write_file", map[string]any{"path": k, "content": keyB})
-		refusal(t, env, "path_denied", "example-app")
+		// Rule R's own refusal, not the read refusal a key once met first.
+		refusal(t, env, "path_denied", "is not left there as root")
 		noApproval(t, env)
 		if readFile(t, k) != keyA {
 			t.Fatal("changed")
