@@ -158,9 +158,10 @@ func TestPrivKeyRotation(t *testing.T) {
 	var pv struct {
 		PreviewSHA256 string `json:"preview_sha256"`
 	}
-	answers = append(answers, string(f.ok("priv_list_backups", m{"path": p}, nil).Data),
-		string(f.ok("priv_restore_preview", m{"id": w.BackupIDs[0]}, &pv).Data))
-	answers = append(answers, string(f.ok("priv_restore_backup", m{"id": w.BackupIDs[0], "expected_preview_sha256": pv.PreviewSHA256}, nil).Data))
+	listed := f.ok("priv_list_backups", m{"path": p}, nil).Data
+	previewed := f.ok("priv_restore_preview", m{"id": w.BackupIDs[0]}, &pv).Data
+	restored := f.ok("priv_restore_backup", m{"id": w.BackupIDs[0], "expected_preview_sha256": pv.PreviewSHA256}, nil).Data
+	answers = append(answers, string(listed), string(previewed), string(restored))
 	if readFile(t, p) != oldKey {
 		t.Fatal("the restore did not bring the old key back")
 	}
