@@ -635,13 +635,19 @@ func (v *validator) command(field string, rc *rawCommand, maxTier Tier) (Command
 			c.Templates = append(c.Templates, tpl)
 		}
 	}
-	if !ok || !v.review(field, &c, rec, prog.scriptArgs) {
+	if !ok || !v.review(field, &c, rec, &prog) {
 		return c, false
 	}
 	// The gate's GTFOBins list and warning (POLICY §6), for a command that
 	// runs as root (handoff N-16).
 	if w := gpolicy.EscapeWarning(field, true, gpolicy.CanonicalName(filepath.Base(rc.Path)), gpolicy.CanonicalName(filepath.Base(prog.resolved))); w != "" {
 		v.warn("%s", w)
+	}
+	// A script's interpreters get the template's arguments (handoff N-31).
+	for _, s := range prog.scripts {
+		if w := gpolicy.ScriptEscapeWarning(field, true, s.script, s.written, s.interpreter); w != "" {
+			v.warn("%s", w)
+		}
 	}
 	if _, inSystem := pathx.Longest(gpolicy.DefaultReadExec(), c.Interpreter); c.Interpreter != "" && c.Unit == UnitCore && !inSystem {
 		// The core unit's Landlock ruleset grants read+execute on the
@@ -710,7 +716,13 @@ func (v *validator) resolve(field string, rc *rawCommand) (prog program, rec []r
 type program struct {
 	resolved, applet, interpreter string
 	scriptArgs                    []string
+	// scripts is the #! scripts on the way to the binary, outermost first.
+	scripts []scriptStep
 }
+
+// scriptStep is one #! script: its resolved path, the interpreter as its
+// first line writes it, and that interpreter resolved.
+type scriptStep struct{ script, written, interpreter string }
 
 // maxScripts is how many #! scripts the kernel follows in a chain:
 // "up to a limit of four recursions" (execve(2)).
@@ -823,6 +835,7 @@ func (v *validator) resolveProgram(field, p string, rootEquivalent bool, depth i
 			add(r)
 		}
 		prog.interpreter, prog.scriptArgs = ip.resolved, ip.scriptArgs
+		prog.scripts = append([]scriptStep{{script: resolved, written: ct.Interpreter, interpreter: ip.resolved}}, ip.scripts...)
 		if ct.Arg != "" {
 			prog.scriptArgs = append(prog.scriptArgs, ct.Arg)
 		}
@@ -859,15 +872,36 @@ func (v *validator) resolveProgram(field, p string, rootEquivalent bool, depth i
 	return prog, rec, true
 }
 
+// scriptChain describes the #! scripts on the way to a binary: "run by
+// /a/interp", or "run by /a/inner-script, run by /a/interp".
+func scriptChain(prog *program) string {
+	steps := make([]string, 0, len(prog.scripts))
+	for _, s := range prog.scripts {
+		steps = append(steps, "run by "+s.interpreter)
+	}
+	return strings.Join(steps, ", ")
+}
+
 // review applies N-13's acknowledge rule to a resolved command (handoff
-// §2.1): a POLICY §5 group 11–13 binary, a package tool, or find with an
+// §2.1): a POLICY §5 group 11–13 binary, a package tool, a #! script (N-26),
+// or find with an
 // action in any of its templates needs a non-empty acknowledge. It sets the
 // command's list B group and findings, and reports each for check-policy.
-func (v *validator) review(field string, c *Command, rec []recognised, scriptArgs []string) bool {
+func (v *validator) review(field string, c *Command, rec []recognised, prog *program) bool {
+	scriptArgs := prog.scriptArgs
 	var needs []string
 	// A template's tokens, after the arguments of any #! line on the way to
 	// the program (they reach it first).
 	tokens := func(t template.Template) []string { return append(slices.Clone(scriptArgs), t.String()...) }
+	// A script runs its interpreter as root on whatever the script holds,
+	// which the policy does not show (handoff N-26). An interpreter on the
+	// never list was refused before this point; an acknowledge cannot
+	// override that.
+	if len(prog.scripts) > 0 {
+		last := prog.scripts[len(prog.scripts)-1].interpreter
+		needs = append(needs, fmt.Sprintf("%s is a #! script (%s): it runs as root on whatever the script contains, which this policy does not show", c.Resolved, scriptChain(prog)))
+		c.Findings = append(c.Findings, CommandFinding{Category: FindingScript, Program: last, Match: MatchScript})
+	}
 	for _, r := range rec {
 		switch r.class {
 		case ClassListB:
@@ -903,6 +937,8 @@ func (v *validator) review(field string, c *Command, rec []recognised, scriptArg
 	}
 	for _, fd := range c.Findings {
 		switch fd.Category {
+		case FindingScript:
+			v.find("script", c.ID, "%s is a #! script (%s), which runs as root on whatever it contains; acknowledge: %s", c.Resolved, scriptChain(prog), c.Acknowledge)
 		case FindingPackage:
 			v.find("package-tool", c.ID, "%s is the package tool %s (recognised by %s name); it runs outside the package operations' binding; acknowledge: %s", c.Resolved, fd.Program, fd.Match, c.Acknowledge)
 		case FindingExec:

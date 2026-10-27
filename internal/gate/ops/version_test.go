@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -120,4 +121,32 @@ func TestForwardHelperOtherVersion(t *testing.T) {
 // opsServe runs the gate on one raw request line.
 func opsServe(f *fixture, in string, out *bytes.Buffer) int {
 	return ops.Serve(&f.opts, strings.NewReader(in), out)
+}
+
+// TestGateChecksVersionBeforeAnythingElse: "version mismatch means nothing
+// ran" (ARCHITECTURE §4.0) holds because the gate decodes the request's
+// version before it dispatches, applies the policy's tiers to the op, or
+// touches the host: a state-changing request of another version, from a
+// ceiling and into a policy that would run it or refuse it, is
+// protocol_mismatch and nothing happened. The server's and the gate's
+// protocol_mismatch (never outcome_unknown) relies on this order.
+func TestGateChecksVersionBeforeAnythingElse(t *testing.T) {
+	for _, tier := range []string{"destructive", "read"} {
+		f := newFixture(t, tier)
+		for _, v := range []int{1, 3} {
+			t.Run(fmt.Sprintf("%s/v%d", tier, v), func(t *testing.T) {
+				target := filepath.Join(f.write, fmt.Sprintf("created-by-v%d", v))
+				var out bytes.Buffer
+				req := fmt.Sprintf(`{"v":%d,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"mkdir","args":{"path":%q},"timeout_ms":5000}`+"\n", v, target)
+				if code := opsServe(f, req, &out); code != 0 {
+					t.Fatalf("exit %d", code)
+				}
+				var r v1Response
+				if err := json.Unmarshal(out.Bytes(), &r); err != nil || r.OK || r.Error == nil || r.Error.Code != "protocol_mismatch" {
+					t.Fatalf("answer %q, want protocol_mismatch (a policy tier refusal or a success means the request was handled)", out.String())
+				}
+				absent(t, target)
+			})
+		}
+	}
 }

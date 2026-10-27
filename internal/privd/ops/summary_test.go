@@ -244,11 +244,14 @@ func TestPrivPolicySummaryNothingPrivate(t *testing.T) {
 		canaryPowAck  = "canary-ack-reboot-a41e"
 		canaryPersAck = "canary-ack-persistence-0d3b"
 		canaryPowerOp = "canary-ack-power-section-9f62"
+		canaryScrAck  = "canary-ack-script-6b8a"
 	)
 	var pers string
 	f := newFixture(t, broadUsers(), func(f *fixture, y *string) {
 		gatetest.WriteFile(f.t, filepath.Join(f.d, "bin", "dpkg"), "invented package tool\n", 0o755)
 		gatetest.WriteFile(f.t, filepath.Join(f.d, "bin", "reboot"), "invented power tool\n", 0o755)
+		gatetest.WriteFile(f.t, filepath.Join(f.d, "bin", "example-interp"), "invented interpreter\n", 0o755)
+		gatetest.WriteFile(f.t, filepath.Join(f.d, "bin", "renew"), "#!"+filepath.Join(f.d, "bin", "example-interp")+"\n", 0o755)
 		pers = filepath.Join(f.d, "etc", "example-app.d")
 		gatetest.Mkdir(f.t, pers, 0o755)
 		*y = strings.Replace(*y, `  deny: ["`+f.read+`/secrets/**"]`,
@@ -267,11 +270,16 @@ func TestPrivPolicySummaryNothingPrivate(t *testing.T) {
     unit: broad
     acknowledge: %q
     templates: [["--help"]]
+  - id: x-script
+    path: %s
+    tier: read
+    acknowledge: %q
+    templates: [[]]
 packages:
-`, filepath.Join(f.d, "bin", "dpkg"), canaryPkgAck, filepath.Join(f.d, "bin", "reboot"), canaryPowAck), 1)
+`, filepath.Join(f.d, "bin", "dpkg"), canaryPkgAck, filepath.Join(f.d, "bin", "reboot"), canaryPowAck, filepath.Join(f.d, "bin", "renew"), canaryScrAck), 1)
 	})
 	s, raw, _ := f.summary()
-	for _, c := range []string{canaryDeny, canaryDeny2, canaryPkgAck, canaryPowAck, canaryPersAck, canaryPowerOp, "secrets/**", "acknowledge"} {
+	for _, c := range []string{canaryDeny, canaryDeny2, canaryPkgAck, canaryPowAck, canaryPersAck, canaryPowerOp, canaryScrAck, "secrets/**", "acknowledge"} {
 		if strings.Contains(raw, c) {
 			t.Errorf("the summary carries %q: %s", c, raw)
 		}
@@ -283,7 +291,8 @@ packages:
 	for _, fd := range s.Findings {
 		got[fd.CommandID] = fd.Category + " " + fd.Program + " " + fd.Match
 	}
-	if got["x-dpkg"] != "package dpkg written" || got["x-reboot"] != "power reboot written" || len(got) != 2 {
+	if got["x-dpkg"] != "package dpkg written" || got["x-reboot"] != "power reboot written" || len(got) != 3 ||
+		got["x-script"] != "script "+filepath.Join(f.d, "bin", "example-interp")+" script" {
 		t.Fatalf("findings %+v", s.Findings)
 	}
 }

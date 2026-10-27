@@ -16,12 +16,16 @@ All notable changes to shell-mcp. Versions follow [Semantic Versioning](https://
 **Changed**
 
 - **Protocol version 2** (ARCHITECTURE §4.0). A server, gate or helper of another version refuses with `protocol_mismatch`, naming both versions and which side to upgrade; a 0.1.0 server or gate gets that message in its own version's frame. A refusal of the version is never reported as `outcome_unknown`. The session hello is unchanged.
+- **Privileged `#!` scripts need an acknowledge** (handoff N-26): a command in the privileged policy whose program is a `#!` script (found by its content, so a symlink or a renamed copy counts) is refused at load unless it carries a non-empty `acknowledge`, the existing key. The refusal names the script and its interpreter; an interpreter on the never list is still refused, acknowledged or not. `check-policy` prints `REVIEW script` and the acknowledge on the command's line, and `priv_policy` reports a `script` finding. The gate is unchanged: its scripts run as the service account inside its sandbox, and keep the WARN.
+- **The GTFOBins warning checks a script's interpreter** (handoff N-31): in the gate's and the helper's `check-policy`, a `#!` script run by a listed program (`make`, `sed`, …) gets the warning naming both, by the name the `#!` line writes and the name it resolves to, on every step of the script chain.
+- **The order of the version check is a stated requirement** (ARCHITECTURE §4.0): every peer checks the version of a request or response before any other action on it, which is what makes "a version mismatch means nothing ran" true. New tests in the gate and the helper hold it.
 
 **Upgrade notes**
 
 - **Upgrade the server, the gate and the helper together.** A 0.1.0 server and a gate of this release, or the reverse, refuse each other with `protocol_mismatch` (the message says which to upgrade); so do a gate and a helper of different releases.
 - **Regenerate the helper's units after upgrading** (`shell-mcp-privd units --policy /etc/shell-mcp/privileged.yaml --out /etc/systemd/system`, then `systemctl daemon-reload`): the new units carry `MemoryMax=`, `MemorySwapMax=0` and `OOMPolicy=continue` derived from `limits.max_memory_mb`. A gate or privileged policy that sets `limits.max_memory_mb` is refused by a 0.1.0 gate or helper (unknown key). Commands that need more than 1024 MiB of data (for example `jq` on very large files) need the key raised.
 - A gate policy that uses `{path:read:fd}` is refused by a 0.1.0 gate (unknown placeholder).
+- **A privileged policy with a `#!` script and no `acknowledge` on its command refuses to load** (the helper will not start on it, and `check-policy` says which command). Add a one-line `acknowledge` to each such command after reviewing the script; check the policy first with `shell-mcp-privd check-policy --policy /etc/shell-mcp/privileged.yaml`.
 
 ## [0.1.0]
 
