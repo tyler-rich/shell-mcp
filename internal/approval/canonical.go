@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/tyler-rich/shell-mcp/internal/redact"
@@ -65,8 +66,8 @@ type Field struct {
 }
 
 // Fields flattens v's canonical JSON into fields: objects by key (sorted),
-// arrays by index, strings as they are (one holding a private key only as
-// its size and SHA-256: shown), other values as JSON text. A value
+// arrays by index, strings as they are (each private-key block in one
+// only as its size and SHA-256: shown), other values as JSON text. A value
 // longer than MaxFieldBytes is cut (on a rune boundary) and marked, and at
 // most maxTotal bytes of values are kept, then one field says what was left
 // out.
@@ -130,16 +131,29 @@ func flatten(key string, v any, out *[]Field) {
 	}
 }
 
-// shown is a string value as the approval page shows it: a value holding a
-// PEM private key (redact.ContainsPrivateKey) only as its size and SHA-256
-// (handoff N-5). The key has already passed through the client; this keeps
-// it off the page and out of the record's fields, while the arguments hash
+// shown is a string value as the approval page shows it (handoff N-5):
+// each PEM private-key block (redact.PrivateKeyBlocks: from its BEGIN line
+// through the END line of the same label, or to the end of the value when
+// there is none) only as that block's size and SHA-256, and everything
+// around it as it is, so a key cannot hide the rest of a file from the
+// approver. The key has already passed through the client; this keeps it
+// off the page and out of the record's fields, while the arguments hash
 // (HashOf, over the real value) still binds it.
 func shown(s string) string {
-	if !redact.ContainsPrivateKey([]byte(s)) {
+	blocks := redact.PrivateKeyBlocks(s)
+	if len(blocks) == 0 {
 		return s
 	}
-	return fmt.Sprintf("private key, not shown: %d bytes, sha256 %s", len(s), SHA256Hex([]byte(s)))
+	var b strings.Builder
+	last := 0
+	for _, r := range blocks {
+		block := s[r[0]:r[1]]
+		b.WriteString(s[last:r[0]])
+		fmt.Fprintf(&b, "private key, not shown: %d bytes, sha256 %s", len(block), SHA256Hex([]byte(block)))
+		last = r[1]
+	}
+	b.WriteString(s[last:])
+	return b.String()
 }
 
 func orValue(k string) string {
