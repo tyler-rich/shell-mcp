@@ -155,12 +155,11 @@ func TestPrivKeyRotation(t *testing.T) {
 	}
 	// A second write bound to the old hash is refused: the file changed.
 	f.fail("priv_write_file", m{"path": p, "content_b64": b64(oldKey), "expected_sha256": h.SHA256}, "exists")
-	answers = append(answers, string(f.ok("priv_list_backups", m{"path": p}, nil).Data))
-	answers = append(answers, string(f.ok("priv_restore_preview", m{"id": w.BackupIDs[0]}, nil).Data))
 	var pv struct {
 		PreviewSHA256 string `json:"preview_sha256"`
 	}
-	f.ok("priv_restore_preview", m{"id": w.BackupIDs[0]}, &pv)
+	answers = append(answers, string(f.ok("priv_list_backups", m{"path": p}, nil).Data),
+		string(f.ok("priv_restore_preview", m{"id": w.BackupIDs[0]}, &pv).Data))
 	answers = append(answers, string(f.ok("priv_restore_backup", m{"id": w.BackupIDs[0], "expected_preview_sha256": pv.PreviewSHA256}, nil).Data))
 	if readFile(t, p) != oldKey {
 		t.Fatal("the restore did not bring the old key back")
