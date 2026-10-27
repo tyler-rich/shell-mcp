@@ -86,7 +86,7 @@ What makes it different from a shell over SSH: no command line is ever interpret
 | `shell_move_path` | only with `operator` in `SHELL_MCP_APPROVAL_TIERS` | Renames a file or directory within one write root of the target policy (same filesystem only). |
 | `shell_run_command` | by the command's tier | Runs a read- or operator-tier command declared in the target policy with arguments matching one of its templates and optional standard input, and returns its exit status and redacted, size-capped output. |
 | `shell_set_permissions` | only with `operator` in `SHELL_MCP_APPROVAL_TIERS` | Sets the permission bits of a file or directory under the target policy's write roots, and returns the old and new mode. |
-| `shell_write_file` | only with `operator` in `SHELL_MCP_APPROVAL_TIERS` | Atomically replaces or creates a text file under the target policy's write roots and verifies it by reading it back, returning the old and new SHA-256 and line counts. |
+| `shell_write_file` | only with `operator` in `SHELL_MCP_APPROVAL_TIERS` | Atomically replaces or creates a text file under the target policy's write roots and verifies it by reading it back, returning the old and new SHA-256 and line counts. Content passes through the client and its model provider, so generate private keys on the host instead. |
 
 #### Destructive tools: `admin` only (3)
 
@@ -116,7 +116,7 @@ What makes it different from a shell over SSH: no command line is ever interpret
 | `shell_priv_set_permissions` | operator | always | Sets the mode of a file or directory as root (with recursive, also of everything under it) within the host's privileged write roots, exactly as its approved preview listed; returns the counts and the old and new mode. |
 | `shell_priv_update_package_index` | operator | always | Updates, as root, the host's package index from its configured sources; returns apt-get's exit status and redacted, size-capped output. |
 | `shell_priv_upgrade_packages` | operator | always | Upgrades, as root, exactly the packages its approved preview listed, each to its approved version, never installing what was not approved nor removing anything; returns what dpkg shows was upgraded. |
-| `shell_priv_write_file` | operator | always | Atomically writes a text file as root within the host's privileged write roots, backing up what it replaces and verifying by read-back; returns the hashes, line counts, mode, owner and backup ids. |
+| `shell_priv_write_file` | operator | always | Atomically writes a text file as root within the host's privileged write roots, backing up what it replaces and verifying by read-back; returns the hashes, line counts, mode, owner and backup ids. Content passes through the client and its model provider, so generate private keys on the host instead. |
 | `shell_priv_delete_path` | destructive | always | Deletes, as root, a file, an empty directory, or with recursive a directory tree within the host's privileged write roots, exactly as its approved preview listed it, after backing it up; returns the counts and the backup ids. |
 | `shell_priv_reboot_host` | destructive | always | Reboots or powers off the host as root: answers at once with the time the action will be requested from logind, 60 seconds later, unless it is cancelled, or blocked by a package operation or an inhibitor lock, first. |
 | `shell_priv_remove_packages` | destructive | always | Removes, as root, allow-listed packages exactly as their approved preview listed them, keeping their configuration files; returns what dpkg shows was removed. |

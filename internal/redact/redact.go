@@ -7,6 +7,7 @@ package redact
 import (
 	"bytes"
 	"regexp"
+	"strings"
 )
 
 // Mask replaces every redacted value.
@@ -18,6 +19,9 @@ var (
 	// (?s) lets . cross line breaks, so LF and CRLF input behave alike.
 	pemBlock = regexp.MustCompile(`(?s)-{5}BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-{5}.*?(?:-{5}END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-{5}|\z)`)
 	pemHead  = regexp.MustCompile(`-{5}BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-{5}`)
+	// pemHead with the label captured (the same matches): the END line that
+	// closes a block names the same label.
+	pemLabeled = regexp.MustCompile(`-{5}BEGIN ([A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?)-{5}`)
 	// The value of an Authorization or Proxy-Authorization header, to the end
 	// of the line (a CR ends it too).
 	authHeader = regexp.MustCompile(`(?i)\b((?:proxy-)?authorization[ \t]*:[ \t]*)[^\r\n]*`)
@@ -88,4 +92,28 @@ func ContainsPrivateKey(b []byte) bool {
 		return false
 	}
 	return pemHead.Match(b)
+}
+
+// PrivateKeyBlocks returns the byte ranges [start, end) of the PEM
+// private-key blocks in s, in order: each from its BEGIN header (the one
+// ContainsPrivateKey detects) through the first END line of the same label
+// after it, or, when there is none, to the end of s, so that a block whose
+// END is missing or names another label is never taken to end early.
+func PrivateKeyBlocks(s string) [][2]int {
+	var out [][2]int
+	for off := 0; off < len(s); {
+		m := pemLabeled.FindStringSubmatchIndex(s[off:])
+		if m == nil {
+			break
+		}
+		start, head := off+m[0], off+m[1]
+		end := len(s)
+		closing := "-----END " + s[off+m[2]:off+m[3]] + "-----"
+		if i := strings.Index(s[head:], closing); i >= 0 {
+			end = head + i + len(closing)
+		}
+		out = append(out, [2]int{start, end})
+		off = end
+	}
+	return out
 }

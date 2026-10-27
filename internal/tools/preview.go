@@ -182,7 +182,7 @@ func (d *Deps) srcDstPreview(ctx context.Context, in *srcDstIn, target string, i
 		if re := refuseDestination(dst, srcType, isCopy, in.Overwrite); re != nil {
 			return nil, re
 		}
-		if cur, f, e = d.boundFilePreview(ctx, target, protocol.OpReadFile, "gate", dst, &acc); e != nil {
+		if cur, f, e = d.boundFilePreview(ctx, target, dst, &acc); e != nil {
 			return nil, e
 		}
 		delete(cur, "lines")

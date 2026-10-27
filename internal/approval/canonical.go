@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"unicode/utf8"
+
+	"github.com/tyler-rich/shell-mcp/internal/redact"
 )
 
 // CanonicalJSON returns v's canonical JSON: v marshalled, decoded into
@@ -63,7 +66,8 @@ type Field struct {
 }
 
 // Fields flattens v's canonical JSON into fields: objects by key (sorted),
-// arrays by index, strings as they are, other values as JSON text. A value
+// arrays by index, strings as they are (each private-key block in one
+// only as its size and SHA-256: shown), other values as JSON text. A value
 // longer than MaxFieldBytes is cut (on a rune boundary) and marked, and at
 // most maxTotal bytes of values are kept, then one field says what was left
 // out.
@@ -118,13 +122,38 @@ func flatten(key string, v any, out *[]Field) {
 			flatten(key+"["+strconv.Itoa(i)+"]", e, out)
 		}
 	case string:
-		*out = append(*out, Field{Key: orValue(key), Value: x})
+		*out = append(*out, Field{Key: orValue(key), Value: shown(x)})
 	case nil:
 		*out = append(*out, Field{Key: orValue(key), Value: "null"})
 	default:
 		b, _ := json.Marshal(x)
 		*out = append(*out, Field{Key: orValue(key), Value: string(b)})
 	}
+}
+
+// shown is a string value as the approval page shows it (handoff N-5):
+// each PEM private-key block (redact.PrivateKeyBlocks: from its BEGIN line
+// through the END line of the same label, or to the end of the value when
+// there is none) only as that block's size and SHA-256, and everything
+// around it as it is, so a key cannot hide the rest of a file from the
+// approver. The key has already passed through the client; this keeps it
+// off the page and out of the record's fields, while the arguments hash
+// (HashOf, over the real value) still binds it.
+func shown(s string) string {
+	blocks := redact.PrivateKeyBlocks(s)
+	if len(blocks) == 0 {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for _, r := range blocks {
+		block := s[r[0]:r[1]]
+		b.WriteString(s[last:r[0]])
+		fmt.Fprintf(&b, "private key, not shown: %d bytes, sha256 %s", len(block), SHA256Hex([]byte(block)))
+		last = r[1]
+	}
+	b.WriteString(s[last:])
+	return b.String()
 }
 
 func orValue(k string) string {

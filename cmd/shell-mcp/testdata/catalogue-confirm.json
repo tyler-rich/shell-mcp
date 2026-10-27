@@ -911,7 +911,7 @@
       "readOnlyHint": false,
       "title": "Write file as root"
     },
-    "description": "Atomically writes a text file as root within the host's privileged write roots, backing up what it replaces and verifying by read-back; returns the hashes, line counts, mode, owner and backup ids.",
+    "description": "Atomically writes a text file as root within the host's privileged write roots, backing up what it replaces and verifying by read-back; returns the hashes, line counts, mode, owner and backup ids. Content passes through the client and its model provider, so generate private keys on the host instead.",
     "input_schema_sha256": "984832f955db2c45207ba60b86df5dc50848d5094a4aa687192333cd702ab840",
     "output_schema_sha256": "8563e5a2f984f7df9290d702e45124f039f50ccc92fc433bf6472d78c10bd245",
     "requires_user_interaction": true
@@ -1059,7 +1059,7 @@
       "readOnlyHint": false,
       "title": "Write file"
     },
-    "description": "Atomically replaces or creates a text file under the target policy's write roots and verifies it by reading it back, returning the old and new SHA-256 and line counts.",
+    "description": "Atomically replaces or creates a text file under the target policy's write roots and verifies it by reading it back, returning the old and new SHA-256 and line counts. Content passes through the client and its model provider, so generate private keys on the host instead.",
     "input_schema_sha256": "60317ac1fc958b9cf21b389b383c5fc99c02305852476df475257d0b76742dde",
     "output_schema_sha256": "9d01f4fb70b983e5bb6d30c16a2eb024f802db37270a97a9b40ba131d2dba096",
     "requires_user_interaction": true
