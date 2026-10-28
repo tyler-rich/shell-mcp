@@ -24,7 +24,9 @@ const (
 	sniffTextBytes   = 8 << 10   // binary detection
 	defaultReadBytes = 64 << 10  // read_file default max_bytes
 	maxTailLines     = 5000      // read_file tail_lines ceiling
-	maxHashBytes     = 256 << 20 // whole-file SHA-256 only up to this size
+	maxHashBytes     = 256 << 20 // whole-file SHA-256 (and key search) only up to this size
+	keyLookback      = 1 << 20   // above that size: key search before a read window
+	keyScanOverlap   = 4 << 10   // bytes kept between chunks, so a header cannot straddle one unseen
 	defaultFindDepth = 4
 	defaultFindLimit = 200
 )
@@ -125,9 +127,52 @@ func validPrefix(b []byte) []byte {
 	return b
 }
 
-// ReadFile reads the regular file p. Files whose first 64 KiB contain a
-// private-key header are refused; binary files (NUL or invalid UTF-8 in the
-// first 8 KiB) return size and SHA-256 only.
+// keyScan is an io.Writer that notes whether the bytes written through it hold
+// a private-key header, including one split between two writes.
+type keyScan struct {
+	tail  []byte
+	found bool
+}
+
+func (k *keyScan) Write(p []byte) (int, error) {
+	if k.found {
+		return len(p), nil
+	}
+	buf := append(k.tail, p...) //nolint:gocritic // appendAssign: tail is replaced below
+	if redact.ContainsPrivateKey(buf) {
+		k.found = true
+		k.tail = nil
+		return len(p), nil
+	}
+	k.tail = bytes.Clone(buf[max(0, len(buf)-keyScanOverlap):])
+	return len(p), nil
+}
+
+// holdsKey reports whether file holds a private-key header in [from, to) or,
+// for the first sniffKeyBytes, always. Both ranges are clamped to the file.
+func holdsKey(file io.ReaderAt, size, from, to int64) (bool, error) {
+	k := &keyScan{}
+	for _, r := range [][2]int64{{0, min(size, sniffKeyBytes)}, {max(0, from-keyLookback), min(size, to)}} {
+		if r[1] <= r[0] {
+			continue
+		}
+		if _, err := io.Copy(k, io.NewSectionReader(file, r[0], r[1]-r[0])); err != nil {
+			return false, mapErr(err)
+		}
+		if k.found {
+			return true, nil
+		}
+		k.tail = nil
+	}
+	return false, nil
+}
+
+// ReadFile reads the regular file p. A file holding a private-key header
+// anywhere is refused, so a window that starts inside a key's body cannot
+// return the body without its header (S7-1): up to maxHashBytes the
+// whole file is searched, in the same pass as its SHA-256; above that the
+// first 64 KiB, the window and the keyLookback bytes before it. Binary files
+// (NUL or invalid UTF-8 in the first 8 KiB) return size and SHA-256 only.
 func (f *FS) ReadFile(p string, o ReadOptions) (ReadResult, error) {
 	if o.MaxBytes == 0 {
 		o.MaxBytes = min(defaultReadBytes, f.cfg.Limits.MaxReadBytes)
@@ -172,16 +217,28 @@ func (f *FS) ReadFile(p string, o ReadOptions) (ReadResult, error) {
 	if _, err := io.ReadFull(io.NewSectionReader(file, 0, size), head); err != nil {
 		return ReadResult{}, mapErr(err)
 	}
-	if redact.ContainsPrivateKey(head) {
-		return ReadResult{}, errf(protocol.CodePathDenied, "file contains a private key")
-	}
 	res := ReadResult{Path: p, Size: size}
 	if size <= maxHashBytes {
-		h := sha256.New()
-		if _, err := io.Copy(h, io.NewSectionReader(file, 0, size)); err != nil {
+		h, k := sha256.New(), &keyScan{}
+		if _, err := io.Copy(io.MultiWriter(h, k), io.NewSectionReader(file, 0, size)); err != nil {
 			return ReadResult{}, mapErr(err)
 		}
+		if k.found {
+			return ReadResult{}, errf(protocol.CodePathDenied, "file contains a private key")
+		}
 		res.SHA256 = hex.EncodeToString(h.Sum(nil))
+	} else {
+		from, to := o.Offset, o.Offset+int64(o.MaxBytes)
+		if o.TailLines > 0 {
+			from, to = size-int64(o.MaxBytes), size
+		}
+		found, err := holdsKey(file, size, from, to)
+		if err != nil {
+			return ReadResult{}, err
+		}
+		if found {
+			return ReadResult{}, errf(protocol.CodePathDenied, "file contains a private key")
+		}
 	}
 	sniff := head[:min(len(head), sniffTextBytes)]
 	if len(sniff) < len(head) || int64(len(head)) < size {
@@ -287,11 +344,11 @@ func (f *FS) HashFile(p string) (HashResult, error) {
 	if _, err := io.ReadFull(io.NewSectionReader(file, 0, size), head); err != nil {
 		return HashResult{}, mapErr(err)
 	}
-	h := sha256.New()
-	if _, err := io.Copy(h, io.NewSectionReader(file, 0, size)); err != nil {
+	h, k := sha256.New(), &keyScan{}
+	if _, err := io.Copy(io.MultiWriter(h, k), io.NewSectionReader(file, 0, size)); err != nil {
 		return HashResult{}, mapErr(err)
 	}
-	res := HashResult{Path: p, Size: size, SHA256: hex.EncodeToString(h.Sum(nil)), PrivateKey: redact.ContainsPrivateKey(head)}
+	res := HashResult{Path: p, Size: size, SHA256: hex.EncodeToString(h.Sum(nil)), PrivateKey: k.found}
 	sniff := head[:min(len(head), sniffTextBytes)]
 	if len(sniff) < len(head) || int64(len(head)) < size {
 		sniff = validPrefix(sniff)

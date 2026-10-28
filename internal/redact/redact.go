@@ -1,7 +1,7 @@
 // Package redact is the shared output redaction used by the server, gate and
-// helper: PEM private-key blocks (including a header whose END line was cut
-// off by truncation), Authorization header values, Bearer tokens, and
-// configured RE2 patterns.
+// helper: PEM private-key blocks (to the first END line of the BEGIN line's
+// label, or to the end of the input when there is none, as after truncation),
+// Authorization header values, Bearer tokens, and configured RE2 patterns.
 package redact
 
 import (
@@ -14,11 +14,7 @@ import (
 const Mask = "[REDACTED]"
 
 var (
-	// A private-key block, up to its END line or, when the END line is
-	// missing (for example after truncation), to the end of the input.
-	// (?s) lets . cross line breaks, so LF and CRLF input behave alike.
-	pemBlock = regexp.MustCompile(`(?s)-{5}BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-{5}.*?(?:-{5}END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-{5}|\z)`)
-	pemHead  = regexp.MustCompile(`-{5}BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-{5}`)
+	pemHead = regexp.MustCompile(`-{5}BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-{5}`)
 	// pemHead with the label captured (the same matches): the END line that
 	// closes a block names the same label.
 	pemLabeled = regexp.MustCompile(`-{5}BEGIN ([A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?)-{5}`)
@@ -47,7 +43,7 @@ func New(extra []*regexp.Regexp) *Redactor {
 
 // Bytes returns b with every secret replaced by Mask. b is not modified.
 func (r *Redactor) Bytes(b []byte) []byte {
-	out := pemBlock.ReplaceAll(b, pemRepl)
+	out := maskKeyBlocks(b)
 	out = authHeader.ReplaceAll(out, keepRepl)
 	out = bearer.ReplaceAll(out, keepRepl)
 	if r != nil {
@@ -56,6 +52,24 @@ func (r *Redactor) Bytes(b []byte) []byte {
 		}
 	}
 	return out
+}
+
+// maskKeyBlocks returns b with each private-key block (PrivateKeyBlocks, the
+// finder the approval page's masking uses too) replaced by Mask. b is not
+// modified; without a key header it is returned as it is.
+func maskKeyBlocks(b []byte) []byte {
+	if !ContainsPrivateKey(b) {
+		return b
+	}
+	s := string(b)
+	out := make([]byte, 0, len(b))
+	last := 0
+	for _, r := range PrivateKeyBlocks(s) {
+		out = append(out, s[last:r[0]]...)
+		out = append(out, pemRepl...)
+		last = r[1]
+	}
+	return append(out, s[last:]...)
 }
 
 // String is Bytes for strings.

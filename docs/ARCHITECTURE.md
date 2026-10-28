@@ -50,7 +50,7 @@ Python remains viable for the server alone, but one language for all three binar
 | `internal/gateclient` | Open a session, request exec `shell-mcp-gate/1`, write one request (≤ 2 MiB), read one response (≤ 4 MiB), enforce the tool's time budget, map gate errors to envelope codes. |
 | `internal/tools` | Registry: `Register(tool, tier)`; at startup registers tiers allowed by the profile minus `SHELL_MCP_DISABLE_TOOLS`. One file per domain. Tools validate inputs, call the gate, shape results — no host logic. |
 | `internal/envelope` | Uniform result builders; the closed error-code set. |
-| `internal/redact` | Shared with the gate: PEM private-key blocks, bearer/`Authorization`, configured secrets, `key=value` secret patterns. |
+| `internal/redact` | Shared with the gate: PEM private-key blocks (`PrivateKeyBlocks`, also used by the approval page; each ends at the END line of its own label), bearer/`Authorization`, configured secrets, `key=value` secret patterns. |
 | `internal/protocol` | Shared wire types, protocol version constant (and the version refusals both sides send, §4), size limits. |
 
 ### Gate (`cmd/shell-mcp-gate`)
