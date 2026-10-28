@@ -3,6 +3,7 @@ package redact
 import (
 	"bytes"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -79,6 +80,75 @@ func FuzzPrivateKeyBlocks(f *testing.F) {
 		}
 		if ContainsPrivateKey([]byte(s[last:])) {
 			t.Fatalf("%q: a header after the blocks", s)
+		}
+	})
+}
+
+// refKeyBlocks is an independent reference for the key-block rule (a header
+// "-----BEGIN <label>-----" whose label ends in PRIVATE KEY or PRIVATE KEY
+// BLOCK; the block runs through the first "-----END <label>-----" after it, or
+// to the end of s), written without the package's regexps.
+func refKeyBlocks(s string) [][2]int {
+	var out [][2]int
+	for off := 0; off < len(s); {
+		start, head, label := -1, 0, ""
+		for i := off; i+len("-----BEGIN ") <= len(s); i++ {
+			if !strings.HasPrefix(s[i:], "-----BEGIN ") {
+				continue
+			}
+			j := i + len("-----BEGIN ")
+			k := j
+			for k < len(s) && (s[k] == ' ' || s[k] >= 'A' && s[k] <= 'Z' || s[k] >= '0' && s[k] <= '9') {
+				k++
+			}
+			l := s[j:k]
+			if strings.HasPrefix(s[k:], "-----") && (strings.HasSuffix(l, "PRIVATE KEY") || strings.HasSuffix(l, "PRIVATE KEY BLOCK")) {
+				start, head, label = i, k+len("-----"), l
+				break
+			}
+		}
+		if start < 0 {
+			break
+		}
+		end := len(s)
+		if i := strings.Index(s[head:], "-----END "+label+"-----"); i >= 0 {
+			end = head + i + len("-----END "+label+"-----")
+		}
+		out = append(out, [2]int{start, end})
+		off = end
+	}
+	return out
+}
+
+// FuzzRedactKeyBlocks: for input with no Authorization or Bearer text, the
+// output is the input with each key block replaced by Mask and everything
+// else unchanged, so no key body survives and no text outside a block is
+// touched; Bytes agrees with the reference on where the blocks are.
+func FuzzRedactKeyBlocks(f *testing.F) {
+	begin, end := "-----BEGIN ", "-----END "
+	pk := "PRIVATE " + "KEY-----"
+	for _, s := range []string{"", "plain", "a" + begin + "RSA " + pk + "BODY1" + end + "RSA " + pk + "z",
+		begin + "RSA " + pk + "BODY1" + end + "EC " + pk + "BODY2" + end + "RSA " + pk + "tail",
+		begin + "RSA " + pk + "BODY1" + end + "EC " + pk + "BODY2",
+		begin + "RSA " + pk + "B" + end + "RSA " + pk + "m" + begin + "EC " + pk + "C" + end + "EC " + pk,
+		begin + pk + "A" + begin + "EC " + pk + "B" + end + pk} {
+		f.Add(s)
+	}
+	r := New(nil)
+	f.Fuzz(func(t *testing.T, s string) {
+		if authHeader.MatchString(s) || bearer.MatchString(s) {
+			t.Skip()
+		}
+		var want strings.Builder
+		last := 0
+		for _, b := range refKeyBlocks(s) {
+			want.WriteString(s[last:b[0]])
+			want.WriteString(Mask)
+			last = b[1]
+		}
+		want.WriteString(s[last:])
+		if got := r.String(s); got != want.String() {
+			t.Fatalf("%q: got %q, want %q", s, got, want.String())
 		}
 	})
 }
