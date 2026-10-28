@@ -58,7 +58,7 @@ func BenchmarkLoadManyCommands(b *testing.B) {
 		if count == 250 {
 			break
 		}
-		one := fmt.Sprintf("  - id: c-%d\n    path: %s\n    tier: operator\n    acknowledge: \"invented review note\"\n    templates: [[\"--version\"]]\n", count, "/usr/bin/"+e.Name())
+		one := fmt.Sprintf("  - id: c-%d\n    path: %s\n    tier: operator\n    acknowledge: \"invented review note\"\n    templates: [[\"--version\"]]\n", count, "/usr/bin/" + e.Name())
 		if _, err := policy.Parse([]byte(head+"commands:\n"+one), "/etc/shell-mcp/privileged.yaml", benchOpts()); err != nil {
 			continue
 		}
