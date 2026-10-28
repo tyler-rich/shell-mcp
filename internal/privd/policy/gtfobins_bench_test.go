@@ -35,7 +35,7 @@ func benchOpts() *policy.LoadOptions {
 }
 
 func BenchmarkLoadExamplePolicy(b *testing.B) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", "privileged", "privileged.yaml")) //nolint:gosec // G304: this repository's example file
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", "privileged", "privileged.yaml"))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func BenchmarkLoadManyCommands(b *testing.B) {
 		if count == 250 {
 			break
 		}
-		one := fmt.Sprintf("  - id: c-%d\n    path: %s\n    tier: operator\n    acknowledge: \"invented review note\"\n    templates: [[\"--version\"]]\n", count, filepath.Join("/usr/bin", e.Name()))
+		one := fmt.Sprintf("  - id: c-%d\n    path: %s\n    tier: operator\n    acknowledge: \"invented review note\"\n    templates: [[\"--version\"]]\n", count, "/usr/bin/"+e.Name())
 		if _, err := policy.Parse([]byte(head+"commands:\n"+one), "/etc/shell-mcp/privileged.yaml", benchOpts()); err != nil {
 			continue
 		}

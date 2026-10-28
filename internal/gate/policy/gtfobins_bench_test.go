@@ -55,7 +55,7 @@ func manyCommands(b *testing.B, n int) []byte {
 		if count == n {
 			break
 		}
-		p := filepath.Join("/usr/bin", e.Name())
+		p := "/usr/bin/"+e.Name()
 		one := fmt.Sprintf("  - id: c-%d\n    path: %s\n    tier: read\n    templates: [[\"--version\"]]\n", count, p)
 		if _, err := policy.Parse([]byte("version: 1\nmax_tier: read\ncommands:\n"+one), "/etc/shell-mcp/p.yaml", benchOpts()); err != nil {
 			continue
