@@ -38,6 +38,13 @@ func fakeReadSHA(content, sha string) string {
 	return fmt.Sprintf(`{"path":"/srv/app/config/app.yaml","size":%d,"sha256":%q,"binary":false,"content":%q,"offset":0,"truncated":false}`, len(content), sha, content)
 }
 
+// fakeHashSHA is hash_file's answer (handoff N-5, the gate's half): never
+// content.
+func fakeHashSHA(content, sha string, key bool) string {
+	return fmt.Sprintf(`{"path":"/srv/app/config/app.yaml","size":%d,"sha256":%q,"binary":false,"lines":%d,"private_key":%v}`,
+		len(content), sha, countLines([]byte(content)), key)
+}
+
 func (g *recordingGate) set(op string, r gateReply) { //nolint:gocritic // the fake gate stores replies by value
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -55,6 +62,7 @@ func approvalReplies() map[string]gateReply {
 	r := operatorReplies()
 	r["stat"] = gateReply{data: fakeFileStat}
 	r["read_file"] = gateReply{data: fakeReadSHA("key: value\n", shaOld)}
+	r["hash_file"] = gateReply{data: fakeHashSHA("key: value\n", shaOld, false)}
 	return r
 }
 
@@ -232,8 +240,9 @@ func TestApprovalApprovedRunsOnce(t *testing.T) {
 func TestApprovalAbsentPreviewExpectsAbsent(t *testing.T) {
 	for name, set := range map[string]func(*recordingGate){
 		"absent at stat": func(g *recordingGate) { g.set("stat", gateReply{code: "not_found", msg: "no such file"}) },
-		"removed before read_file": func(g *recordingGate) {
+		"removed before the hash": func(g *recordingGate) {
 			g.set("read_file", gateReply{code: "not_found", msg: "no such file"})
+			g.set("hash_file", gateReply{code: "not_found", msg: "no such file"})
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -326,7 +335,10 @@ func TestApprovalDefaultsHashTheSame(t *testing.T) {
 
 func TestApprovalFreshPreviewChanged(t *testing.T) {
 	for name, change := range map[string]func(*recordingGate){
-		"content": func(g *recordingGate) { g.set("read_file", gateReply{data: fakeReadSHA("key: other\n", shaNew)}) },
+		"content": func(g *recordingGate) {
+			g.set("read_file", gateReply{data: fakeReadSHA("key: other\n", shaNew)})
+			g.set("hash_file", gateReply{data: fakeHashSHA("key: other\n", shaNew, false)})
+		},
 		"mode": func(g *recordingGate) {
 			g.set("stat", gateReply{data: strings.Replace(fakeFileStat, `"0640"`, `"0600"`, 1)})
 		},
@@ -626,18 +638,21 @@ func TestApprovalPreviews(t *testing.T) {
 		ops     string
 		want    map[string]string
 	}{
-		{"shell_write_file", writeArgs, nil, "stat,read_file", map[string]string{
+		{"shell_write_file", writeArgs, nil, "stat,hash_file", map[string]string{
 			"path": "/srv/app/config/app.yaml", "current.state": "file", "current.size": "11", "current.mode": "0640",
-			"current.sha256": shaOld, "current.lines": "1", "new.bytes": "12", "new.sha256": sha("key: value2\n"), "new.lines": "1", "lines_delta": "0"}},
+			"current.sha256": shaOld, "current.lines": "1", "current.private_key": "false", "new.bytes": "12", "new.sha256": sha("key: value2\n"),
+			"new.lines": "1", "new.private_key": "false", "lines_delta": "0"}},
 		{"shell_write_file", writeArgs, map[string]gateReply{"stat": {code: "not_found", msg: "no such file"}}, "stat", map[string]string{
-			"current.state": "absent", "new.bytes": "12", "new.lines": "1", "lines_delta": "1"}},
-		{"shell_write_file", writeArgs, map[string]gateReply{"read_file": {data: `{"path":"/srv/app/config/app.yaml","size":11,"sha256":"` + shaOld + `","binary":true,"offset":0,"truncated":false}`}},
-			"stat,read_file", map[string]string{"current.state": "file", "current.sha256": shaOld, "current.lines": "null", "lines_delta": "null"}},
-		{"shell_copy_path", withOverwrite(operatorCallArgs["shell_copy_path"]), map[string]gateReply{}, "stat,stat,read_file", map[string]string{
+			"current.state": "absent", "new.bytes": "12", "new.lines": "1", "new.private_key": "false", "lines_delta": "1"}},
+		{"shell_write_file", writeArgs, map[string]gateReply{
+			"read_file": {data: `{"path":"/srv/app/config/app.yaml","size":11,"sha256":"` + shaOld + `","binary":true,"offset":0,"truncated":false}`},
+			"hash_file": {data: `{"path":"/srv/app/config/app.yaml","size":11,"sha256":"` + shaOld + `","binary":true,"lines":null,"private_key":false}`}},
+			"stat,hash_file", map[string]string{"current.state": "file", "current.sha256": shaOld, "current.lines": "null", "lines_delta": "null"}},
+		{"shell_copy_path", withOverwrite(operatorCallArgs["shell_copy_path"]), map[string]gateReply{}, "stat,stat,hash_file", map[string]string{
 			"source.state": "present", "source.type": "file", "source.mode": "0640", "source.size": "11",
-			"destination.state": "file", "destination.sha256": shaOld, "overwrite": "true"}},
-		{"shell_move_path", withOverwrite(operatorCallArgs["shell_move_path"]), map[string]gateReply{}, "stat,stat,read_file", map[string]string{
-			"source.state": "present", "destination.state": "file", "destination.sha256": shaOld}},
+			"destination.state": "file", "destination.sha256": shaOld, "destination.private_key": "false", "overwrite": "true"}},
+		{"shell_move_path", withOverwrite(operatorCallArgs["shell_move_path"]), map[string]gateReply{}, "stat,stat,hash_file", map[string]string{
+			"source.state": "present", "destination.state": "file", "destination.sha256": shaOld, "destination.private_key": "false"}},
 		{"shell_copy_path", operatorCallArgs["shell_copy_path"], map[string]gateReply{"stat": {code: "not_found", msg: "no such file"}}, "stat,stat", map[string]string{
 			"source.state": "absent", "destination.state": "absent", "overwrite": "false"}},
 		{"shell_make_directory", operatorCallArgs["shell_make_directory"], map[string]gateReply{"stat": {code: "not_found", msg: "no such file"}}, "stat",

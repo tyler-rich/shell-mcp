@@ -111,6 +111,7 @@ func TestCopyMoveChangedAfterApproval(t *testing.T) {
 			id := a.pending(name, bindArgs(true))
 			a.approve(id)
 			a.g.set("read_file", gateReply{data: fakeReadSHA("key: other\n", shaNew)})
+			a.g.set("hash_file", gateReply{data: fakeHashSHA("key: other\n", shaNew, false)})
 			env, _ := a.call(name, withID(bindArgs(true), id))
 			if errCode(env) != "approval_invalid" || len(a.mutatingOps()) != 0 {
 				t.Fatalf("content changed after approval: %v, ops %v", env, a.g.ops())
@@ -158,6 +159,7 @@ func TestCopyMovePreviewRefusals(t *testing.T) {
 		{"move onto a symlink", "shell_move_path", true, func(g *recordingGate) { g.setPath("stat", bindDst, gateReply{data: link}) }, "path_denied"},
 		{"copy over a file with no hash", "shell_copy_path", true, func(g *recordingGate) {
 			g.set("read_file", gateReply{data: `{"path":"` + bindDst + `","size":300000000,"binary":true,"offset":0,"truncated":false}`})
+			g.set("hash_file", gateReply{code: "too_large", msg: "the file is larger than the 256 MiB that is hashed"})
 		}, "too_large"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
