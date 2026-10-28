@@ -3,6 +3,7 @@
 package fsx
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,7 +104,7 @@ func FuzzCopySourceKey(f *testing.F) {
 		if errC == nil {
 			got, err := os.ReadFile(dst) //nolint:gosec // G304: fixture
 			must(t, err)
-			if string(got) != string(content) {
+			if !bytes.Equal(got, content) {
 				t.Fatal("the copy differs from its source")
 			}
 		} else if _, err := os.Lstat(dst); !os.IsNotExist(err) {
