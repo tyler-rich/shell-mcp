@@ -640,12 +640,12 @@ func (v *validator) command(field string, rc *rawCommand, maxTier Tier) (Command
 	}
 	// The gate's GTFOBins list and warning (POLICY §6), for a command that
 	// runs as root (handoff N-16).
-	if w := gpolicy.EscapeWarning(field, true, gpolicy.CanonicalName(filepath.Base(rc.Path)), gpolicy.CanonicalName(filepath.Base(prog.resolved))); w != "" {
+	for _, w := range gpolicy.EscapeWarnings(field, true, rc.Path, prog.resolved, prog.listed) {
 		v.warn("%s", w)
 	}
 	// A script's interpreters get the template's arguments (handoff N-31).
 	for _, s := range prog.scripts {
-		if w := gpolicy.ScriptEscapeWarning(field, true, s.script, s.written, s.interpreter); w != "" {
+		for _, w := range gpolicy.ScriptEscapeWarnings(field, true, s.script, s.written, s.interpreter, s.listed) {
 			v.warn("%s", w)
 		}
 	}
@@ -718,11 +718,17 @@ type program struct {
 	scriptArgs                    []string
 	// scripts is the #! scripts on the way to the binary, outermost first.
 	scripts []scriptStep
+	// listed is the GTFOBins-listed programs the binary is, by identity (N-33).
+	listed []gpolicy.ListedMatch
 }
 
 // scriptStep is one #! script: its resolved path, the interpreter as its
-// first line writes it, and that interpreter resolved.
-type scriptStep struct{ script, written, interpreter string }
+// first line writes it, that interpreter resolved, and the listed programs
+// that interpreter is by identity (N-33).
+type scriptStep struct {
+	script, written, interpreter string
+	listed                       []gpolicy.ListedMatch
+}
 
 // maxScripts is how many #! scripts the kernel follows in a chain:
 // "up to a limit of four recursions" (execve(2)).
@@ -835,17 +841,20 @@ func (v *validator) resolveProgram(field, p string, rootEquivalent bool, depth i
 			add(r)
 		}
 		prog.interpreter, prog.scriptArgs = ip.resolved, ip.scriptArgs
-		prog.scripts = append([]scriptStep{{script: resolved, written: ct.Interpreter, interpreter: ip.resolved}}, ip.scripts...)
+		prog.scripts = append([]scriptStep{{script: resolved, written: ct.Interpreter, interpreter: ip.resolved, listed: ip.listed}}, ip.scripts...)
 		if ct.Arg != "" {
 			prog.scriptArgs = append(prog.scriptArgs, ct.Arg)
 		}
 		v.warn("%s: %s is a #! script run by %s; the interpreter reads the script and gets the template's arguments after it, as root (POLICY §5)", field, resolved, ip.resolved)
 	}
-	ms, err := v.scan.MatchAll(resolved, fi)
+	id, err := v.scan.Match(resolved, fi)
 	if err != nil {
 		return fail(".path", "%v", err)
 	}
+	ms := id.Scanned
 	if ct.Kind == gpolicy.ContentUutils {
+		// Its own name is checked by the warning already (N-33).
+		id.Listed = nil
 		// The uutils binary's other names are its other utilities, which
 		// this command never runs (S-MC); any other name refuses it.
 		if ms, err = gpolicy.UutilsSiblings(resolved, ms); err != nil {
@@ -868,6 +877,10 @@ func (v *validator) resolveProgram(field, p string, rootEquivalent bool, depth i
 		if class, g := Classify(m.Name); class != ClassNone {
 			add(recognised{class: class, group: g, name: gpolicy.CanonicalName(m.Name), match: MatchIdentity})
 		}
+	}
+	prog.listed = id.Listed
+	if id.Skipped != nil {
+		v.warn("%s: %s%v; a renamed copy of a GTFOBins-listed program is not recognised by identity here (POLICY §6)", field, via, id.Skipped)
 	}
 	return prog, rec, true
 }

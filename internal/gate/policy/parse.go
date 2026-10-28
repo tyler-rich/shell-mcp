@@ -694,11 +694,17 @@ type program struct {
 	resolved, applet, interpreter string
 	// scripts is the #! scripts on the way to the binary, outermost first.
 	scripts []scriptStep
+	// listed is the GTFOBins-listed programs the binary is, by identity (N-33).
+	listed []ListedMatch
 }
 
 // scriptStep is one #! script: its resolved path, the interpreter as its
 // first line writes it, and that interpreter resolved.
-type scriptStep struct{ script, written, interpreter string }
+type scriptStep struct {
+	script, written, interpreter string
+	// listed is the interpreter's listed programs by identity (N-33).
+	listed []ListedMatch
+}
 
 // maxScripts is how many #! scripts the kernel follows in a chain:
 // "up to a limit of four recursions" (execve(2)).
@@ -716,12 +722,12 @@ func (v *validator) resolveCommand(field string, rc *rawCommand, opts *LoadOptio
 	if written != ran {
 		v.warn("%s: %s resolves to %s; it runs as %q, the name it is executed by, not as %q (argv[0] is the resolved path; POLICY §5)", field, rc.Path, prog.resolved, ran, written)
 	}
-	if w := EscapeWarning(field, false, CanonicalName(written), CanonicalName(ran)); w != "" {
+	for _, w := range EscapeWarnings(field, false, rc.Path, prog.resolved, prog.listed) {
 		v.warn("%s", w)
 	}
 	// A script's interpreters get the template's arguments (handoff N-31).
 	for _, s := range prog.scripts {
-		if w := ScriptEscapeWarning(field, false, s.script, s.written, s.interpreter); w != "" {
+		for _, w := range ScriptEscapeWarnings(field, false, s.script, s.written, s.interpreter, s.listed) {
 			v.warn("%s", w)
 		}
 	}
@@ -811,12 +817,14 @@ func (v *validator) resolveProgram(field, p string, rootEquivalent bool, opts *L
 			return program{}, false
 		}
 		prog.interpreter = ip.resolved
-		prog.scripts = append([]scriptStep{{script: resolved, written: ct.Interpreter, interpreter: ip.resolved}}, ip.scripts...)
+		prog.scripts = append([]scriptStep{{script: resolved, written: ct.Interpreter, interpreter: ip.resolved, listed: ip.listed}}, ip.scripts...)
 		v.warn("%s: %s is a #! script run by %s; the interpreter reads the script and gets the template's arguments after it (POLICY §5)", field, resolved, ip.resolved)
 	}
-	if !v.identity(field, resolved, fi, opts, ct.Kind == ContentUutils, via) {
+	listed, ok := v.identity(field, resolved, fi, opts, ct.Kind == ContentUutils, via)
+	if !ok {
 		return program{}, false
 	}
+	prog.listed = listed
 	return prog, true
 }
 

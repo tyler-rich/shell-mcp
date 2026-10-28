@@ -112,19 +112,6 @@ func TestGTFOBinsIdentityInterpreter(t *testing.T) {
 	}
 }
 
-// TestGTFOBinsIdentityContent: a renamed copy of a listed GNU coreutils
-// program is recognised by what it holds, where no system copy of it is
-// scanned (S-MC).
-func TestGTFOBinsIdentityContent(t *testing.T) {
-	f := newFixture(t)
-	f.gtfoSys(t)
-	gatetest.WriteFile(t, filepath.Join(f.bin, "show-file"), "invented GNU program\x00"+marker("gnu")+"\x00cat\x00", 0o755)
-	p := f.mustLoad(t, cmdPath(filepath.Join(f.bin, "show-file")))
-	if !warned(p, "commands[x]: cat has documented escape techniques", "matched cat by binary identity") {
-		t.Fatalf("no GTFOBins warning for a renamed GNU cat: %q", p.Warnings)
-	}
-}
-
 // TestGTFOBinsIdentityNeverRefuses: the warning is an aid. A listed
 // program's copy that cannot be read, of the command's size, does not
 // refuse the policy (a hard-denied one would, fail-closed); the skipped
@@ -141,7 +128,22 @@ func TestGTFOBinsIdentityNeverRefuses(t *testing.T) {
 	if hits := gtfoWarnings(p); len(hits) != 0 {
 		t.Fatalf("GTFOBins warning: %q", hits)
 	}
-	if !warned(p, "commands[x]", "GTFOBins", "could not be compared") {
+	if !warned(p, "commands[x]", "GTFOBins", "cannot be compared") {
 		t.Fatalf("no warning that the comparison was skipped: %q", p.Warnings)
+	}
+}
+
+// TestGTFOBinsContentNameNotMatched: what a GNU coreutils program's content
+// names is not used for this warning (handoff N-33). Measured on Debian 13's
+// coreutils, 7 of 104 programs carry a different listed program's name as a
+// whole string (touch carries date, whoami carries cp), so a content match
+// would warn about the wrong program. A renamed GNU program is recognised
+// only where a byte-identical scanned system binary exists.
+func TestGTFOBinsContentNameNotMatched(t *testing.T) {
+	f := newFixture(t)
+	f.gtfoSys(t)
+	gatetest.WriteFile(t, filepath.Join(f.bin, "show-file"), "invented GNU program\x00"+marker("gnu")+"\x00cat\x00", 0o755)
+	if hits := gtfoWarnings(f.mustLoad(t, cmdPath(filepath.Join(f.bin, "show-file")))); len(hits) != 0 {
+		t.Fatalf("GTFOBins warning from a content name: %q", hits)
 	}
 }

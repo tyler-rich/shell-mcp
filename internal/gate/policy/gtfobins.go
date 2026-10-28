@@ -128,23 +128,101 @@ func EscapeTechniques(base string) []string {
 	return slices.Clone(cats)
 }
 
-// EscapeWarning is check-policy's warning for the command at field whose
-// binary, by the first of names on the list (the name as written, then as
-// resolved), has documented escape techniques, or "" when none is listed.
-// The gate's and the privileged policy share it and this list (handoff
-// N-16); asRoot says the command runs as root.
-func EscapeWarning(field string, asRoot bool, names ...string) string {
-	for _, base := range names {
-		if cats := EscapeTechniques(base); cats != nil {
-			who := ""
-			if asRoot {
-				who = "it runs as root: "
-			}
-			return fmt.Sprintf("%s: %s has documented escape techniques (GTFOBins: %s); %sreview its templates and never pass {path:write} to it (%s)",
-				field, base, strings.Join(cats, ", "), who, gtfobinsURL(base))
+// How a binary was found to be a listed program (the warning names it).
+const (
+	MatchKindWritten  = "written name"
+	MatchKindResolved = "resolved name"
+	MatchKindIdentity = "binary identity"
+)
+
+// ListedMatch is a GTFOBins-listed program that a binary is, and how it was
+// found: by the name written, the name resolved, or its identity (the same
+// file, by device and inode or by content, as a scanned system binary of that
+// name; handoff N-33).
+type ListedMatch struct {
+	// Name is the listed (canonical) name.
+	Name string
+	// Kind is a MatchKind constant.
+	Kind string
+	// Detail says what the identity was found against, "" otherwise.
+	Detail string
+}
+
+// listedOf is the listed name a path's base name has, or "".
+func listedOf(p string) string {
+	n := CanonicalName(filepath.Base(p))
+	if EscapeTechniques(n) == nil {
+		return ""
+	}
+	return n
+}
+
+// ListedMatches returns, in order, the listed programs a binary is: the one
+// its written name or else its resolved name gives (as before N-33), then
+// each other one it is by identity (ident), once per listed name.
+func ListedMatches(written, resolved string, ident []ListedMatch) []ListedMatch {
+	var out []ListedMatch
+	if n := listedOf(written); n != "" {
+		out = append(out, ListedMatch{Name: n, Kind: MatchKindWritten})
+	} else if n := listedOf(resolved); n != "" {
+		out = append(out, ListedMatch{Name: n, Kind: MatchKindResolved})
+	}
+	for _, m := range ident {
+		if EscapeTechniques(m.Name) != nil && !slices.ContainsFunc(out, func(o ListedMatch) bool { return o.Name == m.Name }) {
+			m.Kind = MatchKindIdentity
+			out = append(out, m)
 		}
 	}
-	return ""
+	return out
+}
+
+func (m ListedMatch) suffix() string {
+	s := "; matched " + m.Name + " by " + m.Kind
+	if m.Detail != "" {
+		s += " (" + m.Detail + ")"
+	}
+	return s
+}
+
+// EscapeWarnings is check-policy's warnings for the command at field whose
+// binary, written at written and resolved to resolved, is a program with
+// documented escape techniques: one for the program its written name, else
+// its resolved name gives, and one for each other listed program it is by
+// identity (ident, from the identity scan). Each names the listed program
+// and how it matched. The gate's and the privileged policy share it and
+// this list (handoff N-16, N-33); asRoot says the command runs as root.
+func EscapeWarnings(field string, asRoot bool, written, resolved string, ident []ListedMatch) []string {
+	who := ""
+	if asRoot {
+		who = "it runs as root: "
+	}
+	var out []string
+	for _, m := range ListedMatches(written, resolved, ident) {
+		out = append(out, fmt.Sprintf("%s: %s has documented escape techniques (GTFOBins: %s); %sreview its templates and never pass {path:write} to it (%s)%s",
+			field, m.Name, strings.Join(EscapeTechniques(m.Name), ", "), who, gtfobinsURL(m.Name), m.suffix()))
+	}
+	return out
+}
+
+// ScriptEscapeWarnings is check-policy's warnings for a #! script, at
+// field, whose interpreter (written in the #! line as written, resolved to
+// resolved, with identity matches ident as in EscapeWarnings) is a program
+// with documented escape techniques, naming the script, the interpreter
+// and the listed program (handoff N-31, N-33). The interpreter gets the
+// template's arguments after the script, so a listed interpreter is as
+// reachable through a script as when declared itself. asRoot is as in
+// EscapeWarnings.
+func ScriptEscapeWarnings(field string, asRoot bool, script, written, resolved string, ident []ListedMatch) []string {
+	who := ""
+	if asRoot {
+		who = "it runs as root: "
+	}
+	var out []string
+	for _, m := range ListedMatches(written, resolved, ident) {
+		out = append(out, fmt.Sprintf("%s: %s is a #! script run by %s, which has documented escape techniques (GTFOBins: %s); %sreview the script and its templates, and never pass {path:write} to it (%s)%s",
+			field, script, resolved, strings.Join(EscapeTechniques(m.Name), ", "), who, gtfobinsURL(m.Name), m.suffix()))
+	}
+	return out
 }
 
 // GTFOBinsNames returns the listed names, sorted.
@@ -155,25 +233,4 @@ func GTFOBinsNames() []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-// ScriptEscapeWarning is check-policy's warning for a #! script, at field,
-// whose interpreter (written in the #! line as written, resolved to
-// resolved) has documented escape techniques, naming both, or "" when
-// neither name is listed (handoff N-31). The interpreter gets the
-// template's arguments after the script, so a listed interpreter is as
-// reachable through a script as when declared itself. asRoot is as in
-// EscapeWarning.
-func ScriptEscapeWarning(field string, asRoot bool, script, written, resolved string) string {
-	for _, base := range []string{CanonicalName(filepath.Base(written)), CanonicalName(filepath.Base(resolved))} {
-		if cats := EscapeTechniques(base); cats != nil {
-			who := ""
-			if asRoot {
-				who = "it runs as root: "
-			}
-			return fmt.Sprintf("%s: %s is a #! script run by %s, which has documented escape techniques (GTFOBins: %s); %sreview the script and its templates, and never pass {path:write} to it (%s)",
-				field, script, resolved, strings.Join(cats, ", "), who, gtfobinsURL(base))
-		}
-	}
-	return ""
 }

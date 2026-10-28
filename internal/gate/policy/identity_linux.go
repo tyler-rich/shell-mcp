@@ -3,6 +3,7 @@
 package policy
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -82,7 +83,8 @@ func scanDenied(dirs, extra []string) []*deniedFile {
 		_ = f.Close()
 		slices.Sort(names)
 		for _, n := range names {
-			if !scanned(n, extra) {
+			isScanned, isListed := scanned(n, extra), listedOf(n) != ""
+			if !isScanned && !isListed {
 				continue
 			}
 			p := filepath.Join(rd, n)
@@ -94,7 +96,7 @@ func scanDenied(dirs, extra []string) []*deniedFile {
 			if !ok {
 				continue
 			}
-			out = append(out, &deniedFile{name: n, path: p, dev: st.Dev, ino: st.Ino, size: fi.Size()})
+			out = append(out, &deniedFile{name: n, path: p, dev: st.Dev, ino: st.Ino, size: fi.Size(), scanned: isScanned, listed: isListed})
 		}
 	}
 	return out
@@ -134,6 +136,31 @@ type IdentityMatch struct {
 // when a comparison is impossible (the check fails closed). Error messages
 // name local paths and are for check-policy.
 func (s *IdentityScan) MatchAll(resolved string, fi os.FileInfo) ([]IdentityMatch, error) {
+	id, err := s.Match(resolved, fi)
+	return id.Scanned, err
+}
+
+// Identity is what a command binary is identical to among the scanned
+// files.
+type Identity struct {
+	// Scanned are the matches with the files the check refuses or
+	// classifies (MatchAll).
+	Scanned []IdentityMatch
+	// Listed are the GTFOBins-listed programs it is identical to, by their
+	// canonical names (handoff N-33), in directory and name order.
+	Listed []ListedMatch
+	// Skipped is why a comparison with a listed program's file was
+	// impossible, or nil. It never fails the check: the GTFOBins warning
+	// is an aid, and a listed file the check cannot read is only not
+	// compared.
+	Skipped error
+}
+
+// Match compares the resolved command binary (fi from os.Stat) with every
+// scanned file. A comparison with a file the check refuses or classifies
+// that is impossible is an error (it fails closed); one with a listed
+// program's file that is not also one of those is recorded in Skipped.
+func (s *IdentityScan) Match(resolved string, fi os.FileInfo) (Identity, error) {
 	if s.denied == nil {
 		s.denied = scanDenied(s.dirs, s.extra)
 		if s.denied == nil {
@@ -142,29 +169,45 @@ func (s *IdentityScan) MatchAll(resolved string, fi os.FileInfo) ([]IdentityMatc
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
-		return nil, fmt.Errorf("%s has no inode information", resolved)
+		return Identity{}, fmt.Errorf("%s has no inode information", resolved)
 	}
-	var sum *[32]byte
-	var out []IdentityMatch
+	var (
+		sum    *[32]byte
+		sumErr error
+		out    Identity
+	)
 	for _, d := range s.denied {
 		same := d.dev == st.Dev && d.ino == st.Ino
 		if !same && d.size == fi.Size() {
-			var err error
-			if sum == nil {
-				if sum, err = fileSum(resolved, fi.Size()); err != nil {
-					return nil, fmt.Errorf("%s cannot be compared with hard-denied binaries: %v", resolved, errReason(err))
-				}
+			if sum == nil && sumErr == nil {
+				sum, sumErr = fileSum(resolved, fi.Size())
 			}
-			if d.sum == nil {
-				if d.sum, err = fileSum(d.path, d.size); err != nil {
-					return nil, fmt.Errorf("%s cannot be compared with hard-denied %q (%s): %v", resolved, d.name, d.path, errReason(err))
-				}
+			if sumErr == nil && d.sum == nil && d.sumErr == nil {
+				d.sum, d.sumErr = fileSum(d.path, d.size)
+			}
+			switch {
+			case sumErr != nil && d.scanned:
+				return Identity{}, fmt.Errorf("%s cannot be compared with hard-denied binaries: %v", resolved, errReason(sumErr))
+			case sumErr != nil:
+				out.Skipped = cmp.Or(out.Skipped, fmt.Errorf("%s cannot be compared with the listed %q (%s): %v", resolved, d.name, d.path, errReason(sumErr)))
+				continue
+			case d.sumErr != nil && d.scanned:
+				return Identity{}, fmt.Errorf("%s cannot be compared with hard-denied %q (%s): %v", resolved, d.name, d.path, errReason(d.sumErr))
+			case d.sumErr != nil:
+				out.Skipped = cmp.Or(out.Skipped, fmt.Errorf("%s cannot be compared with the listed %q (%s): %v", resolved, d.name, d.path, errReason(d.sumErr)))
+				continue
 			}
 			same = *sum == *d.sum
 		}
-		if same {
+		if !same {
+			continue
+		}
+		if d.scanned {
 			g, gname, _ := hardDenied(d.name)
-			out = append(out, IdentityMatch{Name: d.name, Path: d.path, Group: g, GroupName: gname})
+			out.Scanned = append(out.Scanned, IdentityMatch{Name: d.name, Path: d.path, Group: g, GroupName: gname})
+		}
+		if d.listed {
+			out.Listed = append(out.Listed, ListedMatch{Name: CanonicalName(d.name), Kind: MatchKindIdentity, Detail: "identical to " + d.path})
 		}
 	}
 	return out, nil
@@ -176,35 +219,44 @@ func (s *IdentityScan) MatchAll(resolved string, fi os.FileInfo) ([]IdentityMatc
 // multi-call binary (S-MC), which runs as the name of the file it is
 // executed by, its other names are its other utilities and say nothing
 // about this command; any other name is refused.
-func (v *validator) identity(field, resolved string, fi os.FileInfo, opts *LoadOptions, uutils bool, via string) bool {
+//
+// It returns the GTFOBins-listed programs the binary is identical to (N-33;
+// none for the uutils binary, which runs as the name it is executed by and
+// whose own name the warning already checks) and whether it passed.
+func (v *validator) identity(field, resolved string, fi os.FileInfo, opts *LoadOptions, uutils bool, via string) ([]ListedMatch, bool) {
 	if v.scan == nil {
 		v.scan = NewIdentityScan(opts.SystemBinDirs)
 	}
-	ms, err := v.scan.MatchAll(resolved, fi)
+	id, err := v.scan.Match(resolved, fi)
 	if err != nil {
 		v.fail(field+".path", "%s%v", via, err)
-		return false
+		return nil, false
 	}
+	ms := id.Scanned
 	if uutils {
 		ms, err = UutilsSiblings(resolved, ms)
 		if err != nil {
 			v.fail(field+".path", "%s%v", via, err)
-			return false
+			return nil, false
 		}
+		id.Listed = nil
 	}
 	for _, m := range ms {
 		if m.Group > 0 {
 			v.fail(field+".path", "%s%s is a hard link to, or a copy of, the hard-denied %q (%s; group %d: %s)", via, resolved, m.Name, m.Path, m.Group, m.GroupName)
-			return false
+			return nil, false
 		}
 	}
 	for _, m := range ms {
 		if notCommand(m.Name) {
 			v.fail(field+".path", "%s%s is a hard link to, or a copy of, %q (%s), which may not be a policy command", via, resolved, m.Name, m.Path)
-			return false
+			return nil, false
 		}
 	}
-	return true
+	if id.Skipped != nil {
+		v.warn("%s: %s%v; a renamed copy of a GTFOBins-listed program is not recognised by identity here (POLICY §6)", field, via, id.Skipped)
+	}
+	return id.Listed, true
 }
 
 // UutilsSiblings drops from a uutils binary's identity matches the names
