@@ -553,7 +553,7 @@ func keyFixture(bodyLines int) string {
 func TestPrivateKeyBeyondFirstWindow(t *testing.T) {
 	e := newEnv(t)
 	filler := strings.Repeat("log line of ordinary text\n", 4000) // about 100 KiB
-	key := keyFixture(300)                                       // about 19 KiB
+	key := keyFixture(300)                                        // about 19 KiB
 	p := filepath.Join(e.read, "late.log")
 	put(t, p, filler+key+"after\nafter\n")
 	for name, o := range map[string]ReadOptions{
