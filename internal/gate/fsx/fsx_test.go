@@ -534,3 +534,75 @@ func TestAbsoluteSymlinkMessage(t *testing.T) {
 		t.Fatalf("relative escape reported as absolute: %v", err)
 	}
 }
+
+// keyFixture is an invented, run-time-assembled key: a header, bodyLines lines
+// of 64 characters of invented body, and the matching END line.
+func keyFixture(bodyLines int) string {
+	var b strings.Builder
+	b.WriteString("-----BEGIN " + "OPENSSH PRIVATE " + "KEY-----\n")
+	for i := 0; i < bodyLines; i++ {
+		b.WriteString(strings.Repeat("QkVNSU5WRU5URUQ", 5)[:63] + "\n")
+	}
+	b.WriteString("-----END " + "OPENSSH PRIVATE " + "KEY-----\n")
+	return b.String()
+}
+
+// N-35 precursor (S7-1): a key can lie beyond the first 64 KiB, and a window
+// that starts inside its body returns the body without its header, which the
+// output redaction cannot recognise. The refusal covers the whole file.
+func TestPrivateKeyBeyondFirstWindow(t *testing.T) {
+	e := newEnv(t)
+	filler := strings.Repeat("log line of ordinary text\n", 4000) // about 100 KiB
+	key := keyFixture(300)                                       // about 19 KiB
+	p := filepath.Join(e.read, "late.log")
+	put(t, p, filler+key+"after\nafter\n")
+	for name, o := range map[string]ReadOptions{
+		"default window":      {},
+		"offset in the body":  {Offset: int64(len(filler)) + 5000, MaxBytes: 4096},
+		"tail inside the key": {TailLines: 20, MaxBytes: 1024},
+	} {
+		_, err := e.fs.ReadFile(p, o)
+		if err == nil {
+			t.Fatalf("%s: a file holding a private key was read", name)
+		}
+		wantCode(t, err, protocol.CodePathDenied)
+	}
+	h, err := e.fs.HashFile(p)
+	must(t, err)
+	if !h.PrivateKey {
+		t.Fatalf("HashFile did not report the key beyond the first 64 KiB: %+v", h)
+	}
+	// A header that straddles the 64 KiB boundary is found too.
+	pad := strings.Repeat("x", sniffKeyBytes-10)
+	put(t, filepath.Join(e.read, "straddle"), pad+"\n"+key)
+	_, err = e.fs.ReadFile(filepath.Join(e.read, "straddle"), ReadOptions{Offset: int64(sniffKeyBytes) + 200, MaxBytes: 4096})
+	wantCode(t, err, protocol.CodePathDenied)
+}
+
+// Above the size the whole-file pass covers (maxHashBytes), the window and
+// the keyLookback bytes before it are searched.
+func TestPrivateKeyInHugeFileWindow(t *testing.T) {
+	e := newEnv(t)
+	p := filepath.Join(e.read, "huge.log")
+	size := int64(maxHashBytes) + 1<<20
+	f, err := os.Create(p) //nolint:gosec // G304: test fixture
+	must(t, err)
+	_, err = f.WriteString("text\n")
+	must(t, err)
+	key := keyFixture(300)
+	keyAt := size - int64(len(key)) - 1024
+	_, err = f.WriteAt([]byte(key+"tail line\n"), keyAt)
+	must(t, err)
+	must(t, f.Truncate(size))
+	must(t, f.Close())
+	for name, o := range map[string]ReadOptions{
+		"tail inside the key":   {TailLines: 20, MaxBytes: 4096},
+		"offset inside the key": {Offset: keyAt + 5000, MaxBytes: 4096},
+	} {
+		_, err := e.fs.ReadFile(p, o)
+		if err == nil {
+			t.Fatalf("%s: a window inside a private key was returned", name)
+		}
+		wantCode(t, err, protocol.CodePathDenied)
+	}
+}
