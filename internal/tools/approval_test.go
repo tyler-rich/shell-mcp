@@ -189,7 +189,7 @@ func TestApprovalPendingResult(t *testing.T) {
 		t.Fatalf("text block %s", text)
 	}
 	// Only preview reads reached the gate.
-	if ops := a.g.ops(); strings.Join(ops, ",") != "stat,read_file" {
+	if ops := a.g.ops(); strings.Join(ops, ",") != "stat,hash_file" {
 		t.Fatalf("gate ops %v", ops)
 	}
 	r, ok := a.store.Get(id)

@@ -294,8 +294,9 @@ func (f *FS) ReadFile(p string, o ReadOptions) (ReadResult, error) {
 }
 
 // HashResult is a regular file's size, SHA-256 and line count, and whether
-// its first 64 KiB hold a private-key header: never its content (handoff
-// N-5, the helper's priv_hash_file).
+// it holds a private-key header anywhere (the whole file is searched, as
+// ReadFile searches it): never its content (handoff N-5, the gate's
+// hash_file and the helper's priv_hash_file).
 type HashResult struct {
 	Path   string `json:"path"`
 	Size   int64  `json:"size"`
@@ -338,7 +339,7 @@ func (f *FS) HashFile(p string) (HashResult, error) {
 	}
 	size := fi.Size()
 	if size > maxHashBytes {
-		return HashResult{}, errf(protocol.CodeTooLarge, "the file is larger than the %d MiB the helper hashes", maxHashBytes>>20)
+		return HashResult{}, errf(protocol.CodeTooLarge, "the file is larger than the %d MiB that is hashed", maxHashBytes>>20)
 	}
 	head := make([]byte, min(int64(sniffKeyBytes), size))
 	if _, err := io.ReadFull(io.NewSectionReader(file, 0, size), head); err != nil {

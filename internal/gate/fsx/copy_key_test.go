@@ -56,8 +56,9 @@ func TestCopySourceKeyBeyondFirstWindow(t *testing.T) {
 }
 
 // TestTooLargeMessagesAreNeutral: the gate and the helper share HashFile
-// and the commit's destination hash, so their too_large refusals name the
-// 256 MiB bound and no program (S7-3; they said "the helper").
+// and a bound move's destination hash (hashTarget), so their too_large
+// refusals name the 256 MiB bound and no program (S7-3; they said "the
+// helper"). A write or copy hashes the file it replaces without a cap.
 func TestTooLargeMessagesAreNeutral(t *testing.T) {
 	e := newEnv(t)
 	sparse := filepath.Join(e.write, "sparse.bin")
@@ -66,12 +67,47 @@ func TestTooLargeMessagesAreNeutral(t *testing.T) {
 	src := filepath.Join(e.write, "small.txt")
 	put(t, src, "small\n")
 	_, errHash := e.fs.HashFile(sparse)
-	_, errWrite := e.fs.WriteFile(sparse, []byte("new\n"), WriteOptions{ExpectedSHA256: strings.Repeat("0", 64)})
 	_, errMove := e.fs.MoveExpecting(src, sparse, true, strings.Repeat("0", 64))
-	for name, err := range map[string]error{"HashFile": errHash, "a bound write": errWrite, "a bound move": errMove} {
+	for name, err := range map[string]error{"HashFile": errHash, "a bound move": errMove} {
 		wantCode(t, err, protocol.CodeTooLarge)
 		if msg := err.Error(); strings.Contains(msg, "helper") || strings.Contains(msg, "gate") || !strings.Contains(msg, "256 MiB") {
 			t.Fatalf("%s: %q", name, msg)
 		}
 	}
+}
+
+// FuzzCopySourceKey: for any source content, a copy is refused as holding a
+// private key exactly when read_file refuses the same file for one, and a
+// copy that is not refused writes the source unchanged. The key is
+// assembled at run time.
+func FuzzCopySourceKey(f *testing.F) {
+	fs, root := fdEnv(f, selfTrust)
+	key := keyFixture(4)
+	filler := strings.Repeat("log line of ordinary text\n", 3000) // about 77 KiB
+	for _, c := range []string{"", "key: value\n", key, filler + key, filler[:sniffKeyBytes-10] + "\n" + key,
+		"-----BEGIN " + "CERTIFICATE-----\n", filler + "PRIVATE KEY\n", "\x00\x01" + key} {
+		f.Add([]byte(c))
+	}
+	f.Fuzz(func(t *testing.T, content []byte) {
+		content = content[:min(len(content), 200<<10)]
+		src, dst := root+"/src", root+"/dst"
+		must(t, os.WriteFile(src, content, 0o644)) //nolint:gosec // G306: fixture
+		_ = os.Remove(dst)
+		_, errR := fs.ReadFile(src, ReadOptions{})
+		_, errC := fs.Copy(src, dst, false)
+		readKey := errR != nil && strings.Contains(errR.Error(), "file contains a private key")
+		copyKey := errC != nil && strings.Contains(errC.Error(), "file contains a private key")
+		if readKey != copyKey {
+			t.Fatalf("read_file refused a key: %v (%v); copy: %v (%v)", readKey, errR, copyKey, errC)
+		}
+		if errC == nil {
+			got, err := os.ReadFile(dst) //nolint:gosec // G304: fixture
+			must(t, err)
+			if string(got) != string(content) {
+				t.Fatal("the copy differs from its source")
+			}
+		} else if _, err := os.Lstat(dst); !os.IsNotExist(err) {
+			t.Fatalf("a refused copy left %s: %v", dst, err)
+		}
+	})
 }

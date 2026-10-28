@@ -130,7 +130,7 @@ func (f *FS) hashTarget(l *loc, hash bool) (fs.FileInfo, string, error) {
 		return info, "", nil
 	}
 	if info.Size() > maxHashBytes {
-		return nil, "", errf(protocol.CodeTooLarge, "the destination is larger than the %d MiB the helper hashes", maxHashBytes>>20)
+		return nil, "", errf(protocol.CodeTooLarge, "the destination is larger than the %d MiB that is hashed", maxHashBytes>>20)
 	}
 	h := sha256.New()
 	if _, err := io.Copy(h, io.LimitReader(file, maxHashBytes+1)); err != nil {

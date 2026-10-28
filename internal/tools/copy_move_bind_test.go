@@ -75,7 +75,7 @@ func TestCopyMovePreviewBindsDestination(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			a := newApprovalHarness(t, approval.MethodWeb)
 			id := a.pending(name, bindArgs(true))
-			if ops := strings.Join(a.g.ops(), ","); ops != "stat,stat,read_file" {
+			if ops := strings.Join(a.g.ops(), ","); ops != "stat,stat,hash_file" {
 				t.Fatalf("preview ops %s", ops)
 			}
 			p := previewMap(t, a, id)

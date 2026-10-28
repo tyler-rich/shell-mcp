@@ -208,9 +208,10 @@ func tooLargeToBind(who string) *envelope.Error {
 		"the file is larger than the %s hashes (256 MiB), so an approval could not be bound to its content; nothing was requested", who)
 }
 
-// privHashWire is the helper's priv_hash_file data (handoff N-5): never
-// content, so a file holding a private key can be bound by its hash.
-type privHashWire struct {
+// hashWire is the gate's hash_file and the helper's priv_hash_file data
+// (handoff N-5): never content, so a file holding a private key can be
+// bound by its hash.
+type hashWire struct {
 	Path       string `json:"path"`
 	Size       int64  `json:"size"`
 	SHA256     string `json:"sha256"`
@@ -219,20 +220,34 @@ type privHashWire struct {
 	PrivateKey bool   `json:"private_key"`
 }
 
-// privFilePreview is a regular file's state with its content hash: its
-// stat and the helper's priv_hash_file answer (nil when the file was
-// removed between the two reads): the whole-file SHA-256, the line count
-// and whether it holds a private key, never its content. The helper
-// refuses a file above 256 MiB (too_large), which therefore cannot be
-// bound.
+// privFilePreview is hashedFilePreview through the helper's priv_hash_file.
 func (d *Deps) privFilePreview(ctx context.Context, target string, st *Entry, acc *policyAcc) (cur map[string]any, sha string, refusal *envelope.Error) {
-	f, _, pol, e := previewFetch[privHashWire](ctx, d, target, protocol.OpPrivHashFile, pathWire{Path: st.Path}, true)
+	return d.hashedFilePreview(ctx, target, protocol.OpPrivHashFile, "helper", st, acc)
+}
+
+// gateFilePreview is hashedFilePreview through the gate's hash_file
+// (handoff N-5, the gate's half).
+func (d *Deps) gateFilePreview(ctx context.Context, target string, st *Entry, acc *policyAcc) (cur map[string]any, sha string, refusal *envelope.Error) {
+	return d.hashedFilePreview(ctx, target, protocol.OpHashFile, "gate", st, acc)
+}
+
+// hashedFilePreview is a regular file's state with its content hash: its
+// stat and the hash op's answer (nil when the file was removed between the
+// two requests): the whole-file SHA-256, the line count and whether it
+// holds a private key, never its content. A file above 256 MiB is refused
+// by who (too_large) and therefore cannot be bound; the preview is refused
+// too, never sent without a precondition.
+func (d *Deps) hashedFilePreview(ctx context.Context, target, op, who string, st *Entry, acc *policyAcc) (cur map[string]any, sha string, refusal *envelope.Error) {
+	f, _, pol, e := previewFetch[hashWire](ctx, d, target, op, pathWire{Path: st.Path}, true)
 	acc.add(pol)
 	if e != nil && e.Code == protocol.CodeTooLarge {
-		return nil, "", tooLargeToBind("helper")
+		return nil, "", tooLargeToBind(who)
 	}
 	if e != nil || f == nil {
 		return nil, "", e
+	}
+	if !sha256RE.MatchString(f.SHA256) {
+		return nil, "", envelope.Errorf("internal", "the %s's hash of the file is not a SHA-256; nothing was requested", who)
 	}
 	cur = entryPreview(st)
 	cur["state"], cur["sha256"], cur["private_key"] = "file", f.SHA256, f.PrivateKey
@@ -242,30 +257,6 @@ func (d *Deps) privFilePreview(ctx context.Context, target string, st *Entry, ac
 		cur["lines"] = *f.Lines
 	}
 	return cur, f.SHA256, nil
-}
-
-// boundFilePreview is a regular file's state with its content hash, read
-// through the gate's read_file: its stat and the whole-file SHA-256 (nil
-// when it was removed between the two reads). A file given no hash (above
-// 256 MiB) cannot be bound and is refused. (The gate's previews still read
-// a destination; a hash-only gate op is deferred, handoff N-5.)
-func (d *Deps) boundFilePreview(ctx context.Context, target string, st *Entry, acc *policyAcc) (map[string]any, *FileContent, *envelope.Error) {
-	f, warns, pol, e := previewFetch[FileContent](ctx, d, target, protocol.OpReadFile, readFileWire{Path: st.Path}, true)
-	acc.add(pol)
-	if e != nil || f == nil {
-		return nil, nil, e
-	}
-	if f.SHA256 == "" {
-		return nil, nil, tooLargeToBind("gate")
-	}
-	cur := entryPreview(st)
-	cur["state"], cur["sha256"] = "file", f.SHA256
-	delete(cur, "mtime")
-	cur["lines"] = nil
-	if !f.Binary && !f.Truncated && f.Offset == 0 && int64(len(f.Content)) == f.Size && len(warns) == 0 {
-		cur["lines"] = countLines([]byte(f.Content))
-	}
-	return cur, f, nil
 }
 
 // refuseNonFile refuses an existing path that a write would not replace.
