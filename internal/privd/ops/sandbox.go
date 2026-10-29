@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
+	"github.com/tyler-rich/shell-mcp/internal/gate/procself"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 )
@@ -13,8 +14,11 @@ import (
 // helperReadFiles are single files the helper and the root commands it
 // runs read after the sandbox is applied: owner and group names for
 // listings, and the dynamic linker's cache. /proc/self is the helper's own
-// /proc/<pid> (resolved when the rule is created), which fsx and the
-// sandbox's own verification read.
+// /proc/<pid> (resolved when the rule is created), which fsx, the child
+// listing and the sandbox's own verification read through the descriptor
+// the helper opened before the rule (procself): a read through the path
+// after memory pressure can reach a new procfs inode the rule does not
+// cover.
 var helperReadFiles = []string{"/proc/self", "/etc/passwd", "/etc/group", "/etc/ld.so.cache"}
 
 // Rules computes the core unit's Landlock ruleset from the privileged
@@ -43,11 +47,12 @@ func Rules(p *policy.Policy, backupDir string) sandbox.Rules {
 
 // ApplyLandlock applies Rules with the policy's sandbox.landlock mode,
 // through the gate's sandbox (no_new_privs on every thread, Landlock at the
-// kernel's exact ABI, the MPTCP seccomp filter, per-thread verification).
-func ApplyLandlock(p *policy.Policy, backupDir string) (sandbox.Report, error) {
+// kernel's exact ABI, the MPTCP seccomp filter, per-thread verification
+// through proc, the helper's own /proc/<pid> opened before it).
+func ApplyLandlock(p *policy.Policy, backupDir string, proc *procself.Dir) (sandbox.Report, error) {
 	if BypassBuild {
 		return sandbox.Report{Mode: "bypassed (e2e test build)"}, nil
 	}
 	r := Rules(p, backupDir)
-	return sandbox.ApplyRules(p.Landlock, &r)
+	return sandbox.ApplyRules(p.Landlock, &r, proc)
 }

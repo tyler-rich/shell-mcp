@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/tyler-rich/shell-mcp/internal/gate/procself"
 )
 
 // fakeChildren is a process table for reapOrphans: live children, dead
@@ -165,55 +167,95 @@ func TestReapOrphans(t *testing.T) {
 	})
 }
 
+// fakeTaskDir lays out dir/task/<tid>/children like the helper's own
+// /proc/<pid> (invented thread and child ids; nil: a thread that ended,
+// with no children file) and opens dir as childrenIn's directory.
+func fakeTaskDir(t *testing.T, dir string, kids map[string]*string) *procself.Dir {
+	t.Helper()
+	for tid, k := range kids {
+		if err := os.MkdirAll(filepath.Join(dir, "task", tid), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if k == nil {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(dir, "task", tid, "children"), []byte(*k), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d, err := procself.OpenDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	return d
+}
+
+func kids(s string) *string { return &s }
+
 // TestChildrenIn: the per-thread children files, with the real error. A
 // thread whose directory went away is skipped; an unreadable task
 // directory or children file is an error naming it (errno included); no
 // readable file at all is an error.
 func TestChildrenIn(t *testing.T) {
-	d := t.TempDir()
-	for tid, kids := range map[string]string{"10": "11 12 ", "13": ""} {
-		if err := os.MkdirAll(filepath.Join(d, tid), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(d, tid, "children"), []byte(kids), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// A thread that ended between the listing and the read.
-	if err := os.MkdirAll(filepath.Join(d, "14"), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	dir := t.TempDir()
+	d := fakeTaskDir(t, dir, map[string]*string{"10": kids("11 12 "), "13": kids(""), "14": nil})
 	got, err := childrenIn(d)
 	slices.Sort(got)
 	if err != nil || !slices.Equal(got, []int{11, 12}) {
 		t.Fatalf("children %v %v", got, err)
 	}
-	if _, err := childrenIn(filepath.Join(d, "missing")); err == nil || !strings.Contains(err.Error(), "no such file") {
+	if _, err := childrenIn(fakeTaskDir(t, t.TempDir(), nil)); err == nil || !strings.Contains(err.Error(), "no such file") {
 		t.Fatalf("a missing task directory: %v", err)
+	}
+	if _, err := childrenIn(nil); err == nil {
+		t.Fatal("no descriptor was a success")
+	}
+	if _, err := childrenIn(fakeTaskDir(t, t.TempDir(), map[string]*string{"x": kids("11")})); err == nil || !strings.Contains(err.Error(), "not a thread id") {
+		t.Fatalf("a task entry that is not a thread id: %v", err)
 	}
 	if os.Getuid() != 0 {
 		// Unreadable: what Landlock or a permission denies.
-		locked := filepath.Join(t.TempDir(), "task")
-		if err := os.MkdirAll(locked, 0o700); err != nil {
+		lockedDir := t.TempDir()
+		locked := fakeTaskDir(t, lockedDir, map[string]*string{"10": kids("11")})
+		if err := os.Chmod(filepath.Join(lockedDir, "task"), 0); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Chmod(locked, 0); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = os.Chmod(locked, 0o700) }) //nolint:gosec // G302: the test's own directory, back to its mode for cleanup
+		t.Cleanup(func() { _ = os.Chmod(filepath.Join(lockedDir, "task"), 0o700) }) //nolint:gosec // G302: the test's own directory, back to its mode for cleanup
 		if _, err := childrenIn(locked); err == nil || !strings.Contains(err.Error(), "permission denied") {
 			t.Fatalf("an unreadable task directory: %v (the error must carry the errno)", err)
 		}
-		if err := os.Chmod(filepath.Join(d, "10", "children"), 0); err != nil {
+		if err := os.Chmod(filepath.Join(dir, "task", "10", "children"), 0); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := childrenIn(d); err == nil || !strings.Contains(err.Error(), "permission denied") {
 			t.Fatalf("an unreadable children file: %v", err)
 		}
 	}
-	empty := t.TempDir()
-	if _, err := childrenIn(empty); err == nil {
+	if _, err := childrenIn(fakeTaskDir(t, t.TempDir(), map[string]*string{"10": nil})); err == nil {
 		t.Fatal("no children file at all was a success")
+	}
+}
+
+// TestChildrenInPinned: the listing reads the directory opened before the
+// sandbox, not what /proc/self names afterwards. In the core unit, after
+// memory pressure in the instance (an OOM kill), the path can reach the
+// helper's /proc/<pid> through a new procfs inode that its Landlock rule
+// does not cover, and every read through it is EACCES (handoff N-32,
+// S7-5); here the directory is renamed away and its path replaced by one
+// with no children, which a listing through the path would report.
+func TestChildrenInPinned(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "proc-1234")
+	d := fakeTaskDir(t, dir, map[string]*string{"10": kids("21 22"), "11": kids("23")})
+	if err := os.Rename(dir, filepath.Join(base, "moved")); err != nil {
+		t.Fatal(err)
+	}
+	fakeTaskDir(t, dir, map[string]*string{"10": kids("")})
+	got, err := childrenIn(d)
+	slices.Sort(got)
+	if err != nil || !slices.Equal(got, []int{21, 22, 23}) {
+		t.Fatalf("children %v %v: listed through the path, not the descriptor", got, err)
 	}
 }
 

@@ -44,31 +44,44 @@ func procStat(pid int) (state string, ppid int, start string, ok bool) {
 func FindChild(t testing.TB, parent int, args ...string) Proc {
 	t.Helper()
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-		ents, err := os.ReadDir("/proc")
+		p, ok, err := LookupChild(parent, args...)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, e := range ents {
-			pid, err := strconv.Atoi(e.Name())
-			if err != nil {
-				continue
-			}
-			_, ppid, start, ok := procStat(pid)
-			if !ok || (parent != 0 && ppid != parent) {
-				continue
-			}
-			b, err := os.ReadFile("/proc/" + e.Name() + "/cmdline")
-			if err != nil {
-				continue
-			}
-			argv := strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
-			if len(argv) > 0 && slices.Equal(argv[1:], args) {
-				return Proc{Pid: pid, start: start}
-			}
+		if ok {
+			return p
 		}
 	}
 	t.Fatalf("no child of pid %d with arguments %q", parent, args)
 	return Proc{}
+}
+
+// LookupChild is one look of FindChild, without waiting: for a goroutine
+// that watches while a test's request runs.
+func LookupChild(parent int, args ...string) (Proc, bool, error) {
+	ents, err := os.ReadDir("/proc")
+	if err != nil {
+		return Proc{}, false, err
+	}
+	for _, e := range ents {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		_, ppid, start, ok := procStat(pid)
+		if !ok || (parent != 0 && ppid != parent) {
+			continue
+		}
+		b, err := os.ReadFile("/proc/" + e.Name() + "/cmdline")
+		if err != nil {
+			continue
+		}
+		argv := strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00")
+		if len(argv) > 0 && slices.Equal(argv[1:], args) {
+			return Proc{Pid: pid, start: start}, true, nil
+		}
+	}
+	return Proc{}, false, nil
 }
 
 // Alive reports whether p still runs: present in /proc with the same start

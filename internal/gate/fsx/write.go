@@ -415,7 +415,7 @@ func (f *FS) MkdirAs(p string, mode *os.FileMode, parents bool, owner *Owner) (M
 	}
 	defer func() { _ = top.Close() }()
 	l := &loc{p: p, write: true, root: root, top: top}
-	if l.rootReal, err = realPathOfRoot(top); err != nil {
+	if l.rootReal, err = realPathOfRoot(f.cfg.Proc, top); err != nil {
 		return res, mapErr(err)
 	}
 	rel := pathx.Rel(root, p)

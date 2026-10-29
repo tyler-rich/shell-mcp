@@ -28,6 +28,7 @@ import (
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
+	"github.com/tyler-rich/shell-mcp/internal/gate/procself"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/privd/dbus"
 	"github.com/tyler-rich/shell-mcp/internal/privd/peercred"
@@ -87,8 +88,9 @@ type Options struct {
 	Conn *os.File
 	// BackupDir is the backup store (production: units.BackupDir).
 	BackupDir string
-	// ApplySandbox applies Landlock (production: ApplyLandlock).
-	ApplySandbox func(*policy.Policy, string) (sandbox.Report, error)
+	// ApplySandbox applies Landlock (production: ApplyLandlock), given the
+	// helper's own /proc/<pid> opened before it.
+	ApplySandbox func(*policy.Policy, string, *procself.Dir) (sandbox.Report, error)
 	// Audit receives one line per connection (production: stderr, which
 	// the unit sends to the journal).
 	Audit io.Writer
@@ -237,6 +239,10 @@ type server struct {
 	// reapErr is why the helper could not confirm that every process a
 	// command started has ended (the audit line records it).
 	reapErr string
+	// proc is the helper's own /proc/<pid>, opened before the sandbox and
+	// kept for the instance's life: the sandbox's thread check, the child
+	// listing and fsx read /proc/self through it (procself).
+	proc *procself.Dir
 	// hangOnce starts the one watcher of the connection (hangup), whose
 	// channel hangCh is closed when the gate hangs up.
 	hangOnce sync.Once
@@ -515,12 +521,19 @@ func policyInvalidMessage(err error) string {
 // *selfcheck.Error for the "landlock" check.
 func (s *server) sandbox() error {
 	_ = unix.Setrlimit(unix.RLIMIT_CORE, &unix.Rlimit{Cur: 0, Max: 0})
+	// Before the sandbox, in both units, and never closed: the core unit's
+	// Landlock rule on /proc/self keeps covering reads made through it.
+	proc, err := procself.Open()
+	if err != nil {
+		return &selfcheck.Error{Check: selfcheck.CheckLandlock, Detail: err.Error()}
+	}
+	s.proc = proc
 	if s.unit != policy.UnitCore {
 		// The broad unit has no Landlock sandbox: package managers write
 		// anywhere and broad commands need the network (PRIVILEGED §5.2, §7).
 		return nil
 	}
-	if _, err := s.o.ApplySandbox(s.p, s.o.BackupDir); err != nil {
+	if _, err := s.o.ApplySandbox(s.p, s.o.BackupDir, s.proc); err != nil {
 		return &selfcheck.Error{Check: selfcheck.CheckLandlock, Detail: err.Error()}
 	}
 	return nil
@@ -571,7 +584,10 @@ func (s *server) run(nc net.Conn) *protocol.Response {
 		GuardExecPaths: true,
 		// Refusals say the helper acts as root and point to its
 		// documentation.
-		Privileged:                  true,
+		Privileged: true,
+		// Real paths of open files (fd/N) through the helper's own
+		// /proc/<pid> opened before the sandbox (procself).
+		Proc:                        s.proc,
 		InjectBeforeBackup:          o.InjectBeforeBackup,
 		InjectExchangeFault:         o.InjectExchangeFault,
 		InjectReadBackFault:         o.InjectReadBackFault,

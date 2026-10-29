@@ -503,11 +503,17 @@ commands:
     templates: [["rlimits"], ["procattrs"], ["ignore-term", "60s"]]
   # The child memory limit in the core unit (memory_test.go, handoff N-30):
   # reported, not raisable, inherited, and a child tree that reaches the
-  # unit's MemoryMax=; jq reading a large root-owned fixture.
+  # unit's MemoryMax=; jq reading a large root-owned fixture; and a tree past
+  # MemoryMax= that leaves a setsid grandchild for the helper's reap (S7-5).
   - id: probe-mem
     path: /usr/local/bin/example-probe
     tier: read
-    templates: [["rlimits"], ["child-rlimits"], ["raise-data"], ["alloc-tree", "{int:1-8}", "{int:1-4096}", "{int:1-4096}"]]
+    templates:
+      - ["rlimits"]
+      - ["child-rlimits"]
+      - ["raise-data"]
+      - ["alloc-tree", "{int:1-8}", "{int:1-4096}", "{int:1-4096}"]
+      - ["alloc-tree-detach", "66s", "{int:1-8}", "{int:1-4096}", "{int:1-4096}"]
   - id: jq-keys
     path: /usr/bin/jq
     tier: read
@@ -557,6 +563,13 @@ $2    templates:
     tier: operator
     unit: broad
     templates: [["write", "{path:write}"], ["ignore-term", "63s"], ["detach", "64s"]]
+  # probe-mem's setsid grandchild after an OOM kill, in the broad unit
+  # (memory_test.go, S7-5).
+  - id: probe-broad-mem
+    path: /usr/local/bin/example-probe
+    tier: read
+    unit: broad
+    templates: [["alloc-tree-detach", "67s", "{int:1-8}", "{int:1-4096}", "{int:1-4096}"]]
 power:
   allowed: [reboot]
   acknowledge: "e2e: priv_power is called only with reboot.target and poweroff.target runtime-masked"
