@@ -103,8 +103,9 @@ func cleanupPackages(t *testing.T) {
 		_ = os.WriteFile("/run/shell-mcp-e2e-pkg-fast", nil, 0o600)
 		_ = exec.CommandContext(ctx, "dpkg", "--configure", "-a").Run()
 		_ = exec.CommandContext(ctx, "dpkg", "--purge", "example-hello", "example-extra", "example-other", "example-conf",
-			"example-slow", "example-slow-b", "example-slow-a", "example-stuck").Run()
+			"example-slow", "example-slow-b", "example-slow-a", "example-stuck", "example-blocked", "example-needs").Run()
 		_ = os.Remove("/run/shell-mcp-e2e-pkg-fast")
+		_ = os.Remove(pkgRelease)
 	})
 }
 

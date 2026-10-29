@@ -59,6 +59,8 @@ type Options struct {
 	Unit string
 	// AptGet is the apt-get binary (production: /usr/bin/apt-get).
 	AptGet string
+	// Dpkg is the dpkg binary the recovery runs (production: /usr/bin/dpkg).
+	Dpkg string
 	// DpkgDir is dpkg's administrative directory (production:
 	// /var/lib/dpkg): its status file, updates/ journal and frontend lock.
 	DpkgDir string

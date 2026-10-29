@@ -168,6 +168,17 @@ mkdeb_x example-slow 1.0 '' "$wait_fast 8 ]; do sleep 1; i=\$((i+1)); done" ''
 mkdeb_x example-slow-a 1.0 '' "$wait_fast 18 ]; do sleep 1; i=\$((i+1)); done" ''
 mkdeb_x example-slow-b 1.0 example-slow-a '' ''
 mkdeb_x example-stuck 1.0 '' "$wait_fast 600 ]; do sleep 1; i=\$((i+1)); done" ''
+# The recovery (handoff N-14, S7-4): example-blocked's postinst waits until
+# /run/shell-mcp-e2e-pkg-release exists (or the fast flag), so an install
+# killed at its limit leaves it unfinished and a recovery after the
+# release finishes it; example-needs depends on example-absent, which no
+# repository has, so dpkg leaves it unconfigured. Invented packages.
+mkdeb_x example-blocked 1.0 '' 'i=0; while [ ! -e /run/shell-mcp-e2e-pkg-release ] && [ ! -e /run/shell-mcp-e2e-pkg-fast ] && [ $i -lt 600 ]; do sleep 1; i=$((i+1)); done' ''
+d="$(mktemp -d)"
+install -d "$d/DEBIAN"
+printf 'Package: example-needs\nVersion: 1.0\nArchitecture: all\nMaintainer: shell-mcp end-to-end tests <e2e@example.test>\nDepends: example-absent\nDescription: invented package for the shell-mcp end-to-end tests\n' >"$d/DEBIAN/control"
+dpkg-deb --root-owner-group --build "$d" "$bin/debs/example-needs_1.0_all.deb" >/dev/null
+rm -rf "$d"
 
 # --- Policies ---------------------------------------------------------------
 install -o root -g root -m 0755 -d /etc/shell-mcp
@@ -552,7 +563,7 @@ power:
 packages:
   enabled: true
   manager: apt
-  install: [example-hello, example-conf, example-slow, example-slow-a, example-slow-b, example-stuck]
+  install: [example-hello, example-conf, example-slow, example-slow-a, example-slow-b, example-stuck, example-blocked]
   remove: [example-hello, example-conf]
   allow_update_index: true
   allow_upgrade: $3
@@ -567,6 +578,10 @@ priv_policy '' '' true >"$bin/privileged-upgrade.yaml"
 # Short limits for the package stop points (broad_test.go): max_timeout_s 24
 # gives a 6 s stop allowance, so SIGINT at 18 s and the kill at 24 s.
 priv_policy '' '' true | sed 's/^  default_timeout_s: 30$/  default_timeout_s: 10/; s/^  max_timeout_s: 60$/  max_timeout_s: 24/' >"$bin/privileged-pkgstage.yaml"
+# The same with the recovery allowed (handoff N-14, pkg_recover_test.go).
+# Written, not checked here: a helper from before packages.allow_recover
+# refuses it.
+sed 's/^  allow_update_index: true$/  allow_update_index: true\n  allow_recover: true/' "$bin/privileged-pkgstage.yaml" >"$bin/privileged-recover.yaml"
 # The smallest backup store cap (64 MiB), for the store-cap test.
 priv_policy '' '' false | sed 's/^  keep: 3$/  keep: 3\n  max_store_bytes: 67108864/' >"$bin/privileged-small-store.yaml"
 # PRIVILEGED §6's worked chown example on this machine's own coreutils
