@@ -43,9 +43,11 @@ type Package struct {
 	Name, Arch, Version string
 	// Want, Flag and State are the three words of its Status field.
 	Want, Flag, State string
-	// Depends, PreDepends and Provides are those fields as written (used
-	// only to say what an unfinished package needs: UnfinishedPackages).
-	Depends, PreDepends, Provides string
+	// Relations are its Pre-Depends, Depends and Provides fields as
+	// written, joined by NUL (which a status file never holds), "" when it
+	// has none: used only to say what an unfinished package needs
+	// (UnfinishedPackages). One field keeps Package small and comparable.
+	Relations string
 }
 
 // Status is dpkg's status file. Packages are keyed by apt's name for them:
@@ -149,6 +151,7 @@ func ParseStatus(b []byte) (Status, error) {
 
 func parseStanza(stanza string) (Package, error) {
 	var p Package
+	var rel [3]string // Pre-Depends, Depends, Provides
 	seen := map[string]bool{}
 	for _, line := range strings.Split(stanza, "\n") {
 		if line == "" || line[0] == ' ' || line[0] == '\t' {
@@ -190,13 +193,16 @@ func parseStanza(stanza string) (Package, error) {
 				return Package{}, errors.New("dpkg's status file has an entry with an invalid version")
 			}
 			p.Version = v
-		case "Depends":
-			p.Depends = v
 		case "Pre-Depends":
-			p.PreDepends = v
+			rel[0] = v
+		case "Depends":
+			rel[1] = v
 		case "Provides":
-			p.Provides = v
+			rel[2] = v
 		}
+	}
+	if rel != [3]string{} {
+		p.Relations = strings.Join(rel[:], "\x00")
 	}
 	switch {
 	case p.Name == "":

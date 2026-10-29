@@ -177,7 +177,7 @@ func FuzzUnfinishedPackages(f *testing.F) {
 				t.Fatalf("%s: recovery %q", p.Name, p.Recovery)
 			}
 		}
-		if !slices.Equal(got, st.Unfinished()) && !(len(got) == 0 && len(st.Unfinished()) == 0) {
+		if len(got)+len(st.Unfinished()) > 0 && !slices.Equal(got, st.Unfinished()) {
 			t.Fatalf("unfinished %v, Unfinished %v", got, st.Unfinished())
 		}
 		if r := pkg.Settle(st, st); len(r.Configured) != 0 || !r.Other.Empty() || len(r.Still) != len(u) {
@@ -203,7 +203,7 @@ func FuzzReadStateJournal(f *testing.F) {
 	f.Add([]byte("#padding\n"))
 	f.Fuzz(func(t *testing.T, rec []byte) {
 		d := filepath.Join(t.TempDir(), "dpkg")
-		if err := os.MkdirAll(filepath.Join(d, "updates"), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(d, "updates"), 0o750); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(d, "status"), []byte(base), 0o644); err != nil { //nolint:gosec // G306: dpkg's status is world-readable

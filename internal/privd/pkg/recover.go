@@ -148,12 +148,14 @@ type UnfinishedPackage struct {
 // certainly missing; one present at the wrong version is not reported.
 func (s Status) UnfinishedPackages() []UnfinishedPackage {
 	provided := map[string]bool{}
-	for _, p := range s.Packages {
+	for k := range s.Packages {
+		p := s.Packages[k]
 		if !present(&p) {
 			continue
 		}
 		provided[p.Name] = true
-		for _, g := range depGroups(p.Provides) {
+		_, _, provides := p.relations()
+		for _, g := range depGroups(provides) {
 			for _, n := range g {
 				provided[n] = true
 			}
@@ -166,7 +168,8 @@ func (s Status) UnfinishedPackages() []UnfinishedPackage {
 		if p.Flag == "reinstreq" || p.State == "half-installed" {
 			u.Recovery = RecoverReinstall
 		} else {
-			for _, g := range slices.Concat(depGroups(p.PreDepends), depGroups(p.Depends)) {
+			pre, dep, _ := p.relations()
+			for _, g := range slices.Concat(depGroups(pre), depGroups(dep)) {
 				if !slices.ContainsFunc(g, func(n string) bool { return provided[n] }) {
 					u.Missing = append(u.Missing, strings.Join(g, " | "))
 				}
@@ -178,6 +181,15 @@ func (s Status) UnfinishedPackages() []UnfinishedPackage {
 		out = append(out, u)
 	}
 	return out
+}
+
+// relations splits Relations into Pre-Depends, Depends and Provides.
+func (p *Package) relations() (pre, dep, provides string) {
+	f := strings.SplitN(p.Relations, "\x00", 3)
+	for len(f) < 3 {
+		f = append(f, "")
+	}
+	return f[0], f[1], f[2]
 }
 
 // depGroups parses a Depends, Pre-Depends or Provides value into its
