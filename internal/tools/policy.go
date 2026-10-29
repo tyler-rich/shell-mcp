@@ -133,6 +133,7 @@ type PrivPackages struct {
 	Remove           []string `json:"remove" jsonschema:"Packages that may be removed."`
 	AllowUpdateIndex bool     `json:"allow_update_index" jsonschema:"Whether the package index may be updated."`
 	AllowUpgrade     bool     `json:"allow_upgrade" jsonschema:"Whether installed packages may be upgraded."`
+	AllowRecover     bool     `json:"allow_recover" jsonschema:"Whether what an interrupted dpkg left unfinished may be finished (dpkg --configure --pending)."`
 }
 
 // PrivPower is the power section.

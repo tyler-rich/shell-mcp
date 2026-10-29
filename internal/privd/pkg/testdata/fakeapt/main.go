@@ -60,6 +60,8 @@ func main() {
 	switch fields[0] {
 	case "model":
 		os.Exit(model(os.Args[1:]))
+	case "dpkg":
+		os.Exit(dpkgRun(os.Args[1:]))
 	case "ok":
 		fmt.Println("Reading package lists...")
 		fmt.Println("fake apt-get: done")

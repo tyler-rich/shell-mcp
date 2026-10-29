@@ -41,6 +41,9 @@ type fixture struct {
 	// aptGet is the apt-get the policy checks and package operations run
 	// (the probe unless withFakeApt), aptLog the fake's log.
 	aptGet, aptLog string
+	// dpkgBin is the dpkg the policy checks and the recovery runs (the
+	// probe unless withFakeDpkg), dpkgLog the fake's log.
+	dpkgBin, dpkgLog string
 	// dpkg is the dpkg directory (status, updates/, lock-frontend) and
 	// record the package operation record the package operations use.
 	dpkg, record string
@@ -180,6 +183,7 @@ func newFixture(t testing.TB, opts ...opt) *fixture {
 		gatetest.BuildProbe(t, filepath.Dir(f.probe), "example-probe", filepath.Join(d, "outside.txt"))
 	}
 	f.aptGet = f.probe
+	f.dpkgBin = f.probe
 	y := fmt.Sprintf(`version: 1
 client_uid: %d
 socket_group: svc-shell-priv
@@ -232,6 +236,7 @@ commands:
 		UnitClientUID: strconv.FormatUint(uint64(f.uid), 10),
 		Unit:          f.unit,
 		AptGet:        f.aptGet,
+		Dpkg:          f.dpkgBin,
 		DpkgDir:       f.dpkg,
 		PkgRecord:     f.record,
 		ReadStatus: func() ([]byte, error) {
@@ -293,7 +298,7 @@ func (f *fixture) rehash() {
 }
 
 func (f *fixture) loadOptions() *policy.LoadOptions {
-	o := &policy.LoadOptions{Trust: f.opts.Trust, HelperExecutable: f.opts.Executable, SystemBinDirs: f.opts.SystemBinDirs}
+	o := &policy.LoadOptions{Trust: f.opts.Trust, HelperExecutable: f.opts.Executable, SystemBinDirs: f.opts.SystemBinDirs, Dpkg: f.opts.Dpkg}
 	f.opts.Lookups(o)
 	return o
 }

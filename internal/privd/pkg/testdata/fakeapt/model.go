@@ -73,6 +73,8 @@ type modelDef struct {
 
 type installed struct {
 	name, arch, version, status string
+	// depends is kept as it is (the fake dpkg's dependency fixtures).
+	depends string
 }
 
 type change struct {
@@ -343,8 +345,12 @@ func readStatus(dir string) []installed {
 		fmt.Fprintln(os.Stderr, "fakeapt: no status file")
 		os.Exit(2)
 	}
+	return parseStanzas(string(b))
+}
+
+func parseStanzas(s string) []installed {
 	var out []installed
-	for _, stanza := range strings.Split(strings.TrimSpace(string(b)), "\n\n") {
+	for _, stanza := range strings.Split(strings.TrimSpace(s), "\n\n") {
 		var p installed
 		for _, l := range strings.Split(stanza, "\n") {
 			k, v, _ := strings.Cut(l, ": ")
@@ -357,6 +363,8 @@ func readStatus(dir string) []installed {
 				p.version = v
 			case "Status":
 				p.status = v
+			case "Depends":
+				p.depends = v
 			}
 		}
 		if p.name != "" {
@@ -369,8 +377,11 @@ func readStatus(dir string) []installed {
 func writeStatus(dir string, st []installed) {
 	var b strings.Builder
 	for _, p := range st {
-		fmt.Fprintf(&b, "Package: %s\nStatus: %s\nPriority: optional\nArchitecture: %s\nVersion: %s\nDescription: invented\n continuation line\n\n",
-			p.name, p.status, p.arch, p.version)
+		fmt.Fprintf(&b, "Package: %s\nStatus: %s\nPriority: optional\nArchitecture: %s\nVersion: %s\n", p.name, p.status, p.arch, p.version)
+		if p.depends != "" {
+			fmt.Fprintf(&b, "Depends: %s\n", p.depends)
+		}
+		b.WriteString("Description: invented\n continuation line\n\n")
 	}
 	tmp := filepath.Join(dir, "status-new")
 	if err := os.WriteFile(tmp, []byte(b.String()), 0o644); err != nil { //nolint:gosec // G306: dpkg's status is world-readable

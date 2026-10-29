@@ -15,7 +15,8 @@
 | **N-26** (+ **N-31**, new) — **done (S6-3)** | What a `#!` script runs is not looked at; the GTFOBins warning ignores a script's interpreter | Low (needs root to declare; a review gap, not a bypass) | **Next version:** every `#!` script in the privileged policy needs `acknowledge`; the gate keeps its WARN; the GTFOBins warning also checks the interpreter (N-31) | Privileged policy: no new key, the acknowledge list (list B) extended (approved). Existing privileged policies with scripts stop loading until acknowledged | S6-3 |
 | **N-5** (refined) — **private-key half done (S6-4, branch `feat/private-key-rotation`); the gate's half done (S7-3, branch `feat/gate-hash-file`); the 256 MiB caps deferred** | Overwrite previews hash the destination through the read op | Low | **The private-key half only** (option b): a private-key file can be rotated with `shell_priv_write_file` and approved; the 256 MiB cap and the gate move's commit-side cap are **deferred** | Protocol: one read-tier op, `priv_hash_file`, added to version 2 in place and the gate's `hash_file` (S7-3, maintainer 2026-10-28). No schema, error-code, envelope, Landlock or unit change; the approval page masks a private key in any value | S6-4, S7-3 |
 | **N-28** | The core unit's `systemd-analyze security` exposure is exactly at CI's 1.4 | Informational | **Add the offline exposure check; take `ProtectHome=yes`** for policies with no privileged root under `/home`, `/root` or `/run/user` (`read-only`, as today, otherwise); the threshold follows the new score | Generated core unit: `ProtectHome=` conditional (approved). CI and ci-local: the offline check | S6-5 (done) |
-| N-14 | No operation runs `dpkg --configure -a` | Low (operational) | Deferred: the documented recovery template works | A new op would be a protocol change | — |
+| **N-14** — **done (S7-4, branch `feat/pkg-recover`)** | No operation runs `dpkg --configure -a` | Low (operational) | **Done (maintainer, 2026-10-28):** a dedicated recovery, `priv_pkg_recover_preview` and `priv_pkg_recover` with the tool `shell_priv_recover_packages`, under S4c-7's protections without SIGINT; the other package operations' refusal names what each state needs (§6b) | Protocol: two broad ops added to version 2 in place. Privileged policy: `packages.allow_recover` (approved). No error-code, envelope, Landlock or unit change | S7-4 |
+| **N-36** (new, S7-4) | Two unfinished states the recovery leaves: a package that needs a reinstall (half-installed, reinstreq), and one whose dependency is missing; every package operation refuses while either is there | Low (operational) | **Recorded, not built** (maintainer, 2026-10-28); designs in §6b | A reinstall op (protocol); a removal allowed in that state (behaviour) | — |
 | X-5, X-6 | Privileged redaction patterns; the gate's audit line for `priv_*` | Documented | **Dropped as work items** (reasons in §7) | — | — |
 | plan §6, S4d | Other package managers, seccomp, OAuth, multi-principal, non-Linux; approval front ends | — | Deferred, unchanged; N-30 is not a reason to start seccomp | — | — |
 | N-29 | Pin the reference deployment to the released digest | Process | Repeat for every release, in its own PR after the tag | — | after each release |
@@ -256,12 +257,51 @@ So the opt-in helps commands that just read their file (the common read-only sha
 
 **Decision (maintainer, 2026-10-26):** recorded as a future design option; not scheduled.
 
+## 6b. N-14: recovering an unfinished dpkg database (S7-4; done) and N-36 (new)
+
+**What, from the code (phase 1).**
+- Install, upgrade and remove, their previews, and power refused an unfinished database with one message, "an administrator must run dpkg --configure -a". The index update is not refused: `pkgUpdate` and its preview check neither dpkg's state nor the record, which is safe (`apt-get update` never opens dpkg's database), and is now documented.
+- The only recovery through the tools was the acknowledged broad command template. It ran outside S4c-7's protections: no binding of the unfinished packages, no result from dpkg's state, `priv_exec`'s kill on a hang-up, no record, and the command environment without `DEBIAN_FRONTEND=noninteractive`.
+- **Measured** (dpkg 1.22.22 and apt 3.0.3, in a throwaway container with invented packages):
+  - dpkg carries on past a failing postinst and exits 1, so a partial success is the normal case.
+  - `--configure -a` exits 0 and leaves a half-installed or reinstreq package as it is.
+  - It leaves a package whose dependency is missing `unpacked` ("dependency problems"), while `apt-get -f install` proposes removing it.
+  - `SIGINT` to dpkg alone during a postinst is ignored, and dpkg ran to the end. `SIGTERM` leaves the database unfinished, with journal entries, and the postinst running on orphaned.
+  - The status file alone is stale while the journal (`updates/NNNN`, one stanza each; `tmp.i` padding) has entries.
+- **From dpkg's source:** `subproc_signals_ignore()` ignores `SIGINT`/`SIGQUIT` only around `maintscript_exec()`'s reap (`lib/dpkg/subproc.c`, `src/main/script.c`), and `src/main/main.c` installs no handler, so `SIGINT` between scripts ends dpkg with the default action.
+
+**Decision (maintainer, 2026-10-28): option (ii), done in S7-4.**
+- `priv_pkg_recover_preview` (read) and `priv_pkg_recover` (operator, always approval-gated), with the tool `shell_priv_recover_packages`, all in the broad unit.
+- The fixed argv `/usr/bin/dpkg --force-confold --configure --pending` with `pkg.Env`.
+- The record and the lock rule; the state re-read and its hash checked before the run; the early answer; no `SIGINT`; the process group killed only at `limits.max_timeout_s`.
+- A status reader that folds the journal, and the state-aware result (success; `exec_failed` when nothing changed; `verify_failed` otherwise).
+- "Nothing to recover; nothing ran" with no approval; the preview refused when only `needs_reinstall` packages remain.
+- No `apt-get -f install`.
+- Schema: `packages.allow_recover` (default false), shown in `priv_policy`.
+- In the same PR: the refusal on the other package operations and on power names what each state needs; the index update documented; dpkg's `SIGINT` behaviour recorded with the no-SIGINT decision (PRIVILEGED §6, "Recovering an unfinished database").
+
+**Found while implementing.**
+- **The unmet-dependency state is named from the status itself.** It is a Pre-Depends or Depends group none of whose alternatives is on the system, by name or by a present package's Provides. Versions are not compared, so a package reported missing certainly is; one present at the wrong version falls to "to configure", and then the recovery's result names it.
+- **An unreadable journal entry is refused as an interrupted dpkg**, naming `dpkg --configure -a` (before, its contents were never read). A journal record that is not a single valid stanza is not folded into a guess.
+
+**N-36 (new): what the recovery leaves.** While either case below is unfinished, every package operation refuses, so today only an administrator on the host can fix them. Recorded, not built (maintainer, 2026-10-28).
+- **(a) The unmet dependency: a removal limited to exactly the unfinished packages.**
+  - **Proposed:** `priv_pkg_remove` (and its preview) accepts an unfinished database when the journal is empty and every unfinished package is one the request removes, each with the dependency recovery and on `packages.remove`.
+  - **Binding:** the transaction must remove exactly them (anything else is `policy_denied`, as an install that removes is), and the preview's hash also covers their state, as the recovery's does. The run is S4c-7's remove; the result from the status diff.
+  - **No protocol change:** a behaviour change of an existing op; documented, with a CHANGELOG note.
+  - **Open:** whether `apt-get remove` resolves cleanly with the dependency missing (measured only `-s -f install`, which proposed the removal), and whether `dpkg --remove` is the simpler bound path.
+- **(b) The reinstall.**
+  - **Proposed:** a new op pair `priv_pkg_reinstall_preview` / `priv_pkg_reinstall`, simulating and running `apt-get install --reinstall --no-remove -- name=version`, pinned to the installed version, for names on `packages.install`, allowed only while those names are exactly the half-installed or reinstreq packages and the journal is empty.
+  - **Refusal:** with no archive of that version in the index ("can't find an archive", measured), it is refused at the preview with no approval requested.
+  - **Result:** each package installed at the same version, from the status diff (the recovery's `Settle`).
+  - **Protocol:** two ops, so additive within version 2 before `v0.2.0`, or a new version after.
+
 ## 7. Other open items, and the next version
 
 - **N-34** (new, S6-4; low, deferred past 0.2.0, maintainer 2026-10-27): the output redaction's `pemBlock` ends a block at the first `-----END … PRIVATE KEY-----` line of any label, not of the BEGIN line's label, so in output holding a malformed block (`BEGIN RSA PRIVATE KEY`, body, `END EC PRIVATE KEY`, more body) the text after the first END is shown. The approval page's block masking (S6-4) pairs the labels and, without a matching END, masks to the end of the value. Making the output redaction do the same changes redaction behaviour, so it waits for its own session.
 
 **Done (S7-1, branch `fix/redaction-key-labels`, 2026-10-27).** `redact.Bytes` (so every output redaction: gate, helper, server) now masks key blocks with `redact.PrivateKeyBlocks`, the finder the approval page uses; the `pemBlock` regexp is gone. A block ends at the first END line of its BEGIN line's label, or at the end of the output. Output is redacted as whole buffers (no streaming), and `Truncate` redacts before and after the cut. Tests and fuzz: ARCHIVE §14, S7-1.
-- **N-14** (no operation for `dpkg --configure -a`): the documented broad-unit template works and is the operator's reviewed exception. Defer; a new op would be a protocol change for a rare recovery.
+- **N-14** (no operation for `dpkg --configure -a`): deferred on 2026-10-25; **done in S7-4** (maintainer, 2026-10-28; §6b).
 - **X-5** (no redaction patterns in the privileged policy) and **X-6** (the gate's audit line for `priv_*` lacks owner, group, backup id and packages): documented in S4c-1, never proposed. **Dropped as work items (maintainer, 2026-10-25); the documentation stays.** Reasons:
   - **X-5.** Every privileged result already passes the helper's built-in rules (PEM private keys) and then the server's built-in rules and `SHELL_MCP_REDACT_PATTERNS` before it reaches a client (PRIVILEGED §6), so the operator's patterns already apply to root output. A pattern list in the privileged policy would duplicate them in a second place to keep in step, as a privileged schema change, for no output that the server's patterns do not already cover. What it would add (redaction before the bytes leave the target) protects only against a compromised server, which can send any request the policies allow anyway.
   - **X-6.** The helper's own journal line for each request already carries the owner, group, backup id and packages, and joins the gate's line on the request id (ARCHITECTURE §4, `id`; PRIVILEGED §8). Copying them into the gate's line would widen what the gate logs about arguments for no information the target's journal lacks.
@@ -285,6 +325,7 @@ So the opt-in helps commands that just read their file (the common read-only sha
 | 6 | **S7-1** (done, PR #66) | `fix/redaction-key-labels` | N-34 | — |
 | 7 | **S7-2** (done, branch `fix/gtfobins-identity`) | `fix/gtfobins-identity` | N-33: the GTFOBins warning matches by binary identity, programs and interpreters, gate and helper | The measured cost of a policy load; a schema, protocol or never/acknowledge-list change |
 | 8 | **S7-3** (done, branch `feat/gate-hash-file`) | `feat/gate-hash-file` | N-5, the gate's half: `hash_file` for the gate's write, copy and move previews; a gated write over a file above 256 MiB refused at its preview; a copy's source searched whole for a private key | — |
+| 9 | **S7-4** (done, branch `feat/pkg-recover`) | `feat/pkg-recover` | N-14: the recovery op and tool; the refusal naming what each unfinished state needs; N-36 recorded | Phase 1 (the options) before any code |
 | — | Release | `dev → main`, tag by the owner | CHANGELOG `## [0.2.0]` with the upgrade notes (policy keys, the placeholder, scripts acknowledged, protocol version: upgrade server, gate and helper together); then N-29 | when S6-1 to S6-3 are merged; S6-4 and S6-5 if merged by then |
 
 S6-1 comes first (the one medium item, read-tier, no approval needed to reach it). S6-2 before S6-4, because S6-4's ops join the protocol version S6-2 introduces. S6-5 after S6-1, so the two unit changes do not touch the generator and its goldens at once. Each is Opus 5.5 at High (D-022), and each starts with the D-013 refresh.

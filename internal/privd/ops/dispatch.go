@@ -79,6 +79,8 @@ func opTable() map[string]opSpec {
 		protocol.OpPrivPkgUpgradePreview:     {policy.TierRead, (*server).pkgUpgradePreview},
 		protocol.OpPrivPkgRemovePreview:      {policy.TierRead, (*server).pkgRemovePreview},
 		protocol.OpPrivPkgUpdateIndexPreview: {policy.TierRead, (*server).pkgUpdateIndexPreview},
+		protocol.OpPrivPkgRecover:            {policy.TierOperator, (*server).pkgRecover},
+		protocol.OpPrivPkgRecoverPreview:     {policy.TierRead, (*server).pkgRecoverPreview},
 		protocol.OpPrivPower:                 {policy.TierDestructive, (*server).power},
 		protocol.OpPrivPowerPreview:          {policy.TierRead, (*server).powerPreview},
 		protocol.OpPrivPowerCancel:           {policy.TierRead, (*server).powerCancel},
@@ -92,6 +94,7 @@ var broadOps = []string{
 	protocol.OpPrivPkgUpdateIndex, protocol.OpPrivPkgInstall, protocol.OpPrivPkgUpgrade, protocol.OpPrivPkgRemove,
 	protocol.OpPrivPkgInstallPreview, protocol.OpPrivPkgUpgradePreview, protocol.OpPrivPkgRemovePreview, protocol.OpPrivPkgUpdateIndexPreview,
 	protocol.OpPrivPower, protocol.OpPrivPowerPreview, protocol.OpPrivPowerCancel,
+	protocol.OpPrivPkgRecover, protocol.OpPrivPkgRecoverPreview,
 }
 
 // wrongUnit is the refusal of an operation meant for the other unit's

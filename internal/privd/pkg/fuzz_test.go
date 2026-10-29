@@ -3,6 +3,9 @@
 package pkg_test
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -132,6 +135,98 @@ func FuzzPinnedArgs(f *testing.F) {
 		if !ok || !pkg.ValidName(base) || v == "" || strings.HasSuffix(v, "-") || strings.HasPrefix(v, "-") ||
 			strings.Trim(v, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.+~:-") != "" {
 			t.Fatalf("pinned %q from %q %q", args[i+1], name, version)
+		}
+	})
+}
+
+// FuzzUnfinishedPackages (S7-4): whatever dpkg's status holds, the
+// unfinished packages are exactly Unfinished's, sorted, each with a known
+// recovery and, for a dependency, only package names as missing; a state
+// settles with itself to nothing configured and nothing changed; the
+// recovery hash does not depend on the packages' order.
+func FuzzUnfinishedPackages(f *testing.F) {
+	f.Add([]byte(statusFile))
+	f.Add([]byte("Package: dpkg\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1\n\nPackage: a1\nStatus: install ok unpacked\nArchitecture: all\nVersion: 1\nDepends: b1 (>= 2) | c1:any, d1 [amd64], e1 <!nocheck>\nPre-Depends: ,|, x\n\nPackage: f1\nStatus: install ok installed\nArchitecture: all\nVersion: 1\nProvides: e1 (= 1), g1\n"))
+	f.Add([]byte("Package: dpkg\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1\n\nPackage: a1\nStatus: hold reinstreq half-installed\nArchitecture: all\nVersion: 1\n"))
+	f.Fuzz(func(t *testing.T, b []byte) {
+		st, err := pkg.ParseStatus(b)
+		if err != nil {
+			return
+		}
+		u := st.UnfinishedPackages()
+		got := []string{}
+		for _, p := range u {
+			got = append(got, p.Name)
+			switch p.Recovery {
+			case pkg.RecoverConfigure, pkg.RecoverReinstall:
+				if len(p.Missing) != 0 {
+					t.Fatalf("%s: %s with missing %q", p.Name, p.Recovery, p.Missing)
+				}
+			case pkg.RecoverDependency:
+				if len(p.Missing) == 0 {
+					t.Fatalf("%s: a dependency recovery without a missing dependency", p.Name)
+				}
+				for _, g := range p.Missing {
+					for _, n := range strings.Split(g, " | ") {
+						if !pkg.ValidName(n) {
+							t.Fatalf("%s: missing %q is not a package name", p.Name, n)
+						}
+					}
+				}
+			default:
+				t.Fatalf("%s: recovery %q", p.Name, p.Recovery)
+			}
+		}
+		if len(got)+len(st.Unfinished()) > 0 && !slices.Equal(got, st.Unfinished()) {
+			t.Fatalf("unfinished %v, Unfinished %v", got, st.Unfinished())
+		}
+		if r := pkg.Settle(st, st); len(r.Configured) != 0 || !r.Other.Empty() || len(r.Still) != len(u) {
+			t.Fatalf("self-settle %+v", r)
+		}
+		rev := slices.Clone(u)
+		slices.Reverse(rev)
+		pol := strings.Repeat("a", 64)
+		if pkg.RecoverPreviewHash(pol, pkg.RecoverArgs(), u, nil) != pkg.RecoverPreviewHash(pol, pkg.RecoverArgs(), rev, nil) {
+			t.Fatal("the hash depends on the order")
+		}
+	})
+}
+
+// FuzzReadStateJournal (S7-4): whatever one journal record holds, folding
+// it either fails or yields a state whose every entry is keyed by a valid
+// name, with the record reported in Journal.
+func FuzzReadStateJournal(f *testing.F) {
+	base := "Package: dpkg\nStatus: install ok installed\nArchitecture: amd64\nVersion: 1.22.22\n\nPackage: example-b\nStatus: install ok unpacked\nArchitecture: all\nVersion: 1.0\n"
+	f.Add([]byte("Package: example-b\nStatus: install ok half-configured\nArchitecture: all\nVersion: 1.0\nDepends: dpkg\nDescription: invented\n"))
+	f.Add([]byte("Package: example-c\nStatus: install ok unpacked\nArchitecture: i386\nVersion: 2:1.0~rc1\n"))
+	f.Add([]byte("Package: example-b\n\nPackage: example-c\n"))
+	f.Add([]byte("#padding\n"))
+	f.Fuzz(func(t *testing.T, rec []byte) {
+		d := filepath.Join(t.TempDir(), "dpkg")
+		if err := os.MkdirAll(filepath.Join(d, "updates"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "status"), []byte(base), 0o644); err != nil { //nolint:gosec // G306: dpkg's status is world-readable
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "updates", "0000"), rec, 0o644); err != nil { //nolint:gosec // G306: as dpkg writes it
+			t.Fatal(err)
+		}
+		st, err := pkg.ReadState(d)
+		if err != nil {
+			if !errors.Is(err, pkg.ErrJournal) {
+				t.Fatalf("a journal record's error is not ErrJournal: %v", err)
+			}
+			return
+		}
+		if !slices.Equal(st.Journal, []string{"0000"}) || len(st.Packages) < 2 || len(st.Packages) > 3 {
+			t.Fatalf("state %+v", st)
+		}
+		for k, p := range st.Packages {
+			base, _, _ := strings.Cut(k, ":")
+			if !pkg.ValidName(base) || base != p.Name {
+				t.Fatalf("entry %q: %+v", k, p)
+			}
 		}
 	})
 }

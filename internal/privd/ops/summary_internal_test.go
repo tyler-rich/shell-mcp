@@ -69,6 +69,7 @@ func TestSummaryMatchesEnforcementOnExamples(t *testing.T) {
 		protocol.OpPrivPkgInstall: pkg.OpInstall, protocol.OpPrivPkgInstallPreview: pkg.OpInstall,
 		protocol.OpPrivPkgUpgrade: pkg.OpUpgrade, protocol.OpPrivPkgUpgradePreview: pkg.OpUpgrade,
 		protocol.OpPrivPkgRemove: pkg.OpRemove, protocol.OpPrivPkgRemovePreview: pkg.OpRemove,
+		protocol.OpPrivPkgRecover: pkg.OpRecover, protocol.OpPrivPkgRecoverPreview: pkg.OpRecover,
 	}
 	for _, v := range variants {
 		t.Run(v.name, func(t *testing.T) {

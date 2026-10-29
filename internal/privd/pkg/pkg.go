@@ -224,6 +224,12 @@ var lockMessages = [][]byte{
 	[]byte("Unable to acquire the dpkg frontend lock"),
 	[]byte("Unable to lock the administration directory"),
 	[]byte("Unable to lock directory "),
+	// dpkg's own (dpkg 1.22.22, lib/dpkg/lock.c and dbmodify.c), for the
+	// recovery, which runs dpkg directly; dpkg too refuses before changing
+	// anything.
+	[]byte("dpkg frontend lock was locked by "),
+	[]byte("dpkg frontend lock is locked by "),
+	[]byte("dpkg status database is locked by "),
 }
 
 // LockHeld reports whether stderr says a lock was held.

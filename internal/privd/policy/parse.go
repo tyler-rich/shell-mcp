@@ -127,6 +127,7 @@ type rawPackages struct {
 	Remove           []string `yaml:"remove"`
 	AllowUpdateIndex bool     `yaml:"allow_update_index"`
 	AllowUpgrade     bool     `yaml:"allow_upgrade"`
+	AllowRecover     bool     `yaml:"allow_recover"`
 }
 
 // validator accumulates errors, warnings and findings.
@@ -1022,7 +1023,7 @@ func (v *validator) packages(p *Policy, raw *rawPackages) {
 	if raw == nil {
 		return
 	}
-	p.Packages = Packages{Manager: "apt", AllowUpdateIndex: raw.AllowUpdateIndex, AllowUpgrade: raw.AllowUpgrade}
+	p.Packages = Packages{Manager: "apt", AllowUpdateIndex: raw.AllowUpdateIndex, AllowUpgrade: raw.AllowUpgrade, AllowRecover: raw.AllowRecover}
 	if raw.Manager != "" && raw.Manager != "apt" {
 		v.fail("packages.manager", "is %q; only apt is supported in v1", raw.Manager)
 	}
@@ -1057,48 +1058,56 @@ func (v *validator) packages(p *Policy, raw *rawPackages) {
 		return
 	}
 	p.Packages.Enabled = true
-	v.aptGet(p)
-	v.find("root-equivalent", "packages", "package operations run in the broad unit; maintainer scripts run arbitrary code as root (install %s; remove %s; update index %v; upgrade %v)",
-		strings.Join(p.Packages.Install, " "), strings.Join(p.Packages.Remove, " "), p.Packages.AllowUpdateIndex, p.Packages.AllowUpgrade)
+	p.Packages.AptGet = v.packageTool(v.opts.AptGet, DefaultAptGet)
+	if p.Packages.AllowRecover {
+		// The recovery runs dpkg itself (handoff N-14).
+		p.Packages.Dpkg = v.packageTool(v.opts.Dpkg, DefaultDpkg)
+	}
+	v.find("root-equivalent", "packages", "package operations run in the broad unit; maintainer scripts run arbitrary code as root (install %s; remove %s; update index %v; upgrade %v; recover %v)",
+		strings.Join(p.Packages.Install, " "), strings.Join(p.Packages.Remove, " "), p.Packages.AllowUpdateIndex, p.Packages.AllowUpgrade, p.Packages.AllowRecover)
 	if p.MaxTier != 0 && p.MaxTier < TierOperator {
 		v.warn("packages are enabled but max_tier %s refuses every package operation except the previews", p.MaxTier)
 	}
 }
 
-// DefaultAptGet is the apt-get binary the package operations run.
-const DefaultAptGet = "/usr/bin/apt-get"
+// DefaultAptGet is the apt-get binary the package operations run, and
+// DefaultDpkg the dpkg binary the recovery runs.
+const (
+	DefaultAptGet = "/usr/bin/apt-get"
+	DefaultDpkg   = "/usr/bin/dpkg"
+)
 
-// aptGet checks the apt-get binary as a command binary is checked: it
-// resolves, it and its directories are root-owned and not
-// group/other-writable, and it is executable.
-func (v *validator) aptGet(p *Policy) {
-	path := v.opts.AptGet
+// packageTool checks a package operation's binary (path, or def when
+// empty) as a command binary is checked: it resolves, it and its
+// directories are root-owned and not group/other-writable, and it is
+// executable. It returns the resolved path, "" after a failure.
+func (v *validator) packageTool(path, def string) string {
 	if path == "" {
-		path = DefaultAptGet
+		path = def
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		v.fail("packages", "%s cannot be resolved: %v", path, gpolicy.ErrReason(err))
-		return
+		return ""
 	}
 	if _, err = gpolicy.CheckChain(v.opts.Trust, resolved); err != nil {
 		v.fail("packages", "%v", err)
-		return
+		return ""
 	}
 	fi, err := os.Stat(resolved)
 	if err != nil {
 		v.fail("packages", "%s: %v", resolved, gpolicy.ErrReason(err))
-		return
+		return ""
 	}
 	if ferr := gpolicy.CheckFile(v.opts.Trust, resolved, fi); ferr != nil {
 		v.fail("packages", "%v", ferr)
-		return
+		return ""
 	}
 	if fi.Mode().Perm()&0o111 == 0 {
 		v.fail("packages", "%s is not executable", resolved)
-		return
+		return ""
 	}
-	p.Packages.AptGet = resolved
+	return resolved
 }
 
 // PowerActions are what power.allowed may list (priv_power).

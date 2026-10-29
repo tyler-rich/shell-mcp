@@ -128,3 +128,5 @@ packages:
   remove: [htop]               # exact names priv_pkg_remove may remove (never purged)
   allow_update_index: true     # priv_pkg_update_index (apt-get update)
   allow_upgrade: false         # priv_pkg_upgrade (apt-get upgrade of everything)
+  allow_recover: false         # priv_pkg_recover (dpkg --configure --pending after an
+                               # interrupted dpkg: runs the unfinished packages' scripts)

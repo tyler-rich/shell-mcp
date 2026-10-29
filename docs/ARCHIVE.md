@@ -4212,3 +4212,62 @@ TOOLS.md now states this: the staging path must not exist, so stat the staged ke
 **Deferred / out of scope:** the 256 MiB cap itself and the gate move's commit-side cap (N-5); N-14, N-32, N-35; the 0.2.0 release.
 
 **Versions:** Go 1.27.3 (D-013: deps-current reported 13 modules in scope, all current, so no refresh commit). Direct modules unchanged: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0. No dependency added.
+
+### 2026-10-28 — Recovering an unfinished dpkg database through the tools (S7-4: N-14; N-36 recorded) (branch feat/pkg-recover)
+
+**What changed.**
+- **Two broad-unit helper ops,** `priv_pkg_recover_preview` (read) and `priv_pkg_recover` (operator, always approval-gated), and the tool `shell_priv_recover_packages`, added to protocol version 2 in place before `v0.2.0` (ARCHITECTURE §4.0).
+- **The preview** reads dpkg's state with its journal folded in (`pkg.ReadState`: each all-digit `updates/` entry is one status record, applied in order) and lists the unfinished packages. Those a recovery configures (each with the dependencies no package provides) are listed apart from those that need a reinstall. It hashes the policy, the argv, each package's name, version, want, flag and state, and the journal's entry names; never anything derived from them.
+- **The operation** takes the package operation record, waits for the dpkg lock by the lock rule, and re-reads and re-hashes the state (`exists` on any change, nothing run). It answers `ran: false` when nothing is unfinished, and otherwise runs `/usr/bin/dpkg --force-confold --configure --pending` with `pkg.Env` through the stop points without SIGINT (an early `outcome_unknown` at a hang-up or the deadline; the process group killed at `limits.max_timeout_s`). It retries dpkg's own lock refusal within the same bound.
+- **The result** comes from `pkg.Settle` over the states before and after: success only when every unfinished package is installed at its version, the journal is empty and nothing else changed; `exec_failed` when the state is identical; `verify_failed` otherwise.
+- **The tool** follows its preview's tier (`tierFromPreview`): read with nothing unfinished (no approval, nothing but the preview sent), operator otherwise.
+- **Privileged policy:** `packages.allow_recover` (default false, approved schema change), which resolves and checks `/usr/bin/dpkg` as apt-get is, appears in the packages finding, in `check-policy`'s packages line and in `priv_policy`'s summary.
+- **The refusal of an unfinished database** by install, upgrade, remove, their previews and power now reads the folded state and names what each package needs: to configure, a missing dependency (a Pre-Depends or Depends group with no alternative present by name or Provides), or a reinstall (half-installed or reinstreq), and the journal's entries. An unreadable journal entry is refused as an interrupted dpkg.
+- **Documented:** the index update is not refused in that state (safe: `apt-get update` never opens dpkg's database); dpkg's SIGINT behaviour; N-36 with designs (POST-RELEASE §6b).
+- **Found while implementing: `shell_get_policy` would have dropped the privileged summary.** The server decodes `priv_policy` strictly, so the new `allow_recover` field was a `protocol_mismatch`. The server's `PrivPackages` gains the field. `TestGetPolicyPrivilegedSummary` and its failure cases failed with the fixture carrying it before the fix (`d44ced2`).
+
+**Why.** The template route to `dpkg --configure -a` ran outside every protection S4c-7 built, and the kill on a hang-up it inherited from `priv_exec` is the very thing that leaves dpkg unfinished.
+
+**Measured and verified at the source** (dpkg 1.22.22 and apt 3.0.3, throwaway `debian:trixie-slim` containers, no network, invented packages):
+- dpkg carries on past a failing postinst and exits 1.
+- `--configure -a` exits 0 and leaves a half-installed or reinstreq package.
+- It leaves a package with a missing dependency `unpacked`, while `apt-get -s -f install` proposes removing it.
+- dpkg takes the frontend lock itself and refuses a second dpkg naming the holder ("dpkg frontend lock was locked by /usr/bin/dpkg process with pid N").
+- `SIGINT` to dpkg alone during a postinst is ignored, and dpkg ran to the end with exit 0. `SIGTERM` leaves one package half-configured, one unpacked and three journal entries, and the postinst running on.
+- The journal holds one full stanza per entry (`0000`, `0001`; `tmp.i` padding), and the status file alone showed a stale `unpacked` where the journal had `half-configured`.
+- dpkg's source: `subproc_signals_ignore()` sets SIGINT and SIGQUIT to `SIG_IGN` only around the reap in `maintscript_exec()` (`lib/dpkg/subproc.c`, `src/main/script.c`), and `src/main/main.c` installs no signal handler, so SIGINT between scripts ends dpkg with the default action.
+
+**Alternatives rejected:**
+- `apt-get -f install` (it can install and remove; it cannot be pinned; apt refuses while the journal has entries, which is exactly the kill case);
+- a per-package configure for a graceful stop (dependency ordering; much more code);
+- including `dpkg --audit` (another program run as root for categories the status already gives, or that configuring does not fix);
+- binding the whole status file (any unrelated change would refuse);
+- a status-only reader for the recovery (stale while the journal has entries);
+- a resolver for version constraints in the dependency check (it names only a certainly missing dependency; the result catches the rest).
+
+**Tests, failing first.** `a8dc0fa` committed the tests and inert stubs (CI evidence: below). Locally, in the pinned Go container, every new or extended test failed and no existing one did:
+- **pkg:** `TestReadStateFoldsJournal`, `TestReadStateRefusesBadJournal`, `TestUnfinishedPackagesRecovery`, `TestRecoverArgs`, `TestRecoverPreviewHash`, `TestSettle`, `TestLockHeldDpkg`.
+- **ops:** every `TestPkgRecover*` (the policy refused `allow_recover`), `TestUnfinishedRefusalNamesRecovery` (the old single message), `TestPrivPolicySummaryRecover`.
+- **policy, gate, protocol:** `TestPackagesAllowRecover`, `TestRouting`, `TestRoutingTiers`, `TestCodesClosedSet`, `TestPrivMayChange`.
+- **tools:** every `TestPrivRecover*`.
+
+**CI on the tests-only head** (run `40803460058`, `a8dc0fa`):
+- **Both Go jobs** (ubuntu-26.04 `LANDLOCK_PATH=tsync kernel_abi=8 effective_abi=8`, and the forced psx path `LANDLOCK_PATH=psx kernel_abi=8 effective_abi=7`) failed on exactly the tests above and no other.
+- **e2e-host:** 137 passed, 5 failed: the five new tests, each because the helper of the old code refuses `privileged-recover.yaml` ("field allow_recover not found").
+- CodeQL passed.
+
+The `journal` case of `TestUnfinishedRefusalNamesRecovery` passed against the old code as first written and was tightened before the commit (the folded state must not name the package the journal shows installed).
+
+**Tests corrected with the implementation:**
+- `TestPackagesAllowRecover` expected the field name in yaml's decode error, which names the type (`bool`).
+- The recovery fixture gained the apt-get stand-in, which `holdDpkgLock` runs.
+- `TestSummaryMatchesEnforcementOnExamples`' op map gained the two ops.
+- The catalogue's expected privileged rows gained the tool.
+
+**e2e** (`test/e2e/pkg_recover_test.go`, `privileged-recover.yaml`; `example-blocked`, whose postinst waits for a release file, and `example-needs`, whose dependency no repository has): `TestPackageRecoverInterrupted`, `TestPackageRecoverNothing`, `TestPackageRecoverStateChanged`, `TestPackageRecoverStopPoints`, `TestPackageRecoverMissingDependency`.
+
+**Fuzz** (65 s each, the pinned Go container): `FuzzUnfinishedPackages` (new) 33.0M executions, `FuzzReadStateJournal` (new) 166k, `FuzzParseStatus` (touched) 32.9M. All passed.
+
+**Deferred / out of scope:** N-36 (the reinstall and the removal of a package whose dependency is missing; designs recorded); N-32, N-35; the 0.2.0 release.
+
+**Versions:** Go 1.27.3 (D-013: deps-current reported 13 modules in scope, all current, so no refresh commit). Direct modules unchanged: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0. No dependency added.

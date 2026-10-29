@@ -201,6 +201,11 @@ type Packages struct {
 	Remove           []string
 	AllowUpdateIndex bool
 	AllowUpgrade     bool
+	// AllowRecover allows priv_pkg_recover (dpkg --configure --pending);
+	// Dpkg is the resolved dpkg binary it runs (set when Enabled and
+	// AllowRecover).
+	AllowRecover bool
+	Dpkg         string
 }
 
 // Power is the power section (the built-in priv_power operation).
@@ -272,6 +277,10 @@ type LoadOptions struct {
 	// /usr/bin/apt-get); it is resolved and ownership-checked when packages
 	// are enabled.
 	AptGet string
+	// Dpkg is the dpkg binary the recovery runs (production: /usr/bin/dpkg);
+	// it is resolved and ownership-checked when packages.allow_recover is
+	// set.
+	Dpkg string
 	// SystemBinDirs are the directories the binary identity check scans;
 	// nil means the gate's defaults. Tests set their own.
 	SystemBinDirs []string

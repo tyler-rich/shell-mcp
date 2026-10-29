@@ -53,6 +53,7 @@ func newFixture(t testing.TB) *fixture {
 		Trust:            gatetest.Trust(),
 		HelperExecutable: f.helper,
 		AptGet:           f.exe(t, "apt-get", "invented apt-get\n"),
+		Dpkg:             f.exe(t, "dpkg", "invented dpkg\n"),
 		SystemBinDirs:    []string{f.sysbin},
 		LookupUser: func(n string) (uint32, error) {
 			if id, ok := fakeUsers[n]; ok {
@@ -692,6 +693,40 @@ func TestPackages(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.mustFail(t, head+"packages:\n  enabled: true\n  install: [htop]\n", "writable")
+}
+
+// TestPackagesAllowRecover (handoff N-14, S7-4): packages.allow_recover is
+// off by default; when set (with packages enabled) the dpkg binary the
+// recovery runs is resolved and ownership-checked as apt-get is, and the
+// finding names it. Without it no dpkg is looked at.
+func TestPackagesAllowRecover(t *testing.T) {
+	f := newFixture(t)
+	if p := f.mustLoad(t, head+"packages:\n  enabled: true\n  install: [htop]\n"); p.Packages.AllowRecover || p.Packages.Dpkg != "" {
+		t.Fatalf("recovery on by default: %+v", p.Packages)
+	}
+	p := f.mustLoad(t, head+"packages:\n  enabled: true\n  install: [htop]\n  allow_recover: true\n")
+	if !p.Packages.AllowRecover || p.Packages.Dpkg != f.opts.Dpkg {
+		t.Fatalf("packages %+v", p.Packages)
+	}
+	if !slices.ContainsFunc(p.Acknowledged, func(fd policy.Finding) bool {
+		return fd.Kind == "root-equivalent" && fd.Item == "packages" && strings.Contains(fd.Detail, "recover true")
+	}) {
+		t.Errorf("the recovery is not in the packages finding: %+v", p.Acknowledged)
+	}
+	if p := f.mustLoad(t, head+"packages:\n  enabled: false\n  allow_recover: true\n"); p.Packages.Dpkg != "" || p.UsesBroad() {
+		t.Fatalf("disabled packages checked dpkg or use the broad unit: %+v", p.Packages)
+	}
+	f.mustFail(t, head+"packages:\n  enabled: true\n  allow_recover: maybe\n", "bool")
+	good := f.opts.Dpkg
+	f.opts.Dpkg = filepath.Join(f.bin, "missing-dpkg")
+	f.mustFail(t, head+"packages:\n  enabled: true\n  allow_recover: true\n", "missing-dpkg")
+	f.mustLoad(t, head+"packages:\n  enabled: true\n")
+	f.opts.Dpkg = f.exe(t, "dpkg-writable", "dpkg\n")
+	if err := os.Chmod(f.opts.Dpkg, 0o775); err != nil { //nolint:gosec // G302: a deliberately insecure fixture mode
+		t.Fatal(err)
+	}
+	f.mustFail(t, head+"packages:\n  enabled: true\n  allow_recover: true\n", "writable")
+	f.opts.Dpkg = good
 }
 
 // The built-in power operation (priv_power) needs a power section with a

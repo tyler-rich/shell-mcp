@@ -232,7 +232,7 @@
     },
     "description": "Returns a target gate's version, principal, sandbox status and effective policy: roots, limits, services, repositories, commands with their templates, and privileged forwarding with the privileged helper's policy summary.",
     "input_schema_sha256": "42809bf68a1fbfc1ec56832b0e720e986e33781f27d916d7d9a1e9ebc2696207",
-    "output_schema_sha256": "0c69a7ee08f0ed0d9631f9e8d2998d235b5b0919e2cc030812c9dd87bb00cec4",
+    "output_schema_sha256": "98832eda1916777e4b09dc87215338a7f6359e4dfd82024b66c99dbf25eebbf2",
     "requires_user_interaction": false
   },
   {
@@ -754,6 +754,26 @@
     "description": "Reboots or powers off the host as root: answers at once with the time the action will be requested from logind, 60 seconds later, unless it is cancelled, or blocked by a package operation or an inhibitor lock, first.",
     "input_schema_sha256": "71ad9ea19e01864a3594c237bfbcf0e060bea5489e3fc3b020e3bf7df8448d00",
     "output_schema_sha256": "0a307efb187453a59ffe019e743a7da94d3392fa1fe24f7d4b25e7ad91acbd66",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_recover_packages",
+    "title": "Recover unfinished packages as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Recover unfinished packages as root"
+    },
+    "description": "Finishes, as root, what an interrupted dpkg left unfinished, exactly as its approved preview listed it, without installing or removing packages; returns what dpkg shows was configured.",
+    "input_schema_sha256": "6ae8497bec2bac4c9473d84c65286fe270594c68ee8ef34676a32987e07cc6b8",
+    "output_schema_sha256": "e9eaec134f86e6b9d25cbe7cf0cbe43a3bc9675169fc380eb025f2416259e832",
     "requires_user_interaction": true
   },
   {

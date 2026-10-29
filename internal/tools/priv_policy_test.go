@@ -28,7 +28,7 @@ func fakePrivPolicy(sha string) string {
 "commands":[{"id":"app-check","tier":"read","unit":"core","description":"Check the application","templates":[["--check"]],"root_equivalent":false,"capabilities":[]},
 {"id":"app-renew","tier":"operator","unit":"broad","description":"Renew the application's certificates","templates":[["--all"]],"root_equivalent":false,"capabilities":[]},
 {"id":"pkg-recover","tier":"operator","unit":"broad","description":"","templates":[["--configure","-a"]],"root_equivalent":false,"capabilities":[]}],
-"packages":{"enabled":true,"install":["example-hello"],"remove":[],"allow_update_index":true,"allow_upgrade":false},
+"packages":{"enabled":true,"install":["example-hello"],"remove":[],"allow_update_index":true,"allow_upgrade":false,"allow_recover":true},
 "power":{"allowed":["reboot"]},
 "ops":[{"op":"priv_policy","tier":"read","unit":"core"},{"op":"priv_write_file","tier":"operator","unit":"core"},
 {"op":"priv_delete","tier":"destructive","unit":"core"},{"op":"priv_exec","tier":"command","unit":"command"},
@@ -78,7 +78,7 @@ func TestGetPolicyPrivilegedSummary(t *testing.T) {
 		t.Fatalf("no privileged.policy: %v", env)
 	}
 	if !d.Privileged.Enabled || d.Gate.PolicySHA256 != "ab12" || p.PolicySHA256 != "cafe" || p.MaxTier != "destructive" ||
-		p.DenyPatterns != 2 || len(p.Roots.Persistence) != 1 || p.ModesMax != "0755" || p.BackupsMaxStoreBytes != 1073741824 || !p.Packages.Enabled ||
+		p.DenyPatterns != 2 || len(p.Roots.Persistence) != 1 || p.ModesMax != "0755" || p.BackupsMaxStoreBytes != 1073741824 || !p.Packages.Enabled || !p.Packages.AllowRecover ||
 		p.Limits.MaxMemoryMB != 1024 {
 		t.Fatalf("summary %+v", p)
 	}

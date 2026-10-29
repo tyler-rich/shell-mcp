@@ -62,6 +62,7 @@ type summaryWire struct {
 		Remove           []string `json:"remove"`
 		AllowUpdateIndex bool     `json:"allow_update_index"`
 		AllowUpgrade     bool     `json:"allow_upgrade"`
+		AllowRecover     bool     `json:"allow_recover"`
 	} `json:"packages"`
 	Power struct {
 		Allowed []string `json:"allowed"`
@@ -188,8 +189,9 @@ func TestPrivPolicySummary(t *testing.T) {
 	}
 	// What the policy switches off is not listed, as the operations refuse
 	// it: no upgrade (allow_upgrade false), and no power action, because
-	// limits.max_timeout_s (10) is below the 60 s priv_power waits.
-	for _, op := range []string{"priv_pkg_upgrade", "priv_pkg_upgrade_preview", "priv_power", "priv_power_preview"} {
+	// limits.max_timeout_s (10) is below the 60 s priv_power waits; no
+	// recovery (allow_recover false).
+	for _, op := range []string{"priv_pkg_upgrade", "priv_pkg_upgrade_preview", "priv_power", "priv_power_preview", "priv_pkg_recover", "priv_pkg_recover_preview"} {
 		if _, ok := s.op(op); ok {
 			t.Errorf("op %s listed", op)
 		}
@@ -199,6 +201,26 @@ func TestPrivPolicySummary(t *testing.T) {
 	broad.fail("priv_power_preview", m{"action": "reboot"}, "policy_denied")
 	if !strings.Contains(f.lastAudit(), `"op":"priv_policy"`) {
 		t.Fatalf("audit %s", f.lastAudit())
+	}
+}
+
+// TestPrivPolicySummaryRecover (handoff N-14): packages.allow_recover is
+// shown, and the recovery and its preview are listed in the broad unit at
+// their tiers.
+func TestPrivPolicySummaryRecover(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, broadUsers(), allowRecover(), withFakeDpkg())
+	s, _, _ := f.summary()
+	if !s.Packages.AllowRecover {
+		t.Fatalf("packages %+v", s.Packages)
+	}
+	for op, want := range map[string]summaryOp{
+		"priv_pkg_recover":         {"priv_pkg_recover", "operator", "broad"},
+		"priv_pkg_recover_preview": {"priv_pkg_recover_preview", "read", "broad"},
+	} {
+		if got, ok := s.op(op); !ok || got != want {
+			t.Errorf("op %s: %+v (listed %v), want %+v", op, got, ok, want)
+		}
 	}
 }
 
