@@ -4196,6 +4196,19 @@ About 2 to 2.5% on a large policy and under 0.1 ms on the examples; a 250-comman
 - the copy search through `keyScan` (the source is already in memory; `ContainsPrivateKey` on it is the same check);
 - neutral messages for `CurrentFile` too (helper-only; "helper" is accurate).
 
+**CI on `5f7430d`** (run `40640711802`): green, `ci` aggregate pass.
+- **ubuntu-24.04:** `LANDLOCK_PATH=psx kernel_abi=7 effective_abi=7`.
+- **ubuntu-26.04:** `LANDLOCK_PATH=tsync kernel_abi=8 effective_abi=8`; its forced psx step `LANDLOCK_PATH=psx kernel_abi=8 effective_abi=7`.
+- **e2e-host:** `TestGateKeyRotation` passed, all nine subtests; `TestApprovalWebFlow`, `TestPrivKeyRotation` and `TestWriteKeyMaskedOnApprovalPage` passed too.
+- CodeQL and gitleaks passed.
+
+**The gate-side example's key mode, measured (maintainer's request, after review).** Throwaway `docker run --rm` containers on the exposure check's pinned bases (Debian 13 `trixie-slim`, Ubuntu 24.04, Ubuntu 26.04), each with the distribution's `openssl` installed. `openssl genpkey -out` ran as uid 65532 into a new file under umask `022` and `077`, for ED25519 and EC P-256 keys.
+- **Versions:** Debian 13 OpenSSL 3.5.7, Ubuntu 24.04 OpenSSL 3.0.13, Ubuntu 26.04 OpenSSL 3.5.5.
+- **A new file:** mode `0600`, owned by the running user, on all three, under both umasks.
+- **An existing `0644` file at the `-out` path** kept `0644`.
+
+TOOLS.md now states this: the staging path must not exist, so stat the staged key with `shell_stat_path` before the move, fix its mode with `shell_set_permissions` if needed, and use the privileged tools when the key must belong to another account.
+
 **Deferred / out of scope:** the 256 MiB cap itself and the gate move's commit-side cap (N-5); N-14, N-32, N-35; the 0.2.0 release.
 
 **Versions:** Go 1.27.3 (D-013: deps-current reported 13 modules in scope, all current, so no refresh commit). Direct modules unchanged: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0. No dependency added.
