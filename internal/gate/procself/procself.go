@@ -153,12 +153,12 @@ func (d *Dir) open(name string, flags int) (*os.File, error) {
 	return os.NewFile(uintptr(fd), d.path+"/"+name), nil
 }
 
-// openat and readlinkat are the two primitives every read goes through.
-// Tests-only stage: they still resolve the path, as before this package.
+// openat and readlinkat are the two primitives every read goes through:
+// relative to the descriptor, never through the path it was opened by.
 func (d *Dir) openat(name string, flags int) (int, error) {
-	return unix.Open(d.path+"/"+name, flags, 0)
+	return unix.Openat(d.fd, name, flags, 0)
 }
 
 func (d *Dir) readlinkat(name string, buf []byte) (int, error) {
-	return unix.Readlink(d.path+"/"+name, buf)
+	return unix.Readlinkat(d.fd, name, buf)
 }
