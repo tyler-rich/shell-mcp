@@ -757,6 +757,26 @@
     "requires_user_interaction": true
   },
   {
+    "name": "shell_priv_recover_packages",
+    "title": "Recover unfinished packages as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Recover unfinished packages as root"
+    },
+    "description": "Finishes, as root, what an interrupted dpkg left unfinished, exactly as its approved preview listed it, without installing or removing packages; returns what dpkg shows was configured.",
+    "input_schema_sha256": "0ae331bdbdd02f03a03f6ff857c70a81571bb0ed91e0d982dd636e958063bff5",
+    "output_schema_sha256": "e9eaec134f86e6b9d25cbe7cf0cbe43a3bc9675169fc380eb025f2416259e832",
+    "requires_user_interaction": true
+  },
+  {
     "name": "shell_priv_remove_packages",
     "title": "Remove packages as root",
     "tier": "destructive",

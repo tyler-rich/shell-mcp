@@ -114,7 +114,7 @@ func TestCatalogueSnapshot(t *testing.T) {
 			"shell_priv_install_packages operator [admin]",
 			"shell_priv_list_backups read [admin]", "shell_priv_list_directory read [admin]", "shell_priv_make_directory operator [admin]",
 			"shell_priv_move_path operator [admin]", "shell_priv_preview_delete read [admin]", "shell_priv_preview_packages read [admin]",
-			"shell_priv_read_file read [admin]", "shell_priv_reboot_host destructive [admin]", "shell_priv_remove_packages destructive [admin]", "shell_priv_restore_backup operator [admin]",
+			"shell_priv_read_file read [admin]", "shell_priv_reboot_host destructive [admin]", "shell_priv_recover_packages operator [admin]", "shell_priv_remove_packages destructive [admin]", "shell_priv_restore_backup operator [admin]",
 			"shell_priv_run_command destructive [admin]", "shell_priv_set_permissions operator [admin]", "shell_priv_stat_path read [admin]",
 			"shell_priv_update_package_index operator [admin]", "shell_priv_upgrade_packages operator [admin]",
 			"shell_priv_write_file operator [admin]"}
