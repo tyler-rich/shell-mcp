@@ -150,6 +150,10 @@ const (
 	OpGitDiscardPreview = "git_discard_preview"
 	OpExec              = "exec"
 	OpExecPreview       = "exec_preview"
+	// OpHashFile answers a file's size, SHA-256, line count and whether it
+	// holds a private key, never its content, for an overwrite's preview
+	// (handoff N-5, the gate's half; added to version 2 in place).
+	OpHashFile = "hash_file"
 )
 
 // Privileged operations forwarded to the helper (PRIVILEGED.md §6).

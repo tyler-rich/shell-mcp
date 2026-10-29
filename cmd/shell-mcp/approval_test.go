@@ -226,7 +226,7 @@ func tlsFiles(t *testing.T) (certFile, keyFile string) {
 
 // --- The simulated human, in process ------------------------------------------------
 
-// fileGate is a fake gate holding one file's content: stat, read_file and
+// fileGate is a fake gate holding one file's content: stat, read_file, hash_file and
 // write_file act on it, and every write is counted.
 type fileGate struct {
 	mu      sync.Mutex
@@ -248,6 +248,9 @@ func (g *fileGate) exec(_ context.Context, s *sshtest.Session) uint32 {
 		data = fmt.Sprintf(`{"path":"/srv/app/config.yaml","name":"config.yaml","type":"file","size":%d,"mode":"0640","uid":1000,"gid":1000,"mtime":"2026-10-01T00:00:00Z"}`, len(g.content))
 	case protocol.OpReadFile:
 		data = fmt.Sprintf(`{"path":"/srv/app/config.yaml","size":%d,"sha256":%q,"binary":false,"content":%q,"offset":0,"truncated":false}`, len(g.content), sum, g.content)
+	case protocol.OpHashFile:
+		data = fmt.Sprintf(`{"path":"/srv/app/config.yaml","size":%d,"sha256":%q,"binary":false,"lines":%d,"private_key":false}`,
+			len(g.content), sum, strings.Count(g.content, "\n"))
 	case protocol.OpWriteFile:
 		var a struct {
 			ContentB64     string `json:"content_b64"`

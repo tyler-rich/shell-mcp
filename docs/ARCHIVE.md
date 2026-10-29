@@ -4141,3 +4141,74 @@ About 2 to 2.5% on a large policy and under 0.1 ms on the examples; a 250-comman
 **Deferred / out of scope:** N-5's other half, N-14, N-32, N-35, the 0.2.0 release. A renamed copy of a different build of a listed program (no byte-identical system file) is not recognised; POLICY §6 says so.
 
 **Versions:** Go 1.27.3 (the D-013 refresh changed nothing; deps-current reported everything current); direct modules unchanged: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0.
+
+### 2026-10-28 — The gate's `hash_file`: overwriting a private key through the gate's tools under approval; whole-source key search in copies (S7-3: N-5, the gate's half) (branch feat/gate-hash-file)
+
+**Decision (maintainer, 2026-10-28, S7-3 phase 1, approved as designed):**
+- **The op.** A read-tier gate op, `hash_file`, added to protocol version 2 in place (before `v0.2.0`). It is `fsx.HashFile` behind the gate's dispatch: `priv_hash_file`'s answer shape, `read_file`'s path rules, the 256 MiB `too_large` cap. It comes after `read_file` in `hello`, and its audit line carries the path only.
+- **The previews.** It is used for every existing destination of the `shell_write_file`, `shell_copy_path` and `shell_move_path` previews, and the write preview gains `new.private_key`. There is no `read_file` fallback for an older version 2 gate. The preview hash covers only stable values. Approvals pending across the upgrade fail closed (accepted).
+- **(a)** A gated gate write over a file it cannot hash is refused at its preview.
+- **(b)** The `too_large` messages are neutral.
+- **Added by the maintainer:** the copy-source key search is fixed here (gate and helper), and the docs get a gate-side "generate on the host" example.
+
+**What blocked it, from the code.** `writePreview` (`internal/tools/preview.go`) and `srcDstPreview` → `boundFilePreview` read an existing destination through the gate's `read_file`. `fsx.ReadFile` refuses a file holding a key anywhere (S7-1): `path_denied`, "file contains a private key", and no approval was requested. This applied only with `operator` in `SHELL_MCP_APPROVAL_TIERS`; ungated, these tools never read the old file. The commit side was never the obstacle: `writeAtomic` and the move's `hashTarget` hash the replaced file without checking for a key.
+
+**Findings in phase 1:**
+- **(a)** `writePreview` never checked for an empty hash. Above 256 MiB `read_file` returns no SHA-256, so an approved write was sent with neither `expected_sha256` nor `expect_absent`, bound only to the size and mode in its preview. Copy and move already refused this case.
+- **`CopyAs` searched only the first 64 KiB of a source** (≤ `max_read_bytes`) for a key. That was a consistency gap with S7-1, not a leak: a copy returns hashes only.
+- **The `too_large` messages of `HashFile` and `hashTarget` said "the helper hashes"** in the gate too.
+
+**What changed.**
+- **Protocol:** `OpHashFile`, at the end of the gate op constants.
+- **Gate:** `opOrder` (after `read_file`), `opTable` (read tier), and `(*server).hashFile` (`pathArgs`, strict).
+- **Server previews.** `hashedFilePreview` is shared by `privFilePreview` (`priv_hash_file`, "helper") and the new `gateFilePreview` (`hash_file`, "gate"). It returns the stat without `mtime`, `sha256`, `lines` and `private_key`, and maps `too_large` to `tooLargeToBind(who)`. It now also refuses an answer whose `sha256` is not 64 lowercase hex digits (`internal`), so an empty hash can never become an unbound operation. That check caught the server package's fake gate, which answered `{}` to unknown ops (`cmd/shell-mcp/approval_test.go` now answers `hash_file`).
+- `writePreview` and `srcDstPreview` use `gateFilePreview`, and `boundFilePreview` is removed. The write's `current` now has the same shape as the privileged write's (type, uid, gid, owner, group, `private_key`), and `lines` comes from `hash_file` (a text file of at most `read_file`'s default read). A ≤ 64 KiB file whose content would have been redacted now gets a line count; it used to be `null`.
+- **fsx.** `CopyAs` calls `redact.ContainsPrivateKey` on the whole source it has already read. The `too_large` messages read "larger than the 256 MiB that is hashed". The `HashResult` comment is corrected (whole file, since S7-1). `CurrentFile`'s message (helper-only, restore) is unchanged.
+- **Docs:**
+  - TOOLS: the approval-preview paragraph, both gate preview rows, the copy row, the new "Replacing a private key through the gate's tools" section (with a gate `openssl genpkey -out {path:write}` command and an approved `shell_move_path`), and the privileged bullet's deferred-twin sentence.
+  - POLICY §3, PRIVILEGED (`priv_copy` row; the key section points to the gate's route), ARCHITECTURE §4.0 (the added-in-place bullet) and §4.3, CHANGELOG Unreleased (Added, Fixed, an upgrade note), and the handoff (N-5's gate half done).
+
+**Tests.** Committed failing first in `f73e07d`; the implementation is `a03c478`.
+- **fsx:** `TestCopySourceKeyBeyondFirstWindow`, `TestTooLargeMessagesAreNeutral`.
+- **Gate ops:** `TestHashFile` (key, bundle, text, binary, large; no content; the audit line without hash or key; `read_file`'s path refusals; extra field; 300 MiB `too_large`), `TestHashFileListedAfterReadFile`, `TestGateKeyRotation` (write, copy and move over a key and a bundle bound to `hash_file`'s hash; a stale hash is `exists`).
+- **Helper:** `TestPrivCopySourceKeyBeyondFirstWindow`.
+- **Tools:** `TestGateWriteOverPrivateKey`, `TestGateKeyRotationBindings` (other content, a swap after approval, a swap before the commit), `TestGateWritePreviewUnhashable`; `TestApprovalPreviews` updated to expect `hash_file` and `private_key`.
+- **e2e:** `TestGateKeyRotation`.
+- Every key is generated per run (`ecdsa`, PKCS #8) or assembled from split strings (`keyFixture`). The sentinel check covers results, approval pages, the server log and the gate's journal lines.
+
+**CI on `f73e07d`** (run `40637501213`) failed exactly on the new and changed tests and no existing one:
+- **Both Go jobs** (ubuntu-24.04 `LANDLOCK_PATH=psx kernel_abi=7 effective_abi=7`, ubuntu-26.04 `LANDLOCK_PATH=tsync kernel_abi=8 effective_abi=8`): `TestApprovalPreviews`, `TestCopySourceKeyBeyondFirstWindow`, `TestGateKeyRotation`, `TestGateKeyRotationBindings`, `TestGateWriteOverPrivateKey`, `TestGateWritePreviewUnhashable`, `TestHashFile`, `TestHashFileListedAfterReadFile`, `TestPrivCopySourceKeyBeyondFirstWindow`, `TestTooLargeMessagesAreNeutral`.
+- **e2e-host:** `TestGateKeyRotation`, all eight subtests:
+  - every overwrite of a key was refused `path_denied` where an approval was expected;
+  - the 104 KiB copy source with a late key was copied;
+  - no `hash_file` journal line.
+- CodeQL and gitleaks passed.
+
+**Tests corrected after the fail-first run:**
+- `TestTooLargeMessagesAreNeutral` first included a bound write. Writes hash the replaced file without a cap, so that case is `exists`, not `too_large`, and it was dropped; the test still failed first on `HashFile`.
+- Two existing tests that pin the preview's op sequence (`TestApprovalPendingResult`, `TestCopyMovePreviewBindsDestination`) and e2e `TestApprovalWebFlow`'s journal wait expected `read_file` and now expect `hash_file`. They changed with the implementation.
+
+**Fuzz** (75 s each, the pinned Go container): `FuzzCopySourceKey` (new: a copy is refused for a key exactly when `read_file` is, and an allowed copy is byte-identical), 17.0k executions (each writes files); `FuzzHashFile`, 442k executions. Both passed.
+
+**Alternatives rejected:**
+- a `read_file` fallback on `unknown_op` (an unreleased gate; one code path, not two);
+- keeping the write preview's old `current` shape (two shapes for the same thing);
+- the copy search through `keyScan` (the source is already in memory; `ContainsPrivateKey` on it is the same check);
+- neutral messages for `CurrentFile` too (helper-only; "helper" is accurate).
+
+**CI on `5f7430d`** (run `40640711802`): green, `ci` aggregate pass.
+- **ubuntu-24.04:** `LANDLOCK_PATH=psx kernel_abi=7 effective_abi=7`.
+- **ubuntu-26.04:** `LANDLOCK_PATH=tsync kernel_abi=8 effective_abi=8`; its forced psx step `LANDLOCK_PATH=psx kernel_abi=8 effective_abi=7`.
+- **e2e-host:** `TestGateKeyRotation` passed, all nine subtests; `TestApprovalWebFlow`, `TestPrivKeyRotation` and `TestWriteKeyMaskedOnApprovalPage` passed too.
+- CodeQL and gitleaks passed.
+
+**The gate-side example's key mode, measured (maintainer's request, after review).** Throwaway `docker run --rm` containers on the exposure check's pinned bases (Debian 13 `trixie-slim`, Ubuntu 24.04, Ubuntu 26.04), each with the distribution's `openssl` installed. `openssl genpkey -out` ran as uid 65532 into a new file under umask `022` and `077`, for ED25519 and EC P-256 keys.
+- **Versions:** Debian 13 OpenSSL 3.5.7, Ubuntu 24.04 OpenSSL 3.0.13, Ubuntu 26.04 OpenSSL 3.5.5.
+- **A new file:** mode `0600`, owned by the running user, on all three, under both umasks.
+- **An existing `0644` file at the `-out` path** kept `0644`.
+
+TOOLS.md now states this: the staging path must not exist, so stat the staged key with `shell_stat_path` before the move, fix its mode with `shell_set_permissions` if needed, and use the privileged tools when the key must belong to another account.
+
+**Deferred / out of scope:** the 256 MiB cap itself and the gate move's commit-side cap (N-5); N-14, N-32, N-35; the 0.2.0 release.
+
+**Versions:** Go 1.27.3 (D-013: deps-current reported 13 modules in scope, all current, so no refresh commit). Direct modules unchanged: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0. No dependency added.

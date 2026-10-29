@@ -42,7 +42,7 @@ var opOrder = []string{
 	protocol.OpHello, protocol.OpPolicy, protocol.OpSysinfo, protocol.OpDisk, protocol.OpProcesses,
 	protocol.OpServiceStatus, protocol.OpServiceList, protocol.OpJournal,
 	protocol.OpGitStatus, protocol.OpGitLog, protocol.OpGitDiff, protocol.OpGitDiscardPreview,
-	protocol.OpListDir, protocol.OpStat, protocol.OpReadFile, protocol.OpFind, protocol.OpCertInspect, protocol.OpDeletePreview,
+	protocol.OpListDir, protocol.OpStat, protocol.OpReadFile, protocol.OpHashFile, protocol.OpFind, protocol.OpCertInspect, protocol.OpDeletePreview,
 	protocol.OpServiceControl, protocol.OpGitPull, protocol.OpWriteFile, protocol.OpMkdir, protocol.OpCopy,
 	protocol.OpMove, protocol.OpChmod, protocol.OpDelete, protocol.OpGitDiscard,
 }
@@ -68,6 +68,7 @@ func opTable() map[string]opSpec {
 		protocol.OpListDir:           {policy.TierRead, (*server).listDir},
 		protocol.OpStat:              {policy.TierRead, (*server).stat},
 		protocol.OpReadFile:          {policy.TierRead, (*server).readFile},
+		protocol.OpHashFile:          {policy.TierRead, (*server).hashFile},
 		protocol.OpFind:              {policy.TierRead, (*server).find},
 		protocol.OpCertInspect:       {policy.TierRead, (*server).certInspect},
 		protocol.OpDeletePreview:     {policy.TierRead, (*server).deletePreview},
