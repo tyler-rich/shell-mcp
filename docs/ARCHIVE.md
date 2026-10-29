@@ -4224,6 +4224,7 @@ TOOLS.md now states this: the staging path must not exist, so stat the staged ke
 - **Privileged policy:** `packages.allow_recover` (default false, approved schema change), which resolves and checks `/usr/bin/dpkg` as apt-get is, appears in the packages finding, in `check-policy`'s packages line and in `priv_policy`'s summary.
 - **The refusal of an unfinished database** by install, upgrade, remove, their previews and power now reads the folded state and names what each package needs: to configure, a missing dependency (a Pre-Depends or Depends group with no alternative present by name or Provides), or a reinstall (half-installed or reinstreq), and the journal's entries. An unreadable journal entry is refused as an interrupted dpkg.
 - **Documented:** the index update is not refused in that state (safe: `apt-get update` never opens dpkg's database); dpkg's SIGINT behaviour; N-36 with designs (POST-RELEASE §6b).
+- **Found while implementing: `shell_get_policy` would have dropped the privileged summary.** The server decodes `priv_policy` strictly, so the new `allow_recover` field was a `protocol_mismatch`. The server's `PrivPackages` gains the field. `TestGetPolicyPrivilegedSummary` and its failure cases failed with the fixture carrying it before the fix (`d44ced2`).
 
 **Why.** The template route to `dpkg --configure -a` ran outside every protection S4c-7 built, and the kill on a hang-up it inherited from `priv_exec` is the very thing that leaves dpkg unfinished.
 
