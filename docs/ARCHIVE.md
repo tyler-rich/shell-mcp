@@ -4251,6 +4251,11 @@ TOOLS.md now states this: the staging path must not exist, so stat the staged ke
 - **policy, gate, protocol:** `TestPackagesAllowRecover`, `TestRouting`, `TestRoutingTiers`, `TestCodesClosedSet`, `TestPrivMayChange`.
 - **tools:** every `TestPrivRecover*`.
 
+**CI on the tests-only head** (run `40803460058`, `a8dc0fa`):
+- **Both Go jobs** (ubuntu-26.04 `LANDLOCK_PATH=tsync kernel_abi=8 effective_abi=8`, and the forced psx path `LANDLOCK_PATH=psx kernel_abi=8 effective_abi=7`) failed on exactly the tests above and no other.
+- **e2e-host:** 137 passed, 5 failed: the five new tests, each because the helper of the old code refuses `privileged-recover.yaml` ("field allow_recover not found").
+- CodeQL passed.
+
 The `journal` case of `TestUnfinishedRefusalNamesRecovery` passed against the old code as first written and was tightened before the commit (the folded state must not name the package the journal shows installed).
 
 **Tests corrected with the implementation:**
