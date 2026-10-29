@@ -43,6 +43,9 @@ type Package struct {
 	Name, Arch, Version string
 	// Want, Flag and State are the three words of its Status field.
 	Want, Flag, State string
+	// Depends, PreDepends and Provides are those fields as written (used
+	// only to say what an unfinished package needs: UnfinishedPackages).
+	Depends, PreDepends, Provides string
 }
 
 // Status is dpkg's status file. Packages are keyed by apt's name for them:
@@ -156,7 +159,7 @@ func parseStanza(stanza string) (Package, error) {
 			return Package{}, errors.New("dpkg's status file has a line that is not a field")
 		}
 		switch k {
-		case "Package", "Status", "Architecture", "Version":
+		case "Package", "Status", "Architecture", "Version", "Depends", "Pre-Depends", "Provides":
 		default:
 			continue
 		}
@@ -187,6 +190,12 @@ func parseStanza(stanza string) (Package, error) {
 				return Package{}, errors.New("dpkg's status file has an entry with an invalid version")
 			}
 			p.Version = v
+		case "Depends":
+			p.Depends = v
+		case "Pre-Depends":
+			p.PreDepends = v
+		case "Provides":
+			p.Provides = v
 		}
 	}
 	switch {
@@ -501,18 +510,30 @@ func printable(s string) string {
 	}, s)
 }
 
-// heldByRE is apt's "It is held by process <pid> (<name>)".
-var heldByRE = regexp.MustCompile(`held by process (\d{1,10}) \(([^()\n]{1,64})\)`)
+// heldByRE is apt's "It is held by process <pid> (<name>)"; dpkgHeldByRE
+// is dpkg's "locked by <path> process with pid <pid>" (dpkg 1.22.22,
+// measured).
+var (
+	heldByRE     = regexp.MustCompile(`held by process (\d{1,10}) \(([^()\n]{1,64})\)`)
+	dpkgHeldByRE = regexp.MustCompile(`locked by ([^\s()]{1,256}) process with pid (\d{1,10})`)
+)
 
-// HolderFromStderr is the lock holder apt named in its refusal.
+// HolderFromStderr is the lock holder apt or dpkg named in its refusal.
 func HolderFromStderr(stderr []byte) (Holder, bool) {
-	m := heldByRE.FindSubmatch(stderr)
+	if m := heldByRE.FindSubmatch(stderr); m != nil {
+		pid, err := strconv.Atoi(string(m[1]))
+		if err != nil {
+			return Holder{}, false
+		}
+		return Holder{PID: pid, Comm: printable(string(m[2]))}, true
+	}
+	m := dpkgHeldByRE.FindSubmatch(stderr)
 	if m == nil {
 		return Holder{}, false
 	}
-	pid, err := strconv.Atoi(string(m[1]))
+	pid, err := strconv.Atoi(string(m[2]))
 	if err != nil {
 		return Holder{}, false
 	}
-	return Holder{PID: pid, Comm: printable(string(m[2]))}, true
+	return Holder{PID: pid, Comm: printable(filepath.Base(string(m[1])))}, true
 }

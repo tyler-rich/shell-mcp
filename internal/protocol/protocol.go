@@ -229,6 +229,7 @@ var privReadOps = []string{
 	OpPrivReadFile, OpPrivHashFile, OpPrivListDir, OpPrivStat, OpPrivListBackups, OpPrivBackupCheck,
 	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview, OpPrivExecPreview,
 	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPkgUpdateIndexPreview, OpPrivPowerPreview, OpPrivPolicy,
+	OpPrivPkgRecoverPreview,
 }
 
 // PrivMayChange reports whether a privileged request can change the host:
@@ -252,6 +253,7 @@ var PrivOps = []string{
 	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPower, OpPrivBackupCheck,
 	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview, OpPrivExecPreview,
 	OpPrivPkgUpdateIndexPreview, OpPrivPowerPreview, OpPrivPowerCancel, OpPrivPolicy, OpPrivHashFile,
+	OpPrivPkgRecover, OpPrivPkgRecoverPreview,
 }
 
 // Tier names on the wire: a request's ceiling, and max_tier in the gate

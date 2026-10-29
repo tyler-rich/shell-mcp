@@ -71,6 +71,7 @@ type summaryPackages struct {
 	Remove           []string `json:"remove"`
 	AllowUpdateIndex bool     `json:"allow_update_index"`
 	AllowUpgrade     bool     `json:"allow_upgrade"`
+	AllowRecover     bool     `json:"allow_recover"`
 }
 
 type summaryPower struct {
@@ -102,6 +103,7 @@ var pkgOpOf = map[string]pkg.Op{
 	protocol.OpPrivPkgInstall: pkg.OpInstall, protocol.OpPrivPkgInstallPreview: pkg.OpInstall,
 	protocol.OpPrivPkgUpgrade: pkg.OpUpgrade, protocol.OpPrivPkgUpgradePreview: pkg.OpUpgrade,
 	protocol.OpPrivPkgRemove: pkg.OpRemove, protocol.OpPrivPkgRemovePreview: pkg.OpRemove,
+	protocol.OpPrivPkgRecover: pkg.OpRecover, protocol.OpPrivPkgRecoverPreview: pkg.OpRecover,
 }
 
 // allowed reports whether the policy lets op through at all, by the checks
@@ -150,7 +152,7 @@ func (s *server) summary() summaryData {
 		BackupsKeep:  p.BackupsKeep, BackupsMaxStoreBytes: p.BackupsMaxStoreBytes,
 		Commands: []summaryCommand{},
 		Packages: summaryPackages{Enabled: p.Packages.Enabled, Install: orEmpty(p.Packages.Install), Remove: orEmpty(p.Packages.Remove),
-			AllowUpdateIndex: p.Packages.AllowUpdateIndex, AllowUpgrade: p.Packages.AllowUpgrade},
+			AllowUpdateIndex: p.Packages.AllowUpdateIndex, AllowUpgrade: p.Packages.AllowUpgrade, AllowRecover: p.Packages.AllowRecover},
 		Power:    summaryPower{Allowed: orEmpty(p.Power.Allowed)},
 		Ops:      []summaryOp{},
 		Findings: []summaryFinding{},

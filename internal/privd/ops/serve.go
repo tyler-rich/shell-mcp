@@ -161,6 +161,7 @@ func ProductionOptions(version, policyPath string) Options {
 		UnitClientUID:           os.Getenv(units.ClientUIDEnv),
 		Unit:                    os.Getenv(units.UnitEnv),
 		AptGet:                  policy.DefaultAptGet,
+		Dpkg:                    policy.DefaultDpkg,
 		DpkgDir:                 DefaultDpkgDir,
 		PkgRecord:               DefaultPkgRecord,
 		SystemBus:               dbus.SystemBus,
@@ -252,6 +253,11 @@ type server struct {
 	// unfinished the packages dpkg left part-way, for the audit line.
 	applied    *auditApplied
 	unfinished []string
+	// configured are the packages a recovery configured, for the audit
+	// line; program is the program a package operation runs ("apt-get",
+	// or "dpkg" for the recovery), for its early answer.
+	configured []string
+	program    string
 	// powerState is what became of priv_power's action ("not_delivered",
 	// "cancelled", "refused", "unconfirmed", "requested"), powerAt its
 	// scheduled time and powerDetail why it was refused, for the audit line.
@@ -386,7 +392,7 @@ func (s *server) checks() error {
 	if e := selfcheck.Binary(o.Trust, o.Executable); e != nil {
 		return e
 	}
-	lo := &policy.LoadOptions{Trust: o.Trust, HelperExecutable: o.Executable, SystemBinDirs: o.SystemBinDirs, AptGet: o.AptGet}
+	lo := &policy.LoadOptions{Trust: o.Trust, HelperExecutable: o.Executable, SystemBinDirs: o.SystemBinDirs, AptGet: o.AptGet, Dpkg: o.Dpkg}
 	o.Lookups(lo)
 	p, err := policy.Load(o.PolicyPath, lo)
 	if err != nil {

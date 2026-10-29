@@ -113,7 +113,7 @@ func (f *fixture) setState(stanzas string, journal map[string]string) {
 // recovery allowed, and the dpkg stand-in.
 func recoverFixture(t *testing.T, opts ...opt) *fixture {
 	t.Helper()
-	f := newFixture(t, append([]opt{broadUsers(), allowRecover(), withFakeDpkg(), asBroad()}, opts...)...)
+	f := newFixture(t, append([]opt{broadUsers(), allowRecover(), withFakeApt("ok"), withFakeDpkg(), asBroad()}, opts...)...)
 	f.opts.PkgLockRetry = 50 * time.Millisecond
 	return f
 }

@@ -260,6 +260,10 @@ func (s *server) pkgAllowed(op pkg.Op, names []string) error {
 		if !pp.AllowUpgrade {
 			return errf(protocol.CodePolicyDenied, "packages.allow_upgrade is not set")
 		}
+	case pkg.OpRecover:
+		if !pp.AllowRecover {
+			return errf(protocol.CodePolicyDenied, "packages.allow_recover is not set")
+		}
 	case pkg.OpInstall, pkg.OpRemove:
 		allowed, list := pp.Install, "packages.install"
 		if op == pkg.OpRemove {
@@ -405,30 +409,69 @@ func (s *server) pkgChecks() error {
 // notUnfinished refuses a database dpkg left part-way: unfinished
 // packages, or entries in its journal (PRIVILEGED §6).
 func (s *server) notUnfinished() error {
-	st, err := pkg.ReadStatus(s.o.DpkgDir)
+	st, err := pkg.ReadState(s.o.DpkgDir)
 	if err != nil {
-		return errf(protocol.CodeExecFailed, "dpkg's status could not be read (%s); nothing was changed", err.Error())
+		return stateErr(err, "nothing was changed")
 	}
-	return unfinishedErr(st, s.o.DpkgDir, "nothing was changed")
+	return unfinishedErr(st, "nothing was changed")
 }
 
-func unfinishedErr(st pkg.Status, dir, tail string) error {
-	unf := st.Unfinished()
-	upd, err := pkg.PendingUpdates(dir)
-	if err != nil {
-		return errf(protocol.CodeExecFailed, "dpkg's journal could not be read (%s); %s", err.Error(), tail)
+// stateErr refuses when dpkg's state could not be read: as an interrupted
+// dpkg when its journal holds an entry that could not be read.
+func stateErr(err error, tail string) error {
+	if errors.Is(err, pkg.ErrJournal) {
+		return errf(protocol.CodeExecFailed, "dpkg was interrupted and left an entry in its journal /var/lib/dpkg/updates that could not be read (%s), "+
+			"which dpkg --configure -a folds in; %s", err.Error(), tail)
 	}
-	if len(unf) == 0 && len(upd) == 0 {
+	return errf(protocol.CodeExecFailed, "dpkg's state could not be read (%s); %s", err.Error(), tail)
+}
+
+// unfinishedErr refuses a database dpkg left part-way, naming what each
+// unfinished package needs (S7-4): configuring, a missing dependency, or
+// a reinstall, and dpkg's journal; nil when there is nothing.
+func unfinishedErr(st pkg.State, tail string) error {
+	u := st.UnfinishedPackages()
+	if len(u) == 0 && len(st.Journal) == 0 {
 		return nil
 	}
-	what := []string{}
-	if len(unf) > 0 {
-		what = append(what, fmt.Sprintf("%d package(s) unfinished (%s)", len(unf), firstNames(unf)))
+	return errf(protocol.CodeExecFailed, "dpkg was interrupted and left %s; %s", describeUnfinished(u, len(st.Journal)), tail)
+}
+
+// describeUnfinished says what unfinished packages need, by recovery, and
+// what dpkg's journal holds: for a refusal, and for a recovery's result.
+func describeUnfinished(u []pkg.UnfinishedPackage, journal int) string {
+	var conf, dep, re []string
+	for _, p := range u {
+		n := p.Name + " (" + p.State + ")"
+		switch p.Recovery {
+		case pkg.RecoverReinstall:
+			re = append(re, n)
+		case pkg.RecoverDependency:
+			dep = append(dep, n+" needs "+strings.Join(p.Missing, ", "))
+		default:
+			conf = append(conf, n)
+		}
 	}
-	if len(upd) > 0 {
-		what = append(what, fmt.Sprintf("%d entr(ies) in its journal /var/lib/dpkg/updates", len(upd)))
+	var parts []string
+	if len(conf) > 0 {
+		parts = append(parts, fmt.Sprintf("%d package(s) to configure (%s): dpkg --configure -a finishes them "+
+			"(the helper's recovery, priv_pkg_recover, where packages.allow_recover is set, or an administrator on the host)", len(conf), firstNames(conf)))
 	}
-	return errf(protocol.CodeExecFailed, "dpkg was interrupted and left %s: an administrator must run dpkg --configure -a on the host; %s", strings.Join(what, " and "), tail)
+	if len(dep) > 0 {
+		parts = append(parts, fmt.Sprintf("%d package(s) with a missing dependency (%s): configuring leaves them unfinished "+
+			"until an administrator installs the dependency or removes them on the host", len(dep), firstNames(dep)))
+	}
+	if len(re) > 0 {
+		parts = append(parts, fmt.Sprintf("%d package(s) to reinstall (%s): dpkg --configure -a does not fix them; "+
+			"an administrator reinstalls them (apt-get install --reinstall) or removes them on the host", len(re), firstNames(re)))
+	}
+	if journal > 0 {
+		parts = append(parts, fmt.Sprintf("%d entr(ies) in its journal /var/lib/dpkg/updates, which dpkg --configure -a folds in", journal))
+	}
+	if len(parts) == 0 {
+		return "nothing unfinished"
+	}
+	return strings.Join(parts, "; ")
 }
 
 func firstNames(l []string) string {
@@ -537,11 +580,11 @@ func (s *server) pkgChange(raw jsontext.Value, op pkg.Op) (data any, warns []str
 	if err != nil {
 		return nil, nil, err
 	}
-	before, err := pkg.ReadStatus(s.o.DpkgDir)
+	before, err := pkg.ReadState(s.o.DpkgDir)
 	if err != nil {
-		return nil, nil, errf(protocol.CodeExecFailed, "dpkg's status could not be read (%s); nothing was changed", err.Error())
+		return nil, nil, stateErr(err, "nothing was changed")
 	}
-	if uerr := unfinishedErr(before, s.o.DpkgDir, "nothing was changed"); uerr != nil {
+	if uerr := unfinishedErr(before, "nothing was changed"); uerr != nil {
 		return nil, nil, uerr
 	}
 	// (1) The preview, recomputed with its own argv.
@@ -595,7 +638,7 @@ func (s *server) pkgChange(raw jsontext.Value, op pkg.Op) (data any, warns []str
 	if err != nil {
 		return nil, nil, err
 	}
-	return s.pkgOutcome(op, names, before, tx, &res, attempts, waited)
+	return s.pkgOutcome(op, names, before.Status, tx, &res, attempts, waited)
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -669,13 +712,21 @@ func (s *server) pause(d time.Duration, deadline time.Time) error {
 // apt's own refusal of a held lock while the lock budget lasts, unless the
 // request was already answered.
 func (s *server) runPinned(argv []string, st pkgStages, lockBudget time.Time) (execx.Result, int, error) {
+	return s.runLocked(s.o.AptGet, argv, st, lockBudget, true)
+}
+
+// runLocked runs path with argv through the stop points, again after the
+// program's own refusal of a held lock while the lock budget lasts,
+// unless the request was already answered. sigint says whether the stop
+// point sends SIGINT (apt-get's graceful stop; dpkg has none).
+func (s *server) runLocked(path string, argv []string, st pkgStages, lockBudget time.Time, sigint bool) (execx.Result, int, error) {
 	retry := s.o.PkgLockRetry
 	if retry <= 0 {
 		retry = pkg.DefaultRetry
 	}
 	attempts := 0
 	for {
-		res, err := s.runApt(argv, st)
+		res, err := s.runApt(path, argv, st, sigint)
 		attempts++
 		if err != nil {
 			return res, attempts, err
@@ -694,12 +745,15 @@ func (s *server) runPinned(argv []string, st pkgStages, lockBudget time.Time) (e
 	}
 }
 
-// runApt runs apt-get once through the stop points (PRIVILEGED §6): no
-// signal at a hang-up or the request's deadline, but an early
-// outcome_unknown answer; SIGINT to apt-get alone at the stop point; the
+// runApt runs path (apt-get, or dpkg for the recovery) once through the
+// stop points (PRIVILEGED §6): no signal at a hang-up or the request's
+// deadline, but an early outcome_unknown answer; SIGINT to apt-get alone
+// at the stop point when sigint is set (never for dpkg, which ignores
+// SIGINT only while it waits for a maintainer script and otherwise dies
+// of it: dpkg 1.22.22, lib/dpkg/subproc.c and src/main/script.c); the
 // process group killed at the instance's limit; then every child left
 // killed and reaped.
-func (s *server) runApt(argv []string, st pkgStages) (execx.Result, error) {
+func (s *server) runApt(path string, argv []string, st pkgStages, sigint bool) (execx.Result, error) {
 	if s.answered {
 		return execx.Result{}, errf(protocol.CodeExecFailed, "the request was answered before apt-get started; nothing was changed")
 	}
@@ -712,7 +766,7 @@ func (s *server) runApt(argv []string, st pkgStages) (execx.Result, error) {
 	var mu sync.Mutex
 	var proc *os.Process
 	spec := &execx.Spec{
-		Trampoline: s.o.Executable, Path: s.o.AptGet, Args: argv, Env: s.aptEnv(), Dir: "/",
+		Trampoline: s.o.Executable, Path: path, Args: argv, Env: s.aptEnv(), Dir: "/",
 		Timeout: time.Until(st.killAt), MaxOutput: s.p.Limits.MaxOutputBytes, MaxMemoryMB: s.p.Limits.MaxMemoryMB,
 		Started: func(p *os.Process) { mu.Lock(); proc = p; mu.Unlock() },
 	}
@@ -726,6 +780,9 @@ func (s *server) runApt(argv []string, st pkgStages) (execx.Result, error) {
 		stop := time.NewTimer(time.Until(st.stopAt))
 		defer dl.Stop()
 		defer stop.Stop()
+		if !sigint {
+			stop.Stop()
+		}
 		for {
 			select {
 			case <-done:
@@ -793,10 +850,14 @@ func (s *server) answerEarly(when string) {
 	}
 	s.answered = true
 	until := s.stages().killAt.UTC().Format(time.RFC3339)
-	resp := failure(protocol.CodeOutcomeUnknown, fmt.Sprintf("apt-get is still running %s (request id %s): it is left to finish, because stopping dpkg part-way "+
-		"would leave its database unfinished, and may run until %s (stopped gracefully before then, killed only then); what it changed will be in "+
-		"the helper's journal under request id %s and in /var/log/apt/history.log on the host; preview again after that time; the approval was used",
-		when, s.req.ID, until, s.req.ID))
+	program, stop, logFile := "apt-get", "stopped gracefully before then, killed only then", "/var/log/apt/history.log"
+	if s.program == "dpkg" {
+		program, stop, logFile = "dpkg", "killed only then", "/var/log/dpkg.log"
+	}
+	resp := failure(protocol.CodeOutcomeUnknown, fmt.Sprintf("%s is still running %s (request id %s): it is left to finish, because stopping dpkg part-way "+
+		"would leave its database unfinished, and may run until %s (%s); what it changed will be in "+
+		"the helper's journal under request id %s and in %s on the host; preview again after that time; the approval was used",
+		program, when, s.req.ID, until, stop, s.req.ID, logFile))
 	resp.ID = s.req.ID
 	s.earlyCode = s.respond(s.conn, resp)
 }
@@ -806,11 +867,11 @@ func (s *server) answerEarly(when string) {
 // a success; nothing changed is exec_failed; anything else verify_failed.
 // apt's exit code decides nothing.
 func (s *server) pkgOutcome(op pkg.Op, names []string, before pkg.Status, tx pkg.Transaction, res *execx.Result, attempts int, waited time.Duration) (data any, warns []string, failure error) {
-	after, err := pkg.ReadStatus(s.o.DpkgDir)
+	after, err := pkg.ReadState(s.o.DpkgDir)
 	if err != nil {
-		return nil, nil, errf(protocol.CodeOutcomeUnknown, "apt-get ran, but dpkg's status could not be read afterwards (%s); check the host", err.Error())
+		return nil, nil, errf(protocol.CodeOutcomeUnknown, "apt-get ran, but dpkg's state could not be read afterwards (%s); check the host", err.Error())
 	}
-	diff := pkg.Diff(before, after)
+	diff := pkg.Diff(before, after.Status)
 	s.recordApplied(diff)
 	s.unfinished = after.Unfinished()
 	if len(s.unfinished) > maxAuditChanged {
@@ -833,7 +894,7 @@ func (s *server) pkgOutcome(op pkg.Op, names []string, before pkg.Status, tx pkg
 	case "killed":
 		how = "apt-get was killed at the helper's limit; "
 	}
-	if uerr := unfinishedErr(after, s.o.DpkgDir, "the transaction cannot be undone"); uerr != nil {
+	if uerr := unfinishedErr(after, "the transaction cannot be undone"); uerr != nil {
 		var oe *opError
 		errors.As(uerr, &oe)
 		return nil, nil, errf(protocol.CodeVerifyFailed, "%s%s; applied %s, approved %s", how, oe.msg, txSummary(diff), txSummary(tx))

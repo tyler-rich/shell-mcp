@@ -716,7 +716,7 @@ func TestPackagesAllowRecover(t *testing.T) {
 	if p := f.mustLoad(t, head+"packages:\n  enabled: false\n  allow_recover: true\n"); p.Packages.Dpkg != "" || p.UsesBroad() {
 		t.Fatalf("disabled packages checked dpkg or use the broad unit: %+v", p.Packages)
 	}
-	f.mustFail(t, head+"packages:\n  enabled: true\n  allow_recover: maybe\n", "allow_recover")
+	f.mustFail(t, head+"packages:\n  enabled: true\n  allow_recover: maybe\n", "bool")
 	good := f.opts.Dpkg
 	f.opts.Dpkg = filepath.Join(f.bin, "missing-dpkg")
 	f.mustFail(t, head+"packages:\n  enabled: true\n  allow_recover: true\n", "missing-dpkg")
