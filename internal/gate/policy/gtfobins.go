@@ -161,14 +161,19 @@ func listedOf(p string) string {
 // its written name or else its resolved name gives (as before N-33), then
 // each other one it is by identity (ident), once per listed name.
 func ListedMatches(written, resolved string, ident []ListedMatch) []ListedMatch {
+	return matchesOf(written, resolved, ident, func(n string) bool { return EscapeTechniques(n) != nil })
+}
+
+// matchesOf is ListedMatches for the canonical names listed reports.
+func matchesOf(written, resolved string, ident []ListedMatch, listed func(string) bool) []ListedMatch {
 	var out []ListedMatch
-	if n := listedOf(written); n != "" {
+	if n := CanonicalName(filepath.Base(written)); listed(n) {
 		out = append(out, ListedMatch{Name: n, Kind: MatchKindWritten})
-	} else if n := listedOf(resolved); n != "" {
+	} else if n := CanonicalName(filepath.Base(resolved)); listed(n) {
 		out = append(out, ListedMatch{Name: n, Kind: MatchKindResolved})
 	}
 	for _, m := range ident {
-		if EscapeTechniques(m.Name) != nil && !slices.ContainsFunc(out, func(o ListedMatch) bool { return o.Name == m.Name }) {
+		if listed(m.Name) && !slices.ContainsFunc(out, func(o ListedMatch) bool { return o.Name == m.Name }) {
 			m.Kind = MatchKindIdentity
 			out = append(out, m)
 		}

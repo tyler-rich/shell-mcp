@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/procself"
 	"github.com/tyler-rich/shell-mcp/internal/pathx"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
 )
@@ -71,8 +72,10 @@ func join(dir, name string) string {
 	return dir + "/" + name
 }
 
-// realPathOfFile reads /proc/self/fd/N for an open file.
-func realPathOfFile(f *os.File) (string, error) {
+// realPathOfFile reads fd/N of proc (this process's /proc/<pid>, opened
+// before the sandbox; Config.Proc) for an open file, or /proc/self/fd/N
+// when proc is nil.
+func realPathOfFile(proc *procself.Dir, f *os.File) (string, error) {
 	sc, err := f.SyscallConn()
 	if err != nil {
 		return "", err
@@ -80,7 +83,12 @@ func realPathOfFile(f *os.File) (string, error) {
 	var p string
 	var rerr error
 	if err := sc.Control(func(fd uintptr) {
-		p, rerr = os.Readlink("/proc/self/fd/" + strconv.FormatUint(uint64(fd), 10))
+		n := strconv.FormatUint(uint64(fd), 10)
+		if proc != nil {
+			p, rerr = proc.Readlink("fd/" + n)
+			return
+		}
+		p, rerr = os.Readlink("/proc/self/fd/" + n)
 	}); err != nil {
 		return "", err
 	}
@@ -93,13 +101,13 @@ func realPathOfFile(f *os.File) (string, error) {
 	return p, nil
 }
 
-func realPathOfRoot(r *os.Root) (string, error) {
+func realPathOfRoot(proc *procself.Dir, r *os.Root) (string, error) {
 	f, err := r.Open(".")
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = f.Close() }()
-	return realPathOfFile(f)
+	return realPathOfFile(proc, f)
 }
 
 // confineLayer is one of the three layers that keep a lookup inside its
@@ -223,7 +231,7 @@ func (f *FS) locate(p string, write bool) (*loc, error) {
 		return nil, mapErr(err)
 	}
 	l := &loc{p: p, write: write, root: root, top: top, rel: pathx.Rel(root, p)}
-	if l.rootReal, err = realPathOfRoot(top); err != nil {
+	if l.rootReal, err = realPathOfRoot(f.cfg.Proc, top); err != nil {
 		l.close()
 		return nil, mapErr(err)
 	}
@@ -250,7 +258,7 @@ func (f *FS) locate(p string, write bool) (*loc, error) {
 		}
 		return nil, mapErr(err)
 	}
-	if l.parentReal, err = realPathOfRoot(l.parent); err != nil {
+	if l.parentReal, err = realPathOfRoot(f.cfg.Proc, l.parent); err != nil {
 		l.close()
 		return nil, mapErr(err)
 	}
@@ -341,7 +349,7 @@ func (f *FS) openTarget(l *loc) (*os.File, error) {
 	if err != nil {
 		return nil, mapErr(err)
 	}
-	rp, err := realPathOfFile(file)
+	rp, err := realPathOfFile(f.cfg.Proc, file)
 	if err != nil {
 		_ = file.Close()
 		return nil, mapErr(err)
@@ -390,7 +398,7 @@ func (f *FS) openSubdir(l *loc, dir *os.Root, want, name string) (sub *os.Root, 
 	if err != nil {
 		return nil, "", false, mapErr(err)
 	}
-	rp, err = realPathOfRoot(sub)
+	rp, err = realPathOfRoot(f.cfg.Proc, sub)
 	if err != nil {
 		_ = sub.Close()
 		return nil, "", false, mapErr(err)

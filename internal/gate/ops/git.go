@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"errors"
+	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,6 +20,7 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/pathx"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
+	"github.com/tyler-rich/shell-mcp/internal/redact"
 )
 
 // Built-in git operations (POLICY §7). Every invocation is
@@ -477,9 +480,22 @@ func (s *server) gitDiff(raw jsontext.Value) (data any, warns []string, failure 
 	// never a submodule's history or diff. The work-tree diff never enters
 	// a submodule (=all); the staged diff compares the index with HEAD only,
 	// so it still shows staged gitlink changes (=dirty; handoff N-23).
-	args := []string{"diff", "--no-color", "--no-ext-diff", "--no-textconv", "--submodule=short", "--ignore-submodules=all"}
+	which := []string{"--ignore-submodules=all"}
 	if a.Staged {
-		args = append(args[:len(args)-1], "--cached", "--ignore-submodules=dirty")
+		which = []string{"--cached", "--ignore-submodules=dirty"}
+	}
+	keys, err := r.keyFiles(a.Staged, which)
+	if err != nil {
+		return nil, nil, err
+	}
+	args := append([]string{"diff", "--no-color", "--no-ext-diff", "--no-textconv", "--submodule=short"}, which...)
+	var masks []byte
+	if len(keys) > 0 {
+		args = append(args, "--")
+		for _, k := range keys {
+			args = append(args, ":(top,literal,exclude)"+k)
+			masks = fmt.Appendf(masks, "%s %q: holds a private key; its changes are not shown\n", redact.Mask, k)
+		}
 	}
 	res, err := r.run(maxOut, args...)
 	if err != nil {
@@ -488,8 +504,103 @@ func (s *server) gitDiff(raw jsontext.Value) (data any, warns []string, failure 
 	if !exited(&res, 0) {
 		return nil, nil, r.s.gitFailed("diff", &res)
 	}
-	out, cut := s.red.Truncate(res.Stdout, maxOut)
+	out, cut := s.red.Truncate(append(masks, res.Stdout...), maxOut)
 	return gitDiffData{Repo: a.Repo, Staged: a.Staged, Diff: string(out), Truncated: cut || res.StdoutTruncated}, nil, nil
+}
+
+// keyPattern is redact's private-key header as a POSIX extended regular
+// expression, for git grep.
+const keyPattern = `-----BEGIN [A-Z0-9 ]*PRIVATE KEY( BLOCK)?-----`
+
+// Bounds on the pathspecs git_diff passes: beyond them the search covers
+// the whole tree, and too many key files to leave out is too_large.
+const (
+	maxKeyPathspecs     = maxGitEntries
+	maxKeyPathspecBytes = 128 << 10
+)
+
+// keyFiles returns, sorted, the paths among the diff's changed files
+// (which: the diff's own --cached and --ignore-submodules flags) that hold
+// a private-key header on either side of it, in the work tree and the
+// index or, staged, in the index and HEAD (handoff N-35). A hunk shows
+// lines of a file around a change and git fills the hunk header from the
+// line before it, so a key's body lines can be shown without its BEGIN
+// line, which the output redaction needs: such a file is left out of the
+// patch instead. When the changed files cannot all be listed or passed as
+// pathspecs, the whole tree is searched.
+func (r *gitRepo) keyFiles(staged bool, which []string) ([]string, error) {
+	res, err := r.run(r.s.p.Limits.MaxOutputBytes, append([]string{"diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", "--no-textconv"}, which...)...)
+	if err != nil {
+		return nil, err
+	}
+	if !exited(&res, 0) {
+		return nil, r.s.gitFailed("diff", &res)
+	}
+	var pathspecs []string
+	if !res.StdoutTruncated {
+		changed, err := gitx.ParseNames(res.Stdout, "")
+		if err != nil {
+			return nil, errf(protocol.CodeExecFailed, "git diff --name-only output could not be parsed")
+		}
+		if len(changed) == 0 {
+			return nil, nil
+		}
+		size := 0
+		for _, c := range changed {
+			size += len(c)
+		}
+		if len(changed) <= maxKeyPathspecs && size <= maxKeyPathspecBytes {
+			pathspecs = []string{"--"}
+			for _, c := range changed {
+				pathspecs = append(pathspecs, ":(top,literal)"+c)
+			}
+		}
+	}
+	sides := [][]string{{"--cached"}, nil}
+	if staged {
+		sides[1] = []string{"HEAD"}
+		if head, err := r.run(gitHashMaxBytes, "rev-parse", "--verify", "--quiet", "HEAD^{commit}"); err != nil {
+			return nil, err
+		} else if !exited(&head, 0) {
+			sides = sides[:1] // no commit yet: the index is the only side
+		}
+	}
+	found := map[string]bool{}
+	for _, side := range sides {
+		args := append([]string{"grep", "-l", "-z", "-a", "-E", "--full-name", "--no-textconv", "--no-recurse-submodules", "-e", keyPattern}, side...)
+		g, err := r.run(r.s.p.Limits.MaxOutputBytes, append(args, pathspecs...)...)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case exited(&g, 1): // nothing matched
+			continue
+		case !exited(&g, 0):
+			return nil, r.s.gitFailed("grep", &g)
+		case g.StdoutTruncated:
+			return nil, errf(protocol.CodeTooLarge, "the repository holds more files with a private key than git_diff can leave out; nothing is shown")
+		}
+		prefix := ""
+		if len(side) == 1 && side[0] == "HEAD" {
+			prefix = "HEAD:"
+		}
+		names, err := gitx.ParseNames(g.Stdout, prefix)
+		if err != nil {
+			return nil, errf(protocol.CodeExecFailed, "git grep output could not be parsed")
+		}
+		for _, n := range names {
+			found[n] = true
+		}
+	}
+	keys := slices.Sorted(maps.Keys(found))
+	size := 0
+	for _, k := range keys {
+		size += len(k)
+	}
+	if len(keys) > maxKeyPathspecs || size > maxKeyPathspecBytes {
+		return nil, errf(protocol.CodeTooLarge, "the repository holds more files with a private key than git_diff can leave out; nothing is shown")
+	}
+	return keys, nil
 }
 
 type gitPullData struct {

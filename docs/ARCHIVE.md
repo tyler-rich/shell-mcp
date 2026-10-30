@@ -3959,6 +3959,8 @@ cosign is not installed on the workstation, so it ran from the official image `g
 
 **The reap after an OOM kill (diagnosed in CI, maintainer-approved option A, 2026-10-26).** With `MemorySwapMax=0` the OOM path worked as approved: e2e-host's test diagnostic (run on `e5ed411`) showed the kernel killing the command itself (`example-probe`, about 682 MiB, `CONSTRAINT_MEMCG`, invoked by itself), `memory.peak` at `memory.max` (1342177280), `memory.events` `max 37 oom 1 oom_kill 1`, no swap events, no allocation failure of the helper, and the instance answering in 628 ms with `memory.current` 630 MB (the two children). But the helper's reap of the children answered `outcome_unknown` (fail closed): `reap_error` "the children could not be listed, so some are left: no /proc/self/task/*/children file". `children()` used `filepath.Glob`, which discards I/O errors, so the real errno was hidden. Change: `childrenIn` reads the task directory with `os.ReadDir` and returns the real error (a thread that ended is skipped); a fallback, `childrenByStatIn`, scans `/proc/[0-9]*/stat` by parent pid with the same rules (in the core unit Landlock lets the helper read only its own `/proc/<pid>`, so it serves where no ruleset applies, the broad unit); `reapOrphans` tries the listings in order each round, kills what they found, lists again on failure until the 5 s bound, succeeds only when `wait4` reports `ECHILD` (which a failed listing no longer turns into a failure: the kernel has said no child is left), and at the bound fails with the last listing's real error. The e2e diagnostic stays. Option C (a per-command sub-cgroup with `Delegate=yes` and `cgroup.kill`) is recorded as N-32 in the handoff.
 
+**Correction (S7-5, 2026-10-29): the retry above did not fix the listing; S7-5 does.** The failed listing was not transient. The core unit's Landlock rule on `/proc/self` holds the inode of the helper's `/proc/<pid>`; the OOM's memory pressure can reclaim that directory's dentry, and every later lookup of the path reaches a new procfs inode the rule does not cover (`EACCES`, for the rest of the instance), which `filepath.Glob` hid as "no children file". This test passed after the change only because the command's two children were in its process group: execx's group `SIGKILL` had already ended them, so `wait4` reached `ECHILD` with nothing left to list. A child in a session of its own would have been left until systemd stopped the instance, after an `outcome_unknown`. S7-5 reads the helper's own `/proc/<pid>` through a descriptor kept from before Landlock (its entry below).
+
 **Audit of error-swallowing listings over `/proc`** (gate, helper, sandbox; non-test code). `filepath.Glob`: one, the helper's `children()` (replaced, above). Others: `sandbox.allThreadsNoNewPrivs` (the gate's thread self-check after Landlock) skipped a thread whose status it could not read for any reason and passed with no thread checked: a wrong success; now only a thread that ended (ENOENT, ESRCH) is skipped, any other error fails the check, and checking none fails it. `execx.userTasks` returned 0 when `/proc` could not be listed or held more than 65,536 entries, and `childLimits` then dropped `RLIMIT_NPROC` silently: now `Run` refuses (`ErrStart`, "cannot count the user's tasks for RLIMIT_NPROC", with the reason) except for uid 0, which the kernel never holds to `RLIMIT_NPROC` (`copy_process` exempts `INIT_USER`; the core unit could not count anyway: e2e showed root's children with the system default `nproc`). Kept as they are, because a silent error there only drops a name or a row from an answer, never a check: `fsx.ListPIDs` (propagates its errors), the `processes` op's per-pid reads (a process it cannot read is not listed), `pkg.comm` (the lock holder's name, empty when unreadable). Tests failing first (`324b1d4`): `TestReapOrphans` (a listing tried again within the bound; ECHILD after a failed listing; a listing that fails once; the fallback killing a live child; the bound's error carrying the errno), `TestChildrenIn`, `TestChildrenByStatIn`, `TestAllThreadsNoNewPrivsIn` (it passed with no thread checked), `TestUserTasksIn` and `TestRunRefusesWithoutTaskCount` (a command started without its task count). **Follow-up (maintainer, 2026-10-26): the walk's bound follows `pid_max`.** The 65,536-entry cap was the scan's own, not the kernel's, so a busy host would have refused every command; the walk is now bounded by `/proc/sys/kernel/pid_max` plus 4096 for `/proc`'s other entries and reads `/proc` in chunks of 4096, refusing only when `pid_max` cannot be read or parsed, `/proc` cannot be listed, or there are more entries than that bound (each named in the message). `TestUserTasksInBoundFromPidMax`, committed failing first (`1b96587`: 65,601 entries under `pid_max` 4194304 refused "has more than 65536 entries"), now counts them, and refuses more entries than a `pid_max` of 1000 allows and an unreadable `pid_max`. `TestExecReapFailureIsOutcomeUnknown` and `TestPkgReapFailureIsOutcomeUnknown` now model a child that is still there (a failed listing with `ECHILD` is a success under the approved rule). The memory tests accept either fatal error a Go program gives at its limit ("runtime: out of memory" when the heap cannot grow, "runtime: cannot allocate memory" when its metadata cannot; ci-local saw the second).
 
 **Alternatives rejected:** `RLIMIT_AS` (counts reservations: Go, Rust, glibc arenas, git's pack maps); `MemoryMax=` fixed with the key capped below it (the core unit's 256M would cap commands near 128 MiB); `core.preloadIndex=false` and `pack.threads=1` (above); a CPU-count test with `taskset` (it does not reach git).
@@ -4269,5 +4271,168 @@ The `journal` case of `TestUnfinishedRefusalNamesRecovery` passed against the ol
 **Fuzz** (65 s each, the pinned Go container): `FuzzUnfinishedPackages` (new) 33.0M executions, `FuzzReadStateJournal` (new) 166k, `FuzzParseStatus` (touched) 32.9M. All passed.
 
 **Deferred / out of scope:** N-36 (the reinstall and the removal of a package whose dependency is missing; designs recorded); N-32, N-35; the 0.2.0 release.
+
+**Versions:** Go 1.27.3 (D-013: deps-current reported 13 modules in scope, all current, so no refresh commit). Direct modules unchanged: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0. No dependency added.
+
+### 2026-10-30 — The helper reads its own `/proc/<pid>` through a descriptor kept from before Landlock; N-32 decided, not built (S7-5) (branch feat/command-cgroup)
+
+**Scope (the session prompt):** N-32, a per-command cgroup, decided before 0.2.0: phase 1 (the current guarantees, the design, its measured cost, the alternatives, a recommendation), then what the maintainer approved.
+
+**Decision (maintainer, 2026-10-29, phase 1):** option (v). The helper opens `/proc/self` with `O_PATH` before Landlock, keeps it for the instance's life, and reads its own `/proc/<pid>` only through it, in every read after the sandbox; the gate is checked for the same pattern. N-32 is recorded as decided, not built, for 0.2.0, with the revisit condition. The memory and task sharing between helper and command is recorded as known, fail-closed behaviour. #61's record is corrected.
+
+**What phase 1 found.**
+- **#61's failed listing was not transient.** The core unit's Landlock rule on `/proc/self` holds the inode of the helper's `/proc/<pid>`, not its dentry. Memory-cgroup pressure can reclaim the unused dentry, and the next lookup of the path makes a new procfs inode that the rule does not cover. Every read through the path is then `EACCES` for the rest of the instance.
+  - Reproduced in throwaway, unprivileged, labelled containers (Docker Desktop's Linux 6.6, Landlock ABI 3, `--memory=256m` with swap off, a child allocating until it was OOM-killed; no host mount):
+    - Rule on `/proc/self`, no descriptor kept: `/proc/self/task` failed with `EACCES` in 4 of 4 runs, still failing afterwards.
+    - With the `O_PATH` descriptor kept: none of 4 failed, 2 reading through `openat` on it and 2 through the path (the kept descriptor pins the dentry for the path lookup too). Three further runs were cut short by the OOM killer taking the container's shell.
+    - Rule on `/proc`, the gate's case: none of 3 failed.
+  - #61's test passed only because the command's two children were in its process group. Execx's group `SIGKILL` had already ended them, so `wait4` reached `ECHILD` with nothing to list.
+- **The guarantees today.**
+  - Confirmation is sound in the core unit: `ECHILD` means no descendant is left, and a core command cannot leave the process tree.
+  - Ending a tree (`setsid`, double fork, `SIGTERM` ignored) is correct but not atomic: it converges round by round within `TasksMax=` and 5 s, and depends on the listing.
+  - A command shares `MemoryMax=` and `TasksMax=` with the helper. An OOM can choose the helper, and a fork bomb can stop the Go runtime starting a thread (not measured). Both end the helper: the answer is `outcome_unknown`, never a false success.
+- **N-32 in detail, and why not.** Handoff §6a, with the measured scores:
+  - Core unit 1.3 → 1.3 on systemd 257 and 259 (Debian 13, Ubuntu 26.04), but 1.5 on 255 (Ubuntu 24.04).
+  - On 255, `private` is no valid value and falls back to off. On 257 and 259, the assessor scores `private` as protected though it is writable.
+  - `private` is downgraded to writable `false` without cgroup namespaces (`systemd.exec(5)`, 257).
+  - Not `DelegateSubgroup=`: verified in systemd's `execute.c` and `exec-invoke.c`, v257.
+  - No Landlock change would be needed.
+  - The broad unit goes 8.1 → 8.2.
+
+**What changed.**
+- **`internal/gate/procself`** (new):
+  - `Open` opens `/proc/self` as an `O_PATH|O_DIRECTORY` descriptor.
+  - `ReadFile` and `ReadDirNames` (bounded) and `Readlink` work relative to it through `openat(2)` and `readlinkat(2)`, with `O_NOFOLLOW`.
+  - `ValidName` keeps a name relative and inside the directory: up to 8 components, no empty component, no `.` or `..`, printable ASCII.
+- **The reads changed, each now through the descriptor:**
+  - The sandbox's thread check after Landlock: `/proc/self/task` and `task/<tid>/status`. `sandbox.ApplyRules` now takes the descriptor and refuses without one; `sandbox.Apply` (the gate) opens its own and closes it afterwards.
+  - The reap's child listing: `task/<tid>/children` (`childrenIn`).
+  - fsx's real path of every open file: `fd/N` (`realPathOfFile`, `realPathOfRoot`), through the new `Config.Proc`. The helper sets it; `nil` keeps the path read, for the gate.
+- **The helper** opens the descriptor in `sandbox()`, in both units, before Landlock; failing to open it is `helper_sandbox_unavailable` (existing check `landlock`). It passes the descriptor to `ApplySandbox` (signature changed), the listing and both fsx configurations.
+- **Not changed, and why:**
+  - `/proc/self/status` for the self-checks (before the sandbox).
+  - `/proc/self/cgroup` for power and `pkg.comm` (broad unit, no Landlock).
+  - The `/proc/[0-9]*/stat` fallback (broad unit only; Landlock refuses it in the core unit, as documented).
+  - Execx's task count (uid 0 is not counted).
+  - `CheckRootChain` and `CheckClosedChain` (`check-policy`, outside the sandbox: `realPathOfRoot(nil, …)`).
+  - The gate's own path reads: its ruleset grants `/proc`, the procfs root, which the mount holds.
+- **No unit, Landlock rule, schema, protocol, error-code or envelope change.** The e2e privileged policy gains the probe template `alloc-tree-detach` (core `probe-mem`) and the read command `probe-broad-mem` (broad). Their units are unchanged: the offline exposure check rates every core unit at its record.
+- **Docs:**
+  - PRIVILEGED §5.1 (the descriptor and why), §5.2 (the sharing as known, fail-closed behaviour), §6 (the listing).
+  - ARCHITECTURE (the `procself` row; fsx).
+  - The handoff (N-32 decided, not built; §6a).
+  - CHANGELOG (Fixed).
+  - #61's entry corrected.
+  - TARGET-SETUP unchanged: operators regenerate nothing.
+
+**Tests, failing first.** The tests-only commit `b684dc5` carried the tests and `procself` with its two primitives still resolving the path (the old behaviour); the fix `9b4edaf` makes them work relative to the descriptor.
+- **CI on `b684dc5`** (run 40820537546): both Go jobs failed on exactly the four new tests. ubuntu-24.04 ran `LANDLOCK_PATH=psx kernel_abi=8 effective_abi=7`; ubuntu-26.04 ran `LANDLOCK_PATH=tsync kernel_abi=8 effective_abi=8`.
+  - `TestReadsThroughDescriptor`: "status read through the path, not the descriptor".
+  - `TestAllThreadsNoNewPrivsThroughDescriptor`: "the check read the path, not the descriptor: thread 10 does not have NoNewPrivs set".
+  - `TestRealPathOfFileThroughProc`: real path `/srv/app/replacement`, "read through the path, not the descriptor".
+  - `TestChildrenInPinned`: "children [] … listed through the path, not the descriptor".
+  - Each opens a directory, renames it away and puts another in its place.
+- **e2e-host on `b684dc5`:** 143 passed, 0 failed, none skipped (ubuntu-26.04, kernel 7.0.0-1017-azure, systemd 259, Landlock ABI 8).
+  - **`TestPrivOOMDetachedSurvivorEnded/core` did not fail on the runner.** The runner's kernel did not reclaim the `/proc/<pid>` entry in that run: the old listing worked and the `setsid` grandchild was killed and reaped before the answer. The failing-first evidence for the mechanism is therefore the four unit tests and the container measurements above, not the e2e test. The e2e test stays as the end-to-end guard of the case in both units; `/broad` (no Landlock) was always expected to pass.
+  - `TestSecurityExposure`: core 1.3 (`E2E_SECURITY_MAX` 1.3), broad 8.1.
+  - CodeQL (`analyze (go)`, `analyze (actions)`), deps-current, exposure, gitleaks, the image and the probes passed.
+- **The real code under pressure** (a throwaway program built in a container from a tmpfs copy of the checkout, not committed): `sandbox.ApplyRules` with a rule on `/proc/self` and the `procself` descriptor, then an OOM kill (the child's `oom_score_adj` at 1000), gave no failed read in 3 of 3 runs.
+
+**`scripts/ci-local.sh` on `9b4edaf`** (run alone): every step passed.
+- gofmt, vet and lint in both builds.
+- The offline exposure check on systemd 255, 257 and 259, and its weakened-unit self-test.
+- `go test -race` in the release and every test build: `internal/privd/ops` 144.4 s, `internal/gate/fsx` 31.5 s, `internal/gate/procself` 1.0 s, `internal/gate/sandbox` 1.6 s.
+- The e2e runner-only guards.
+- govulncheck: no vulnerability reached; module-level GO-2026-5932, `x/crypto/openpgp`, not imported, no fix, as before.
+- Both platform builds, the release snapshot and scripts, deps-current and every self-test.
+
+The docs changed after the run (documentation only). **Fuzz:** `FuzzValidName` (new), 60 s, 99 million executions, no failure.
+
+**Alternatives rejected:**
+- (i) Document today's design only: it leaves the listing broken after memory pressure.
+- (ii) N-32 in the broad unit only: its listing already works (no Landlock), and its commands can leave the cgroup.
+- (iii) N-32 in both units: systemd 255, failing open, new self-checks, an execx change shared with the gate.
+- (iv) Transient units or scopes over D-Bus: the bus is root-equivalent and hidden from the core unit on purpose; a scope escapes the instance's limits; a PID 1 service loses the helper's Landlock domain.
+- `ReadWritePaths=` on the instance cgroup: without a cgroup namespace the helper could raise its own `MemoryMax=`, and the path holds `\x2d`, which the generator refuses.
+- Raising commands' `oom_score_adj`: Landlock refuses the child's `/proc/<pid>` in the core unit.
+
+**Deferred:**
+- N-32: revisit when Ubuntu 24.04 (systemd 255) is no longer a supported target.
+- The thread-starvation case under `TasksMax=` (documented, not measured).
+- The dentry eviction on the runner's kernel (not reproduced in CI).
+- Out of scope: N-35, N-36, the 0.2.0 release.
+
+**Versions:** Go 1.27.3 (D-013: deps-current reported 13 modules in scope, all current, so no refresh commit). Direct modules unchanged: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0. No dependency added. systemd in the exposure images: 255.4, 257.13, 259.9.
+
+### 2026-10-30 — Headerless private-key output closed in journal, command and diff output (S7-6: N-35) (branch fix/headerless-key-output)
+
+**Scope (the session prompt):** N-35, a private key's body reaching the client without its BEGIN line through journal, command or diff output, decided before 0.2.0: phase 1 (each path verified against the code with a benign reproduction, the options with their trade-offs, a heuristic's false-positive rate measured on real text, a recommendation), then what the maintainer approved, tests first on a tests-only draft PR.
+
+**What phase 1 found (verified from the code, reproduced through the real gate ops with keys generated at run time).**
+- **Caps never cut a key before redaction.** `execx`'s capture keeps the head, `Truncate` redacts before and after its cut, and the server keeps the head. Only a source can cut its own slice.
+- **Journal:** `journalctl -o short-iso -n N [--since] [--until]`. A service that writes a key to stdout gets one entry per line, so `lines: 12` showed 10 of an RSA-2048 key's 26 body lines. `--until` can also end a window inside a body. A window from `-n` alone always ends at the newest entry, so it holds the END whenever it holds a body line and the END was logged.
+- **Commands:** a declared `tail -n {int} -- {path:read}` over a key file showed 9 body lines.
+- **`git diff`:** a changed body line showed 8 old and 8 new body lines: the hunk's 6 context lines, the changed lines, and the hunk header. Git fills the header from the last line before the hunk that starts with a letter (`@@ -12,7 +12,7 @@ <body line>`), a second way out that the handoff had not named. The context is always git's default 3: no `diff.*` key is on the allowlist. `git_log` returns subjects only, so `git_diff` is the only patch output.
+- **Pushback.** There is no privileged journal read (the "join" is audit lines joined by request id); `priv_exec` is a fourth source-cut path. A name list (`*.key`) is weaker than searching content. An output heuristic alone cannot stop a hostile caller with a fragment template (`cut -c`, `head -c`); only a search of the command's input can.
+
+**Measured (the PEM-width heuristic).**
+- **The corpus:** 12,348,739 lines in 58,685 text files: the Go 1.27.3 tree, a 922 MB module cache, `/etc`, `/usr/share`, `/var/log` of the Go image, and this repository's `git log -p --all`.
+- **The rule:** runs of lines that are 64 or 70 base64 characters (after a diff marker or journal prefix), not all hex.
+- **Runs of 2 or more lines.** 120 inside private keys and 737 inside other PEM blocks. 6 outside any block, all of them encrypted keys in `crypto/x509/pem_decrypt_test.go` whose header is a Go string concatenation.
+- **Runs of 1 or more lines.** 11 outside a block (5 more: base64 test data).
+- **END lines with no BEGIN:** 1 in the whole corpus.
+- **No real journal was available**, so none was measured.
+
+**Decision (maintainer, 2026-10-30, phase 1).**
+- **Journal:** the END rule (b1) in `redact.Bytes` for every caller, plus the width heuristic (b2), as a separate entry point on journal message content only.
+- **Diff:** decide by content, with `git diff --name-only -z` and `git grep` on both sides. Leave key files out with literal exclude pathspecs, add a mask line naming each, and apply b1. No `private_key_files` field.
+- **Commands:** search each `{path:read}`/`{path:read:fd}` regular file at resolution with the existing whole-file scanner, refuse with `path_denied`, in the gate and the helper. Over 256 MiB, run with b2. Literal paths and directories are the documented residual. No `check-policy` WARN for range programs without the opt-in.
+- **Approved schema change:** a per-command opt-in in both policies that accepts such a file. It is shown in `check-policy` and both summaries, b2 applies to that command's output, and `check-policy` warns when the opted-in program is a range or filter program.
+
+**What changed.**
+- **`redact`.**
+  - **The END rule.** `maskKeyBlocks` masks, in the text between key blocks, each `-----END … PRIVATE KEY-----` (any private-key label) back to the start of the text or the previous mask (`orphanEnds`). `PrivateKeyBlocks` and the approval page are unchanged.
+  - **`MaskKeyBodies(b, PlainLines|JournalLines)`** (`bodies.go`) is the heuristic. A run of 64- or 70-wide base64 lines, all of one width and not all hex, is masked, with a following shorter line whose length can end a body: a multiple of 4 after 64, even after 70. It is not applied inside a PEM block whose BEGIN is shown. Each line's content is replaced by the mask; prefixes and line endings are kept. The last-line length rule was added after the tests showed a trailing ordinary word ("after") taken for a last line.
+- **Journal:** `journal` applies `MaskKeyBodies(Bytes(out), JournalLines)`, then `Truncate`.
+- **Commands.**
+  - **The search.** `fsx.CommandKeyInputs` searches each `{path:read}` (opened as `ResolveRead` opens it) and `{path:read:fd}` (through the gate's descriptor, `ReadAt`, offset unchanged) of the matched template, regular files only, up to 256 MiB. It is called in both `resolveExec`s, so the preview refuses too.
+  - **The refusal** is `path_denied`, naming the file and `reads_private_keys`.
+  - **Strict output.** A command with the opt-in, or with a file over the cap, gets `MaskKeyBodies(Bytes(…), PlainLines)` on stdout and stderr before `Truncate`.
+- **Policies.**
+  - **The key.** `reads_private_keys` (bool, default false) in both. The name says what the gate checks, that the command reads key files, and parallels `root_equivalent` as an owner's declaration.
+  - **The warning.** `KeyRangeWarnings` uses the range-program list (`keyrange.go`: 29 names) with the GTFOBins matcher, generalised as `matchesOf`. Matching is by written name, resolved name and binary identity (the identity scan now also collects those names; it only ever warns).
+  - **Where it is shown.** `check-policy` prints an `ok` line (gate) or `[reads_private_keys]` (helper). The summaries `policy`, `priv_policy` and `shell_get_policy` carry the field, and the catalogue snapshots were regenerated.
+- **`git_diff`.**
+  - **`keyFiles`** runs `diff --name-only -z --no-renames` with the diff's own flags, then `git grep -l -z -a -E --full-name --no-textconv --no-recurse-submodules -e <header>` on each side, with `:(top,literal)` pathspecs. The sides are the index and the work tree, or HEAD and the index; only the index while HEAD is unborn.
+  - **The patch** runs with `:(top,literal,exclude)` for each match, and `[REDACTED] "<path>": holds a private key; its changes are not shown` lines go before it.
+  - **Bounds and fallbacks.** Beyond 1000 names or 128 KiB, or a truncated name list, the whole tree is searched. Too many key files is `too_large`.
+  - **The subcommand table.** `grep` joins `gitx.GitCommands` with `--no-recurse-submodules`. The gap test's example of an unlisted subcommand moved from `grep` to `blame`. `gitx.ParseNames` parses the NUL lists.
+- **Test infrastructure.** fakesys's journalctl prints the last N lines of a journal file a test writes. The e2e read policy lists `example-keylog.service`, and the e2e read repository commits a key file and changes one of its body lines.
+
+**Tests, failing first.** The tests-only commit `b4770b4` (draft PR #72) failed against the old code. It carried compile stubs only: `MaskKeyBodies` returned its input, `RangeProgramNames` returned nil, and `ReadsPrivateKeys` was a field nothing set. Failing tests:
+- **`redact`:** `TestOrphanEndMasksBack`, `TestMaskKeyBodiesWindowInsideBody`, `TestMaskKeyBodiesJournal`, the new seeds of `FuzzRedactKeyBlocks` (its reference now includes the END rule), and `FuzzHeaderlessKeyBody`.
+- **Gate:** `TestJournalHeaderlessKey` (lines 12: 10 body lines), `TestExecKeyInputRefused`, `TestExecKeyInputOptIn`, `TestExecKeyInputLargeFile`, `TestGitDiffKeyFileExcluded` (24 body lines), `TestGitDiffKeyFileUnbornHead`.
+- **Helper and policies:** `TestPrivExecKeyInput`, `TestReadsPrivateKeysParsed`, `TestReadsPrivateKeysRangeWarning`, `TestRangeProgramsListShape`, and the helper's `TestReadsPrivateKeys`.
+- **Passing against the old code too, as they should:** `TestOrphanEndOrdinaryTextUnchanged` and `TestMaskKeyBodiesOrdinaryOutputUnchanged`, which pin ordinary output.
+
+**Fuzz, 60 s each, all passed:** `FuzzHeaderlessKeyBody` 6.36M execs (an invented key of any length and width PEM uses, any window of its lines, with or without journal prefixes: no full body line survives, and none at all when the window reaches the END), `FuzzRedactKeyBlocks` 29.6M, `FuzzRedact` 30.5M, `FuzzPrivateKeyBlocks` 18.1M, `FuzzParseNames` 73.9M, `FuzzPrivExecPreviewMatchesExec` 98.9k (the helper's one resolution with the key search in it).
+
+**`scripts/ci-local.sh` on `c571c88`** (run alone): every step passed: gofmt, go vet (both build-tag sets), golangci-lint (both), the offline exposure check (systemd 255/257/259) and its self-test, `go test -race` in every build, the e2e runner-only guards, govulncheck, the linux/amd64 and arm64 builds, the release snapshot, deps-current and the self-tests. Landlock (ABI 3) and the unprivileged systemd container were available. e2e-host runs in CI only.
+
+**Alternatives rejected:**
+- **Fetching extra journal entries and cutting back.** It needs entry parsing around boot markers and continuation lines, plus a second run for `--since`, and still misses keys longer than its margin.
+- **`git diff -U<large>`.** It inflates every diff, has to re-split merged hunks, and is bounded by its margin.
+- **A key-file name list.** Content is cheap to search with `git grep`.
+- **The heuristic on every command's output.** It would change ordinary output (windows into certificates, `openssl base64`), and it does not stop fragment templates.
+- **A `check-policy` WARN for range programs without the opt-in:** declined by the maintainer.
+
+**Deferred / documented residual** (POLICY §3):
+- Paths written literally in templates, and files a program opens by itself (directories included).
+- A file holding a key body without its header.
+- The owner-matched `{path:read}` swap between the search and the command's lookup.
+- A journal window of only a key's short last line.
+- Fragments under one PEM-width line from an opted-in command.
+- No real journal corpus was measured.
+- Out of scope: N-36, the 0.2.0 release.
 
 **Versions:** Go 1.27.3 (D-013: deps-current reported 13 modules in scope, all current, so no refresh commit). Direct modules unchanged: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0. No dependency added.

@@ -282,28 +282,23 @@ func main() {
 		allocMiB(n)
 		fmt.Printf("allocated %d MiB\n", n)
 	case "alloc-tree":
-		// args[0] children each allocate and hold args[1] MiB; then this
-		// process allocates args[2] MiB, more than any child, so when the
-		// tree reaches its cgroup's MemoryMax= the kernel's OOM killer
-		// chooses this process (the largest).
-		n, _ := strconv.Atoi(args[0])
+		allocTree(args)
+	case "alloc-tree-detach":
+		// A grandchild in a session of its own ("linger" args[0]: setsid,
+		// outside this process's group, no stdio, ignoring SIGTERM), which
+		// only the helper's reap can end once this process is gone; its pid
+		// on the first line; then alloc-tree with args[1:], so the OOM kill
+		// ends this process and leaves the grandchild to the helper.
 		self, _ := os.Executable()
-		for range n {
-			cmd := exec.Command(self, "alloc-hold", args[1]) //nolint:gosec,noctx // G204: this probe itself
-			out, err := cmd.StdoutPipe()
-			if err == nil {
-				err = cmd.Start()
-			}
-			if err != nil {
-				fmt.Println("spawn failed:", err)
-				os.Exit(1)
-			}
-			_, _ = bufio.NewReader(out).ReadString('\n')
+		cmd := exec.Command(self, "linger", args[0]) //nolint:gosec,noctx // G204: this probe itself
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		if err := cmd.Start(); err != nil {
+			fmt.Println("spawn failed:", err)
+			os.Exit(1)
 		}
-		m, _ := strconv.Atoi(args[2])
-		allocMiB(m)
-		time.Sleep(120 * time.Second)
-		fmt.Println("the tree was not stopped")
+		fmt.Println(cmd.Process.Pid)
+		time.Sleep(500 * time.Millisecond) // the test finds the grandchild meanwhile
+		allocTree(args[1:])
 	case "alloc-hold":
 		n, _ := strconv.Atoi(args[0])
 		allocMiB(n)
@@ -313,6 +308,31 @@ func main() {
 		fmt.Println("unknown")
 		os.Exit(2)
 	}
+}
+
+// allocTree: args[0] children each allocate and hold args[1] MiB; then
+// this process allocates args[2] MiB, more than any child, so when the tree
+// reaches its cgroup's MemoryMax= the kernel's OOM killer chooses this
+// process (the largest).
+func allocTree(args []string) {
+	n, _ := strconv.Atoi(args[0])
+	self, _ := os.Executable()
+	for range n {
+		cmd := exec.Command(self, "alloc-hold", args[1]) //nolint:gosec,noctx // G204: this probe itself
+		out, err := cmd.StdoutPipe()
+		if err == nil {
+			err = cmd.Start()
+		}
+		if err != nil {
+			fmt.Println("spawn failed:", err)
+			os.Exit(1)
+		}
+		_, _ = bufio.NewReader(out).ReadString('\n')
+	}
+	m, _ := strconv.Atoi(args[2])
+	allocMiB(m)
+	time.Sleep(120 * time.Second)
+	fmt.Println("the tree was not stopped")
 }
 
 // held keeps what allocMiB allocated reachable.

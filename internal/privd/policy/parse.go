@@ -104,15 +104,16 @@ type rawBackups struct {
 }
 
 type rawCommand struct {
-	ID             string     `yaml:"id"`
-	Path           string     `yaml:"path"`
-	Tier           string     `yaml:"tier"`
-	Description    string     `yaml:"description"`
-	Unit           string     `yaml:"unit"`
-	RootEquivalent bool       `yaml:"root_equivalent"`
-	Capabilities   []string   `yaml:"capabilities"`
-	Acknowledge    string     `yaml:"acknowledge"`
-	Templates      [][]string `yaml:"templates"`
+	ID               string     `yaml:"id"`
+	Path             string     `yaml:"path"`
+	Tier             string     `yaml:"tier"`
+	Description      string     `yaml:"description"`
+	Unit             string     `yaml:"unit"`
+	RootEquivalent   bool       `yaml:"root_equivalent"`
+	ReadsPrivateKeys bool       `yaml:"reads_private_keys"`
+	Capabilities     []string   `yaml:"capabilities"`
+	Acknowledge      string     `yaml:"acknowledge"`
+	Templates        [][]string `yaml:"templates"`
 }
 
 type rawPower struct {
@@ -581,7 +582,7 @@ func (v *validator) commands(p *Policy, raw []rawCommand) {
 }
 
 func (v *validator) command(field string, rc *rawCommand, maxTier Tier) (Command, bool) {
-	c := Command{ID: rc.ID, Path: rc.Path, RootEquivalent: rc.RootEquivalent, Acknowledge: rc.Acknowledge, Description: rc.Description}
+	c := Command{ID: rc.ID, Path: rc.Path, RootEquivalent: rc.RootEquivalent, ReadsPrivateKeys: rc.ReadsPrivateKeys, Acknowledge: rc.Acknowledge, Description: rc.Description}
 	ok := true
 	t, err := gpolicy.ParseTier(rc.Tier)
 	if err != nil {
@@ -647,6 +648,11 @@ func (v *validator) command(field string, rc *rawCommand, maxTier Tier) (Command
 	// A script's interpreters get the template's arguments (handoff N-31).
 	for _, s := range prog.scripts {
 		for _, w := range gpolicy.ScriptEscapeWarnings(field, true, s.script, s.written, s.interpreter, s.listed) {
+			v.warn("%s", w)
+		}
+	}
+	if rc.ReadsPrivateKeys {
+		for _, w := range gpolicy.KeyRangeWarnings(field, true, rc.Path, prog.resolved, prog.listed) {
 			v.warn("%s", w)
 		}
 	}

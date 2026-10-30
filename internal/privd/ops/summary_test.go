@@ -48,13 +48,14 @@ type summaryWire struct {
 	BackupsKeep          int    `json:"backups_keep"`
 	BackupsMaxStoreBytes int64  `json:"backups_max_store_bytes"`
 	Commands             []struct {
-		ID             string     `json:"id"`
-		Tier           string     `json:"tier"`
-		Unit           string     `json:"unit"`
-		Description    string     `json:"description"`
-		Templates      [][]string `json:"templates"`
-		RootEquivalent bool       `json:"root_equivalent"`
-		Capabilities   []string   `json:"capabilities"`
+		ID               string     `json:"id"`
+		Tier             string     `json:"tier"`
+		Unit             string     `json:"unit"`
+		Description      string     `json:"description"`
+		Templates        [][]string `json:"templates"`
+		RootEquivalent   bool       `json:"root_equivalent"`
+		Capabilities     []string   `json:"capabilities"`
+		ReadsPrivateKeys bool       `json:"reads_private_keys"`
 	} `json:"commands"`
 	Packages struct {
 		Enabled          bool     `json:"enabled"`

@@ -165,7 +165,11 @@ type Command struct {
 	Tier           Tier
 	Description    string
 	RootEquivalent bool
-	Templates      []template.Template
+	// ReadsPrivateKeys lets the command's {path:read} (and {path:read:fd})
+	// files hold a private key, which is otherwise refused; its output then
+	// gets redact.MaskKeyBodies (POLICY §4, handoff N-35).
+	ReadsPrivateKeys bool
+	Templates        []template.Template
 	// Applet is the utility the uutils multi-call binary runs as (the
 	// resolved file's name), or "" for any other binary (S-MC).
 	Applet string

@@ -475,7 +475,7 @@ func (f *FS) openGitDir(repo string) (*os.Root, string, error) {
 	if err != nil {
 		return nil, "", mapErr(err)
 	}
-	gr, err := realPathOfRoot(gd)
+	gr, err := realPathOfRoot(f.cfg.Proc, gd)
 	if err != nil || gr != rp+"/.git" {
 		_ = gd.Close()
 		return nil, "", errf(protocol.CodePathDenied, "repo/.git must be a real directory inside the root")

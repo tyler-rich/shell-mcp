@@ -257,6 +257,10 @@ func checkPolicyWithParam(args []string, stdout, stderr io.Writer, trust policy.
 		pr("ok   policy: sha256 %s, max_tier %s, %d commands", p.SHA256, p.MaxTier, len(p.Commands))
 		usesFD := false
 		for i := range p.Commands {
+			if c := &p.Commands[i]; c.ReadsPrivateKeys {
+				pr("ok   commands[%s]: reads_private_keys: its {path:read} files may hold a private key, and its output also gets the PEM-width heuristic; "+
+					"the owner vouches that it never prints part of its input (POLICY §4)", c.ID)
+			}
 			if c := &p.Commands[i]; c.Applet != "" {
 				pr("ok   commands[%s]: %s is the uutils multi-call binary; it runs as %s (the name of the file it is executed by)", c.ID, c.Resolved, c.Applet)
 			}

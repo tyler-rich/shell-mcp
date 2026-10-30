@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
 )
 
 // The child memory limit, end to end (handoff N-30, N-25's memory half):
@@ -181,6 +183,87 @@ func TestPrivCoreOOMPolicyContinue(t *testing.T) {
 	if out := privExec(t, "probe-echo", "", "echo", "after-oom"); out != "after-oom" {
 		t.Fatalf("after the OOM kill: %q", out)
 	}
+}
+
+// TestPrivOOMDetachedSurvivorEnded: a command that first starts a
+// grandchild in a session of its own (setsid, ignoring SIGTERM, outside
+// the command's process group, so the group kill does not reach it) and
+// then grows a child tree past the unit's MemoryMax= is OOM-killed; the
+// grandchild, reparented to the helper (its child subreaper), is killed
+// and reaped before the answer, which is the command's signal. In the core
+// unit the memory pressure can reclaim the dentry of the helper's own
+// /proc/<pid>, after which /proc/self reaches a new procfs inode that the
+// Landlock rule does not cover and every read through the path is EACCES:
+// the helper lists its children through the descriptor it opened before
+// the sandbox (PRIVILEGED §6, S7-5). The broad unit has no Landlock; the
+// same case there guards the reap.
+func TestPrivOOMDetachedSurvivorEnded(t *testing.T) {
+	for _, c := range []struct{ unit, command, linger string }{
+		{"core", "probe-mem", "66s"},
+		{"broad", "probe-broad-mem", "67s"},
+	} {
+		t.Run(c.unit, func(t *testing.T) {
+			// The grandchild, seen while the request runs (a goroutine may
+			// not fail the test).
+			stop, seen := make(chan struct{}), make(chan gatetest.Proc, 1)
+			go func() {
+				for {
+					if p, ok, err := gatetest.LookupChild(0, "linger", c.linger); err == nil && ok {
+						seen <- p
+						return
+					}
+					select {
+					case <-stop:
+						return
+					case <-time.After(5 * time.Millisecond):
+					}
+				}
+			}()
+			a := map[string]any{"command_id": c.command, "args": []string{"alloc-tree-detach", c.linger, "2", "300", "1000"}}
+			if c.unit == "broad" {
+				a["unit"] = "broad"
+			}
+			start := time.Now()
+			r, id := gate(t, svcShell, "priv_exec", a)
+			close(stop)
+			var g gatetest.Proc
+			select {
+			case g = <-seen:
+				t.Cleanup(g.Kill)
+			default:
+				t.Fatalf("the grandchild was never seen; answer %s %+v", r.code(), r.Error)
+			}
+			line := helperLineOf(id)
+			if !r.OK {
+				t.Fatalf("a setsid grandchild after the OOM kill: %s %+v (grandchild reaped: %v)\nhelper: %s",
+					r.code(), r.Error, g.Reaped(), line)
+			}
+			var d memExecData
+			if json.Unmarshal(r.Data, &d) != nil || d.Signal == nil || *d.Signal != "SIGKILL" {
+				t.Fatalf("not the OOM kill: %s; this host's swap: %s\nhelper: %s", r.Data, swapTotal(t), line)
+			}
+			if !g.Reaped() {
+				t.Fatalf("the helper answered while its grandchild %d was still there\nhelper: %s", g.Pid, line)
+			}
+			if strings.Contains(line, "reap_error") {
+				t.Fatalf("the journal line carries reap_error: %s", line)
+			}
+			if el := time.Since(start); el > 25*time.Second {
+				t.Fatalf("took %v", el)
+			}
+		})
+	}
+}
+
+// helperLineOf is the helper's journal line for request id, waiting up to
+// 10 s for it ("" when there is none).
+func helperLineOf(id string) string {
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if l, ok := findLine(id); ok {
+			return l
+		}
+	}
+	return ""
 }
 
 // deref is *p for messages, or "<nil>".

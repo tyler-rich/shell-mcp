@@ -104,11 +104,12 @@ type repoSummary struct {
 }
 
 type cmdSummary struct {
-	ID             string     `json:"id"`
-	Description    string     `json:"description"`
-	Tier           string     `json:"tier"`
-	RootEquivalent bool       `json:"root_equivalent"`
-	Templates      [][]string `json:"templates"`
+	ID               string     `json:"id"`
+	Description      string     `json:"description"`
+	Tier             string     `json:"tier"`
+	RootEquivalent   bool       `json:"root_equivalent"`
+	ReadsPrivateKeys bool       `json:"reads_private_keys"`
+	Templates        [][]string `json:"templates"`
 }
 
 func orEmpty[T any](s []T) []T {
@@ -148,7 +149,7 @@ func PolicySummary(p *policy.Policy) Summary {
 	}
 	for i := range p.Commands {
 		c := &p.Commands[i]
-		cs := cmdSummary{ID: c.ID, Description: c.Description, Tier: c.Tier.String(), RootEquivalent: c.RootEquivalent, Templates: [][]string{}}
+		cs := cmdSummary{ID: c.ID, Description: c.Description, Tier: c.Tier.String(), RootEquivalent: c.RootEquivalent, ReadsPrivateKeys: c.ReadsPrivateKeys, Templates: [][]string{}}
 		for _, t := range c.Templates {
 			cs.Templates = append(cs.Templates, t.String())
 		}
