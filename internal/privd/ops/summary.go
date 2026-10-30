@@ -105,6 +105,7 @@ var pkgOpOf = map[string]pkg.Op{
 	protocol.OpPrivPkgUpgrade: pkg.OpUpgrade, protocol.OpPrivPkgUpgradePreview: pkg.OpUpgrade,
 	protocol.OpPrivPkgRemove: pkg.OpRemove, protocol.OpPrivPkgRemovePreview: pkg.OpRemove,
 	protocol.OpPrivPkgRecover: pkg.OpRecover, protocol.OpPrivPkgRecoverPreview: pkg.OpRecover,
+	protocol.OpPrivPkgReinstall: pkg.OpReinstall, protocol.OpPrivPkgReinstallPreview: pkg.OpReinstall,
 }
 
 // allowed reports whether the policy lets op through at all, by the checks

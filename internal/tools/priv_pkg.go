@@ -49,7 +49,7 @@ func checkPkgNames(op string, names []string) *envelope.Error {
 		switch {
 		case len(n) > maxPkgName || !pkgNameRE.MatchString(n):
 			return invalid("packages[%d] is not a Debian package name (lower-case letters, digits, +, - and ., at least two characters, alphanumeric first, at most %d bytes)", i, maxPkgName)
-		case op == "install" && strings.HasSuffix(n, "-"), op == "remove" && strings.HasSuffix(n, "+"):
+		case (op == "install" || op == "reinstall") && strings.HasSuffix(n, "-"), op == "remove" && strings.HasSuffix(n, "+"):
 			return invalid("packages[%d] ends in a character apt-get reads as the opposite operation", i)
 		case slices.Contains(names[:i], n):
 			return invalid("packages[%d] is listed twice", i)
@@ -92,13 +92,13 @@ type privPkgNoNamesIn struct {
 
 type privPreviewPackagesIn struct {
 	targetArg
-	Operation string   `json:"operation" jsonschema:"install, upgrade or remove."`
-	Packages  []string `json:"packages,omitzero" jsonschema:"Debian package names (1-20) for install and remove; none for upgrade."`
+	Operation string   `json:"operation" jsonschema:"install, upgrade, remove or reinstall."`
+	Packages  []string `json:"packages,omitzero" jsonschema:"Debian package names (1-20) for install, remove and reinstall; none for upgrade."`
 }
 
 func (in *privPreviewPackagesIn) validate() *envelope.Error {
 	switch in.Operation {
-	case "install", "remove":
+	case "install", "remove", "reinstall":
 		return checkPkgNames(in.Operation, in.Packages)
 	case "upgrade":
 		if in.Packages != nil {
@@ -106,7 +106,7 @@ func (in *privPreviewPackagesIn) validate() *envelope.Error {
 		}
 		return nil
 	}
-	return invalid("operation must be install, upgrade or remove")
+	return invalid("operation must be install, upgrade, remove or reinstall")
 }
 
 // PackageVersion is a package a transaction installs.
@@ -138,11 +138,13 @@ type PackageChanges struct {
 
 // PackagePreview is shell_priv_preview_packages' data.
 type PackagePreview struct {
-	Op       string   `json:"op" jsonschema:"install, upgrade or remove."`
+	Op       string   `json:"op" jsonschema:"install, upgrade, remove or reinstall."`
 	Packages []string `json:"packages" jsonschema:"The requested names."`
 	PackageChanges
-	Argv          []string `json:"argv" jsonschema:"The apt-get arguments simulated."`
-	PreviewSHA256 string   `json:"preview_sha256" jsonschema:"SHA-256 over the privileged policy, the requested names, every list with its versions and the argv; an operation runs only while it is unchanged."`
+	Unfinished    []UnfinishedPackage `json:"unfinished" jsonschema:"The packages dpkg left unfinished, each with its version and state, for a removal of exactly them; empty when nothing is unfinished."`
+	Reinstall     []UnfinishedPackage `json:"reinstall" jsonschema:"For a reinstall: each package to reinstall at the version dpkg names, with its state; empty otherwise."`
+	Argv          []string            `json:"argv" jsonschema:"The apt-get arguments simulated."`
+	PreviewSHA256 string              `json:"preview_sha256" jsonschema:"SHA-256 over the privileged policy, the requested names, every list with its versions and the argv and, while packages are unfinished, their state; an operation runs only while it is unchanged."`
 }
 
 // PackageResult is the install, upgrade and remove tools' data.
@@ -198,15 +200,16 @@ type pkgPreviewWire struct {
 	Op       string   `json:"op"`
 	Packages []string `json:"packages"`
 	pkgChangesWire
-	Complete        bool     `json:"complete"`
-	Argv            []string `json:"argv"`
-	ExitCode        *int     `json:"exit_code"`
-	Signal          *string  `json:"signal"`
-	Stderr          string   `json:"stderr"`
-	StderrTruncated bool     `json:"stderr_truncated"`
-	DurationMS      int64    `json:"duration_ms"`
-	PolicySHA256    string   `json:"policy_sha256"`
-	PreviewSHA256   string   `json:"preview_sha256"`
+	Unfinished      []recoverEntryWire `json:"unfinished"`
+	Complete        bool               `json:"complete"`
+	Argv            []string           `json:"argv"`
+	ExitCode        *int               `json:"exit_code"`
+	Signal          *string            `json:"signal"`
+	Stderr          string             `json:"stderr"`
+	StderrTruncated bool               `json:"stderr_truncated"`
+	DurationMS      int64              `json:"duration_ms"`
+	PolicySHA256    string             `json:"policy_sha256"`
+	PreviewSHA256   string             `json:"preview_sha256"`
 }
 
 type pkgUpdatePreviewWire struct {
@@ -267,7 +270,7 @@ func privPreviewPackages(d *Deps) Tool {
 		privileged:  true,
 		schema: func(s *jsonschema.Schema) {
 			boundPkgNames(s)
-			enumIn(s, "operation", "install", "upgrade", "remove")
+			enumIn(s, "operation", "install", "upgrade", "remove", "reinstall")
 		},
 		audit: func(in privPreviewPackagesIn) map[string]any {
 			m := pkgAudit(in.Target, in.Packages)
@@ -276,6 +279,20 @@ func privPreviewPackages(d *Deps) Tool {
 		},
 		summary: func(p *PackagePreview) string { return changesSummary(&p.PackageChanges) },
 		run: func(ctx context.Context, _ *mcp.CallToolRequest, in privPreviewPackagesIn) envelope.Envelope[PackagePreview] {
+			if in.Operation == "reinstall" {
+				r := fetch[reinstallPreviewWire](ctx, d, in.Target, protocol.OpPrivPkgReinstallPreview, pkgNamesWire{Packages: in.Packages}, d.budget())
+				if !r.OK {
+					return envelope.Failure[PackagePreview](r.Target, r.Error)
+				}
+				x := r.Data
+				c := PackageChanges{}
+				emptyChanges(&c)
+				out := PackagePreview{Op: x.Op, Packages: orNone(x.Packages), PackageChanges: c, Unfinished: []UnfinishedPackage{}, Reinstall: unfinishedOf(x.Reinstall),
+					Argv: orNone(x.Argv), PreviewSHA256: x.PreviewSHA256}
+				env := envelope.Success(r.Target, out)
+				env.Gate, env.Warnings = r.Gate, r.Warnings
+				return env
+			}
 			var args any = noArgsWire{}
 			if in.Operation != "upgrade" {
 				args = pkgNamesWire{Packages: in.Packages}
@@ -285,10 +302,8 @@ func privPreviewPackages(d *Deps) Tool {
 				return envelope.Failure[PackagePreview](r.Target, r.Error)
 			}
 			x := r.Data
-			out := PackagePreview{Op: x.Op, Packages: x.Packages, PackageChanges: x.changes(), Argv: x.Argv, PreviewSHA256: x.PreviewSHA256}
-			if out.Packages == nil {
-				out.Packages = []string{}
-			}
+			out := PackagePreview{Op: x.Op, Packages: orNone(x.Packages), PackageChanges: x.changes(), Unfinished: unfinishedOf(x.Unfinished), Reinstall: []UnfinishedPackage{},
+				Argv: x.Argv, PreviewSHA256: x.PreviewSHA256}
 			env := envelope.Success(r.Target, out)
 			env.Gate, env.Warnings = r.Gate, r.Warnings
 			return env
@@ -542,5 +557,11 @@ func (d *Deps) privPkgPreview(ctx context.Context, target, op string, names []st
 		argv = []string{}
 	}
 	value := map[string]any{"op": op, "packages": names, "install": inst, "upgrade": upg, "remove": rem, "argv": argv, "preview_sha256": hash}
+	if len(x.Unfinished) > 0 {
+		// A removal of exactly the unfinished packages (handoff N-36):
+		// each with its version and state, so that a package that worked
+		// at an older version is visibly being removed.
+		value["unfinished"] = recoverEntries(x.Unfinished)
+	}
 	return &preview{value: value, policy: policy, contentSHA256: hash, count: len(c.Install) + len(c.Upgrade) + len(c.Remove)}, nil
 }

@@ -712,8 +712,8 @@
       "title": "Preview packages as root"
     },
     "description": "Reports, as root, what installing, upgrading or removing packages would change, without changing anything: every package with its exact version, and a hash of the transaction.",
-    "input_schema_sha256": "30daa473d1e9535cf14cfcd170279261761a8d4b58a80a18d3117f19d279b10d",
-    "output_schema_sha256": "3f1e459d2419ddd8ef966bf88eb05d52a643ce400aafe14b06e8e6fa6173baa6",
+    "input_schema_sha256": "63d6a371be12f9ddf1e88b0d2284e5e52fe017539596b20acec1ff882fe581f3",
+    "output_schema_sha256": "e52332b92d1bcea94c6871c535732c8cb0a9b35419fca6de04fce98a689fb9b9",
     "requires_user_interaction": false
   },
   {
@@ -774,6 +774,26 @@
     "description": "Finishes, as root, what an interrupted dpkg left unfinished, exactly as its approved preview listed it, without installing or removing packages; returns what dpkg shows was configured.",
     "input_schema_sha256": "0ae331bdbdd02f03a03f6ff857c70a81571bb0ed91e0d982dd636e958063bff5",
     "output_schema_sha256": "e9eaec134f86e6b9d25cbe7cf0cbe43a3bc9675169fc380eb025f2416259e832",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_reinstall_packages",
+    "title": "Reinstall unfinished packages as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Reinstall unfinished packages as root"
+    },
+    "description": "Reinstalls, as root, exactly the packages an interrupted dpkg left needing a reinstall, each at the version dpkg names, as its approved preview listed them; returns what dpkg shows was reinstalled.",
+    "input_schema_sha256": "a5895a8c049c1741b58e19c4f5d15f3ffeed6bb445238b856d97c4a9ce528012",
+    "output_schema_sha256": "b59912f49638b214a093931e7eec46b87513f9aabf91d3260f4d0c2769a3de87",
     "requires_user_interaction": true
   },
   {
