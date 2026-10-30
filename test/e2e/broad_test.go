@@ -101,9 +101,13 @@ func cleanupPackages(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		_ = os.WriteFile("/run/shell-mcp-e2e-pkg-fast", nil, 0o600)
+		_ = os.Remove(pkgFail)
+		// dpkg refuses to remove a package that needs a reinstall without
+		// this force (measured); only the tests' own cleanup uses it.
+		_ = exec.CommandContext(ctx, "dpkg", "--force-remove-reinstreq", "--purge", "example-reinst").Run()
 		_ = exec.CommandContext(ctx, "dpkg", "--configure", "-a").Run()
 		_ = exec.CommandContext(ctx, "dpkg", "--purge", "example-hello", "example-extra", "example-other", "example-conf",
-			"example-slow", "example-slow-b", "example-slow-a", "example-stuck", "example-blocked", "example-needs").Run()
+			"example-slow", "example-slow-b", "example-slow-a", "example-stuck", "example-blocked", "example-needs", "example-reinst").Run()
 		_ = os.Remove("/run/shell-mcp-e2e-pkg-fast")
 		_ = os.Remove(pkgRelease)
 	})

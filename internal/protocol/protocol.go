@@ -189,6 +189,11 @@ const (
 	// report of the unfinished packages (handoff N-14; broad).
 	OpPrivPkgRecover        = "priv_pkg_recover"
 	OpPrivPkgRecoverPreview = "priv_pkg_recover_preview"
+	// OpPrivPkgReinstall reinstalls exactly the packages dpkg left
+	// needing a reinstall, each pinned to the version dpkg's status names,
+	// bound to OpPrivPkgReinstallPreview's simulation (handoff N-36; broad).
+	OpPrivPkgReinstall        = "priv_pkg_reinstall"
+	OpPrivPkgReinstallPreview = "priv_pkg_reinstall_preview"
 	// OpPrivPower answers first, then asks logind to reboot or power off
 	// after a fixed delay (broad unit; PRIVILEGED §6, "Power").
 	OpPrivPower = "priv_power"
