@@ -197,8 +197,8 @@ func TestPrivPreviewPackagesReinstall(t *testing.T) {
 	if pa := a.g.args(t, "priv_pkg_reinstall_preview"); pa["packages"] == nil {
 		t.Fatalf("preview args %v", pa)
 	}
-	if env, _ := a.call("shell_priv_preview_packages", map[string]any{"operation": "reinstall"}); errCode(env) != "validation_error" {
-		t.Fatalf("reinstall without names: %v", env)
+	if bad, _ := a.call("shell_priv_preview_packages", map[string]any{"operation": "reinstall"}); errCode(bad) != "validation_error" {
+		t.Fatalf("reinstall without names: %v", bad)
 	}
 	b := newPrivPkgHarness(t, approval.MethodNone)
 	b.g.set("priv_pkg_remove_preview", gateReply{data: fakeUnfinishedRemovePreview(shaPK)})

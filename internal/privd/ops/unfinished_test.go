@@ -31,10 +31,9 @@ func unfinishedRepo() []mpkg {
 		mpkg{Name: "example-needs", Version: "1.0", Depends: []string{"example-absent"}})
 }
 
-func unfinishedFixture(t *testing.T, opts ...opt) *fixture {
+func unfinishedFixture(t *testing.T) *fixture {
 	t.Helper()
-	f := modelFixture(t, &pkgModel{Repo: unfinishedRepo()}, nil, append([]opt{unfinishedLists()}, opts...)...)
-	return f
+	return modelFixture(t, &pkgModel{Repo: unfinishedRepo()}, nil, unfinishedLists())
 }
 
 var (
@@ -89,8 +88,12 @@ func withExpected(args m, hash string) m {
 	return out
 }
 
-func refusedWith(t *testing.T, what string, r response, code string, in ...string) {
+// refused serves op with args and requires a refusal with code whose
+// message holds every string of in.
+func (f *fixture) refused(what, op string, args any, code string, in ...string) {
+	t := f.t
 	t.Helper()
+	r := f.serve(op, args)
 	if r.OK || r.Error == nil || r.Error.Code != code {
 		t.Fatalf("%s: %+v, want %s", what, r.Error, code)
 	}
@@ -151,7 +154,7 @@ func TestPkgRemoveUnfinished(t *testing.T) {
 		t.Fatalf("audit %q", l)
 	}
 	runs := len(f.realRuns())
-	refusedWith(t, "the same hash again", f.serve("priv_pkg_remove", withExpected(needs, p.PreviewSHA256)), "exists", "nothing was run")
+	f.refused("the same hash again", "priv_pkg_remove", withExpected(needs, p.PreviewSHA256), "exists", "nothing was run")
 	if len(f.realRuns()) != runs {
 		t.Fatal("apt-get ran again")
 	}
@@ -170,7 +173,7 @@ func TestPkgRemoveUnfinishedHash(t *testing.T) {
 	if moved := f.unfinishedPreview("priv_pkg_remove_preview", needs); moved.PreviewSHA256 == p.PreviewSHA256 {
 		t.Fatal("a changed want left the hash unchanged")
 	}
-	refusedWith(t, "state changed", f.serve("priv_pkg_remove", withExpected(needs, p.PreviewSHA256)), "exists", "nothing was run")
+	f.refused("state changed", "priv_pkg_remove", withExpected(needs, p.PreviewSHA256), "exists", "nothing was run")
 	if len(f.realRuns()) != 0 {
 		t.Fatal("apt-get ran")
 	}
@@ -207,8 +210,8 @@ func TestPkgRemoveUnfinishedExactSet(t *testing.T) {
 			t.Parallel()
 			f := unfinishedFixture(t)
 			f.setState(c.state, c.journal)
-			refusedWith(t, "preview", f.serve("priv_pkg_remove_preview", c.args), "exec_failed", c.want...)
-			refusedWith(t, "operation", f.serve("priv_pkg_remove", withExpected(c.args, strings.Repeat("a", 64))), "exec_failed", c.want...)
+			f.refused("preview", "priv_pkg_remove_preview", c.args, "exec_failed", c.want...)
+			f.refused("operation", "priv_pkg_remove", withExpected(c.args, strings.Repeat("a", 64)), "exec_failed", c.want...)
 			if len(f.realRuns()) != 0 {
 				t.Fatal("apt-get ran")
 			}
@@ -262,9 +265,9 @@ func TestPkgRemoveUnfinishedResult(t *testing.T) {
 	f.setState(needsUnpacked, nil)
 	p := f.unfinishedPreview("priv_pkg_remove_preview", needs)
 	f.setModel(&pkgModel{Repo: unfinishedRepo(), Run: mrun{Fail: true}})
-	refusedWith(t, "nothing changed", f.serve("priv_pkg_remove", withExpected(needs, p.PreviewSHA256)), "exec_failed", "changed nothing")
+	f.refused("nothing changed", "priv_pkg_remove", withExpected(needs, p.PreviewSHA256), "exec_failed", "changed nothing")
 	f.setModel(&pkgModel{Repo: unfinishedRepo(), Run: mrun{Extra: []mpkg{{Name: "example-extra", Version: "1.0"}}}})
-	refusedWith(t, "more than approved", f.serve("priv_pkg_remove", withExpected(needs, p.PreviewSHA256)), "verify_failed", "approved")
+	f.refused("more than approved", "priv_pkg_remove", withExpected(needs, p.PreviewSHA256), "verify_failed", "approved")
 }
 
 // TestPkgReinstall: a package that needs a reinstall, previewed and
@@ -304,7 +307,7 @@ func TestPkgReinstall(t *testing.T) {
 	if !strings.Contains(l, `"op":"priv_pkg_reinstall"`) || !strings.Contains(l, `"outcome":"ok"`) || !strings.Contains(l, `"reinstalled":["example-bad"]`) || strings.Contains(l, p.PreviewSHA256) {
 		t.Fatalf("audit %q", l)
 	}
-	refusedWith(t, "the same hash again", f.serve("priv_pkg_reinstall", withExpected(bad, p.PreviewSHA256)), "exec_failed", "nothing needs a reinstall")
+	f.refused("the same hash again", "priv_pkg_reinstall", withExpected(bad, p.PreviewSHA256), "exec_failed", "nothing needs a reinstall")
 }
 
 // TestPkgReinstallRefusals: refused before anything runs, at the preview
@@ -340,8 +343,8 @@ func TestPkgReinstallRefusals(t *testing.T) {
 				f.setModel(&pkgModel{Repo: c.repo})
 			}
 			f.setState(c.state, c.journal)
-			refusedWith(t, "preview", f.serve("priv_pkg_reinstall_preview", c.args), c.code, c.want...)
-			refusedWith(t, "operation", f.serve("priv_pkg_reinstall", withExpected(c.args, strings.Repeat("a", 64))), c.code, c.want...)
+			f.refused("preview", "priv_pkg_reinstall_preview", c.args, c.code, c.want...)
+			f.refused("operation", "priv_pkg_reinstall", withExpected(c.args, strings.Repeat("a", 64)), c.code, c.want...)
 			if len(f.realRuns()) != 0 {
 				t.Fatal("apt-get ran")
 			}
@@ -367,7 +370,7 @@ func TestPkgReinstallStateChanged(t *testing.T) {
 	f.setState(badReinstreq, nil)
 	p := f.reinstallPreview(bad)
 	f.setState(strings.Replace(badReinstreq, "install reinstreq", "deinstall reinstreq", 1), nil)
-	refusedWith(t, "state changed", f.serve("priv_pkg_reinstall", withExpected(bad, p.PreviewSHA256)), "exists", "nothing was run")
+	f.refused("state changed", "priv_pkg_reinstall", withExpected(bad, p.PreviewSHA256), "exists", "nothing was run")
 	if len(f.realRuns()) != 0 {
 		t.Fatal("apt-get ran")
 	}
@@ -393,7 +396,7 @@ func TestPkgReinstallResult(t *testing.T) {
 			f.setState(badReinstreq, nil)
 			p := f.reinstallPreview(bad)
 			f.setModel(&pkgModel{Repo: unfinishedRepo(), Run: c.run})
-			refusedWith(t, name, f.serve("priv_pkg_reinstall", withExpected(bad, p.PreviewSHA256)), c.code, c.want)
+			f.refused(name, "priv_pkg_reinstall", withExpected(bad, p.PreviewSHA256), c.code, c.want)
 		})
 	}
 }
@@ -406,11 +409,11 @@ func TestPkgReinstallInProgress(t *testing.T) {
 	f := unfinishedFixture(t)
 	f.setState(badReinstreq, nil)
 	release := f.holdRecord(`{"request_id":"0b5c0000-0000-4000-8000-0000000000bb","started":"2026-09-29T12:00:00Z","until":"2026-09-29T12:15:00Z"}`)
-	refusedWith(t, "preview", f.serve("priv_pkg_reinstall_preview", bad), "exec_failed", "package operation in progress")
-	refusedWith(t, "operation", f.serve("priv_pkg_reinstall", withExpected(bad, strings.Repeat("a", 64))), "exec_failed", "package operation in progress")
+	f.refused("preview", "priv_pkg_reinstall_preview", bad, "exec_failed", "package operation in progress")
+	f.refused("operation", "priv_pkg_reinstall", withExpected(bad, strings.Repeat("a", 64)), "exec_failed", "package operation in progress")
 	release()
 	_, unlock := f.holdDpkgLock()
-	refusedWith(t, "lock held", f.serve("priv_pkg_reinstall_preview", bad), "exec_failed", "locked by")
+	f.refused("lock held", "priv_pkg_reinstall_preview", bad, "exec_failed", "locked by")
 	unlock()
 }
 
@@ -425,8 +428,8 @@ func TestPkgRecoverRefusesOnlyMissingDependencies(t *testing.T) {
 			t.Parallel()
 			f := recoverFixture(t)
 			f.setState(state, nil)
-			refusedWith(t, "preview", f.serve("priv_pkg_recover_preview", m{}), "exec_failed", "would change nothing", "example-needs", "priv_pkg_remove")
-			refusedWith(t, "operation", f.serve("priv_pkg_recover", m{"expected_preview_sha256": strings.Repeat("a", 64)}), "exec_failed", "would change nothing")
+			f.refused("preview", "priv_pkg_recover_preview", m{}, "exec_failed", "would change nothing", "example-needs", "priv_pkg_remove")
+			f.refused("operation", "priv_pkg_recover", m{"expected_preview_sha256": strings.Repeat("a", 64)}, "exec_failed", "would change nothing")
 			if len(f.dpkgRuns()) != 0 {
 				t.Fatal("dpkg ran")
 			}

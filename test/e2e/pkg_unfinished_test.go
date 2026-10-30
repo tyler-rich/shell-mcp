@@ -160,7 +160,7 @@ func setSelection(t *testing.T, pkg, want string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	c := exec.CommandContext(ctx, "dpkg", "--set-selections") //nolint:gosec // G204: fixed test command
+	c := exec.CommandContext(ctx, "dpkg", "--set-selections")
 	c.Stdin = strings.NewReader(pkg + " " + want + "\n")
 	if out, err := c.CombinedOutput(); err != nil {
 		t.Fatalf("dpkg --set-selections: %v\n%s", err, out)
