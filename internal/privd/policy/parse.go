@@ -104,15 +104,16 @@ type rawBackups struct {
 }
 
 type rawCommand struct {
-	ID             string     `yaml:"id"`
-	Path           string     `yaml:"path"`
-	Tier           string     `yaml:"tier"`
-	Description    string     `yaml:"description"`
-	Unit           string     `yaml:"unit"`
-	RootEquivalent bool       `yaml:"root_equivalent"`
-	Capabilities   []string   `yaml:"capabilities"`
-	Acknowledge    string     `yaml:"acknowledge"`
-	Templates      [][]string `yaml:"templates"`
+	ID               string     `yaml:"id"`
+	Path             string     `yaml:"path"`
+	Tier             string     `yaml:"tier"`
+	Description      string     `yaml:"description"`
+	Unit             string     `yaml:"unit"`
+	RootEquivalent   bool       `yaml:"root_equivalent"`
+	ReadsPrivateKeys bool       `yaml:"reads_private_keys"`
+	Capabilities     []string   `yaml:"capabilities"`
+	Acknowledge      string     `yaml:"acknowledge"`
+	Templates        [][]string `yaml:"templates"`
 }
 
 type rawPower struct {

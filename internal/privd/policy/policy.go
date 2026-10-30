@@ -155,15 +155,16 @@ type NamedID struct {
 
 // Command is one declared root command.
 type Command struct {
-	ID             string
-	Path           string // as written
-	Resolved       string // after EvalSymlinks; the execve path and argv[0]
-	Tier           Tier
-	Description    string
-	Unit           Unit
-	RootEquivalent bool
-	Capabilities   []string
-	Acknowledge    string
+	ID               string
+	Path             string // as written
+	Resolved         string // after EvalSymlinks; the execve path and argv[0]
+	Tier             Tier
+	Description      string
+	Unit             Unit
+	RootEquivalent   bool
+	ReadsPrivateKeys bool
+	Capabilities     []string
+	Acknowledge      string
 	// ListB is the POLICY §5 group (11–13) the binary belongs to, or 0.
 	ListB     int
 	Templates []template.Template

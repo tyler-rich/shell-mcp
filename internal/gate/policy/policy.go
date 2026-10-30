@@ -159,13 +159,14 @@ type Privileged struct {
 
 // Command is one declared command.
 type Command struct {
-	ID             string
-	Path           string // as written
-	Resolved       string // after EvalSymlinks; argv[0] and the execve path
-	Tier           Tier
-	Description    string
-	RootEquivalent bool
-	Templates      []template.Template
+	ID               string
+	Path             string // as written
+	Resolved         string // after EvalSymlinks; argv[0] and the execve path
+	Tier             Tier
+	Description      string
+	RootEquivalent   bool
+	ReadsPrivateKeys bool
+	Templates        []template.Template
 	// Applet is the utility the uutils multi-call binary runs as (the
 	// resolved file's name), or "" for any other binary (S-MC).
 	Applet string

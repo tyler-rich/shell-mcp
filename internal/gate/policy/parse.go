@@ -116,12 +116,13 @@ type rawRedact struct {
 }
 
 type rawCommand struct {
-	ID             string     `yaml:"id"`
-	Path           string     `yaml:"path"`
-	Tier           string     `yaml:"tier"`
-	Description    string     `yaml:"description"`
-	RootEquivalent bool       `yaml:"root_equivalent"`
-	Templates      [][]string `yaml:"templates"`
+	ID               string     `yaml:"id"`
+	Path             string     `yaml:"path"`
+	Tier             string     `yaml:"tier"`
+	Description      string     `yaml:"description"`
+	RootEquivalent   bool       `yaml:"root_equivalent"`
+	ReadsPrivateKeys bool       `yaml:"reads_private_keys"`
+	Templates        [][]string `yaml:"templates"`
 }
 
 // validator accumulates errors and warnings.

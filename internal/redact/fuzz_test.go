@@ -33,7 +33,7 @@ func FuzzRedact(f *testing.F) {
 		if ContainsPrivateKey(cut) {
 			t.Fatalf("a private-key header survived truncation: %q", cut)
 		}
-		if !pemHead.Match(in) && !authHeader.Match(in) && !bearer.Match(in) && !r.extra[0].Match(in) && !bytes.Equal(out, in) {
+		if !pemHead.Match(in) && len(refOrphanEnds(string(in), 0, len(in))) == 0 && !authHeader.Match(in) && !bearer.Match(in) && !r.extra[0].Match(in) && !bytes.Equal(out, in) {
 			t.Fatalf("input without secrets was changed: %q -> %q", in, out)
 		}
 	})
@@ -120,10 +120,49 @@ func refKeyBlocks(s string) [][2]int {
 	return out
 }
 
+// refOrphanEnds is the reference for the orphan-END rule (handoff N-35) in
+// s[from:to], text outside every block: each "-----END <label>-----" of a
+// private-key label masks from from, or from the end of the previous one,
+// through itself.
+func refOrphanEnds(s string, from, to int) [][2]int {
+	var out [][2]int
+	for i := from; i+len("-----END ") <= to; i++ {
+		if !strings.HasPrefix(s[i:], "-----END ") {
+			continue
+		}
+		k := i + len("-----END ")
+		j := k
+		for j < to && (s[j] == ' ' || s[j] >= 'A' && s[j] <= 'Z' || s[j] >= '0' && s[j] <= '9') {
+			j++
+		}
+		l := s[k:j]
+		if j+len("-----") <= to && strings.HasPrefix(s[j:], "-----") && (strings.HasSuffix(l, "PRIVATE KEY") || strings.HasSuffix(l, "PRIVATE KEY BLOCK")) {
+			out = append(out, [2]int{from, j + len("-----")})
+			from = j + len("-----")
+			i = from - 1
+		}
+	}
+	return out
+}
+
+// refMasked is every range Bytes masks: the key blocks and, in the text
+// between them, the orphan END ranges.
+func refMasked(s string) [][2]int {
+	var out [][2]int
+	last := 0
+	for _, b := range refKeyBlocks(s) {
+		out = append(out, refOrphanEnds(s, last, b[0])...)
+		out = append(out, b)
+		last = b[1]
+	}
+	return append(out, refOrphanEnds(s, last, len(s))...)
+}
+
 // FuzzRedactKeyBlocks: for input with no Authorization or Bearer text, the
-// output is the input with each key block replaced by Mask and everything
-// else unchanged, so no key body survives and no text outside a block is
-// touched; Bytes agrees with the reference on where the blocks are.
+// output is the input with each key block, and each orphan END range
+// (handoff N-35), replaced by Mask and everything else unchanged, so no key
+// body survives and no text outside those ranges is touched; Bytes agrees
+// with the reference on where they are.
 func FuzzRedactKeyBlocks(f *testing.F) {
 	begin, end := "-----BEGIN ", "-----END "
 	pk := "PRIVATE " + "KEY-----"
@@ -131,7 +170,9 @@ func FuzzRedactKeyBlocks(f *testing.F) {
 		begin + "RSA " + pk + "BODY1" + end + "EC " + pk + "BODY2" + end + "RSA " + pk + "tail",
 		begin + "RSA " + pk + "BODY1" + end + "EC " + pk + "BODY2",
 		begin + "RSA " + pk + "B" + end + "RSA " + pk + "m" + begin + "EC " + pk + "C" + end + "EC " + pk,
-		begin + pk + "A" + begin + "EC " + pk + "B" + end + pk} {
+		begin + pk + "A" + begin + "EC " + pk + "B" + end + pk,
+		"BODY1\nBODY2\n" + end + pk + "\nafter", "a" + begin + "RSA " + pk + "B" + end + "RSA " + pk + "m" + end + "EC " + pk + "n",
+		"x" + end + pk + "y" + end + "OPENSSH " + pk + "z", "BODY" + end + "RSA PUBLIC " + "KEY-----"} {
 		f.Add(s)
 	}
 	r := New(nil)
@@ -141,7 +182,7 @@ func FuzzRedactKeyBlocks(f *testing.F) {
 		}
 		var want strings.Builder
 		last := 0
-		for _, b := range refKeyBlocks(s) {
+		for _, b := range refMasked(s) {
 			want.WriteString(s[last:b[0]])
 			want.WriteString(Mask)
 			last = b[1]

@@ -228,7 +228,7 @@ paths:
 services:
   status: ["example-*.service"]
 journal:
-  units: ["example-app.service", "example-journal.service"]
+  units: ["example-app.service", "example-journal.service", "example-keylog.service"]
   max_lines: 200
 git:
   repos:

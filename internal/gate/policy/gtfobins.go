@@ -234,3 +234,6 @@ func GTFOBinsNames() []string {
 	sort.Strings(names)
 	return names
 }
+
+// RangeProgramNames is a stub (handoff N-35, tests first).
+func RangeProgramNames() []string { return nil }

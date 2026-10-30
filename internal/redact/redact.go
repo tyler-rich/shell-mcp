@@ -131,3 +131,15 @@ func PrivateKeyBlocks(s string) [][2]int {
 	}
 	return out
 }
+
+// LineFormat says how MaskKeyBodies finds a line's content.
+type LineFormat int
+
+// Line formats.
+const (
+	PlainLines LineFormat = iota
+	JournalLines
+)
+
+// MaskKeyBodies is a stub (handoff N-35, tests first).
+func MaskKeyBodies(b []byte, _ LineFormat) []byte { return b }
