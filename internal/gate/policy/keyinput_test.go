@@ -46,7 +46,7 @@ func TestReadsPrivateKeysParsed(t *testing.T) {
 	if w := rangeWarnings(p); len(w) != 0 {
 		t.Fatalf("warnings %q", w)
 	}
-	f.mustFail(t, keyCmd("{BIN}/example-tool", "    reads_private_keys: yes please\n"), "reads_private_keys")
+	f.mustFail(t, keyCmd("{BIN}/example-tool", "    reads_private_keys: yes please\n"), "into bool")
 }
 
 // TestReadsPrivateKeysRangeWarning: an opted-in command whose program is

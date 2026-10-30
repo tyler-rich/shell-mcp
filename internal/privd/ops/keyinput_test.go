@@ -57,7 +57,8 @@ func TestPrivExecKeyInput(t *testing.T) {
 	keyFile := filepath.Join(f.read, "service.key")
 	gatetest.WriteFile(t, keyFile, strings.Join(key, "\n")+"\n", 0o644)
 	bare := filepath.Join(f.read, "bare.txt")
-	gatetest.WriteFile(t, bare, strings.Join(key[4:10], "\n")+"\n", 0o644)
+	// The probe prints "READ:" before the first line: an ordinary one.
+	gatetest.WriteFile(t, bare, "an ordinary first line\n"+strings.Join(key[4:10], "\n")+"\n", 0o644)
 	leaks := func(s string) bool {
 		for _, l := range key[1 : len(key)-1] {
 			if strings.Contains(s, l) {

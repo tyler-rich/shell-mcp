@@ -15,23 +15,25 @@ import (
 // here are invented: base64 of hashed bytes, wrapped as PEM wraps it,
 // assembled at run time, never a literal key.
 
-// inventedBody returns n full lines of width w and a shorter last line,
-// derived from seed.
+// inventedBody returns n full lines of width w and a shorter last line
+// ending in padding, its length a multiple of 4 as base64's is (32 after
+// lines of 64, 36 after lines of 70), derived from seed.
 func inventedBody(seed string, n, w int) []string {
+	last := (w/2 + 3) / 4 * 4
 	var raw []byte
-	for i := 0; len(raw)*4/3 < n*w+w/2; i++ {
+	for i := 0; len(raw)*4/3 < n*w+last; i++ {
 		var c [8]byte
 		binary.BigEndian.PutUint64(c[:], uint64(i))
 		h := sha256.Sum256(append([]byte(seed), c[:]...))
 		raw = append(raw, h[:]...)
 	}
-	enc := base64.StdEncoding.EncodeToString(raw)[:n*w+w/2]
+	enc := base64.StdEncoding.EncodeToString(raw)
 	var out []string
-	for len(enc) > w {
+	for range n {
 		out = append(out, enc[:w])
 		enc = enc[w:]
 	}
-	return append(out, enc+"==")
+	return append(out, enc[:last-2]+"==")
 }
 
 // keyLines is a whole invented key: BEGIN, body, END.

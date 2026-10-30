@@ -202,7 +202,8 @@ func TestExecKeyInputOptIn(t *testing.T) {
 	keyFile := filepath.Join(dir, "service.key")
 	gatetest.WriteFile(t, keyFile, strings.Join(key, "\n")+"\n", 0o644)
 	bare := filepath.Join(dir, "bare.txt")
-	gatetest.WriteFile(t, bare, strings.Join(key[3:12], "\n")+"\n", 0o644)
+	// The probe prints "READ:" before the first line: an ordinary one.
+	gatetest.WriteFile(t, bare, "an ordinary first line\n"+strings.Join(key[3:12], "\n")+"\n", 0o644)
 	var d keyExec
 	for _, req := range []m{
 		{"command_id": "key-cat-allowed", "args": []string{"cat", keyFile}},

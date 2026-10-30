@@ -56,13 +56,14 @@ type summaryOwners struct {
 }
 
 type summaryCommand struct {
-	ID             string     `json:"id"`
-	Tier           string     `json:"tier"`
-	Unit           string     `json:"unit"`
-	Description    string     `json:"description"`
-	Templates      [][]string `json:"templates"`
-	RootEquivalent bool       `json:"root_equivalent"`
-	Capabilities   []string   `json:"capabilities"`
+	ID               string     `json:"id"`
+	Tier             string     `json:"tier"`
+	Unit             string     `json:"unit"`
+	Description      string     `json:"description"`
+	Templates        [][]string `json:"templates"`
+	RootEquivalent   bool       `json:"root_equivalent"`
+	Capabilities     []string   `json:"capabilities"`
+	ReadsPrivateKeys bool       `json:"reads_private_keys"`
 }
 
 type summaryPackages struct {
@@ -170,7 +171,7 @@ func (s *server) summary() summaryData {
 	for i := range p.Commands {
 		c := &p.Commands[i]
 		sc := summaryCommand{ID: c.ID, Tier: c.Tier.String(), Unit: string(c.Unit), Description: c.Description, Templates: [][]string{},
-			RootEquivalent: c.RootEquivalent, Capabilities: orEmpty(c.Capabilities)}
+			RootEquivalent: c.RootEquivalent, Capabilities: orEmpty(c.Capabilities), ReadsPrivateKeys: c.ReadsPrivateKeys}
 		for _, t := range c.Templates {
 			sc.Templates = append(sc.Templates, t.String())
 		}

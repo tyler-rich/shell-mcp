@@ -232,7 +232,7 @@
     },
     "description": "Returns a target gate's version, principal, sandbox status and effective policy: roots, limits, services, repositories, commands with their templates, and privileged forwarding with the privileged helper's policy summary.",
     "input_schema_sha256": "42809bf68a1fbfc1ec56832b0e720e986e33781f27d916d7d9a1e9ebc2696207",
-    "output_schema_sha256": "98832eda1916777e4b09dc87215338a7f6359e4dfd82024b66c99dbf25eebbf2",
+    "output_schema_sha256": "178ba7b19dedc524a10b501791b07a8775708f28aa8ec33c265177404161ae0e",
     "requires_user_interaction": false
   },
   {

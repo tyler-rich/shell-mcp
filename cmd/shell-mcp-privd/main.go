@@ -447,6 +447,9 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 		if c.RootEquivalent {
 			extra += " [root_equivalent]"
 		}
+		if c.ReadsPrivateKeys {
+			extra += " [reads_private_keys]"
+		}
 		if c.Applet != "" {
 			extra += " [uutils applet " + c.Applet + "]"
 		}

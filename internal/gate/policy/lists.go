@@ -157,8 +157,9 @@ type deniedFile struct {
 	sum        *[32]byte // computed on demand
 	sumErr     error     // why it could not be, once tried
 	// scanned: a name the identity check refuses or classifies, so a
-	// failed comparison fails the load; listed: a GTFOBins-listed name, so
-	// a failed comparison only skips the warning (N-33). A file may be both.
+	// failed comparison fails the load; listed: a GTFOBins-listed name or a
+	// range program's (keyrange.go, handoff N-35), so a failed comparison
+	// only skips the warning (N-33). A file may be both.
 	scanned, listed bool
 }
 

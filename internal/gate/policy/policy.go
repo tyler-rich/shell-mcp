@@ -159,12 +159,15 @@ type Privileged struct {
 
 // Command is one declared command.
 type Command struct {
-	ID               string
-	Path             string // as written
-	Resolved         string // after EvalSymlinks; argv[0] and the execve path
-	Tier             Tier
-	Description      string
-	RootEquivalent   bool
+	ID             string
+	Path           string // as written
+	Resolved       string // after EvalSymlinks; argv[0] and the execve path
+	Tier           Tier
+	Description    string
+	RootEquivalent bool
+	// ReadsPrivateKeys lets the command's {path:read} (and {path:read:fd})
+	// files hold a private key, which is otherwise refused; its output then
+	// gets redact.MaskKeyBodies (POLICY §4, handoff N-35).
 	ReadsPrivateKeys bool
 	Templates        []template.Template
 	// Applet is the utility the uutils multi-call binary runs as (the

@@ -28,6 +28,7 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/procself"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
+	"github.com/tyler-rich/shell-mcp/internal/redact"
 	"github.com/tyler-rich/shell-mcp/internal/template"
 )
 
@@ -103,6 +104,10 @@ type resolvedExec struct {
 	template int
 	args     []string
 	dir      string
+	// strict: the output gets redact.MaskKeyBodies, for a command that
+	// declares reads_private_keys or reads a file too large to search
+	// (handoff N-35).
+	strict bool
 }
 
 // resolveExec is the one resolution priv_exec and priv_exec_preview share
@@ -140,7 +145,13 @@ func (s *server) resolveExec(id string, args []string, cwd string, unitOK func(*
 			return nil, err
 		}
 	}
-	return &resolvedExec{c: c, template: i, args: out, dir: dir}, nil
+	// A file that holds a private key could be printed in part, without its
+	// BEGIN line (handoff N-35): refused unless the command opts in.
+	over, err := s.fs.CommandKeyInputs(c.ID, &c.Templates[i], out, nil, c.ReadsPrivateKeys)
+	if err != nil {
+		return nil, err
+	}
+	return &resolvedExec{c: c, template: i, args: out, dir: dir, strict: over || c.ReadsPrivateKeys}, nil
 }
 
 type execPreviewArgs struct {
@@ -275,6 +286,10 @@ func (s *server) exec(raw jsontext.Value) (data any, warns []string, failure err
 	}, rx.c.Tier > policy.TierRead)
 	if err != nil {
 		return nil, nil, err
+	}
+	if rx.strict {
+		res.Stdout = redact.MaskKeyBodies(s.red.Bytes(res.Stdout), redact.PlainLines)
+		res.Stderr = redact.MaskKeyBodies(s.red.Bytes(res.Stderr), redact.PlainLines)
 	}
 	stdout, cutOut := s.red.Truncate(res.Stdout, maxOut)
 	stderr, cutErr := s.red.Truncate(res.Stderr, maxOut)

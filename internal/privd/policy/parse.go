@@ -582,7 +582,7 @@ func (v *validator) commands(p *Policy, raw []rawCommand) {
 }
 
 func (v *validator) command(field string, rc *rawCommand, maxTier Tier) (Command, bool) {
-	c := Command{ID: rc.ID, Path: rc.Path, RootEquivalent: rc.RootEquivalent, Acknowledge: rc.Acknowledge, Description: rc.Description}
+	c := Command{ID: rc.ID, Path: rc.Path, RootEquivalent: rc.RootEquivalent, ReadsPrivateKeys: rc.ReadsPrivateKeys, Acknowledge: rc.Acknowledge, Description: rc.Description}
 	ok := true
 	t, err := gpolicy.ParseTier(rc.Tier)
 	if err != nil {
@@ -648,6 +648,11 @@ func (v *validator) command(field string, rc *rawCommand, maxTier Tier) (Command
 	// A script's interpreters get the template's arguments (handoff N-31).
 	for _, s := range prog.scripts {
 		for _, w := range gpolicy.ScriptEscapeWarnings(field, true, s.script, s.written, s.interpreter, s.listed) {
+			v.warn("%s", w)
+		}
+	}
+	if rc.ReadsPrivateKeys {
+		for _, w := range gpolicy.KeyRangeWarnings(field, true, rc.Path, prog.resolved, prog.listed) {
 			v.warn("%s", w)
 		}
 	}

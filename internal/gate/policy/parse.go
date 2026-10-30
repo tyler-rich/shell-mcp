@@ -635,7 +635,7 @@ func (v *validator) commands(p *Policy, raw []rawCommand, opts *LoadOptions) {
 			v.fail(field, "duplicate command id")
 			continue
 		}
-		c := Command{ID: rc.ID, Path: rc.Path, RootEquivalent: rc.RootEquivalent}
+		c := Command{ID: rc.ID, Path: rc.Path, RootEquivalent: rc.RootEquivalent, ReadsPrivateKeys: rc.ReadsPrivateKeys}
 		t, err := ParseTier(rc.Tier)
 		if err != nil {
 			v.fail(field+".tier", "%v", err)
@@ -650,6 +650,11 @@ func (v *validator) commands(p *Policy, raw []rawCommand, opts *LoadOptions) {
 		prog, ok := v.resolveCommand(field, &rc, opts)
 		if !ok {
 			continue
+		}
+		if rc.ReadsPrivateKeys {
+			for _, w := range KeyRangeWarnings(field, false, rc.Path, prog.resolved, prog.listed) {
+				v.warn("%s", w)
+			}
 		}
 		c.Resolved, c.Applet, c.Interpreter = prog.resolved, prog.applet, prog.interpreter
 		if len(rc.Templates) == 0 || len(rc.Templates) > template.MaxTemplateCount {

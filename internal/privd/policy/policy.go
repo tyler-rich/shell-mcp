@@ -155,13 +155,16 @@ type NamedID struct {
 
 // Command is one declared root command.
 type Command struct {
-	ID               string
-	Path             string // as written
-	Resolved         string // after EvalSymlinks; the execve path and argv[0]
-	Tier             Tier
-	Description      string
-	Unit             Unit
-	RootEquivalent   bool
+	ID             string
+	Path           string // as written
+	Resolved       string // after EvalSymlinks; the execve path and argv[0]
+	Tier           Tier
+	Description    string
+	Unit           Unit
+	RootEquivalent bool
+	// ReadsPrivateKeys lets the command's {path:read} (and {path:read:fd})
+	// files hold a private key, which is otherwise refused; its output then
+	// gets redact.MaskKeyBodies (POLICY §4, handoff N-35).
 	ReadsPrivateKeys bool
 	Capabilities     []string
 	Acknowledge      string

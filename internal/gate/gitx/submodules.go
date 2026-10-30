@@ -117,6 +117,8 @@ var GitCommands = []GitCommand{
 		Why: "takes no such flag: -n lists untracked paths within the process, skips a nested repository without entering it (dir.c) and starts no process"},
 	{Name: "checkout-index", WorkTree: true,
 		Why: "takes no such flag: writes only the listed files and symlinks, never a gitlink (the discard refuses gitlink changes), and starts no process in a submodule while submodule.recurse is false"},
+	{Name: "grep", WorkTree: true, Flag: "--no-recurse-submodules",
+		Why: "git_diff's private-key search of the changed files (handoff N-35), in the work tree, the index or HEAD"},
 	{Name: "log", Why: "reads commits only"},
 	{Name: "config", Why: "reads the repository's configuration file only"},
 	{Name: "rev-parse", Why: "reads refs only"},
