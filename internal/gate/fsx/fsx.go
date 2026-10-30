@@ -16,6 +16,7 @@ package fsx
 import (
 	"os"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/procself"
 	"github.com/tyler-rich/shell-mcp/internal/pathx"
 )
 
@@ -45,6 +46,14 @@ type Config struct {
 	// Protected applies to every write, on requested and real paths.
 	Protected *pathx.Matcher
 	Limits    Limits
+	// Proc, when set, is this process's own /proc/<pid> opened before the
+	// sandbox (procself): the real path of an open file is read through it
+	// (fd/N). The privileged helper sets it, because its core unit's
+	// Landlock rule covers only that directory's inode, which a read
+	// through the /proc/self path can miss after memory pressure. nil reads
+	// /proc/self/fd/N by path: the gate's ruleset grants /proc itself, the
+	// procfs root, which the mount holds.
+	Proc *procself.Dir
 	// InjectReadBackFault, when non-nil, transforms the bytes read back
 	// after a write before they are compared. Tests only; production code
 	// never sets it.

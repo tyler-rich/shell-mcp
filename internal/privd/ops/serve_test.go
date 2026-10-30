@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/procself"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/privd/ops"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
@@ -187,7 +188,7 @@ func TestNoRequestByteReadBeforeChecksPass(t *testing.T) {
 		"wrong peer":  func(f *fixture) { f.opts.UnitClientUID = strconv.FormatUint(uint64(f.uid)+1, 10) },
 		"no unit uid": func(f *fixture) { f.opts.UnitClientUID = "" },
 		"sandbox refuses": func(f *fixture) {
-			f.opts.ApplySandbox = func(*policy.Policy, string) (sandbox.Report, error) {
+			f.opts.ApplySandbox = func(*policy.Policy, string, *procself.Dir) (sandbox.Report, error) {
 				f.sandboxCalls++
 				return sandbox.Report{}, sandbox.ErrUnavailable
 			}
@@ -276,7 +277,7 @@ func TestServeAnswersAuthenticatedPeer(t *testing.T) {
 func TestSandboxRefusal(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	f.opts.ApplySandbox = func(*policy.Policy, string) (sandbox.Report, error) {
+	f.opts.ApplySandbox = func(*policy.Policy, string, *procself.Dir) (sandbox.Report, error) {
 		return sandbox.Report{}, sandbox.ErrUnavailable
 	}
 	in := request("priv_stat", m{"path": f.read})

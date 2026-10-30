@@ -25,6 +25,7 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/procfs"
+	"github.com/tyler-rich/shell-mcp/internal/gate/procself"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
 	"github.com/tyler-rich/shell-mcp/internal/template"
@@ -464,7 +465,9 @@ func watchHangup(c net.Conn) <-chan struct{} {
 // ReapHooks replace how ReapOrphans lists this process's children and
 // waits for them (and skip PR_SET_CHILD_SUBREAPER); tests only.
 type ReapHooks struct {
-	// Children lists the children (production: /proc/self/task/*/children).
+	// Children lists the children (production: task/*/children of the
+	// helper's own /proc/<pid>, through the descriptor opened before the
+	// sandbox).
 	Children func() ([]int, error)
 	// Fallback lists them another way (production: /proc/[0-9]*/stat);
 	// nil means none.
@@ -477,7 +480,7 @@ type ReapHooks struct {
 // reap kills and reaps every child left after a command (reapOrphans), with
 // the test hooks when set.
 func (s *server) reap() error {
-	lists, wait := []func() ([]int, error){children, childrenByStat}, waitAnyChild
+	lists, wait := []func() ([]int, error){func() ([]int, error) { return childrenIn(s.proc) }, childrenByStat}, waitAnyChild
 	if h := s.o.ReapHooks; h != nil {
 		lists, wait = []func() ([]int, error){h.Children}, h.Wait
 		if h.Fallback != nil {
@@ -535,10 +538,12 @@ func reapOrphans(bound time.Duration, lists []func() ([]int, error), kill func(i
 // maxChildren bounds the children read from /proc.
 const maxChildren = 4096
 
-// children lists this process's children from /proc/self/task/*/children
-// (the helper's own /proc/<pid>, which its Landlock ruleset and
-// ProcSubset=pid leave readable).
-func children() ([]int, error) { return childrenIn("/proc/self/task") }
+// maxTasks bounds the helper's own threads the listing reads, and
+// maxChildrenBytes one thread's children file.
+const (
+	maxTasks         = 4096
+	maxChildrenBytes = 64 << 10
+)
 
 // childrenByStat is the fallback listing: the processes in /proc whose
 // parent is this process. In the core unit Landlock grants no read of
@@ -550,20 +555,31 @@ func childrenByStat() ([]int, error) { return childrenByStatIn("/proc", os.Getpi
 // between the listing and the read.
 func ended(err error) bool { return errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ESRCH) }
 
-// childrenIn lists the children from taskDir/<tid>/children, with the real
+// childrenIn lists the children from task/<tid>/children under proc (the
+// helper's own /proc/<pid>, opened before the sandbox: procself; its
+// Landlock ruleset and ProcSubset=pid leave it readable), with the real
 // error: the task directory or a children file that cannot be read (its
 // errno included), or no children file read at all (a kernel without
-// CONFIG_PROC_CHILDREN). A thread that ended meanwhile is skipped.
-func childrenIn(taskDir string) ([]int, error) {
-	ents, err := os.ReadDir(taskDir)
+// CONFIG_PROC_CHILDREN). A thread that ended meanwhile is skipped. Reading
+// through proc's descriptor, not the /proc/self path, keeps the core
+// unit's Landlock rule covering the reads after memory pressure in the
+// instance (an OOM kill), which can make the path reach a new procfs inode.
+func childrenIn(proc *procself.Dir) ([]int, error) {
+	if proc == nil {
+		return nil, errors.New("no /proc/self descriptor")
+	}
+	tids, err := proc.ReadDirNames("task", maxTasks)
 	if err != nil {
 		return nil, err
 	}
 	var out []int
 	read := 0
-	for _, e := range ents {
-		p := taskDir + "/" + e.Name() + "/children"
-		b, err := os.ReadFile(p) //nolint:gosec // G304: a task entry of the fixed task directory
+	for _, tid := range tids {
+		if n, err := strconv.Atoi(tid); err != nil || n <= 0 {
+			return out, fmt.Errorf("%s/task/%s: not a thread id", proc.Path(), tid)
+		}
+		p := proc.Path() + "/task/" + tid + "/children"
+		b, err := proc.ReadFile("task/"+tid+"/children", maxChildrenBytes)
 		if ended(err) {
 			continue
 		}
@@ -583,7 +599,7 @@ func childrenIn(taskDir string) ([]int, error) {
 		}
 	}
 	if read == 0 {
-		return nil, fmt.Errorf("no %s/*/children file could be read", taskDir)
+		return nil, fmt.Errorf("no %s/task/*/children file could be read", proc.Path())
 	}
 	return out, nil
 }

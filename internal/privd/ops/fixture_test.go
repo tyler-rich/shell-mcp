@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
+	"github.com/tyler-rich/shell-mcp/internal/gate/procself"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/privd/ops"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
@@ -247,7 +248,7 @@ commands:
 		Audit:     f.audit,
 		Now:       func() time.Time { return time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC) },
 	}
-	f.opts.ApplySandbox = func(*policy.Policy, string) (sandbox.Report, error) {
+	f.opts.ApplySandbox = func(*policy.Policy, string, *procself.Dir) (sandbox.Report, error) {
 		f.sandboxCalls++
 		f.unreadAtSandbox = unreadBytes(f.t, f.helperFD)
 		return sandbox.Report{Mode: "best-effort"}, nil
