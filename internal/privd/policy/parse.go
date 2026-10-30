@@ -74,6 +74,7 @@ type rawLimits struct {
 	DefaultTimeoutS  *int `yaml:"default_timeout_s"`
 	MaxTimeoutS      *int `yaml:"max_timeout_s"`
 	MaxDeleteEntries *int `yaml:"max_delete_entries"`
+	MaxMemoryMB      *int `yaml:"max_memory_mb"`
 }
 
 type rawPaths struct {
@@ -103,15 +104,16 @@ type rawBackups struct {
 }
 
 type rawCommand struct {
-	ID             string     `yaml:"id"`
-	Path           string     `yaml:"path"`
-	Tier           string     `yaml:"tier"`
-	Description    string     `yaml:"description"`
-	Unit           string     `yaml:"unit"`
-	RootEquivalent bool       `yaml:"root_equivalent"`
-	Capabilities   []string   `yaml:"capabilities"`
-	Acknowledge    string     `yaml:"acknowledge"`
-	Templates      [][]string `yaml:"templates"`
+	ID               string     `yaml:"id"`
+	Path             string     `yaml:"path"`
+	Tier             string     `yaml:"tier"`
+	Description      string     `yaml:"description"`
+	Unit             string     `yaml:"unit"`
+	RootEquivalent   bool       `yaml:"root_equivalent"`
+	ReadsPrivateKeys bool       `yaml:"reads_private_keys"`
+	Capabilities     []string   `yaml:"capabilities"`
+	Acknowledge      string     `yaml:"acknowledge"`
+	Templates        [][]string `yaml:"templates"`
 }
 
 type rawPower struct {
@@ -126,6 +128,7 @@ type rawPackages struct {
 	Remove           []string `yaml:"remove"`
 	AllowUpdateIndex bool     `yaml:"allow_update_index"`
 	AllowUpgrade     bool     `yaml:"allow_upgrade"`
+	AllowRecover     bool     `yaml:"allow_recover"`
 }
 
 // validator accumulates errors, warnings and findings.
@@ -323,6 +326,15 @@ func (v *validator) limits(p *Policy, raw *rawLimits) {
 	set(&l.MaxTimeoutS, raw.MaxTimeoutS, "max_timeout_s", 900, MaxTimeoutCeiling)
 	set(&l.DefaultTimeoutS, raw.DefaultTimeoutS, "default_timeout_s", 60, MaxTimeoutCeiling)
 	set(&l.MaxDeleteEntries, raw.MaxDeleteEntries, "max_delete_entries", 1000, 10000)
+	// The same key, default and range as the gate's (handoff N-30).
+	l.MaxMemoryMB = gpolicy.MaxMemoryMBDefault
+	if m := raw.MaxMemoryMB; m != nil {
+		if *m < gpolicy.MaxMemoryMBMin || *m > gpolicy.MaxMemoryMBMax {
+			v.fail("limits.max_memory_mb", "%d is not in %d..%d", *m, gpolicy.MaxMemoryMBMin, gpolicy.MaxMemoryMBMax)
+		} else {
+			l.MaxMemoryMB = *m
+		}
+	}
 	if l.DefaultTimeoutS > l.MaxTimeoutS {
 		if raw.DefaultTimeoutS == nil {
 			l.DefaultTimeoutS = l.MaxTimeoutS
@@ -570,7 +582,7 @@ func (v *validator) commands(p *Policy, raw []rawCommand) {
 }
 
 func (v *validator) command(field string, rc *rawCommand, maxTier Tier) (Command, bool) {
-	c := Command{ID: rc.ID, Path: rc.Path, RootEquivalent: rc.RootEquivalent, Acknowledge: rc.Acknowledge, Description: rc.Description}
+	c := Command{ID: rc.ID, Path: rc.Path, RootEquivalent: rc.RootEquivalent, ReadsPrivateKeys: rc.ReadsPrivateKeys, Acknowledge: rc.Acknowledge, Description: rc.Description}
 	ok := true
 	t, err := gpolicy.ParseTier(rc.Tier)
 	if err != nil {
@@ -614,17 +626,35 @@ func (v *validator) command(field string, rc *rawCommand, maxTier Tier) (Command
 		case tpl.UsesUnit():
 			v.fail(fmt.Sprintf("%s.templates[%d]", field, j), "{unit} placeholders are not available in the privileged policy, which declares no units")
 			ok = false
+		case tpl.UsesPathReadFD():
+			// N-10's chain rule leaves no account but root able to change
+			// what a root command's path names, so a descriptor would add
+			// nothing there (handoff N-22).
+			v.fail(fmt.Sprintf("%s.templates[%d]", field, j), "{path:read:fd} is not available in the privileged policy: root commands get closed paths only "+
+				"(every directory from / to a path is root's and closed), so use {path:read}")
+			ok = false
 		default:
 			c.Templates = append(c.Templates, tpl)
 		}
 	}
-	if !ok || !v.review(field, &c, rec, prog.scriptArgs) {
+	if !ok || !v.review(field, &c, rec, &prog) {
 		return c, false
 	}
 	// The gate's GTFOBins list and warning (POLICY §6), for a command that
 	// runs as root (handoff N-16).
-	if w := gpolicy.EscapeWarning(field, true, gpolicy.CanonicalName(filepath.Base(rc.Path)), gpolicy.CanonicalName(filepath.Base(prog.resolved))); w != "" {
+	for _, w := range gpolicy.EscapeWarnings(field, true, rc.Path, prog.resolved, prog.listed) {
 		v.warn("%s", w)
+	}
+	// A script's interpreters get the template's arguments (handoff N-31).
+	for _, s := range prog.scripts {
+		for _, w := range gpolicy.ScriptEscapeWarnings(field, true, s.script, s.written, s.interpreter, s.listed) {
+			v.warn("%s", w)
+		}
+	}
+	if rc.ReadsPrivateKeys {
+		for _, w := range gpolicy.KeyRangeWarnings(field, true, rc.Path, prog.resolved, prog.listed) {
+			v.warn("%s", w)
+		}
 	}
 	if _, inSystem := pathx.Longest(gpolicy.DefaultReadExec(), c.Interpreter); c.Interpreter != "" && c.Unit == UnitCore && !inSystem {
 		// The core unit's Landlock ruleset grants read+execute on the
@@ -693,6 +723,18 @@ func (v *validator) resolve(field string, rc *rawCommand) (prog program, rec []r
 type program struct {
 	resolved, applet, interpreter string
 	scriptArgs                    []string
+	// scripts is the #! scripts on the way to the binary, outermost first.
+	scripts []scriptStep
+	// listed is the GTFOBins-listed programs the binary is, by identity (N-33).
+	listed []gpolicy.ListedMatch
+}
+
+// scriptStep is one #! script: its resolved path, the interpreter as its
+// first line writes it, that interpreter resolved, and the listed programs
+// that interpreter is by identity (N-33).
+type scriptStep struct {
+	script, written, interpreter string
+	listed                       []gpolicy.ListedMatch
 }
 
 // maxScripts is how many #! scripts the kernel follows in a chain:
@@ -806,16 +848,20 @@ func (v *validator) resolveProgram(field, p string, rootEquivalent bool, depth i
 			add(r)
 		}
 		prog.interpreter, prog.scriptArgs = ip.resolved, ip.scriptArgs
+		prog.scripts = append([]scriptStep{{script: resolved, written: ct.Interpreter, interpreter: ip.resolved, listed: ip.listed}}, ip.scripts...)
 		if ct.Arg != "" {
 			prog.scriptArgs = append(prog.scriptArgs, ct.Arg)
 		}
 		v.warn("%s: %s is a #! script run by %s; the interpreter reads the script and gets the template's arguments after it, as root (POLICY §5)", field, resolved, ip.resolved)
 	}
-	ms, err := v.scan.MatchAll(resolved, fi)
+	id, err := v.scan.Match(resolved, fi)
 	if err != nil {
 		return fail(".path", "%v", err)
 	}
+	ms := id.Scanned
 	if ct.Kind == gpolicy.ContentUutils {
+		// Its own name is checked by the warning already (N-33).
+		id.Listed = nil
 		// The uutils binary's other names are its other utilities, which
 		// this command never runs (S-MC); any other name refuses it.
 		if ms, err = gpolicy.UutilsSiblings(resolved, ms); err != nil {
@@ -839,18 +885,43 @@ func (v *validator) resolveProgram(field, p string, rootEquivalent bool, depth i
 			add(recognised{class: class, group: g, name: gpolicy.CanonicalName(m.Name), match: MatchIdentity})
 		}
 	}
+	prog.listed = id.Listed
+	if id.Skipped != nil {
+		v.warn("%s: %s%v; a renamed copy of a GTFOBins-listed program is not recognised by identity here (POLICY §6)", field, via, id.Skipped)
+	}
 	return prog, rec, true
 }
 
+// scriptChain describes the #! scripts on the way to a binary: "run by
+// /a/interp", or "run by /a/inner-script, run by /a/interp".
+func scriptChain(prog *program) string {
+	steps := make([]string, 0, len(prog.scripts))
+	for _, s := range prog.scripts {
+		steps = append(steps, "run by "+s.interpreter)
+	}
+	return strings.Join(steps, ", ")
+}
+
 // review applies N-13's acknowledge rule to a resolved command (handoff
-// §2.1): a POLICY §5 group 11–13 binary, a package tool, or find with an
+// §2.1): a POLICY §5 group 11–13 binary, a package tool, a #! script (N-26),
+// or find with an
 // action in any of its templates needs a non-empty acknowledge. It sets the
 // command's list B group and findings, and reports each for check-policy.
-func (v *validator) review(field string, c *Command, rec []recognised, scriptArgs []string) bool {
+func (v *validator) review(field string, c *Command, rec []recognised, prog *program) bool {
+	scriptArgs := prog.scriptArgs
 	var needs []string
 	// A template's tokens, after the arguments of any #! line on the way to
 	// the program (they reach it first).
 	tokens := func(t template.Template) []string { return append(slices.Clone(scriptArgs), t.String()...) }
+	// A script runs its interpreter as root on whatever the script holds,
+	// which the policy does not show (handoff N-26). An interpreter on the
+	// never list was refused before this point; an acknowledge cannot
+	// override that.
+	if len(prog.scripts) > 0 {
+		last := prog.scripts[len(prog.scripts)-1].interpreter
+		needs = append(needs, fmt.Sprintf("%s is a #! script (%s): it runs as root on whatever the script contains, which this policy does not show", c.Resolved, scriptChain(prog)))
+		c.Findings = append(c.Findings, CommandFinding{Category: FindingScript, Program: last, Match: MatchScript})
+	}
 	for _, r := range rec {
 		switch r.class {
 		case ClassListB:
@@ -886,6 +957,8 @@ func (v *validator) review(field string, c *Command, rec []recognised, scriptArg
 	}
 	for _, fd := range c.Findings {
 		switch fd.Category {
+		case FindingScript:
+			v.find("script", c.ID, "%s is a #! script (%s), which runs as root on whatever it contains; acknowledge: %s", c.Resolved, scriptChain(prog), c.Acknowledge)
 		case FindingPackage:
 			v.find("package-tool", c.ID, "%s is the package tool %s (recognised by %s name); it runs outside the package operations' binding; acknowledge: %s", c.Resolved, fd.Program, fd.Match, c.Acknowledge)
 		case FindingExec:
@@ -956,7 +1029,7 @@ func (v *validator) packages(p *Policy, raw *rawPackages) {
 	if raw == nil {
 		return
 	}
-	p.Packages = Packages{Manager: "apt", AllowUpdateIndex: raw.AllowUpdateIndex, AllowUpgrade: raw.AllowUpgrade}
+	p.Packages = Packages{Manager: "apt", AllowUpdateIndex: raw.AllowUpdateIndex, AllowUpgrade: raw.AllowUpgrade, AllowRecover: raw.AllowRecover}
 	if raw.Manager != "" && raw.Manager != "apt" {
 		v.fail("packages.manager", "is %q; only apt is supported in v1", raw.Manager)
 	}
@@ -991,48 +1064,56 @@ func (v *validator) packages(p *Policy, raw *rawPackages) {
 		return
 	}
 	p.Packages.Enabled = true
-	v.aptGet(p)
-	v.find("root-equivalent", "packages", "package operations run in the broad unit; maintainer scripts run arbitrary code as root (install %s; remove %s; update index %v; upgrade %v)",
-		strings.Join(p.Packages.Install, " "), strings.Join(p.Packages.Remove, " "), p.Packages.AllowUpdateIndex, p.Packages.AllowUpgrade)
+	p.Packages.AptGet = v.packageTool(v.opts.AptGet, DefaultAptGet)
+	if p.Packages.AllowRecover {
+		// The recovery runs dpkg itself (handoff N-14).
+		p.Packages.Dpkg = v.packageTool(v.opts.Dpkg, DefaultDpkg)
+	}
+	v.find("root-equivalent", "packages", "package operations run in the broad unit; maintainer scripts run arbitrary code as root (install %s; remove %s; update index %v; upgrade %v; recover %v)",
+		strings.Join(p.Packages.Install, " "), strings.Join(p.Packages.Remove, " "), p.Packages.AllowUpdateIndex, p.Packages.AllowUpgrade, p.Packages.AllowRecover)
 	if p.MaxTier != 0 && p.MaxTier < TierOperator {
 		v.warn("packages are enabled but max_tier %s refuses every package operation except the previews", p.MaxTier)
 	}
 }
 
-// DefaultAptGet is the apt-get binary the package operations run.
-const DefaultAptGet = "/usr/bin/apt-get"
+// DefaultAptGet is the apt-get binary the package operations run, and
+// DefaultDpkg the dpkg binary the recovery runs.
+const (
+	DefaultAptGet = "/usr/bin/apt-get"
+	DefaultDpkg   = "/usr/bin/dpkg"
+)
 
-// aptGet checks the apt-get binary as a command binary is checked: it
-// resolves, it and its directories are root-owned and not
-// group/other-writable, and it is executable.
-func (v *validator) aptGet(p *Policy) {
-	path := v.opts.AptGet
+// packageTool checks a package operation's binary (path, or def when
+// empty) as a command binary is checked: it resolves, it and its
+// directories are root-owned and not group/other-writable, and it is
+// executable. It returns the resolved path, "" after a failure.
+func (v *validator) packageTool(path, def string) string {
 	if path == "" {
-		path = DefaultAptGet
+		path = def
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		v.fail("packages", "%s cannot be resolved: %v", path, gpolicy.ErrReason(err))
-		return
+		return ""
 	}
 	if _, err = gpolicy.CheckChain(v.opts.Trust, resolved); err != nil {
 		v.fail("packages", "%v", err)
-		return
+		return ""
 	}
 	fi, err := os.Stat(resolved)
 	if err != nil {
 		v.fail("packages", "%s: %v", resolved, gpolicy.ErrReason(err))
-		return
+		return ""
 	}
 	if ferr := gpolicy.CheckFile(v.opts.Trust, resolved, fi); ferr != nil {
 		v.fail("packages", "%v", ferr)
-		return
+		return ""
 	}
 	if fi.Mode().Perm()&0o111 == 0 {
 		v.fail("packages", "%s is not executable", resolved)
-		return
+		return ""
 	}
-	p.Packages.AptGet = resolved
+	return resolved
 }
 
 // PowerActions are what power.allowed may list (priv_power).

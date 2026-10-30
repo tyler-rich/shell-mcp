@@ -101,14 +101,14 @@ func (g *recordingGate) exec(_ context.Context, s *sshtest.Session) uint32 {
 	}
 	if r.code != "" {
 		// A gate's refusal carries its own block, as a success does.
-		_, _ = fmt.Fprintf(s.Stdout, `{"v":1,"id":%q,"ok":false,"error":{"code":%q,"message":%q},"warnings":[],"gate":%s%s}`+"\n", id, r.code, r.msg, gate, helper)
+		_, _ = fmt.Fprintf(s.Stdout, `{"v":2,"id":%q,"ok":false,"error":{"code":%q,"message":%q},"warnings":[],"gate":%s%s}`+"\n", id, r.code, r.msg, gate, helper)
 		return 0
 	}
 	var one bytes.Buffer
 	if err := json.Compact(&one, []byte(r.data)); err != nil {
 		panic(fmt.Sprintf("fake gate data for %s is not JSON: %v", req.Op, err))
 	}
-	_, _ = fmt.Fprintf(s.Stdout, `{"v":1,"id":%q,"ok":true,"data":%s,"warnings":%s,"gate":%s%s}`+"\n", id, one.String(), warn, gate, helper)
+	_, _ = fmt.Fprintf(s.Stdout, `{"v":2,"id":%q,"ok":true,"data":%s,"warnings":%s,"gate":%s%s}`+"\n", id, one.String(), warn, gate, helper)
 	return 0
 }
 
@@ -254,7 +254,7 @@ func fakeExec(stdout string, exit int) string {
 // command.
 const fakePolicyCommands = `{"version":1,"max_tier":"operator","sha256":"ab12","sandbox":{"landlock":"required","system_read_exec":[],"tcp_connect_ports":[]},
 "limits":{"DefaultTimeoutS":30,"MaxTimeoutS":300,"MaxOutputBytes":1048576,"MaxStdinBytes":1048576,"MaxReadBytes":1048576,"MaxWriteBytes":1048576,
-"MaxFindResults":1000,"MaxFindDepth":8,"MaxDeleteEntries":1000,"MaxProcesses":2000},
+"MaxFindResults":1000,"MaxFindDepth":8,"MaxDeleteEntries":1000,"MaxProcesses":2000,"MaxMemoryMB":1024},
 "paths":{"read":["/srv/app"],"write":[],"deny":[]},"services":{"status":[],"control_units":[],"control_verbs":[]},
 "journal":{"units":[],"max_lines":200},"git":{"repos":[]},"privileged":{"enabled":false,"max_tier":"read"},"redact_patterns":0,
 "commands":[{"id":"app-status","description":"Application status","tier":"read","root_equivalent":false,"templates":[["status","--json"],["status","{enum:web|worker}"]]},

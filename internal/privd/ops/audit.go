@@ -186,7 +186,9 @@ type auditLine struct {
 	// Applied is what dpkg's status shows a package operation changed
 	// (bounded as Changed), AppliedTotal how many changes,
 	// AppliedTruncated set when Applied lists fewer; Unfinished the
-	// packages dpkg left part-way (at most 100); Stopped how the helper
+	// packages dpkg left part-way (at most 100); Configured the packages a
+	// recovery configured (at most 100); Reinstalled the packages a reinstall
+	// finished (at most 100); Stopped how the helper
 	// stopped apt-get ("sigint", "killed"); AnsweredEarly that the request
 	// was answered outcome_unknown before the operation ended, whose own
 	// result Outcome then is.
@@ -194,6 +196,8 @@ type auditLine struct {
 	AppliedTotal     int           `json:"applied_total,omitzero"`
 	AppliedTruncated bool          `json:"applied_truncated,omitzero"`
 	Unfinished       []string      `json:"unfinished,omitzero"`
+	Configured       []string      `json:"configured,omitzero"`
+	Reinstalled      []string      `json:"reinstalled,omitzero"`
 	Stopped          string        `json:"stopped,omitzero"`
 	AnsweredEarly    bool          `json:"answered_early,omitzero"`
 	// Power is what became of priv_power's action (not_delivered, cancelled,
@@ -253,7 +257,7 @@ func (s *server) auditRequest(resp *protocol.Response) {
 	l := &auditLine{PeerUID: &uid, PeerPID: &pid, Outcome: "ok", BackupIDs: s.ids(), BackupIDsDiscarded: s.discarded, Changed: s.changed,
 		ChangedTotal: s.changedTotal, ChangedTruncated: s.changedTruncated, Removed: s.removed, RemovedTotal: s.removedTotal,
 		RemovedTruncated: s.removedTruncated, SetAside: s.setAside, HungUp: s.hungUp, ReapError: auditText(s.reapErr),
-		Unfinished: s.unfinished, Stopped: s.stopped, AnsweredEarly: s.answered, Power: s.powerState, ScheduledAt: s.powerAt}
+		Unfinished: s.unfinished, Configured: s.configured, Reinstalled: s.reinstalled, Stopped: s.stopped, AnsweredEarly: s.answered, Power: s.powerState, ScheduledAt: s.powerAt}
 	if s.powerDetail != "" {
 		l.Detail = auditText(s.powerDetail)
 	}

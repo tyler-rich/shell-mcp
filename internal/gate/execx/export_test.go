@@ -16,3 +16,12 @@ func RunWithStartDelay(ctx context.Context, spec *Spec, d time.Duration) (Result
 
 // UserTasks is userTasks, for the rlimit tests' expected bound.
 var UserTasks = userTasks
+
+// UserTasksIn is userTasksIn, for the task-count tests.
+var UserTasksIn = userTasksIn
+
+// RunWithProcDir is Run counting the user's tasks under procDir instead of
+// /proc.
+func RunWithProcDir(ctx context.Context, spec *Spec, procDir string) (Result, error) {
+	return run(ctx, spec, &hooks{procDir: procDir})
+}

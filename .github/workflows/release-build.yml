@@ -11,9 +11,13 @@
 #   approve  a real release only: the `release` environment (the owner's
 #            approval) before anything is pushed, signed or attested
 #   sign     pushes the image index unchanged (GHCR for a release, the
-#            loopback registry for a dry run), signs it and the files with
-#            cosign keyless, attests provenance and SBOMs, and verifies all
-#            of it (scripts/release/verify.sh)
+#            loopback registry for a dry run), signs it, each binary, the
+#            examples archive and SHA256SUMS with cosign keyless, attests
+#            SLSA provenance for every file SHA256SUMS lists and for the
+#            image index (SHA256SUMS itself is covered by its cosign
+#            signature, not an attestation), attests SBOMs for the binaries
+#            and platform images, and verifies all of it
+#            (scripts/release/verify.sh)
 #   publish  a real release only: a draft GitHub Release with every file,
 #            then published
 #
@@ -364,7 +368,7 @@ jobs:
           for f in *_linux_amd64 *_linux_arm64 "shell-mcp_${VERSION}_examples.tar.gz" SHA256SUMS; do
             cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"
           done
-      - name: provenance (every release file)
+      - name: provenance (every file SHA256SUMS lists)
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-checksums: dist/SHA256SUMS

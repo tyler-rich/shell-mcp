@@ -202,3 +202,90 @@ func ProgramKeyName(key string) bool {
 	}
 	return false
 }
+
+// ThreadKey is a configuration key whose default makes git start threads
+// or processes in proportion to the host's CPUs (online_cpus()), as
+// `git help --config` prints it, and how the gate pins it: forced with -c
+// on every git process (Args), or why it needs no override (Why). Each
+// thread's stack counts against the child memory limit (RLIMIT_DATA), so
+// pinning them keeps a git operation's memory need the same on every host
+// (handoff N-30).
+type ThreadKey struct {
+	Key  string
+	Args []string
+	Why  string
+}
+
+// Why a thread key needs no override.
+const (
+	whyHooksOff = "hooks only, and every hook is disabled (hook.<event>.enabled=false, core.hooksPath=/dev/null)"
+	whyWorkers  = "read only when checkout.workers is above 1, which is pinned to 1"
+)
+
+// ThreadKeys is the table (git 2.55). The values are fixed, so a git
+// process starts the same threads on every host; each is a thread count
+// git accepts (thread-utils, index-pack, read-cache, preload-index,
+// parallel-checkout, fetch, submodule-config).
+var ThreadKeys = []ThreadKey{
+	// index-pack (a pull's fetch): online_cpus()/2, at most 20 threads,
+	// without it.
+	{Key: "pack.threads", Args: []string{"pack.threads=" + PackThreads}},
+	// Reading and writing the index: one thread unless set (read-cache.c);
+	// pinned so that no configuration turns on online_cpus() threads.
+	{Key: "index.threads", Args: []string{"index.threads=1"}},
+	// The lstat preload of status, diff and update-index: one thread per
+	// 500 entries, at most 20, whatever the CPUs (preload-index.c).
+	{Key: "core.preloadIndex", Args: []string{"core.preloadIndex=" + PreloadIndex}},
+	{Key: "checkout.workers", Args: []string{"checkout.workers=1"}},
+	{Key: "checkout.thresholdForParallelism", Why: whyWorkers},
+	{Key: "grep.threads", Args: []string{"grep.threads=1"}},
+	{Key: "fetch.parallel", Args: []string{"fetch.parallel=1"}},
+	{Key: "submodule.fetchJobs", Args: []string{"submodule.fetchJobs=1"}},
+	{Key: "repack.cruftThreads", Why: whyNotRun},
+	{Key: "hook.jobs", Why: whyHooksOff},
+	{Key: "hook.<event>.jobs", Why: whyHooksOff},
+	{Key: "hook.<friendly-name>.parallel", Why: whyHooksOff},
+}
+
+// The pinned values of the two thread keys whose fixed value is a choice
+// (handoff N-30, measured in S6-1 on git 2.47.3 with 32 CPUs): index-pack
+// of git's own 222 MB pack took 8.6 s and 278 MiB with 4 threads, 9.1 s and
+// 485 MiB with git's default (16 there), 14.0 s and 203 MiB with 1; the
+// preload's lstat threads follow the index's size, not the CPUs, and make
+// status on a 1,000,000-entry index take 0.7 s instead of 1.6 s.
+const (
+	PackThreads  = "4"
+	PreloadIndex = "true"
+)
+
+// ThreadOverrides returns every -c value of ThreadKeys, in its order.
+func ThreadOverrides() []string {
+	var out []string
+	for i := range ThreadKeys {
+		out = append(out, ThreadKeys[i].Args...)
+	}
+	return out
+}
+
+// ThreadKeyName reports whether key, as `git help --config` prints it,
+// sets how many threads, workers or parallel jobs git runs: its variable
+// name (last component, lowercased) ends in threads, workers, jobs or
+// parallel, or is preloadindex or thresholdforparallelism. Like
+// ProgramKeyName, the rule errs towards too many and is a check, not a
+// proof: git's own online_cpus() callers in 2.55 (index-pack, pack-objects,
+// grep, read-cache, preload-index, parallel checkout, fetch, submodule
+// fetches, hooks, name-hash) were read to write the table.
+func ThreadKeyName(key string) bool {
+	parts := strings.Split(key, ".")
+	name := strings.ToLower(parts[len(parts)-1])
+	switch name {
+	case "preloadindex", "thresholdforparallelism":
+		return true
+	}
+	for _, s := range []string{"threads", "workers", "jobs", "parallel"} {
+		if strings.HasSuffix(name, s) {
+			return true
+		}
+	}
+	return false
+}

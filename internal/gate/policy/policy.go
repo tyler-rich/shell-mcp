@@ -103,7 +103,17 @@ type Limits struct {
 	MaxFindDepth     int
 	MaxDeleteEntries int
 	MaxProcesses     int
+	// MaxMemoryMB is every child's RLIMIT_DATA, soft and hard, in MiB.
+	MaxMemoryMB int
 }
+
+// limits.max_memory_mb: the default and the range, the same in the
+// privileged policy (handoff N-30).
+const (
+	MaxMemoryMBDefault = 1024
+	MaxMemoryMBMin     = 128
+	MaxMemoryMBMax     = 16384
+)
 
 // Paths holds the roots, the deny matcher (built-ins plus policy
 // patterns) and the protected matcher.
@@ -155,7 +165,11 @@ type Command struct {
 	Tier           Tier
 	Description    string
 	RootEquivalent bool
-	Templates      []template.Template
+	// ReadsPrivateKeys lets the command's {path:read} (and {path:read:fd})
+	// files hold a private key, which is otherwise refused; its output then
+	// gets redact.MaskKeyBodies (POLICY §4, handoff N-35).
+	ReadsPrivateKeys bool
+	Templates        []template.Template
 	// Applet is the utility the uutils multi-call binary runs as (the
 	// resolved file's name), or "" for any other binary (S-MC).
 	Applet string

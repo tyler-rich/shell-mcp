@@ -267,7 +267,7 @@ func fakeGate(hello, policy string) sshtest.Exec {
 		if err := json.Compact(&one, []byte(data)); err != nil {
 			return 1
 		}
-		_, _ = fmt.Fprintf(s.Stdout, `{"v":1,"id":%q,"ok":true,"data":%s,"warnings":[],"gate":{"version":"0.1.0","principal":"readonly-key","policy_sha256":"ab12","max_tier":"read","duration_ms":2}}`+"\n", req.ID, one.String())
+		_, _ = fmt.Fprintf(s.Stdout, `{"v":2,"id":%q,"ok":true,"data":%s,"warnings":[],"gate":{"version":"0.1.0","principal":"readonly-key","policy_sha256":"ab12","max_tier":"read","duration_ms":2}}`+"\n", req.ID, one.String())
 		return 0
 	}
 }
@@ -280,7 +280,7 @@ const fakeHello = `{"gate_version":"0.1.0","protocol":1,"principal":"readonly-ke
 
 const fakePolicy = `{"version":1,"max_tier":"read","sha256":"ab12","sandbox":{"landlock":"required","system_read_exec":[],"tcp_connect_ports":[]},
 "limits":{"DefaultTimeoutS":30,"MaxTimeoutS":300,"MaxOutputBytes":1048576,"MaxStdinBytes":1048576,"MaxReadBytes":1048576,"MaxWriteBytes":1048576,
-"MaxFindResults":1000,"MaxFindDepth":8,"MaxDeleteEntries":1000,"MaxProcesses":2000},
+"MaxFindResults":1000,"MaxFindDepth":8,"MaxDeleteEntries":1000,"MaxProcesses":2000,"MaxMemoryMB":1024},
 "paths":{"read":["/srv/app"],"write":[],"deny":[]},"services":{"status":["example-*.service"],"control_units":[],"control_verbs":[]},
 "journal":{"units":["example-app.service"],"max_lines":200},"git":{"repos":[{"path":"/srv/app","remote":"https://git.example.test/app.git"}]},
 "privileged":{"enabled":false,"max_tier":"read"},"redact_patterns":0,
@@ -298,10 +298,10 @@ func TestGetPolicy(t *testing.T) {
 		`"gate":{"max_tier":"read","ops":["hello","policy","read_file"],"policy_sha256":"ab12","principal":"readonly-key","protocol":1,"version":"0.1.0"}`,
 		`"kernel_abi":7`, `"effective_abi":7`, `"mode":"required"`, `"not_enforced":["unix_socket","scope"]`,
 		`"privileged":{"enabled":false,"max_tier":"read"}`,
-		`"limits":{"default_timeout_s":30,"max_delete_entries":1000,"max_find_depth":8,"max_find_results":1000,"max_output_bytes":1048576,"max_processes":2000,"max_read_bytes":1048576,"max_stdin_bytes":1048576,"max_timeout_s":300,"max_write_bytes":1048576}`,
+		`"limits":{"default_timeout_s":30,"max_delete_entries":1000,"max_find_depth":8,"max_find_results":1000,"max_memory_mb":1024,"max_output_bytes":1048576,"max_processes":2000,"max_read_bytes":1048576,"max_stdin_bytes":1048576,"max_timeout_s":300,"max_write_bytes":1048576}`,
 		`"paths":{"deny":[],"read":["/srv/app"],"write":[]}`,
 		`"repos":[{"path":"/srv/app","remote":"https://git.example.test/app.git"}]`,
-		`"commands":[{"description":"Show the version","id":"app-version","root_equivalent":false,"templates":[["--version"]],"tier":"read"}]`,
+		`"commands":[{"description":"Show the version","id":"app-version","reads_private_keys":false,"root_equivalent":false,"templates":[["--version"]],"tier":"read"}]`,
 	} {
 		if !strings.Contains(string(b), want) {
 			t.Fatalf("data lacks %s:\n%s", want, b)
@@ -315,7 +315,7 @@ func TestGetPolicy(t *testing.T) {
 
 func TestGetPolicyGateRefusalPassesThrough(t *testing.T) {
 	tg, c := sshTarget(t, func(_ context.Context, s *sshtest.Session) uint32 {
-		_, _ = io.WriteString(s.Stdout, `{"v":1,"id":"","ok":false,"error":{"code":"sandbox_unavailable","message":"Landlock is unavailable"}}`+"\n")
+		_, _ = io.WriteString(s.Stdout, `{"v":2,"id":"","ok":false,"error":{"code":"sandbox_unavailable","message":"Landlock is unavailable"}}`+"\n")
 		return 0
 	})
 	h := newHarness(t, []config.Target{tg}, map[string]*sshx.Client{"app-host": c}, "")

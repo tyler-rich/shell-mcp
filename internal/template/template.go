@@ -7,6 +7,7 @@ package template
 import (
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -22,6 +23,11 @@ const (
 	MaxEnumOptions   = 64
 	MaxTemplateCount = 64 // templates per command
 	maxUnitBytes     = 256
+	// MaxFDTokens bounds the {path:read:fd} placeholders of one template.
+	MaxFDTokens = 8
+	// FirstFD is the descriptor the first {path:read:fd} of a template is
+	// passed as; the k-th (from 0, left to right) is FirstFD+k.
+	FirstFD = 4
 )
 
 // Kind is a token kind.
@@ -36,6 +42,7 @@ const (
 	Int
 	Enum
 	Regex
+	PathReadFD
 )
 
 // Token is one parsed template token.
@@ -59,6 +66,10 @@ type Resolver interface {
 	// clean value, resolved under the caller's read (write=false) or write
 	// roots, or an error (typically a path-denied error).
 	ResolvePath(value string, write bool) (string, error)
+	// ResolveReadFD opens a {path:read:fd} value under the caller's read
+	// roots and returns the open file and its real path, or an error
+	// (typically a path-denied error).
+	ResolveReadFD(value string) (*os.File, string, error)
 	// MatchUnit reports whether a unit name is allowed.
 	MatchUnit(value string) bool
 }
@@ -89,12 +100,20 @@ func Parse(tokens []string) (Template, error) {
 		return Template{}, fmt.Errorf("template has more than %d tokens", MaxTokens)
 	}
 	out := Template{Tokens: make([]Token, 0, len(tokens))}
+	fds := 0
 	for i, s := range tokens {
 		tok, err := parseToken(s)
 		if err != nil {
 			return Template{}, fmt.Errorf("token %d: %w", i+1, err)
 		}
+		if tok.Kind == PathReadFD {
+			fds++
+		}
 		out.Tokens = append(out.Tokens, tok)
+	}
+	if fds > MaxFDTokens {
+		return Template{}, fmt.Errorf("template has %d {path:read:fd} placeholders; at most %d {path:read:fd} per template (descriptors %d to %d)",
+			fds, MaxFDTokens, FirstFD, FirstFD+MaxFDTokens-1)
 	}
 	return out, nil
 }
@@ -119,6 +138,8 @@ func parseToken(s string) (Token, error) {
 		tok.Kind = PathRead
 	case typ == "path" && hasParam && param == "write":
 		tok.Kind = PathWrite
+	case typ == "path" && hasParam && param == "read:fd":
+		tok.Kind = PathReadFD
 	case typ == "unit" && !hasParam:
 		tok.Kind = Unit
 	case typ == "int" && hasParam:
@@ -200,6 +221,10 @@ func (t Template) String() []string {
 // UsesPathWrite reports whether the template has a {path:write} placeholder.
 func (t Template) UsesPathWrite() bool { return t.uses(PathWrite) }
 
+// UsesPathReadFD reports whether the template has a {path:read:fd}
+// placeholder.
+func (t Template) UsesPathReadFD() bool { return t.uses(PathReadFD) }
+
 // UsesUnit reports whether the template has a {unit} placeholder.
 func (t Template) UsesUnit() bool { return t.uses(Unit) }
 
@@ -235,17 +260,49 @@ func Match(templates []Template, args []string, r Resolver) ([]string, error) {
 	return out, err
 }
 
-// MatchIndex is Match that also returns the index of the template that
-// matched (-1 when none did).
-func MatchIndex(templates []Template, args []string, r Resolver) (index int, resolved []string, err error) {
+// Descriptor is a {path:read:fd} value opened for a command: the
+// descriptor number it is passed as, the real path the caller resolved,
+// and the open file.
+type Descriptor struct {
+	FD   int
+	Path string
+	File *os.File
+}
+
+// Matched is a template match: the template's index, the resolved
+// arguments and the descriptors opened for its {path:read:fd}
+// placeholders, which the caller must Close.
+type Matched struct {
+	Index       int
+	Args        []string
+	Descriptors []Descriptor
+}
+
+// Close closes the match's descriptors.
+func (m *Matched) Close() {
+	for _, d := range m.Descriptors {
+		_ = d.File.Close()
+	}
+	m.Descriptors = nil
+}
+
+// FDPath is the argument a {path:read:fd} passed as descriptor n becomes.
+func FDPath(n int) string { return "/dev/fd/" + strconv.Itoa(n) }
+
+// MatchFD is MatchIndex that also opens each {path:read:fd} placeholder's
+// file: the k-th of the matching template (from 0, in token order) is
+// passed as descriptor FirstFD+k, and its argument becomes FDPath of that.
+// A template that does not match closes what it opened. The caller must
+// Close the result.
+func MatchFD(templates []Template, args []string, r Resolver) (*Matched, error) {
 	if len(args) > MaxTokens {
-		return -1, nil, fmt.Errorf("more than %d arguments: %w", MaxTokens, ErrNoMatch)
+		return nil, fmt.Errorf("more than %d arguments: %w", MaxTokens, ErrNoMatch)
 	}
 	var best error
 	for i, t := range templates {
-		out, err := t.match(args, r)
+		out, ds, err := t.match(args, r)
 		if err == nil {
-			return i, out, nil
+			return &Matched{Index: i, Args: out, Descriptors: ds}, nil
 		}
 		if rank(err) > rank(best) {
 			best = err
@@ -254,7 +311,26 @@ func MatchIndex(templates []Template, args []string, r Resolver) (index int, res
 	if best == nil {
 		best = ErrNoMatch
 	}
-	return -1, nil, best
+	return nil, best
+}
+
+// errNeedsDescriptors refuses a {path:read:fd} template to a caller that
+// passes arguments only as strings (MatchIndex, Match).
+var errNeedsDescriptors = errors.New("a {path:read:fd} is passed as an open descriptor, which this caller does not do")
+
+// MatchIndex is Match that also returns the index of the template that
+// matched (-1 when none did). It never matches a template with a
+// {path:read:fd}: its descriptors are closed and the match refused.
+func MatchIndex(templates []Template, args []string, r Resolver) (index int, resolved []string, err error) {
+	m, err := MatchFD(templates, args, r)
+	if err != nil {
+		return -1, nil, err
+	}
+	if len(m.Descriptors) > 0 {
+		m.Close()
+		return -1, nil, &PathError{errNeedsDescriptors}
+	}
+	return m.Index, m.Args, nil
 }
 
 func rank(err error) int {
@@ -271,15 +347,25 @@ func rank(err error) int {
 	return 1
 }
 
-func (t Template) match(args []string, r Resolver) ([]string, error) {
+// match matches args against t, opening a descriptor for each
+// {path:read:fd} in token order; a failure closes the ones it opened.
+func (t Template) match(args []string, r Resolver) (_ []string, _ []Descriptor, err error) {
 	if len(args) != len(t.Tokens) {
-		return nil, ErrNoMatch
+		return nil, nil, ErrNoMatch
 	}
+	var opened []Descriptor
+	defer func() {
+		if err != nil {
+			for _, d := range opened {
+				_ = d.File.Close()
+			}
+		}
+	}()
 	// Literals first, so a structurally different template never reports a
 	// placeholder error.
 	for i, tok := range t.Tokens {
 		if tok.Kind == Literal && args[i] != tok.Literal {
-			return nil, ErrNoMatch
+			return nil, nil, ErrNoMatch
 		}
 	}
 	out := make([]string, len(args))
@@ -290,30 +376,45 @@ func (t Template) match(args []string, r Resolver) ([]string, error) {
 			continue
 		}
 		if err := CheckValue(v); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		switch tok.Kind {
 		case PathRead, PathWrite:
 			if err := pathx.CheckClean(v); err != nil {
-				return nil, &ValueError{"is not an absolute clean path"}
+				return nil, nil, &ValueError{"is not an absolute clean path"}
 			}
 			p, err := r.ResolvePath(v, tok.Kind == PathWrite)
 			if err != nil {
-				return nil, &PathError{err}
+				return nil, nil, &PathError{err}
 			}
 			if err := CheckValue(p); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			out[i] = p
+		case PathReadFD:
+			if err := pathx.CheckClean(v); err != nil {
+				return nil, nil, &ValueError{"is not an absolute clean path"}
+			}
+			file, p, err := r.ResolveReadFD(v)
+			if err != nil {
+				return nil, nil, &PathError{err}
+			}
+			opened = append(opened, Descriptor{FD: FirstFD + len(opened), Path: p, File: file})
+			// The path is shown with the descriptor, never passed: it obeys
+			// the same rules as a passed one.
+			if err := CheckValue(p); err != nil {
+				return nil, nil, err
+			}
+			out[i] = FDPath(opened[len(opened)-1].FD)
 		case Unit:
 			if len(v) > maxUnitBytes || !unitRE.MatchString(v) || !r.MatchUnit(v) {
-				return nil, ErrNoMatch
+				return nil, nil, ErrNoMatch
 			}
 			out[i] = v
 		case Int:
 			n, err := parseDecimal(v)
 			if err != nil || n < tok.min || n > tok.max {
-				return nil, ErrNoMatch
+				return nil, nil, ErrNoMatch
 			}
 			out[i] = v
 		case Enum:
@@ -325,15 +426,15 @@ func (t Template) match(args []string, r Resolver) ([]string, error) {
 				}
 			}
 			if !found {
-				return nil, ErrNoMatch
+				return nil, nil, ErrNoMatch
 			}
 			out[i] = v
 		case Regex:
 			if !tok.re.MatchString(v) {
-				return nil, ErrNoMatch
+				return nil, nil, ErrNoMatch
 			}
 			out[i] = v
 		}
 	}
-	return out, nil
+	return out, opened, nil
 }

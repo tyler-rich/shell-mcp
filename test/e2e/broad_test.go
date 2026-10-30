@@ -101,10 +101,15 @@ func cleanupPackages(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 		_ = os.WriteFile("/run/shell-mcp-e2e-pkg-fast", nil, 0o600)
+		_ = os.Remove(pkgFail)
+		// dpkg refuses to remove a package that needs a reinstall without
+		// this force (measured); only the tests' own cleanup uses it.
+		_ = exec.CommandContext(ctx, "dpkg", "--force-remove-reinstreq", "--purge", "example-reinst").Run()
 		_ = exec.CommandContext(ctx, "dpkg", "--configure", "-a").Run()
 		_ = exec.CommandContext(ctx, "dpkg", "--purge", "example-hello", "example-extra", "example-other", "example-conf",
-			"example-slow", "example-slow-b", "example-slow-a", "example-stuck").Run()
+			"example-slow", "example-slow-b", "example-slow-a", "example-stuck", "example-blocked", "example-needs", "example-reinst").Run()
 		_ = os.Remove("/run/shell-mcp-e2e-pkg-fast")
+		_ = os.Remove(pkgRelease)
 	})
 }
 
@@ -541,7 +546,7 @@ func wrongUnit(t *testing.T, socket, op string, args any) string {
 	t.Helper()
 	a, _ := json.Marshal(args)
 	id := newID()
-	out := directTo(t, svcShell, socket, fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":%q,"args":%s,"timeout_ms":30000}`+"\n", id, op, a))
+	out := directTo(t, svcShell, socket, fmt.Sprintf(`{"v":2,"id":%q,"ceiling":"destructive","op":%q,"args":%s,"timeout_ms":30000}`+"\n", id, op, a))
 	var r response
 	if err := json.Unmarshal([]byte(out), &r); err != nil || r.code() != "helper_wrong_unit" || r.ID != id {
 		t.Fatalf("%s %s on %s: %q", op, a, socket, out)
@@ -629,7 +634,7 @@ func TestHelperExecTrampoline(t *testing.T) {
 func startGate(t *testing.T, policy, principal, ceiling, op string, args any) *exec.Cmd {
 	t.Helper()
 	a, _ := json.Marshal(args)
-	req := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":%q,"op":%q,"args":%s,"timeout_ms":30000}`+"\n", newID(), ceiling, op, a)
+	req := fmt.Sprintf(`{"v":2,"id":%q,"ceiling":%q,"op":%q,"args":%s,"timeout_ms":30000}`+"\n", newID(), ceiling, op, a)
 	cmd := exec.CommandContext(t.Context(), gateBin, "serve", "--policy", policy, "--principal", principal) //nolint:gosec // G204: the installed gate; policy and principal are this file's constants
 	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, svcShell)}
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin"}

@@ -13,7 +13,7 @@ body:
     attributes:
       label: Version
       description: Output of `shell-mcp version` (and `shell-mcp-gate version` / `shell-mcp-privd version` if relevant).
-      placeholder: shell-mcp 0.1.0 (commit …, go1.27.2)
+      placeholder: shell-mcp 0.2.0 (commit …, go1.27.3)
     validations:
       required: true
   - type: dropdown

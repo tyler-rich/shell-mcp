@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/gatetest"
+	"github.com/tyler-rich/shell-mcp/internal/gate/procself"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/privd/ops"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
@@ -41,6 +42,9 @@ type fixture struct {
 	// aptGet is the apt-get the policy checks and package operations run
 	// (the probe unless withFakeApt), aptLog the fake's log.
 	aptGet, aptLog string
+	// dpkgBin is the dpkg the policy checks and the recovery runs (the
+	// probe unless withFakeDpkg), dpkgLog the fake's log.
+	dpkgBin, dpkgLog string
 	// dpkg is the dpkg directory (status, updates/, lock-frontend) and
 	// record the package operation record the package operations use.
 	dpkg, record string
@@ -180,6 +184,7 @@ func newFixture(t testing.TB, opts ...opt) *fixture {
 		gatetest.BuildProbe(t, filepath.Dir(f.probe), "example-probe", filepath.Join(d, "outside.txt"))
 	}
 	f.aptGet = f.probe
+	f.dpkgBin = f.probe
 	y := fmt.Sprintf(`version: 1
 client_uid: %d
 socket_group: svc-shell-priv
@@ -232,6 +237,7 @@ commands:
 		UnitClientUID: strconv.FormatUint(uint64(f.uid), 10),
 		Unit:          f.unit,
 		AptGet:        f.aptGet,
+		Dpkg:          f.dpkgBin,
 		DpkgDir:       f.dpkg,
 		PkgRecord:     f.record,
 		ReadStatus: func() ([]byte, error) {
@@ -242,7 +248,7 @@ commands:
 		Audit:     f.audit,
 		Now:       func() time.Time { return time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC) },
 	}
-	f.opts.ApplySandbox = func(*policy.Policy, string) (sandbox.Report, error) {
+	f.opts.ApplySandbox = func(*policy.Policy, string, *procself.Dir) (sandbox.Report, error) {
 		f.sandboxCalls++
 		f.unreadAtSandbox = unreadBytes(f.t, f.helperFD)
 		return sandbox.Report{Mode: "best-effort"}, nil
@@ -293,7 +299,7 @@ func (f *fixture) rehash() {
 }
 
 func (f *fixture) loadOptions() *policy.LoadOptions {
-	o := &policy.LoadOptions{Trust: f.opts.Trust, HelperExecutable: f.opts.Executable, SystemBinDirs: f.opts.SystemBinDirs}
+	o := &policy.LoadOptions{Trust: f.opts.Trust, HelperExecutable: f.opts.Executable, SystemBinDirs: f.opts.SystemBinDirs, Dpkg: f.opts.Dpkg}
 	f.opts.Lookups(o)
 	return o
 }
@@ -358,7 +364,7 @@ type m = map[string]any
 
 func request(op string, args any) string {
 	a, _ := json.Marshal(args)
-	return fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":%q,"args":%s,"timeout_ms":5000}`+"\n", reqID, op, a)
+	return fmt.Sprintf(`{"v":2,"id":%q,"ceiling":"destructive","op":%q,"args":%s,"timeout_ms":5000}`+"\n", reqID, op, a)
 }
 
 func (f *fixture) serve(op string, args any) response {
@@ -368,7 +374,7 @@ func (f *fixture) serve(op string, args any) response {
 	if err := json.Unmarshal([]byte(out), &r); err != nil {
 		f.t.Fatalf("%s: response %q (exit %d) is not JSON: %v", op, out, code, err)
 	}
-	if code != 0 || r.V != 1 || r.ID != reqID || !strings.HasSuffix(out, "\n") || strings.Count(out, "\n") != 1 {
+	if code != 0 || r.V != 2 || r.ID != reqID || !strings.HasSuffix(out, "\n") || strings.Count(out, "\n") != 1 {
 		f.t.Fatalf("%s: exit %d envelope %q", op, code, out)
 	}
 	return r

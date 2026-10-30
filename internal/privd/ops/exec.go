@@ -10,9 +10,9 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,8 +24,11 @@ import (
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
+	"github.com/tyler-rich/shell-mcp/internal/gate/procfs"
+	"github.com/tyler-rich/shell-mcp/internal/gate/procself"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
+	"github.com/tyler-rich/shell-mcp/internal/redact"
 	"github.com/tyler-rich/shell-mcp/internal/template"
 )
 
@@ -76,13 +79,21 @@ func (r resolver) ResolvePath(v string, write bool) (string, error) {
 	return r.s.fs.ResolveRead(v)
 }
 
+// ResolveReadFD refuses: the privileged policy refuses {path:read:fd} at
+// load (root commands get closed paths only), and this keeps a template
+// that reached the helper anyway from running.
+func (resolver) ResolveReadFD(string) (*os.File, string, error) {
+	return nil, "", &fsx.Error{Code: protocol.CodePolicyDenied, Msg: "{path:read:fd} is not available in the privileged policy; nothing was run"}
+}
+
 func (resolver) MatchUnit(string) bool { return false }
 
 // responseBudget leaves room for the envelope inside MaxResponseBytes.
 const responseBudget = protocol.MaxResponseBytes - 256<<10
 
-// execHome is HOME for root commands: ProtectHome=read-only leaves /root
-// read-only, and the helper has no home of its own.
+// execHome is HOME for root commands: the helper has no home of its own.
+// The core unit hides /root (ProtectHome=yes) or leaves it read-only, and
+// the helper's Landlock domain grants nothing under it either way.
 const execHome = "/root"
 
 // resolvedExec is a privileged command resolved for one request: the
@@ -93,6 +104,10 @@ type resolvedExec struct {
 	template int
 	args     []string
 	dir      string
+	// strict: the output gets redact.MaskKeyBodies, for a command that
+	// declares reads_private_keys or reads a file too large to search
+	// (handoff N-35).
+	strict bool
 }
 
 // resolveExec is the one resolution priv_exec and priv_exec_preview share
@@ -130,7 +145,13 @@ func (s *server) resolveExec(id string, args []string, cwd string, unitOK func(*
 			return nil, err
 		}
 	}
-	return &resolvedExec{c: c, template: i, args: out, dir: dir}, nil
+	// A file that holds a private key could be printed in part, without its
+	// BEGIN line (handoff N-35): refused unless the command opts in.
+	over, err := s.fs.CommandKeyInputs(c.ID, &c.Templates[i], out, nil, c.ReadsPrivateKeys)
+	if err != nil {
+		return nil, err
+	}
+	return &resolvedExec{c: c, template: i, args: out, dir: dir, strict: over || c.ReadsPrivateKeys}, nil
 }
 
 type execPreviewArgs struct {
@@ -254,16 +275,21 @@ func (s *server) exec(raw jsontext.Value) (data any, warns []string, failure err
 		maxOut = a.MaxOutputBytes
 	}
 	res, err := s.runCommand(&execx.Spec{
-		Trampoline: s.o.Executable,
-		Path:       rx.c.Resolved,
-		Args:       rx.args,
-		Env:        execx.Environment(execHome),
-		Dir:        rx.dir,
-		Timeout:    s.timeout(),
-		MaxOutput:  maxOut,
+		Trampoline:  s.o.Executable,
+		Path:        rx.c.Resolved,
+		Args:        rx.args,
+		Env:         execx.Environment(execHome),
+		Dir:         rx.dir,
+		Timeout:     s.timeout(),
+		MaxOutput:   maxOut,
+		MaxMemoryMB: s.p.Limits.MaxMemoryMB,
 	}, rx.c.Tier > policy.TierRead)
 	if err != nil {
 		return nil, nil, err
+	}
+	if rx.strict {
+		res.Stdout = redact.MaskKeyBodies(s.red.Bytes(res.Stdout), redact.PlainLines)
+		res.Stderr = redact.MaskKeyBodies(s.red.Bytes(res.Stderr), redact.PlainLines)
 	}
 	stdout, cutOut := s.red.Truncate(res.Stdout, maxOut)
 	stderr, cutErr := s.red.Truncate(res.Stderr, maxOut)
@@ -454,8 +480,13 @@ func watchHangup(c net.Conn) <-chan struct{} {
 // ReapHooks replace how ReapOrphans lists this process's children and
 // waits for them (and skip PR_SET_CHILD_SUBREAPER); tests only.
 type ReapHooks struct {
-	// Children lists the children (production: /proc/self/task/*/children).
+	// Children lists the children (production: task/*/children of the
+	// helper's own /proc/<pid>, through the descriptor opened before the
+	// sandbox).
 	Children func() ([]int, error)
+	// Fallback lists them another way (production: /proc/[0-9]*/stat);
+	// nil means none.
+	Fallback func() ([]int, error)
 	// Wait is wait4(-1, WNOHANG): the pid of a child that ended, 0 when
 	// children are left and none ended, or ECHILD when none is left.
 	Wait func() (int, error)
@@ -464,11 +495,14 @@ type ReapHooks struct {
 // reap kills and reaps every child left after a command (reapOrphans), with
 // the test hooks when set.
 func (s *server) reap() error {
-	list, wait := children, waitAnyChild
+	lists, wait := []func() ([]int, error){func() ([]int, error) { return childrenIn(s.proc) }, childrenByStat}, waitAnyChild
 	if h := s.o.ReapHooks; h != nil {
-		list, wait = h.Children, h.Wait
+		lists, wait = []func() ([]int, error){h.Children}, h.Wait
+		if h.Fallback != nil {
+			lists = append(lists, h.Fallback)
+		}
 	}
-	return reapOrphans(reapBound, list, func(pid int) { _ = unix.Kill(pid, unix.SIGKILL) }, wait)
+	return reapOrphans(reapBound, lists, func(pid int) { _ = unix.Kill(pid, unix.SIGKILL) }, wait)
 }
 
 func waitAnyChild() (int, error) {
@@ -482,32 +516,34 @@ func waitAnyChild() (int, error) {
 // round lists the children (so one born of a process killed in the
 // previous round, reparented here, is killed in the next), kills them, and
 // reaps whatever has ended; the rounds go on until wait4 says no child is
-// left. It fails closed: it returns nil only then, and an error when the
-// children cannot be listed (they could not be killed) or some are still
-// there after bound.
-func reapOrphans(bound time.Duration, list func() ([]int, error), kill func(int), wait func() (int, error)) error {
+// left. Each round uses the first of lists that works (the per-thread
+// children files, then the /proc scan), and a round whose listings all
+// fail kills what they found and lists again in the next (handoff N-30:
+// after an OOM kill in the instance, the listing failed once and the reap
+// gave up). It fails closed: it returns nil only when wait4 reports ECHILD
+// (the kernel's own word that no child is left, whatever the listings
+// said), and after bound an error carrying the last round's listing error,
+// or saying that children were still there.
+func reapOrphans(bound time.Duration, lists []func() ([]int, error), kill func(int), wait func() (int, error)) error {
 	deadline := time.Now().Add(bound)
 	for {
-		pids, lerr := list()
+		pids, lerr := listChildren(lists)
 		for _, pid := range pids {
 			kill(pid)
 		}
 		for {
 			pid, err := wait()
 			if errors.Is(err, unix.ECHILD) {
-				if lerr != nil {
-					return fmt.Errorf("the children could not be listed: %w", lerr)
-				}
 				return nil
 			}
 			if err != nil || pid <= 0 {
 				break
 			}
 		}
-		if lerr != nil {
-			return fmt.Errorf("the children could not be listed, so some are left: %w", lerr)
-		}
 		if time.Now().After(deadline) {
+			if lerr != nil {
+				return fmt.Errorf("the children could not be listed, so some may be left: %w", lerr)
+			}
 			return fmt.Errorf("children of the command were still there %v after it ended", bound)
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -517,28 +553,59 @@ func reapOrphans(bound time.Duration, list func() ([]int, error), kill func(int)
 // maxChildren bounds the children read from /proc.
 const maxChildren = 4096
 
-// children lists this process's children from /proc/self/task/*/children
-// (the helper's own /proc/<pid>, which its Landlock ruleset and
-// ProcSubset=pid leave readable). Any file it cannot read, or finding none
-// (a kernel without CONFIG_PROC_CHILDREN), is an error.
-func children() ([]int, error) {
-	tasks, err := filepath.Glob("/proc/self/task/*/children")
+// maxTasks bounds the helper's own threads the listing reads, and
+// maxChildrenBytes one thread's children file.
+const (
+	maxTasks         = 4096
+	maxChildrenBytes = 64 << 10
+)
+
+// childrenByStat is the fallback listing: the processes in /proc whose
+// parent is this process. In the core unit Landlock grants no read of
+// other processes' /proc entries, so there it fails with the real error
+// (EACCES); it serves where no Landlock ruleset applies (the broad unit).
+func childrenByStat() ([]int, error) { return childrenByStatIn("/proc", os.Getpid()) }
+
+// ended reports an error that means the process or thread went away
+// between the listing and the read.
+func ended(err error) bool { return errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ESRCH) }
+
+// childrenIn lists the children from task/<tid>/children under proc (the
+// helper's own /proc/<pid>, opened before the sandbox: procself; its
+// Landlock ruleset and ProcSubset=pid leave it readable), with the real
+// error: the task directory or a children file that cannot be read (its
+// errno included), or no children file read at all (a kernel without
+// CONFIG_PROC_CHILDREN). A thread that ended meanwhile is skipped. Reading
+// through proc's descriptor, not the /proc/self path, keeps the core
+// unit's Landlock rule covering the reads after memory pressure in the
+// instance (an OOM kill), which can make the path reach a new procfs inode.
+func childrenIn(proc *procself.Dir) ([]int, error) {
+	if proc == nil {
+		return nil, errors.New("no /proc/self descriptor")
+	}
+	tids, err := proc.ReadDirNames("task", maxTasks)
 	if err != nil {
 		return nil, err
 	}
-	if len(tasks) == 0 {
-		return nil, errors.New("no /proc/self/task/*/children file")
-	}
 	var out []int
-	for _, t := range tasks {
-		b, err := os.ReadFile(t)                           //nolint:gosec // G304: a /proc/self path from a fixed pattern
-		if err != nil && !errors.Is(err, os.ErrNotExist) { // a thread that ended meanwhile
+	read := 0
+	for _, tid := range tids {
+		if n, err := strconv.Atoi(tid); err != nil || n <= 0 {
+			return out, fmt.Errorf("%s/task/%s: not a thread id", proc.Path(), tid)
+		}
+		p := proc.Path() + "/task/" + tid + "/children"
+		b, err := proc.ReadFile("task/"+tid+"/children", maxChildrenBytes)
+		if ended(err) {
+			continue
+		}
+		if err != nil {
 			return out, err
 		}
+		read++
 		for _, f := range strings.Fields(string(b)) {
 			pid, err := strconv.Atoi(f)
 			if err != nil || pid <= 1 {
-				return out, fmt.Errorf("%s: not a child pid list", t)
+				return out, fmt.Errorf("%s: not a child pid list", p)
 			}
 			if len(out) == maxChildren {
 				return out, fmt.Errorf("more than %d children", maxChildren)
@@ -546,5 +613,77 @@ func children() ([]int, error) {
 			out = append(out, pid)
 		}
 	}
+	if read == 0 {
+		return nil, fmt.Errorf("no %s/task/*/children file could be read", proc.Path())
+	}
 	return out, nil
+}
+
+// maxStatScan bounds the /proc entries childrenByStatIn reads.
+const maxStatScan = 1 << 16
+
+// childrenByStatIn lists the processes under procDir (/proc) whose parent
+// pid, from <pid>/stat, is ppid, with the real error: procDir that cannot
+// be listed, more entries than maxStatScan, or a stat file that cannot be
+// read or parsed. A process that ended meanwhile is skipped.
+func childrenByStatIn(procDir string, ppid int) ([]int, error) {
+	d, err := os.Open(procDir) //nolint:gosec // G304: /proc, or the tests' own directory
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = d.Close() }()
+	names, err := d.Readdirnames(maxStatScan + 1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	if len(names) > maxStatScan {
+		return nil, fmt.Errorf("%s has more than %d entries", procDir, maxStatScan)
+	}
+	var out []int
+	for _, n := range names {
+		pid, err := strconv.Atoi(n)
+		if err != nil || pid <= 0 {
+			continue // not a process
+		}
+		p := procDir + "/" + n + "/stat"
+		b, err := os.ReadFile(p) //nolint:gosec // G304: a numeric entry of the fixed /proc directory
+		if ended(err) {
+			continue
+		}
+		if err != nil {
+			return out, err
+		}
+		st, err := procfs.ParsePIDStat(b)
+		if err != nil || st.PID != pid {
+			return out, fmt.Errorf("%s: not a stat line", p)
+		}
+		if st.PPID == ppid {
+			if len(out) == maxChildren {
+				return out, fmt.Errorf("more than %d children", maxChildren)
+			}
+			out = append(out, pid)
+		}
+	}
+	return out, nil
+}
+
+// listChildren kills nothing; it returns the children from the first
+// listing that works, or, when every listing fails, what they found and all
+// their errors (each with its errno).
+func listChildren(lists []func() ([]int, error)) ([]int, error) {
+	var found []int
+	var errs error
+	for _, l := range lists {
+		pids, err := l()
+		if err == nil {
+			return pids, nil
+		}
+		found = append(found, pids...)
+		if errs == nil {
+			errs = err
+		} else {
+			errs = fmt.Errorf("%w; fallback: %w", errs, err)
+		}
+	}
+	return found, errs
 }

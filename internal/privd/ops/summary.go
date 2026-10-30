@@ -41,6 +41,7 @@ type summaryLimits struct {
 	DefaultTimeoutS  int `json:"default_timeout_s"`
 	MaxTimeoutS      int `json:"max_timeout_s"`
 	MaxDeleteEntries int `json:"max_delete_entries"`
+	MaxMemoryMB      int `json:"max_memory_mb"`
 }
 
 type summaryRoots struct {
@@ -55,13 +56,14 @@ type summaryOwners struct {
 }
 
 type summaryCommand struct {
-	ID             string     `json:"id"`
-	Tier           string     `json:"tier"`
-	Unit           string     `json:"unit"`
-	Description    string     `json:"description"`
-	Templates      [][]string `json:"templates"`
-	RootEquivalent bool       `json:"root_equivalent"`
-	Capabilities   []string   `json:"capabilities"`
+	ID               string     `json:"id"`
+	Tier             string     `json:"tier"`
+	Unit             string     `json:"unit"`
+	Description      string     `json:"description"`
+	Templates        [][]string `json:"templates"`
+	RootEquivalent   bool       `json:"root_equivalent"`
+	Capabilities     []string   `json:"capabilities"`
+	ReadsPrivateKeys bool       `json:"reads_private_keys"`
 }
 
 type summaryPackages struct {
@@ -70,6 +72,7 @@ type summaryPackages struct {
 	Remove           []string `json:"remove"`
 	AllowUpdateIndex bool     `json:"allow_update_index"`
 	AllowUpgrade     bool     `json:"allow_upgrade"`
+	AllowRecover     bool     `json:"allow_recover"`
 }
 
 type summaryPower struct {
@@ -101,6 +104,8 @@ var pkgOpOf = map[string]pkg.Op{
 	protocol.OpPrivPkgInstall: pkg.OpInstall, protocol.OpPrivPkgInstallPreview: pkg.OpInstall,
 	protocol.OpPrivPkgUpgrade: pkg.OpUpgrade, protocol.OpPrivPkgUpgradePreview: pkg.OpUpgrade,
 	protocol.OpPrivPkgRemove: pkg.OpRemove, protocol.OpPrivPkgRemovePreview: pkg.OpRemove,
+	protocol.OpPrivPkgRecover: pkg.OpRecover, protocol.OpPrivPkgRecoverPreview: pkg.OpRecover,
+	protocol.OpPrivPkgReinstall: pkg.OpReinstall, protocol.OpPrivPkgReinstallPreview: pkg.OpReinstall,
 }
 
 // allowed reports whether the policy lets op through at all, by the checks
@@ -140,6 +145,7 @@ func (s *server) summary() summaryData {
 		Limits: summaryLimits{
 			MaxReadBytes: p.Limits.MaxReadBytes, MaxWriteBytes: p.Limits.MaxWriteBytes, MaxOutputBytes: p.Limits.MaxOutputBytes,
 			DefaultTimeoutS: p.Limits.DefaultTimeoutS, MaxTimeoutS: p.Limits.MaxTimeoutS, MaxDeleteEntries: p.Limits.MaxDeleteEntries,
+			MaxMemoryMB: p.Limits.MaxMemoryMB,
 		},
 		Roots:        summaryRoots{Read: orEmpty(p.Paths.Read), Write: orEmpty(p.Paths.Write), Persistence: []string{}},
 		DenyPatterns: len(p.Paths.DenyUser),
@@ -148,7 +154,7 @@ func (s *server) summary() summaryData {
 		BackupsKeep:  p.BackupsKeep, BackupsMaxStoreBytes: p.BackupsMaxStoreBytes,
 		Commands: []summaryCommand{},
 		Packages: summaryPackages{Enabled: p.Packages.Enabled, Install: orEmpty(p.Packages.Install), Remove: orEmpty(p.Packages.Remove),
-			AllowUpdateIndex: p.Packages.AllowUpdateIndex, AllowUpgrade: p.Packages.AllowUpgrade},
+			AllowUpdateIndex: p.Packages.AllowUpdateIndex, AllowUpgrade: p.Packages.AllowUpgrade, AllowRecover: p.Packages.AllowRecover},
 		Power:    summaryPower{Allowed: orEmpty(p.Power.Allowed)},
 		Ops:      []summaryOp{},
 		Findings: []summaryFinding{},
@@ -166,7 +172,7 @@ func (s *server) summary() summaryData {
 	for i := range p.Commands {
 		c := &p.Commands[i]
 		sc := summaryCommand{ID: c.ID, Tier: c.Tier.String(), Unit: string(c.Unit), Description: c.Description, Templates: [][]string{},
-			RootEquivalent: c.RootEquivalent, Capabilities: orEmpty(c.Capabilities)}
+			RootEquivalent: c.RootEquivalent, Capabilities: orEmpty(c.Capabilities), ReadsPrivateKeys: c.ReadsPrivateKeys}
 		for _, t := range c.Templates {
 			sc.Templates = append(sc.Templates, t.String())
 		}

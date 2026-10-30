@@ -35,6 +35,14 @@ func main() {
 			_, _ = f.Write(append(b, '\n'))
 			_ = f.Close()
 		}
+		// The memory limit it was started with, as one line in a log of
+		// its own (logPath.limits): name data=<soft>/<hard>.
+		if f, err := os.OpenFile(logPath+".limits", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil { //nolint:gosec // G304: test log path baked in by the test
+			var l syscall.Rlimit
+			_ = syscall.Getrlimit(syscall.RLIMIT_DATA, &l)
+			_, _ = fmt.Fprintf(f, "%s data=%d/%d\n", filepath.Base(os.Args[0]), l.Cur, l.Max)
+			_ = f.Close()
+		}
 	}
 	args := os.Args[1:]
 	switch filepath.Base(os.Args[0]) {
@@ -161,6 +169,15 @@ func journalctl(args []string) int {
 		if a == "-n" && i+1 < len(args) {
 			n, _ = strconv.Atoi(args[i+1])
 		}
+	}
+	// logPath.journal, when the test wrote one, holds one entry per line:
+	// print the last n, as journalctl -n does.
+	if b, err := os.ReadFile(logPath + ".journal"); err == nil { //nolint:gosec // G304: test path baked in by the test
+		entries := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+		for _, e := range entries[max(0, len(entries)-n):] {
+			fmt.Println(e)
+		}
+		return 0
 	}
 	for i := 0; i < n && i < 50; i++ {
 		fmt.Printf("2026-09-27T10:00:%02d+00:00 target-a %s[4242]: line %d api_key=abc123\n", i%60, strings.TrimSuffix(unit, ".service"), i)

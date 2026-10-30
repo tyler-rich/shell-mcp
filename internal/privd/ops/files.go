@@ -226,6 +226,18 @@ func (s *server) readFile(raw jsontext.Value) (data any, warns []string, failure
 	return r, warnings, nil
 }
 
+// hashFile is priv_hash_file (handoff N-5): the file's size, SHA-256, line
+// count and whether it holds a private key, under priv_read_file's path
+// rules, for an overwrite's preview. Its content never leaves the helper.
+func (s *server) hashFile(raw jsontext.Value) (data any, warns []string, failure error) {
+	var a pathArgs
+	if err := decode(raw, &a); err != nil {
+		return nil, nil, err
+	}
+	r, err := s.fs.HashFile(a.Path)
+	return r, nil, err
+}
+
 func (s *server) writeFile(raw jsontext.Value) (data any, warns []string, failure error) {
 	var a writeArgs
 	if err := decode(raw, &a); err != nil {

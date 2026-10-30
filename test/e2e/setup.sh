@@ -168,6 +168,33 @@ mkdeb_x example-slow 1.0 '' "$wait_fast 8 ]; do sleep 1; i=\$((i+1)); done" ''
 mkdeb_x example-slow-a 1.0 '' "$wait_fast 18 ]; do sleep 1; i=\$((i+1)); done" ''
 mkdeb_x example-slow-b 1.0 example-slow-a '' ''
 mkdeb_x example-stuck 1.0 '' "$wait_fast 600 ]; do sleep 1; i=\$((i+1)); done" ''
+# The recovery (handoff N-14, S7-4): example-blocked's postinst waits until
+# /run/shell-mcp-e2e-pkg-release exists (or the fast flag), so an install
+# killed at its limit leaves it unfinished and a recovery after the
+# release finishes it; example-needs depends on example-absent, which no
+# repository has, so dpkg leaves it unconfigured. Invented packages.
+mkdeb_x example-blocked 1.0 '' 'i=0; while [ ! -e /run/shell-mcp-e2e-pkg-release ] && [ ! -e /run/shell-mcp-e2e-pkg-fast ] && [ $i -lt 600 ]; do sleep 1; i=$((i+1)); done' ''
+d="$(mktemp -d)"
+install -d "$d/DEBIAN"
+printf 'Package: example-needs\nVersion: 1.0\nArchitecture: all\nMaintainer: shell-mcp end-to-end tests <e2e@example.test>\nDepends: example-absent\nDescription: invented package for the shell-mcp end-to-end tests\n' >"$d/DEBIAN/control"
+dpkg-deb --root-owner-group --build "$d" "$bin/debs/example-needs_1.0_all.deb" >/dev/null
+rm -rf "$d"
+# What the recovery leaves (handoff N-36, S7-7): example-reinst's preinst and
+# postrm fail while /run/shell-mcp-e2e-pkg-fail exists, so an install then
+# leaves it half-installed and flagged reinstreq (measured); its postinst
+# waits for the release file, as example-blocked's does, so a reinstall can
+# be held at its stop points. Invented package.
+d="$(mktemp -d)"
+install -d "$d/DEBIAN" "$d/usr/share/example-reinst"
+printf 'example-reinst 1.0\n' >"$d/usr/share/example-reinst/version"
+printf 'Package: example-reinst\nVersion: 1.0\nArchitecture: all\nMaintainer: shell-mcp end-to-end tests <e2e@example.test>\nDescription: invented package for the shell-mcp end-to-end tests\n' >"$d/DEBIAN/control"
+for s in preinst postrm; do
+	printf '#!/bin/sh\nif [ -e /run/shell-mcp-e2e-pkg-fail ]; then echo "invented failure" >&2; exit 1; fi\nexit 0\n' >"$d/DEBIAN/$s"
+done
+printf '#!/bin/sh\ni=0; while [ ! -e /run/shell-mcp-e2e-pkg-release ] && [ ! -e /run/shell-mcp-e2e-pkg-fast ] && [ $i -lt 600 ]; do sleep 1; i=$((i+1)); done\n' >"$d/DEBIAN/postinst"
+chmod 0755 "$d/DEBIAN/preinst" "$d/DEBIAN/postrm" "$d/DEBIAN/postinst"
+dpkg-deb --root-owner-group --build "$d" "$bin/debs/example-reinst_1.0_all.deb" >/dev/null
+rm -rf "$d"
 
 # --- Policies ---------------------------------------------------------------
 install -o root -g root -m 0755 -d /etc/shell-mcp
@@ -217,7 +244,7 @@ paths:
 services:
   status: ["example-*.service"]
 journal:
-  units: ["example-app.service", "example-journal.service"]
+  units: ["example-app.service", "example-journal.service", "example-keylog.service"]
   max_lines: 200
 git:
   repos:
@@ -337,9 +364,44 @@ commands:
     path: /usr/local/bin/example-probe
     tier: operator
     templates: [["write", "{path:write}"], ["echo", "{path:write}"]]
+  # The child memory limit (memory_test.go, handoff N-30): the probe reports,
+  # tries to raise and tests it; jq reads an owner-matched {path:read}.
+  - id: probe-mem
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["rlimits"], ["child-rlimits"], ["raise-data"], ["alloc", "{int:1-4096}"]]
+  - id: jq-keys
+    path: /usr/bin/jq
+    tier: read
+    templates: [["-c", "keys", "{path:read}"]]
 EOF
 chmod 0644 /etc/shell-mcp/gate-hardening.yaml
 /usr/local/bin/shell-mcp-gate check-policy --policy /etc/shell-mcp/gate-hardening.yaml >/dev/null
+
+# The {path:read:fd} policy (read_fd_test.go, handoff N-22): the
+# hardening layout's roots, with commands given the gate's open
+# descriptor, and the string form for comparison. It is not checked here:
+# the tests check it, and before N-22 the gate refuses the placeholder.
+cat >/etc/shell-mcp/gate-fd.yaml <<EOF
+version: 1
+max_tier: operator
+sandbox:
+  landlock: $landlock
+paths:
+  read: [/srv/e2e-gate]
+  write: [/srv/e2e-gate/work]
+  deny: ["/srv/e2e-gate/work/denied/**"]
+commands:
+  - id: probe-fd
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["cat", "{path:read:fd}"], ["procattrs", "{path:read:fd}"], ["write", "{path:read:fd}"], ["sleep-cat", "{enum:3s}", "{path:read:fd}"]]
+  - id: probe-cat
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["cat", "{path:read}"]]
+EOF
+chmod 0644 /etc/shell-mcp/gate-fd.yaml
 
 # The multi-call policy (multicall_test.go, S-MC): commands on this
 # machine's own coreutils (on Ubuntu 26.04 the uutils multi-call binary).
@@ -394,6 +456,9 @@ install -o svc-shell -g svc-shell -m 0755 -d "$ox/work/mounted" "$ox/work/mounte
 mount -t tmpfs -o size=1m,mode=0755,uid=4200001,gid=4200001 e2e-delete-mount "$ox/work/mounted/point"
 printf 'on the mount\n' >"$ox/work/mounted/point/inside.txt"
 
+# BEGIN privileged-policies: scripts/exposure/gen.sh extracts this block (up to
+# the matching END line) to generate the units of every policy below offline;
+# it may use only $bin, $landlock and the shell, and write only $bin/privileged*.yaml.
 # priv_policy <extra line for probe-signal> <extra line for probe-broad> <allow_upgrade>
 priv_policy() {
 	cat <<EOF
@@ -452,6 +517,23 @@ commands:
     path: /usr/local/bin/example-probe
     tier: read
     templates: [["rlimits"], ["procattrs"], ["ignore-term", "60s"]]
+  # The child memory limit in the core unit (memory_test.go, handoff N-30):
+  # reported, not raisable, inherited, and a child tree that reaches the
+  # unit's MemoryMax=; jq reading a large root-owned fixture; and a tree past
+  # MemoryMax= that leaves a setsid grandchild for the helper's reap (S7-5).
+  - id: probe-mem
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates:
+      - ["rlimits"]
+      - ["child-rlimits"]
+      - ["raise-data"]
+      - ["alloc-tree", "{int:1-8}", "{int:1-4096}", "{int:1-4096}"]
+      - ["alloc-tree-detach", "66s", "{int:1-8}", "{int:1-4096}", "{int:1-4096}"]
+  - id: jq-keys
+    path: /usr/bin/jq
+    tier: read
+    templates: [["-c", "keys", "{path:read}"]]
   - id: probe-read-outside
     path: /usr/local/bin/example-probe
     tier: read
@@ -497,14 +579,21 @@ $2    templates:
     tier: operator
     unit: broad
     templates: [["write", "{path:write}"], ["ignore-term", "63s"], ["detach", "64s"]]
+  # probe-mem's setsid grandchild after an OOM kill, in the broad unit
+  # (memory_test.go, S7-5).
+  - id: probe-broad-mem
+    path: /usr/local/bin/example-probe
+    tier: read
+    unit: broad
+    templates: [["alloc-tree-detach", "67s", "{int:1-8}", "{int:1-4096}", "{int:1-4096}"]]
 power:
   allowed: [reboot]
   acknowledge: "e2e: priv_power is called only with reboot.target and poweroff.target runtime-masked"
 packages:
   enabled: true
   manager: apt
-  install: [example-hello, example-conf, example-slow, example-slow-a, example-slow-b, example-stuck]
-  remove: [example-hello, example-conf]
+  install: [example-hello, example-conf, example-slow, example-slow-a, example-slow-b, example-stuck, example-blocked, example-reinst]
+  remove: [example-hello, example-conf, example-needs]
   allow_update_index: true
   allow_upgrade: $3
 EOF
@@ -518,6 +607,10 @@ priv_policy '' '' true >"$bin/privileged-upgrade.yaml"
 # Short limits for the package stop points (broad_test.go): max_timeout_s 24
 # gives a 6 s stop allowance, so SIGINT at 18 s and the kill at 24 s.
 priv_policy '' '' true | sed 's/^  default_timeout_s: 30$/  default_timeout_s: 10/; s/^  max_timeout_s: 60$/  max_timeout_s: 24/' >"$bin/privileged-pkgstage.yaml"
+# The same with the recovery allowed (handoff N-14, pkg_recover_test.go).
+# Written, not checked here: a helper from before packages.allow_recover
+# refuses it.
+sed 's/^  allow_update_index: true$/  allow_update_index: true\n  allow_recover: true/' "$bin/privileged-pkgstage.yaml" >"$bin/privileged-recover.yaml"
 # The smallest backup store cap (64 MiB), for the store-cap test.
 priv_policy '' '' false | sed 's/^  keep: 3$/  keep: 3\n  max_store_bytes: 67108864/' >"$bin/privileged-small-store.yaml"
 # PRIVILEGED §6's worked chown example on this machine's own coreutils
@@ -532,6 +625,7 @@ priv_policy '' '' false | awk '{ print } /^commands:$/ && !done { done = 1
 	print "    path: /usr/bin/chown"
 	print "    tier: read"
 	print "    templates: [[\"--version\"]]" }' >"$bin/privileged-multicall.yaml"
+# END privileged-policies
 chmod 0600 "$bin"/privileged*.yaml
 install -o root -g root -m 0600 "$bin/privileged.yaml" /etc/shell-mcp/privileged.yaml
 

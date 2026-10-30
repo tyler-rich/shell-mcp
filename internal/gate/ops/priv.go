@@ -33,6 +33,7 @@ var broadOps = []string{
 	protocol.OpPrivPkgUpdateIndex, protocol.OpPrivPkgInstall, protocol.OpPrivPkgUpgrade, protocol.OpPrivPkgRemove,
 	protocol.OpPrivPkgInstallPreview, protocol.OpPrivPkgUpgradePreview, protocol.OpPrivPkgRemovePreview, protocol.OpPrivPkgUpdateIndexPreview,
 	protocol.OpPrivPower, protocol.OpPrivPowerPreview, protocol.OpPrivPowerCancel,
+	protocol.OpPrivPkgRecover, protocol.OpPrivPkgRecoverPreview, protocol.OpPrivPkgReinstall, protocol.OpPrivPkgReinstallPreview,
 }
 
 // route picks the helper socket for a privileged op: privileged.broad_socket
@@ -154,6 +155,17 @@ func (s *server) forward(socket string) *protocol.Response {
 		defer t.Stop()
 	}
 	resp, err := protocol.DecodeResponse(conn)
+	var de *protocol.DecodeError
+	if errors.As(err, &de) && de.Code == protocol.CodeProtocolMismatch {
+		// A helper of another version refuses the request before it runs
+		// anything (every released helper decodes the version first), so
+		// even for an operation that can change the host this is a refusal,
+		// never outcome_unknown.
+		return s.errResp(errf(protocol.CodeProtocolMismatch, "%s; the helper refused the request, so nothing ran",
+			protocol.PeerVersionMessage("the privileged helper", "this gate", de.Peer,
+				"upgrade shell-mcp-privd on this host to the gate's release",
+				"upgrade shell-mcp-gate on this host to the helper's release")))
+	}
 	if err != nil {
 		return s.forwardErr(err, wrote, hungUp.Load())
 	}

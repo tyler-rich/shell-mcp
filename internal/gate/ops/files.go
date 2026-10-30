@@ -142,6 +142,20 @@ func (s *server) readFile(raw jsontext.Value) (data any, warns []string, failure
 	return r, warnings, nil
 }
 
+// hashFile is hash_file (handoff N-5, the gate's half): the file's size,
+// SHA-256, line count and whether it holds a private key, under
+// read_file's path rules, for an overwrite's preview. Its content never
+// leaves the gate, so there is nothing to redact; the audit line carries
+// the path only.
+func (s *server) hashFile(raw jsontext.Value) (data any, warns []string, failure error) {
+	var a pathArgs
+	if err := decode(raw, &a); err != nil {
+		return nil, nil, err
+	}
+	r, err := s.fs.HashFile(a.Path)
+	return r, nil, err
+}
+
 func (s *server) find(raw jsontext.Value) (data any, warns []string, failure error) {
 	var a findArgs
 	if err := decode(raw, &a); err != nil {

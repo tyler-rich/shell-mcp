@@ -71,6 +71,7 @@ type rawLimits struct {
 	MaxFindDepth     *int `yaml:"max_find_depth"`
 	MaxDeleteEntries *int `yaml:"max_delete_entries"`
 	MaxProcesses     *int `yaml:"max_processes"`
+	MaxMemoryMB      *int `yaml:"max_memory_mb"`
 }
 
 type rawPaths struct {
@@ -115,12 +116,13 @@ type rawRedact struct {
 }
 
 type rawCommand struct {
-	ID             string     `yaml:"id"`
-	Path           string     `yaml:"path"`
-	Tier           string     `yaml:"tier"`
-	Description    string     `yaml:"description"`
-	RootEquivalent bool       `yaml:"root_equivalent"`
-	Templates      [][]string `yaml:"templates"`
+	ID               string     `yaml:"id"`
+	Path             string     `yaml:"path"`
+	Tier             string     `yaml:"tier"`
+	Description      string     `yaml:"description"`
+	RootEquivalent   bool       `yaml:"root_equivalent"`
+	ReadsPrivateKeys bool       `yaml:"reads_private_keys"`
+	Templates        [][]string `yaml:"templates"`
 }
 
 // validator accumulates errors and warnings.
@@ -273,6 +275,7 @@ func (v *validator) limits(p *Policy, raw *rawLimits) {
 	set(&l.MaxFindDepth, raw.MaxFindDepth, "max_find_depth", 8, 1, 32)
 	set(&l.MaxDeleteEntries, raw.MaxDeleteEntries, "max_delete_entries", 1000, 1, 10000)
 	set(&l.MaxProcesses, raw.MaxProcesses, "max_processes", 2000, 1, 100000)
+	set(&l.MaxMemoryMB, raw.MaxMemoryMB, "max_memory_mb", MaxMemoryMBDefault, MaxMemoryMBMin, MaxMemoryMBMax)
 	if l.DefaultTimeoutS > l.MaxTimeoutS {
 		if raw.DefaultTimeoutS == nil {
 			l.DefaultTimeoutS = l.MaxTimeoutS
@@ -632,7 +635,7 @@ func (v *validator) commands(p *Policy, raw []rawCommand, opts *LoadOptions) {
 			v.fail(field, "duplicate command id")
 			continue
 		}
-		c := Command{ID: rc.ID, Path: rc.Path, RootEquivalent: rc.RootEquivalent}
+		c := Command{ID: rc.ID, Path: rc.Path, RootEquivalent: rc.RootEquivalent, ReadsPrivateKeys: rc.ReadsPrivateKeys}
 		t, err := ParseTier(rc.Tier)
 		if err != nil {
 			v.fail(field+".tier", "%v", err)
@@ -648,12 +651,18 @@ func (v *validator) commands(p *Policy, raw []rawCommand, opts *LoadOptions) {
 		if !ok {
 			continue
 		}
+		if rc.ReadsPrivateKeys {
+			for _, w := range KeyRangeWarnings(field, false, rc.Path, prog.resolved, prog.listed) {
+				v.warn("%s", w)
+			}
+		}
 		c.Resolved, c.Applet, c.Interpreter = prog.resolved, prog.applet, prog.interpreter
 		if len(rc.Templates) == 0 || len(rc.Templates) > template.MaxTemplateCount {
 			v.fail(field+".templates", "needs 1..%d templates", template.MaxTemplateCount)
 			continue
 		}
 		bad := false
+		fdWarned := false
 		for j, tokens := range rc.Templates {
 			tpl, err := template.Parse(tokens)
 			if err != nil {
@@ -662,6 +671,12 @@ func (v *validator) commands(p *Policy, raw []rawCommand, opts *LoadOptions) {
 				continue
 			}
 			c.Templates = append(c.Templates, tpl)
+			// A program measured to give wrong results with a descriptor
+			// (handoff N-22): one warning per command.
+			if w := DescriptorWarning(field, tpl.String(), CanonicalName(filepath.Base(rc.Path)), CanonicalName(filepath.Base(c.Resolved))); w != "" && !fdWarned {
+				v.warn("%s", w)
+				fdWarned = true
+			}
 			if tpl.UsesPathWrite() && c.Tier == TierRead {
 				v.warn("%s: read-tier command takes a {path:write} placeholder", field)
 			}
@@ -681,7 +696,21 @@ func (v *validator) commands(p *Policy, raw []rawCommand, opts *LoadOptions) {
 
 // program is a resolved command binary: its real path, the uutils utility
 // it runs as, and a script's resolved interpreter.
-type program struct{ resolved, applet, interpreter string }
+type program struct {
+	resolved, applet, interpreter string
+	// scripts is the #! scripts on the way to the binary, outermost first.
+	scripts []scriptStep
+	// listed is the GTFOBins-listed programs the binary is, by identity (N-33).
+	listed []ListedMatch
+}
+
+// scriptStep is one #! script: its resolved path, the interpreter as its
+// first line writes it, and that interpreter resolved.
+type scriptStep struct {
+	script, written, interpreter string
+	// listed is the interpreter's listed programs by identity (N-33).
+	listed []ListedMatch
+}
 
 // maxScripts is how many #! scripts the kernel follows in a chain:
 // "up to a limit of four recursions" (execve(2)).
@@ -689,7 +718,7 @@ const maxScripts = 5
 
 // resolveCommand resolves a command's binary (resolveProgram) and warns
 // when it runs as another name than the one written, or has documented
-// escape techniques.
+// escape techniques, its own or those of a script's interpreters.
 func (v *validator) resolveCommand(field string, rc *rawCommand, opts *LoadOptions) (program, bool) {
 	prog, ok := v.resolveProgram(field, rc.Path, rc.RootEquivalent, opts, 0, "")
 	if !ok {
@@ -699,8 +728,14 @@ func (v *validator) resolveCommand(field string, rc *rawCommand, opts *LoadOptio
 	if written != ran {
 		v.warn("%s: %s resolves to %s; it runs as %q, the name it is executed by, not as %q (argv[0] is the resolved path; POLICY §5)", field, rc.Path, prog.resolved, ran, written)
 	}
-	if w := EscapeWarning(field, false, CanonicalName(written), CanonicalName(ran)); w != "" {
+	for _, w := range EscapeWarnings(field, false, rc.Path, prog.resolved, prog.listed) {
 		v.warn("%s", w)
+	}
+	// A script's interpreters get the template's arguments (handoff N-31).
+	for _, s := range prog.scripts {
+		for _, w := range ScriptEscapeWarnings(field, false, s.script, s.written, s.interpreter, s.listed) {
+			v.warn("%s", w)
+		}
 	}
 	return prog, true
 }
@@ -788,11 +823,14 @@ func (v *validator) resolveProgram(field, p string, rootEquivalent bool, opts *L
 			return program{}, false
 		}
 		prog.interpreter = ip.resolved
+		prog.scripts = append([]scriptStep{{script: resolved, written: ct.Interpreter, interpreter: ip.resolved, listed: ip.listed}}, ip.scripts...)
 		v.warn("%s: %s is a #! script run by %s; the interpreter reads the script and gets the template's arguments after it (POLICY §5)", field, resolved, ip.resolved)
 	}
-	if !v.identity(field, resolved, fi, opts, ct.Kind == ContentUutils, via) {
+	listed, ok := v.identity(field, resolved, fi, opts, ct.Kind == ContentUutils, via)
+	if !ok {
 		return program{}, false
 	}
+	prog.listed = listed
 	return prog, true
 }
 

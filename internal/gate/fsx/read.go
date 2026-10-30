@@ -24,7 +24,9 @@ const (
 	sniffTextBytes   = 8 << 10   // binary detection
 	defaultReadBytes = 64 << 10  // read_file default max_bytes
 	maxTailLines     = 5000      // read_file tail_lines ceiling
-	maxHashBytes     = 256 << 20 // whole-file SHA-256 only up to this size
+	maxHashBytes     = 256 << 20 // whole-file SHA-256 (and key search) only up to this size
+	keyLookback      = 1 << 20   // above that size: key search before a read window
+	keyScanOverlap   = 4 << 10   // bytes kept between chunks, so a header cannot straddle one unseen
 	defaultFindDepth = 4
 	defaultFindLimit = 200
 )
@@ -125,9 +127,52 @@ func validPrefix(b []byte) []byte {
 	return b
 }
 
-// ReadFile reads the regular file p. Files whose first 64 KiB contain a
-// private-key header are refused; binary files (NUL or invalid UTF-8 in the
-// first 8 KiB) return size and SHA-256 only.
+// keyScan is an io.Writer that notes whether the bytes written through it hold
+// a private-key header, including one split between two writes.
+type keyScan struct {
+	tail  []byte
+	found bool
+}
+
+func (k *keyScan) Write(p []byte) (int, error) {
+	if k.found {
+		return len(p), nil
+	}
+	buf := append(k.tail, p...) //nolint:gocritic // appendAssign: tail is replaced below
+	if redact.ContainsPrivateKey(buf) {
+		k.found = true
+		k.tail = nil
+		return len(p), nil
+	}
+	k.tail = bytes.Clone(buf[max(0, len(buf)-keyScanOverlap):])
+	return len(p), nil
+}
+
+// holdsKey reports whether file holds a private-key header in [from, to) or,
+// for the first sniffKeyBytes, always. Both ranges are clamped to the file.
+func holdsKey(file io.ReaderAt, size, from, to int64) (bool, error) {
+	k := &keyScan{}
+	for _, r := range [][2]int64{{0, min(size, sniffKeyBytes)}, {max(0, from-keyLookback), min(size, to)}} {
+		if r[1] <= r[0] {
+			continue
+		}
+		if _, err := io.Copy(k, io.NewSectionReader(file, r[0], r[1]-r[0])); err != nil {
+			return false, mapErr(err)
+		}
+		if k.found {
+			return true, nil
+		}
+		k.tail = nil
+	}
+	return false, nil
+}
+
+// ReadFile reads the regular file p. A file holding a private-key header
+// anywhere is refused, so a window that starts inside a key's body cannot
+// return the body without its header (S7-1): up to maxHashBytes the
+// whole file is searched, in the same pass as its SHA-256; above that the
+// first 64 KiB, the window and the keyLookback bytes before it. Binary files
+// (NUL or invalid UTF-8 in the first 8 KiB) return size and SHA-256 only.
 func (f *FS) ReadFile(p string, o ReadOptions) (ReadResult, error) {
 	if o.MaxBytes == 0 {
 		o.MaxBytes = min(defaultReadBytes, f.cfg.Limits.MaxReadBytes)
@@ -172,16 +217,28 @@ func (f *FS) ReadFile(p string, o ReadOptions) (ReadResult, error) {
 	if _, err := io.ReadFull(io.NewSectionReader(file, 0, size), head); err != nil {
 		return ReadResult{}, mapErr(err)
 	}
-	if redact.ContainsPrivateKey(head) {
-		return ReadResult{}, errf(protocol.CodePathDenied, "file contains a private key")
-	}
 	res := ReadResult{Path: p, Size: size}
 	if size <= maxHashBytes {
-		h := sha256.New()
-		if _, err := io.Copy(h, io.NewSectionReader(file, 0, size)); err != nil {
+		h, k := sha256.New(), &keyScan{}
+		if _, err := io.Copy(io.MultiWriter(h, k), io.NewSectionReader(file, 0, size)); err != nil {
 			return ReadResult{}, mapErr(err)
 		}
+		if k.found {
+			return ReadResult{}, errf(protocol.CodePathDenied, "file contains a private key")
+		}
 		res.SHA256 = hex.EncodeToString(h.Sum(nil))
+	} else {
+		from, to := o.Offset, o.Offset+int64(o.MaxBytes)
+		if o.TailLines > 0 {
+			from, to = size-int64(o.MaxBytes), size
+		}
+		found, err := holdsKey(file, size, from, to)
+		if err != nil {
+			return ReadResult{}, err
+		}
+		if found {
+			return ReadResult{}, errf(protocol.CodePathDenied, "file contains a private key")
+		}
 	}
 	sniff := head[:min(len(head), sniffTextBytes)]
 	if len(sniff) < len(head) || int64(len(head)) < size {
@@ -233,6 +290,79 @@ func (f *FS) ReadFile(p string, o ReadOptions) (ReadResult, error) {
 		res.Truncated = true
 	}
 	res.Content = string(buf)
+	return res, nil
+}
+
+// HashResult is a regular file's size, SHA-256 and line count, and whether
+// it holds a private-key header anywhere (the whole file is searched, as
+// ReadFile searches it): never its content (handoff N-5, the gate's
+// hash_file and the helper's priv_hash_file).
+type HashResult struct {
+	Path   string `json:"path"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+	Binary bool   `json:"binary"`
+	// Lines is counted as a preview over read_file's default read did:
+	// for a text file no larger than that read (64 KiB, or max_read_bytes
+	// when smaller); nil otherwise.
+	Lines      *int `json:"lines"`
+	PrivateKey bool `json:"private_key"`
+}
+
+// HashFile hashes the regular file p under ReadFile's path rules (roots,
+// deny lists, symlinks, the moved-in read rule) without returning any of
+// its content, so a file holding a private key can be bound by its hash.
+// Files above 256 MiB are refused (too_large).
+func (f *FS) HashFile(p string) (HashResult, error) {
+	l, err := f.locate(p, false)
+	if err != nil {
+		return HashResult{}, err
+	}
+	defer l.close()
+	file, err := f.openTarget(l)
+	if err != nil {
+		return HashResult{}, err
+	}
+	defer func() { _ = file.Close() }()
+	fi, err := file.Stat()
+	if err != nil {
+		return HashResult{}, mapErr(err)
+	}
+	if fi.IsDir() {
+		return HashResult{}, errf(protocol.CodeIsADirectory, "is a directory")
+	}
+	if !fi.Mode().IsRegular() {
+		return HashResult{}, errf(protocol.CodeBadRequest, "not a regular file")
+	}
+	if err := f.movedInRead(l, fi); err != nil {
+		return HashResult{}, err
+	}
+	size := fi.Size()
+	if size > maxHashBytes {
+		return HashResult{}, errf(protocol.CodeTooLarge, "the file is larger than the %d MiB that is hashed", maxHashBytes>>20)
+	}
+	head := make([]byte, min(int64(sniffKeyBytes), size))
+	if _, err := io.ReadFull(io.NewSectionReader(file, 0, size), head); err != nil {
+		return HashResult{}, mapErr(err)
+	}
+	h, k := sha256.New(), &keyScan{}
+	if _, err := io.Copy(io.MultiWriter(h, k), io.NewSectionReader(file, 0, size)); err != nil {
+		return HashResult{}, mapErr(err)
+	}
+	res := HashResult{Path: p, Size: size, SHA256: hex.EncodeToString(h.Sum(nil)), PrivateKey: k.found}
+	sniff := head[:min(len(head), sniffTextBytes)]
+	if len(sniff) < len(head) || int64(len(head)) < size {
+		sniff = validPrefix(sniff)
+	}
+	res.Binary = bytes.IndexByte(sniff, 0) >= 0 || !utf8.Valid(sniff)
+	if !res.Binary && size <= int64(min(defaultReadBytes, f.cfg.Limits.MaxReadBytes)) {
+		// A file this small is all in head.
+		lines := bytes.Count(head, []byte("\n"))
+		if len(head) > 0 && head[len(head)-1] != '\n' {
+			lines++
+		}
+		res.Lines = &lines
+	}
 	return res, nil
 }
 
@@ -376,6 +506,66 @@ func (f *FS) ResolveRead(p string) (string, error) {
 		return "", err
 	}
 	return l.targetReal(), nil
+}
+
+// ResolveReadFD resolves a {path:read:fd} (POLICY §4, handoff N-22) exactly
+// as ResolveRead does (the roots, the deny list, a final symlink refused,
+// the chain rule with the owner-matched exception), but keeps the
+// descriptor it opened and checked and returns it with the real path; the
+// caller must close it. A command given it as /dev/fd/N reopens that file,
+// whatever happens to its name afterwards. Only a regular file is given: a
+// directory is is_a_directory (a command treats /dev/fd/N as a symlink, and
+// looks up everything below a directory by name again), anything else
+// path_denied (a FIFO could block the command, and a socket cannot be
+// opened). The type is checked before the open, where open(2) would fail
+// on a socket or block on a device, and again on the descriptor.
+func (f *FS) ResolveReadFD(p string) (*os.File, string, error) {
+	l, err := f.locate(p, false)
+	if err != nil {
+		return nil, "", err
+	}
+	defer l.close()
+	// A final symlink, or a name that is gone, is left to openTarget, so
+	// that its refusal is ResolveRead's.
+	if fi, lerr := l.lstat(); lerr == nil && fi.Mode()&fs.ModeSymlink == 0 {
+		if e := regularForFD(p, fi.Mode()); e != nil {
+			return nil, "", e
+		}
+	}
+	file, err := f.openTarget(l)
+	if err != nil {
+		return nil, "", err
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			_ = file.Close()
+		}
+	}()
+	fi, err := file.Stat()
+	if err != nil {
+		return nil, "", mapErr(err)
+	}
+	if e := regularForFD(p, fi.Mode()); e != nil {
+		return nil, "", e
+	}
+	if err := f.execChain(l, file, true); err != nil {
+		return nil, "", err
+	}
+	keep = true
+	return file, l.targetReal(), nil
+}
+
+// regularForFD refuses anything but a regular file for {path:read:fd}.
+func regularForFD(p string, m fs.FileMode) error {
+	switch {
+	case m.IsDir():
+		return errf(protocol.CodeIsADirectory, "%q is a directory; {path:read:fd} takes a regular file: a command given a directory as /dev/fd/N "+
+			"treats it as a symlink, and looks up everything below it by name again; nothing was run", p)
+	case !m.IsRegular():
+		return errf(protocol.CodePathDenied, "%q is not a regular file (a FIFO, socket or device); {path:read:fd} takes a regular file; nothing was run", p)
+	}
+	return nil
 }
 
 // ResolveDir returns the real path of a directory under a read or write

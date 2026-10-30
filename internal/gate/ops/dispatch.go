@@ -42,7 +42,7 @@ var opOrder = []string{
 	protocol.OpHello, protocol.OpPolicy, protocol.OpSysinfo, protocol.OpDisk, protocol.OpProcesses,
 	protocol.OpServiceStatus, protocol.OpServiceList, protocol.OpJournal,
 	protocol.OpGitStatus, protocol.OpGitLog, protocol.OpGitDiff, protocol.OpGitDiscardPreview,
-	protocol.OpListDir, protocol.OpStat, protocol.OpReadFile, protocol.OpFind, protocol.OpCertInspect, protocol.OpDeletePreview,
+	protocol.OpListDir, protocol.OpStat, protocol.OpReadFile, protocol.OpHashFile, protocol.OpFind, protocol.OpCertInspect, protocol.OpDeletePreview,
 	protocol.OpServiceControl, protocol.OpGitPull, protocol.OpWriteFile, protocol.OpMkdir, protocol.OpCopy,
 	protocol.OpMove, protocol.OpChmod, protocol.OpDelete, protocol.OpGitDiscard,
 }
@@ -68,6 +68,7 @@ func opTable() map[string]opSpec {
 		protocol.OpListDir:           {policy.TierRead, (*server).listDir},
 		protocol.OpStat:              {policy.TierRead, (*server).stat},
 		protocol.OpReadFile:          {policy.TierRead, (*server).readFile},
+		protocol.OpHashFile:          {policy.TierRead, (*server).hashFile},
 		protocol.OpFind:              {policy.TierRead, (*server).find},
 		protocol.OpCertInspect:       {policy.TierRead, (*server).certInspect},
 		protocol.OpDeletePreview:     {policy.TierRead, (*server).deletePreview},
@@ -85,7 +86,7 @@ func opTable() map[string]opSpec {
 // checked as read here, and the helper checks the command's tier against
 // its max_tier and the forwarded ceiling.
 var privTiers = map[string]policy.Tier{
-	protocol.OpPrivReadFile: policy.TierRead, protocol.OpPrivListDir: policy.TierRead,
+	protocol.OpPrivReadFile: policy.TierRead, protocol.OpPrivHashFile: policy.TierRead, protocol.OpPrivListDir: policy.TierRead,
 	protocol.OpPrivStat: policy.TierRead, protocol.OpPrivListBackups: policy.TierRead,
 	protocol.OpPrivBackupCheck: policy.TierRead, protocol.OpPrivChownPreview: policy.TierRead, protocol.OpPrivChmodPreview: policy.TierRead,
 	protocol.OpPrivDeletePreview: policy.TierRead, protocol.OpPrivRestorePreview: policy.TierRead,
@@ -104,6 +105,10 @@ var privTiers = map[string]policy.Tier{
 	// The power preview, and the cancel: read tier so that it is never
 	// approval-gated, although it changes the host (handoff P-13).
 	protocol.OpPrivPowerPreview: policy.TierRead, protocol.OpPrivPowerCancel: policy.TierRead,
+	// The recovery (handoff N-14): its preview read, the recovery operator.
+	protocol.OpPrivPkgRecoverPreview: policy.TierRead, protocol.OpPrivPkgRecover: policy.TierOperator,
+	// The reinstall (handoff N-36): its preview read, the reinstall operator.
+	protocol.OpPrivPkgReinstallPreview: policy.TierRead, protocol.OpPrivPkgReinstall: policy.TierOperator,
 }
 
 func (s *server) dispatch() *protocol.Response {

@@ -43,6 +43,11 @@ type Package struct {
 	Name, Arch, Version string
 	// Want, Flag and State are the three words of its Status field.
 	Want, Flag, State string
+	// Relations are its Pre-Depends, Depends and Provides fields as
+	// written, joined by NUL (which a status file never holds), "" when it
+	// has none: used only to say what an unfinished package needs
+	// (UnfinishedPackages). One field keeps Package small and comparable.
+	Relations string
 }
 
 // Status is dpkg's status file. Packages are keyed by apt's name for them:
@@ -146,6 +151,7 @@ func ParseStatus(b []byte) (Status, error) {
 
 func parseStanza(stanza string) (Package, error) {
 	var p Package
+	var rel [3]string // Pre-Depends, Depends, Provides
 	seen := map[string]bool{}
 	for _, line := range strings.Split(stanza, "\n") {
 		if line == "" || line[0] == ' ' || line[0] == '\t' {
@@ -156,7 +162,7 @@ func parseStanza(stanza string) (Package, error) {
 			return Package{}, errors.New("dpkg's status file has a line that is not a field")
 		}
 		switch k {
-		case "Package", "Status", "Architecture", "Version":
+		case "Package", "Status", "Architecture", "Version", "Depends", "Pre-Depends", "Provides":
 		default:
 			continue
 		}
@@ -187,7 +193,16 @@ func parseStanza(stanza string) (Package, error) {
 				return Package{}, errors.New("dpkg's status file has an entry with an invalid version")
 			}
 			p.Version = v
+		case "Pre-Depends":
+			rel[0] = v
+		case "Depends":
+			rel[1] = v
+		case "Provides":
+			rel[2] = v
 		}
+	}
+	if rel != [3]string{} {
+		p.Relations = strings.Join(rel[:], "\x00")
 	}
 	switch {
 	case p.Name == "":
@@ -501,18 +516,30 @@ func printable(s string) string {
 	}, s)
 }
 
-// heldByRE is apt's "It is held by process <pid> (<name>)".
-var heldByRE = regexp.MustCompile(`held by process (\d{1,10}) \(([^()\n]{1,64})\)`)
+// heldByRE is apt's "It is held by process <pid> (<name>)"; dpkgHeldByRE
+// is dpkg's "locked by <path> process with pid <pid>" (dpkg 1.22.22,
+// measured).
+var (
+	heldByRE     = regexp.MustCompile(`held by process (\d{1,10}) \(([^()\n]{1,64})\)`)
+	dpkgHeldByRE = regexp.MustCompile(`locked by ([^\s()]{1,256}) process with pid (\d{1,10})`)
+)
 
-// HolderFromStderr is the lock holder apt named in its refusal.
+// HolderFromStderr is the lock holder apt or dpkg named in its refusal.
 func HolderFromStderr(stderr []byte) (Holder, bool) {
-	m := heldByRE.FindSubmatch(stderr)
+	if m := heldByRE.FindSubmatch(stderr); m != nil {
+		pid, err := strconv.Atoi(string(m[1]))
+		if err != nil {
+			return Holder{}, false
+		}
+		return Holder{PID: pid, Comm: printable(string(m[2]))}, true
+	}
+	m := dpkgHeldByRE.FindSubmatch(stderr)
 	if m == nil {
 		return Holder{}, false
 	}
-	pid, err := strconv.Atoi(string(m[1]))
+	pid, err := strconv.Atoi(string(m[2]))
 	if err != nil {
 		return Holder{}, false
 	}
-	return Holder{PID: pid, Comm: printable(string(m[2]))}, true
+	return Holder{PID: pid, Comm: printable(filepath.Base(string(m[1])))}, true
 }

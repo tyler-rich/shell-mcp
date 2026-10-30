@@ -104,7 +104,7 @@ type errString string
 func (e errString) Error() string { return string(e) }
 
 func TestFromGateResponse(t *testing.T) {
-	ok := &protocol.Response{V: 1, ID: "0b5c0000-0000-4000-8000-000000000001", OK: true,
+	ok := &protocol.Response{V: 2, ID: "0b5c0000-0000-4000-8000-000000000001", OK: true,
 		Data: []byte(`{"name":"from-gate"}`), Warnings: []string{"w1"},
 		Gate: &protocol.GateInfo{Version: "0.1.0", Principal: "readonly-key", PolicySHA256: "cd34", MaxTier: "read", DurationMS: 3}}
 	e := FromGate[data]("app-host", ok)
@@ -114,18 +114,18 @@ func TestFromGateResponse(t *testing.T) {
 	}
 	// Gate codes pass through unchanged, including the helper's self-checks.
 	for _, code := range []string{protocol.CodePathDenied, protocol.CodeHelperPolicyMismatch, protocol.CodeSandboxUnavailable} {
-		bad := &protocol.Response{V: 1, OK: false, Error: &protocol.Error{Code: code, Message: "m"}}
+		bad := &protocol.Response{V: 2, OK: false, Error: &protocol.Error{Code: code, Message: "m"}}
 		e := FromGate[data]("app-host", bad)
 		if e.OK || e.Error == nil || e.Error.Code != code || e.Error.Message != "m" {
 			t.Fatalf("%s: envelope = %+v", code, e)
 		}
 	}
 	// Data that does not decode into the tool's type is a protocol mismatch.
-	odd := &protocol.Response{V: 1, ID: "0b5c0000-0000-4000-8000-000000000001", OK: true, Data: []byte(`{"name":1}`)}
+	odd := &protocol.Response{V: 2, ID: "0b5c0000-0000-4000-8000-000000000001", OK: true, Data: []byte(`{"name":1}`)}
 	if e := FromGate[data]("app-host", odd); e.OK || e.Error.Code != CodeProtocolMismatch {
 		t.Fatalf("undecodable data: %+v", e)
 	}
-	unknownField := &protocol.Response{V: 1, ID: "0b5c0000-0000-4000-8000-000000000001", OK: true, Data: []byte(`{"name":"x","extra":1}`)}
+	unknownField := &protocol.Response{V: 2, ID: "0b5c0000-0000-4000-8000-000000000001", OK: true, Data: []byte(`{"name":"x","extra":1}`)}
 	if e := FromGate[data]("app-host", unknownField); e.OK || e.Error.Code != CodeProtocolMismatch {
 		t.Fatalf("unknown field: %+v", e)
 	}

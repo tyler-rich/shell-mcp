@@ -106,6 +106,9 @@ type Limits struct {
 	DefaultTimeoutS  int
 	MaxTimeoutS      int
 	MaxDeleteEntries int
+	// MaxMemoryMB is every command's RLIMIT_DATA, soft and hard, in MiB;
+	// the units' MemoryMax= is it plus units.HelperMemoryMB.
+	MaxMemoryMB int
 }
 
 // Paths holds the roots and the matchers the helper's fsx uses.
@@ -159,8 +162,12 @@ type Command struct {
 	Description    string
 	Unit           Unit
 	RootEquivalent bool
-	Capabilities   []string
-	Acknowledge    string
+	// ReadsPrivateKeys lets the command's {path:read} (and {path:read:fd})
+	// files hold a private key, which is otherwise refused; its output then
+	// gets redact.MaskKeyBodies (POLICY §4, handoff N-35).
+	ReadsPrivateKeys bool
+	Capabilities     []string
+	Acknowledge      string
 	// ListB is the POLICY §5 group (11–13) the binary belongs to, or 0.
 	ListB     int
 	Templates []template.Template
@@ -175,14 +182,16 @@ type Command struct {
 
 // CommandFinding is a declared command whose program defeats a bound
 // operation, declared with an acknowledge (handoff N-13): a package tool, a
-// power binary, or find with an action in a template.
+// power binary, find with an action in a template, or a #! script (N-26).
 type CommandFinding struct {
-	// Category is FindingPackage, FindingPower or FindingExec.
+	// Category is FindingPackage, FindingPower, FindingExec or FindingScript.
 	Category string
-	// Program is the listed name recognised (apt-get, reboot, find).
+	// Program is the listed name recognised (apt-get, reboot, find), or for
+	// FindingScript the innermost interpreter's resolved path.
 	Program string
 	// Match is how: MatchWritten, MatchResolved, MatchIdentity, or for
-	// find MatchTemplate (the action in a template is what decides).
+	// find MatchTemplate (the action in a template is what decides), or for a
+	// script MatchScript.
 	Match string
 }
 
@@ -196,6 +205,11 @@ type Packages struct {
 	Remove           []string
 	AllowUpdateIndex bool
 	AllowUpgrade     bool
+	// AllowRecover allows priv_pkg_recover (dpkg --configure --pending);
+	// Dpkg is the resolved dpkg binary it runs (set when Enabled and
+	// AllowRecover).
+	AllowRecover bool
+	Dpkg         string
 }
 
 // Power is the power section (the built-in priv_power operation).
@@ -267,6 +281,10 @@ type LoadOptions struct {
 	// /usr/bin/apt-get); it is resolved and ownership-checked when packages
 	// are enabled.
 	AptGet string
+	// Dpkg is the dpkg binary the recovery runs (production: /usr/bin/dpkg);
+	// it is resolved and ownership-checked when packages.allow_recover is
+	// set.
+	Dpkg string
 	// SystemBinDirs are the directories the binary identity check scans;
 	// nil means the gate's defaults. Tests set their own.
 	SystemBinDirs []string

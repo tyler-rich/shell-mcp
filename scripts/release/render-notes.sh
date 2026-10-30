@@ -22,7 +22,9 @@ cat <<EOF
 
 Image: \`${image_repo}:${version}@${digest}\` (linux/amd64, linux/arm64). Pin the digest.
 
-Every file is listed in \`SHA256SUMS\`. The binaries, the examples archive and \`SHA256SUMS\` are signed with Sigstore keyless signing (\`<file>.sigstore.json\`), and every file and the image carry SLSA build provenance; the binaries and the images also carry CycloneDX SBOM attestations. Only the identity below is a release of this version; anything signed by another ref is not.
+\`SHA256SUMS\` lists every release file except itself and the Sigstore bundles. The binaries, the examples archive and \`SHA256SUMS\` are signed with Sigstore keyless signing (\`<file>.sigstore.json\`). Every file \`SHA256SUMS\` lists, and the image index, carry SLSA build provenance; \`SHA256SUMS\` itself has no attestation (\`gh attestation verify SHA256SUMS\` finds nothing), and its cosign signature covers it. The binaries and the platform images also carry CycloneDX SBOM attestations. Only the identity below is a release of this version; anything signed by another ref is not.
+
+Run the \`cosign verify-blob\` command for each binary you use, the examples archive and \`SHA256SUMS\`, and the \`gh attestation verify\` command for each file you use that \`SHA256SUMS\` lists.
 
 \`\`\`bash
 cosign verify-blob --bundle shell-mcp-gate_${version}_linux_amd64.sigstore.json \\

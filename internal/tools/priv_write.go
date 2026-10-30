@@ -13,6 +13,7 @@ import (
 
 	"github.com/tyler-rich/shell-mcp/internal/envelope"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
+	"github.com/tyler-rich/shell-mcp/internal/redact"
 )
 
 // The privileged write tools (docs/TOOLS.md, privileged tier; handoff
@@ -21,7 +22,8 @@ import (
 // The host's helper runs them as root under its privileged policy. They are
 // operator-tier and privileged, so always approval-gated (D-006), and their
 // previews are composed from the helper's read ops (D2): priv_stat,
-// priv_read_file for a content hash, and priv_backup_check (P-11), which
+// priv_hash_file for a content hash (never content, so a file holding a
+// private key can be replaced: handoff N-5), and priv_backup_check (P-11), which
 // also requires the path to be one the helper may write. What the fresh
 // preview saw is passed on as the operation's precondition: expected_sha256
 // or expect_absent for a write, expected_destination_sha256 (P-9) or
@@ -200,37 +202,61 @@ func checkMoveRule(srcRule, dstRule *ownerRuleWire, src *Entry) *envelope.Error 
 	return nil
 }
 
-// privFilePreview is a regular file's state with its content hash: its
-// stat and the helper's whole-file SHA-256 (nil when it was removed between
-// the two reads). A file the helper gives no hash for (above 256 MiB)
-// cannot be bound and is refused.
-func (d *Deps) privFilePreview(ctx context.Context, target string, st *Entry, acc *policyAcc) (map[string]any, *FileContent, *envelope.Error) {
-	return d.boundFilePreview(ctx, target, protocol.OpPrivReadFile, "helper", st, acc)
+// tooLargeToBind refuses a preview whose file is above what who hashes.
+func tooLargeToBind(who string) *envelope.Error {
+	return envelope.Errorf(protocol.CodeTooLarge,
+		"the file is larger than the %s hashes (256 MiB), so an approval could not be bound to its content; nothing was requested", who)
 }
 
-// boundFilePreview is a regular file's state with its content hash, read
-// through op (the gate's read_file or the helper's priv_read_file; who
-// names it in a refusal): its stat and the whole-file SHA-256 (nil when it
-// was removed between the two reads). A file given no hash (above 256 MiB)
-// cannot be bound and is refused.
-func (d *Deps) boundFilePreview(ctx context.Context, target, op, who string, st *Entry, acc *policyAcc) (map[string]any, *FileContent, *envelope.Error) {
-	f, warns, pol, e := previewFetch[FileContent](ctx, d, target, op, readFileWire{Path: st.Path}, true)
+// hashWire is the gate's hash_file and the helper's priv_hash_file data
+// (handoff N-5): never content, so a file holding a private key can be
+// bound by its hash.
+type hashWire struct {
+	Path       string `json:"path"`
+	Size       int64  `json:"size"`
+	SHA256     string `json:"sha256"`
+	Binary     bool   `json:"binary"`
+	Lines      *int   `json:"lines"`
+	PrivateKey bool   `json:"private_key"`
+}
+
+// privFilePreview is hashedFilePreview through the helper's priv_hash_file.
+func (d *Deps) privFilePreview(ctx context.Context, target string, st *Entry, acc *policyAcc) (cur map[string]any, sha string, refusal *envelope.Error) {
+	return d.hashedFilePreview(ctx, target, protocol.OpPrivHashFile, "helper", st, acc)
+}
+
+// gateFilePreview is hashedFilePreview through the gate's hash_file
+// (handoff N-5, the gate's half).
+func (d *Deps) gateFilePreview(ctx context.Context, target string, st *Entry, acc *policyAcc) (cur map[string]any, sha string, refusal *envelope.Error) {
+	return d.hashedFilePreview(ctx, target, protocol.OpHashFile, "gate", st, acc)
+}
+
+// hashedFilePreview is a regular file's state with its content hash: its
+// stat and the hash op's answer (nil when the file was removed between the
+// two requests): the whole-file SHA-256, the line count and whether it
+// holds a private key, never its content. A file above 256 MiB is refused
+// by who (too_large) and therefore cannot be bound; the preview is refused
+// too, never sent without a precondition.
+func (d *Deps) hashedFilePreview(ctx context.Context, target, op, who string, st *Entry, acc *policyAcc) (cur map[string]any, sha string, refusal *envelope.Error) {
+	f, _, pol, e := previewFetch[hashWire](ctx, d, target, op, pathWire{Path: st.Path}, true)
 	acc.add(pol)
+	if e != nil && e.Code == protocol.CodeTooLarge {
+		return nil, "", tooLargeToBind(who)
+	}
 	if e != nil || f == nil {
-		return nil, nil, e
+		return nil, "", e
 	}
-	if f.SHA256 == "" {
-		return nil, nil, envelope.Errorf(protocol.CodeTooLarge,
-			"the file is larger than the %s hashes (256 MiB), so an approval could not be bound to its content; nothing was requested", who)
+	if !sha256RE.MatchString(f.SHA256) {
+		return nil, "", envelope.Errorf("internal", "the %s's hash of the file is not a SHA-256; nothing was requested", who)
 	}
-	cur := entryPreview(st)
-	cur["state"], cur["sha256"] = "file", f.SHA256
+	cur = entryPreview(st)
+	cur["state"], cur["sha256"], cur["private_key"] = "file", f.SHA256, f.PrivateKey
 	delete(cur, "mtime")
 	cur["lines"] = nil
-	if !f.Binary && !f.Truncated && f.Offset == 0 && int64(len(f.Content)) == f.Size && len(warns) == 0 {
-		cur["lines"] = countLines([]byte(f.Content))
+	if f.Lines != nil {
+		cur["lines"] = *f.Lines
 	}
-	return cur, f, nil
+	return cur, f.SHA256, nil
 }
 
 // refuseNonFile refuses an existing path that a write would not replace.
@@ -344,7 +370,7 @@ func privWriteFile(d *Deps) Tool {
 	return define(d, spec[privWriteIn, PrivWriteFile]{
 		name:        "shell_priv_write_file",
 		title:       "Write file as root",
-		description: "Atomically writes a text file as root within the host's privileged write roots, backing up what it replaces and verifying by read-back; returns the hashes, line counts, mode, owner and backup ids.",
+		description: "Atomically writes a text file as root within the host's privileged write roots, backing up what it replaces and verifying by read-back; returns the hashes, line counts, mode, owner and backup ids. Content passes through the client and its model provider, so generate private keys on the host instead.",
 		tier:        TierOperator,
 		privileged:  true,
 		idempotent:  true,
@@ -428,7 +454,8 @@ func (d *Deps) privWritePreview(ctx context.Context, in *privWriteIn, target str
 	var acc policyAcc
 	content := []byte(*in.Content)
 	newLines := countLines(content)
-	value := map[string]any{"path": in.Path, "new": map[string]any{"bytes": len(content), "sha256": sha256Hex(content), "lines": newLines}}
+	value := map[string]any{"path": in.Path, "new": map[string]any{"bytes": len(content), "sha256": sha256Hex(content), "lines": newLines,
+		"private_key": redact.ContainsPrivateKey(content)}}
 	st, e := d.statPreviewOp(ctx, target, protocol.OpPrivStat, in.Path, &acc)
 	if e != nil {
 		return nil, e
@@ -439,9 +466,9 @@ func (d *Deps) privWritePreview(ctx context.Context, in *privWriteIn, target str
 		}
 	}
 	var cur map[string]any
-	var f *FileContent
+	var curSHA string
 	if st != nil {
-		if cur, f, e = d.privFilePreview(ctx, target, st, &acc); e != nil {
+		if cur, curSHA, e = d.privFilePreview(ctx, target, st, &acc); e != nil {
 			return nil, e
 		}
 	}
@@ -478,7 +505,7 @@ func (d *Deps) privWritePreview(ctx context.Context, in *privWriteIn, target str
 		"group": willSet(in.Group, "kept: the file's current group"),
 		"mode":  willSet(in.Mode, "kept: the file's current mode, masked by the host's modes.max"),
 	}
-	return acc.result(value, f.SHA256)
+	return acc.result(value, curSHA)
 }
 
 // --- shell_priv_make_directory ----------------------------------------------
@@ -714,12 +741,12 @@ func (d *Deps) privSrcDstPreview(ctx context.Context, in *privSrcDstIn, own owne
 		return nil, e
 	}
 	var cur map[string]any
-	var f *FileContent
+	var curSHA string
 	if dst != nil {
 		if re := refuseDestination(dst, src.Type, isCopy, in.Overwrite); re != nil {
 			return nil, re
 		}
-		if cur, f, e = d.privFilePreview(ctx, target, dst, &acc); e != nil {
+		if cur, curSHA, e = d.privFilePreview(ctx, target, dst, &acc); e != nil {
 			return nil, e
 		}
 		delete(cur, "lines")
@@ -768,7 +795,7 @@ func (d *Deps) privSrcDstPreview(ctx context.Context, in *privSrcDstIn, own owne
 		return acc.absentResult(value)
 	}
 	value["destination"] = cur
-	return acc.result(value, f.SHA256)
+	return acc.result(value, curSHA)
 }
 
 // PrivCopyPath is shell_priv_copy_path's data. The envelope's verified is

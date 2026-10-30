@@ -32,6 +32,7 @@ type summaryWire struct {
 		DefaultTimeoutS  int `json:"default_timeout_s"`
 		MaxTimeoutS      int `json:"max_timeout_s"`
 		MaxDeleteEntries int `json:"max_delete_entries"`
+		MaxMemoryMB      int `json:"max_memory_mb"`
 	} `json:"limits"`
 	Roots struct {
 		Read        []string `json:"read"`
@@ -47,13 +48,14 @@ type summaryWire struct {
 	BackupsKeep          int    `json:"backups_keep"`
 	BackupsMaxStoreBytes int64  `json:"backups_max_store_bytes"`
 	Commands             []struct {
-		ID             string     `json:"id"`
-		Tier           string     `json:"tier"`
-		Unit           string     `json:"unit"`
-		Description    string     `json:"description"`
-		Templates      [][]string `json:"templates"`
-		RootEquivalent bool       `json:"root_equivalent"`
-		Capabilities   []string   `json:"capabilities"`
+		ID               string     `json:"id"`
+		Tier             string     `json:"tier"`
+		Unit             string     `json:"unit"`
+		Description      string     `json:"description"`
+		Templates        [][]string `json:"templates"`
+		RootEquivalent   bool       `json:"root_equivalent"`
+		Capabilities     []string   `json:"capabilities"`
+		ReadsPrivateKeys bool       `json:"reads_private_keys"`
 	} `json:"commands"`
 	Packages struct {
 		Enabled          bool     `json:"enabled"`
@@ -61,6 +63,7 @@ type summaryWire struct {
 		Remove           []string `json:"remove"`
 		AllowUpdateIndex bool     `json:"allow_update_index"`
 		AllowUpgrade     bool     `json:"allow_upgrade"`
+		AllowRecover     bool     `json:"allow_recover"`
 	} `json:"packages"`
 	Power struct {
 		Allowed []string `json:"allowed"`
@@ -140,7 +143,8 @@ func TestPrivPolicySummary(t *testing.T) {
 		t.Fatalf("summary hash %s, helper block %s, policy file %s", s.PolicySHA256, helperSHA, want)
 	}
 	if s.MaxTier != "destructive" || s.Limits.MaxReadBytes != 65536 || s.Limits.MaxOutputBytes != 4096 || s.Limits.MaxTimeoutS != 10 ||
-		s.Limits.DefaultTimeoutS != 5 || s.Limits.MaxDeleteEntries != 20 || s.Limits.MaxWriteBytes != 65536 {
+		s.Limits.DefaultTimeoutS != 5 || s.Limits.MaxDeleteEntries != 20 || s.Limits.MaxWriteBytes != 65536 ||
+		s.Limits.MaxMemoryMB != 1024 {
 		t.Fatalf("tier and limits: %+v %+v", s.MaxTier, s.Limits)
 	}
 	if !slices.Equal(s.Roots.Read, []string{f.read}) || !slices.Equal(s.Roots.Write, []string{f.write}) || len(s.Roots.Persistence) != 0 || s.DenyPatterns != 1 {
@@ -186,8 +190,9 @@ func TestPrivPolicySummary(t *testing.T) {
 	}
 	// What the policy switches off is not listed, as the operations refuse
 	// it: no upgrade (allow_upgrade false), and no power action, because
-	// limits.max_timeout_s (10) is below the 60 s priv_power waits.
-	for _, op := range []string{"priv_pkg_upgrade", "priv_pkg_upgrade_preview", "priv_power", "priv_power_preview"} {
+	// limits.max_timeout_s (10) is below the 60 s priv_power waits; no
+	// recovery (allow_recover false).
+	for _, op := range []string{"priv_pkg_upgrade", "priv_pkg_upgrade_preview", "priv_power", "priv_power_preview", "priv_pkg_recover", "priv_pkg_recover_preview"} {
 		if _, ok := s.op(op); ok {
 			t.Errorf("op %s listed", op)
 		}
@@ -197,6 +202,26 @@ func TestPrivPolicySummary(t *testing.T) {
 	broad.fail("priv_power_preview", m{"action": "reboot"}, "policy_denied")
 	if !strings.Contains(f.lastAudit(), `"op":"priv_policy"`) {
 		t.Fatalf("audit %s", f.lastAudit())
+	}
+}
+
+// TestPrivPolicySummaryRecover (handoff N-14): packages.allow_recover is
+// shown, and the recovery and its preview are listed in the broad unit at
+// their tiers.
+func TestPrivPolicySummaryRecover(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, broadUsers(), allowRecover(), withFakeDpkg())
+	s, _, _ := f.summary()
+	if !s.Packages.AllowRecover {
+		t.Fatalf("packages %+v", s.Packages)
+	}
+	for op, want := range map[string]summaryOp{
+		"priv_pkg_recover":         {"priv_pkg_recover", "operator", "broad"},
+		"priv_pkg_recover_preview": {"priv_pkg_recover_preview", "read", "broad"},
+	} {
+		if got, ok := s.op(op); !ok || got != want {
+			t.Errorf("op %s: %+v (listed %v), want %+v", op, got, ok, want)
+		}
 	}
 }
 
@@ -242,11 +267,14 @@ func TestPrivPolicySummaryNothingPrivate(t *testing.T) {
 		canaryPowAck  = "canary-ack-reboot-a41e"
 		canaryPersAck = "canary-ack-persistence-0d3b"
 		canaryPowerOp = "canary-ack-power-section-9f62"
+		canaryScrAck  = "canary-ack-script-6b8a"
 	)
 	var pers string
 	f := newFixture(t, broadUsers(), func(f *fixture, y *string) {
 		gatetest.WriteFile(f.t, filepath.Join(f.d, "bin", "dpkg"), "invented package tool\n", 0o755)
 		gatetest.WriteFile(f.t, filepath.Join(f.d, "bin", "reboot"), "invented power tool\n", 0o755)
+		gatetest.WriteFile(f.t, filepath.Join(f.d, "bin", "example-interp"), "invented interpreter\n", 0o755)
+		gatetest.WriteFile(f.t, filepath.Join(f.d, "bin", "renew"), "#!"+filepath.Join(f.d, "bin", "example-interp")+"\n", 0o755)
 		pers = filepath.Join(f.d, "etc", "example-app.d")
 		gatetest.Mkdir(f.t, pers, 0o755)
 		*y = strings.Replace(*y, `  deny: ["`+f.read+`/secrets/**"]`,
@@ -265,11 +293,16 @@ func TestPrivPolicySummaryNothingPrivate(t *testing.T) {
     unit: broad
     acknowledge: %q
     templates: [["--help"]]
+  - id: x-script
+    path: %s
+    tier: read
+    acknowledge: %q
+    templates: [[]]
 packages:
-`, filepath.Join(f.d, "bin", "dpkg"), canaryPkgAck, filepath.Join(f.d, "bin", "reboot"), canaryPowAck), 1)
+`, filepath.Join(f.d, "bin", "dpkg"), canaryPkgAck, filepath.Join(f.d, "bin", "reboot"), canaryPowAck, filepath.Join(f.d, "bin", "renew"), canaryScrAck), 1)
 	})
 	s, raw, _ := f.summary()
-	for _, c := range []string{canaryDeny, canaryDeny2, canaryPkgAck, canaryPowAck, canaryPersAck, canaryPowerOp, "secrets/**", "acknowledge"} {
+	for _, c := range []string{canaryDeny, canaryDeny2, canaryPkgAck, canaryPowAck, canaryPersAck, canaryPowerOp, canaryScrAck, "secrets/**", "acknowledge"} {
 		if strings.Contains(raw, c) {
 			t.Errorf("the summary carries %q: %s", c, raw)
 		}
@@ -281,7 +314,8 @@ packages:
 	for _, fd := range s.Findings {
 		got[fd.CommandID] = fd.Category + " " + fd.Program + " " + fd.Match
 	}
-	if got["x-dpkg"] != "package dpkg written" || got["x-reboot"] != "power reboot written" || len(got) != 2 {
+	if got["x-dpkg"] != "package dpkg written" || got["x-reboot"] != "power reboot written" || len(got) != 3 ||
+		got["x-script"] != "script "+filepath.Join(f.d, "bin", "example-interp")+" script" {
 		t.Fatalf("findings %+v", s.Findings)
 	}
 }

@@ -251,11 +251,11 @@ func (s *server) powerPackageChecks() error {
 	case held:
 		return errf(protocol.CodeExecFailed, "a package operation is running: the dpkg frontend lock is held by %s; nothing was scheduled; preview again after it ends", h)
 	}
-	st, err := pkg.ReadStatus(s.o.DpkgDir)
+	st, err := pkg.ReadState(s.o.DpkgDir)
 	if err != nil {
-		return errf(protocol.CodeExecFailed, "dpkg's status could not be read (%s); nothing was scheduled", err.Error())
+		return stateErr(err, "nothing was scheduled")
 	}
-	return unfinishedErr(st, s.o.DpkgDir, "nothing was scheduled")
+	return unfinishedErr(st, "nothing was scheduled")
 }
 
 func (s *server) dialBus(ctx context.Context) (*dbus.Conn, error) {

@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/procself"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/privd/ops"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
@@ -63,7 +64,9 @@ func (f *fixture) serveAsync(line string) *asyncServe {
 	status := f.status
 	o.ReadStatus = func() ([]byte, error) { return []byte(status), nil }
 	o.Lookups = f.fakeLookups
-	o.ApplySandbox = func(*policy.Policy, string) (sandbox.Report, error) { return sandbox.Report{Mode: "best-effort"}, nil }
+	o.ApplySandbox = func(*policy.Policy, string, *procself.Dir) (sandbox.Report, error) {
+		return sandbox.Report{Mode: "best-effort"}, nil
+	}
 	a := &asyncServe{t: f.t.(*testing.T), gate: fds[1], start: time.Now(), done: make(chan time.Time, 1)}
 	go func() {
 		ops.Serve(&o)
@@ -124,7 +127,7 @@ func (a *asyncServe) ended(d time.Duration) time.Duration {
 
 func pkgLine(op string, args m, timeoutMS int) string {
 	b, _ := json.Marshal(args)
-	return fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":%q,"args":%s,"timeout_ms":%d}`+"\n", reqID, op, b, timeoutMS)
+	return fmt.Sprintf(`{"v":2,"id":%q,"ceiling":"destructive","op":%q,"args":%s,"timeout_ms":%d}`+"\n", reqID, op, b, timeoutMS)
 }
 
 var untilRE = regexp.MustCompile(`may run until \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ`)

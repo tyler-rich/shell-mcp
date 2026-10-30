@@ -133,7 +133,7 @@ func TestPrivMetaPreviews(t *testing.T) {
 		`"op":"priv_chmod_preview","args":{"path":"` + tree + `","mode":"0700"}`,
 		`"op":"priv_chown_preview","args":{"path":"` + tree + `","owner":"tester"}`,
 	} {
-		out, _ := f.serveRaw(`{"v":1,"id":"` + reqID + `","ceiling":"read",` + op + `,"timeout_ms":5000}` + "\n")
+		out, _ := f.serveRaw(`{"v":2,"id":"` + reqID + `","ceiling":"read",` + op + `,"timeout_ms":5000}` + "\n")
 		if !strings.Contains(out, `"ok":true`) {
 			t.Fatalf("at ceiling read: %s", out)
 		}

@@ -73,7 +73,7 @@ func e2ePkgHook(s *server, stage string) {
 	}
 	argv, _ := pkg.Args(pkg.OpUpdate, false, nil)
 	_, _ = execx.Run(context.Background(), &execx.Spec{Trampoline: s.o.Executable, Path: s.o.AptGet, Args: argv, Env: s.aptEnv(), Dir: "/",
-		Timeout: time.Minute, MaxOutput: 64 << 10})
+		Timeout: time.Minute, MaxOutput: 64 << 10, MaxMemoryMB: s.p.Limits.MaxMemoryMB})
 }
 
 type rawArgs struct {

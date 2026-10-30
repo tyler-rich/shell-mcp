@@ -42,11 +42,17 @@ const (
 
 func privNotFound() gateReply { return gateReply{code: "not_found", msg: "no such file"} }
 
+// privHashed is priv_hash_file's answer for privConf with content hash sha.
+func privHashed(sha string) string {
+	return `{"path":"` + privConf + `","size":11,"sha256":"` + sha + `","binary":false,"lines":1,"private_key":false}`
+}
+
 // privWriteReplies answers the helper's preview reads and write ops.
 func privWriteReplies() map[string]gateReply {
 	r := privReplies(allReplies())
 	r["priv_stat"] = gateReply{data: privStat}
 	r["priv_read_file"] = gateReply{data: fakeReadSHA("key: value\n", shaOld)}
+	r["priv_hash_file"] = gateReply{data: privHashed(shaOld)}
 	r["priv_backup_check"] = gateReply{data: privCheck}
 	r["priv_write_file"] = gateReply{data: privWrote}
 	r["priv_copy"] = gateReply{data: privCopied}
@@ -222,6 +228,7 @@ func TestPrivWriteToolsChangeAfterApproval(t *testing.T) {
 		},
 		"destination content": func(g *recordingGate) {
 			g.set("priv_read_file", gateReply{data: fakeReadSHA("key: other\n", shaDest)})
+			g.set("priv_hash_file", gateReply{data: privHashed(shaDest)})
 		},
 	}
 	for _, name := range privWriteTools {
@@ -298,7 +305,7 @@ func TestPrivWritePreconditions(t *testing.T) {
 func TestPrivCopyPreviewShowsDestination(t *testing.T) {
 	a := newPrivWriteHarness(t, approval.MethodWeb)
 	id := a.pending("shell_priv_copy_path", privWriteArgs["shell_priv_copy_path"])
-	if ops := strings.Join(a.g.ops(), ","); ops != "priv_stat,priv_stat,priv_read_file,priv_backup_check" {
+	if ops := strings.Join(a.g.ops(), ","); ops != "priv_stat,priv_stat,priv_hash_file,priv_backup_check" {
 		t.Fatalf("preview ops %s", ops)
 	}
 	p := previewMap(t, a, id)
@@ -330,7 +337,7 @@ func TestPrivCopyPreviewShowsDestination(t *testing.T) {
 func TestPrivWritePreviewShowsOwnerAndBackup(t *testing.T) {
 	a := newPrivWriteHarness(t, approval.MethodWeb)
 	id := a.pending("shell_priv_write_file", map[string]any{"path": privConf, "content": "new\n", "owner": "example-app", "mode": "0600"})
-	if ops := strings.Join(a.g.ops(), ","); ops != "priv_stat,priv_read_file,priv_backup_check" {
+	if ops := strings.Join(a.g.ops(), ","); ops != "priv_stat,priv_hash_file,priv_backup_check" {
 		t.Fatalf("preview ops %s", ops)
 	}
 	p := previewMap(t, a, id)
@@ -411,7 +418,7 @@ func TestPrivWritePreviewRefusals(t *testing.T) {
 			func(g *recordingGate) { g.setPath("priv_stat", privConf, gateReply{data: privLink}) }, "path_denied", "symlink"},
 		{"write over a file with no hash", "shell_priv_write_file", privWriteArgs["shell_priv_write_file"],
 			func(g *recordingGate) {
-				g.set("priv_read_file", gateReply{data: `{"path":"` + privConf + `","size":300000000,"binary":true,"offset":0,"truncated":false}`})
+				g.set("priv_hash_file", gateReply{code: "too_large", msg: "the file is larger than the 256 MiB the helper hashes"})
 			}, "too_large", ""},
 		{"copy onto a directory", "shell_priv_copy_path", privWriteArgs["shell_priv_copy_path"],
 			func(g *recordingGate) { g.setPath("priv_stat", privConf, gateReply{data: privDirSt}) }, "is_a_directory", ""},

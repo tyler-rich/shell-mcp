@@ -51,7 +51,7 @@ One server instance has one profile, set by `SHELL_MCP_PROFILE` at start (D-005)
 |---|---|---|---|
 | `read-only` (default) | 19 | System, disk, processes, services, journal, files, find, certificates, git status/log/diff, read-tier policy commands, delete and discard previews, `shell_get_policy`, `shell_list_targets` | Never needed |
 | `operator` | 27 | Service control, write, mkdir, copy, move, chmod, `git pull`, `shell_run_command` (read and operator commands) | Only if `SHELL_MCP_APPROVAL_TIERS=operator,destructive` |
-| `admin` | 50 | Delete, git discard, destructive commands, and the 21 `shell_priv_*` tools (root, through the helper) | Always for destructive tools and for privileged tools of tier operator or above |
+| `admin` | 52 | Delete, git discard, destructive commands, and the 23 `shell_priv_*` tools (root, through the helper) | Always for destructive tools and for privileged tools of tier operator or above |
 
 `shell-mcp tools` prints the catalogue with each tool's tier, profiles, annotations and schema hashes; keep its output to diff against the next release (tool poisoning, SECURITY §2). `SHELL_MCP_DISABLE_TOOLS` removes individual tools; nothing adds a tool above the profile. The full catalogue is `docs/TOOLS.md`.
 
@@ -78,7 +78,7 @@ Records expire after `SHELL_MCP_APPROVAL_TTL` (default 300 s) and are lost when 
 Enrol the approver **on the server host**, never on the machine where the agent runs. The seed is shown once, as a QR code and an `otpauth://` URI, and stdout must be a terminal (hence `-it`):
 
 ```bash
-docker run --rm -it -v "$PWD/secrets:/run/secrets" ghcr.io/tyler-rich/shell-mcp:0.1.0 \
+docker run --rm -it -v "$PWD/secrets:/run/secrets" ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:9c19075aadb69950eb71d69d840e64ba021fcabf22c7df32a76a229d3c387dd4 \
   approver add --name alice --file /run/secrets/approvers
 ```
 
@@ -133,7 +133,7 @@ claude mcp add --transport stdio shell-mcp-local -- docker run --rm -i --user "$
   -e SHELL_MCP_TRANSPORT=stdio -e SHELL_MCP_AUTH_MODE=none -e SHELL_MCP_SSH_KEY_FILE=/run/secrets/ssh_key \
   -e SHELL_MCP_TARGET_NAME=app-host -e SHELL_MCP_TARGET_HOST=target-a.example.test -e SHELL_MCP_TARGET_USER=svc-shell \
   -e "SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:<the host key's fingerprint>" \
-  ghcr.io/tyler-rich/shell-mcp:0.1.0 serve
+  ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:9c19075aadb69950eb71d69d840e64ba021fcabf22c7df32a76a229d3c387dd4 serve
 ```
 
 The server logs to stderr only under stdio.

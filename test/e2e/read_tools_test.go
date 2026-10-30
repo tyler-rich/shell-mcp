@@ -151,7 +151,21 @@ func makeFixtures(t *testing.T) error {
 	gatetest.Git(t, readRepo, "branch", "-q", "--set-upstream-to=origin/main")
 	gatetest.WriteFile(t, filepath.Join(readRepo, "local.txt"), "local\n", 0o644)
 	gatetest.Git(t, readRepo, "add", "local.txt")
+	// A committed private key (generated for the run), one of whose body
+	// lines is changed below: the diff must leave it out (handoff N-35).
+	if diffKey, err = pemLines(); err != nil {
+		return err
+	}
+	gatetest.WriteFile(t, filepath.Join(readRepo, diffKeyName), strings.Join(diffKey, "\n")+"\n", 0o644)
+	gatetest.Git(t, readRepo, "add", diffKeyName)
 	gatetest.Git(t, readRepo, "commit", "-q", "-m", "local example change")
+	other, err := pemLines()
+	if err != nil {
+		return err
+	}
+	diffKeyMod = append([]string{}, diffKey...)
+	diffKeyMod[14] = other[14]
+	gatetest.WriteFile(t, filepath.Join(readRepo, diffKeyName), strings.Join(diffKeyMod, "\n")+"\n", 0o644)
 	gatetest.WriteFile(t, filepath.Join(readRepo, "config.yaml"), "version: 2\ntoken: "+e2eToken+"\n", 0o644)
 	if out, err := exec.CommandContext(t.Context(), "chmod", "-R", "a+rX", readRoot).CombinedOutput(); err != nil {
 		return fmt.Errorf("chmod: %w: %s", err, out)

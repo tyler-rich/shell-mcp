@@ -30,7 +30,7 @@ import (
 // gateFSAt is an FS configured as the gate's (internal/gate/ops): no
 // helper flag, the chain rule for commands' paths trusting trusted, and
 // chmod's read-back.
-func gateFSAt(t *testing.T, root string, trusted func(uint32) bool) *FS {
+func gateFSAt(t testing.TB, root string, trusted func(uint32) bool) *FS {
 	t.Helper()
 	empty, err := pathx.NewMatcher(nil)
 	must(t, err)

@@ -73,6 +73,8 @@ type modelDef struct {
 
 type installed struct {
 	name, arch, version, status string
+	// depends is kept as it is (the fake dpkg's dependency fixtures).
+	depends string
 }
 
 type change struct {
@@ -96,7 +98,7 @@ func model(args []string) int {
 	defer countRun(m)
 	var op string
 	var names []string
-	simulate, onlyUpgrade, noRemove := false, false, false
+	simulate, onlyUpgrade, noRemove, reinstall := false, false, false, false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -111,6 +113,8 @@ func model(args []string) int {
 			onlyUpgrade = true
 		case a == "--no-remove":
 			noRemove = true
+		case a == "--reinstall":
+			reinstall = true
 		case strings.HasPrefix(a, "-"):
 		case op == "":
 			op = a
@@ -121,7 +125,16 @@ func model(args []string) int {
 		return 0
 	}
 	st := readStatus(m.DpkgDir)
-	changes, code := resolve(m, st, op, names, onlyUpgrade)
+	// apt refuses everything, simulations too, while a package that needs
+	// a reinstall has no archive of its version (apt 3.0.3 and 3.2.0,
+	// measured in S7-7).
+	for _, p := range st {
+		if strings.HasPrefix(p.status, "install reinstreq ") && !slices.ContainsFunc(m.Repo, func(r pkgDef) bool { return r.Name == p.name && r.Version == p.version }) {
+			fmt.Fprintf(os.Stderr, "E: The package %s needs to be reinstalled, but I can't find an archive for it.\n", p.name)
+			return 100
+		}
+	}
+	changes, code := resolve(m, st, op, names, onlyUpgrade, reinstall)
 	if code != 0 {
 		return code
 	}
@@ -135,7 +148,7 @@ func model(args []string) int {
 			switch c.kind {
 			case "inst":
 				fmt.Printf("Inst %s (%s Invented:1.0/stable [all])\n", c.name, c.to)
-			case "upg":
+			case "upg", "reinst":
 				fmt.Printf("Inst %s [%s] (%s Invented:1.0/stable [all])\n", c.name, c.from, c.to)
 			case "remv":
 				fmt.Printf("Remv %s [%s]\n", c.name, c.from)
@@ -152,13 +165,19 @@ func model(args []string) int {
 }
 
 // resolve computes the transaction apt would run: requested names (or
-// name=version) with their missing dependencies, an upgrade of everything
-// whose candidate differs, or a removal.
-func resolve(m modelDef, st []installed, op string, names []string, onlyUpgrade bool) ([]change, int) {
+// name=version) with their missing dependencies, a reinstall of a package
+// on the system at the pinned version (--reinstall), an upgrade of
+// everything whose candidate differs, or a removal of packages on the
+// system in any state but not-installed and config-files.
+func resolve(m modelDef, st []installed, op string, names []string, onlyUpgrade, reinstall bool) ([]change, int) {
 	cur := map[string]string{}
+	onSystem := map[string]string{}
 	for _, p := range st {
 		if p.status == "install ok installed" {
 			cur[p.name] = p.version
+		}
+		if s := stateWord(p.status); s != "not-installed" && s != "config-files" {
+			onSystem[p.name] = p.version
 		}
 	}
 	cand := map[string]pkgDef{}
@@ -219,6 +238,11 @@ func resolve(m modelDef, st []installed, op string, names []string, onlyUpgrade 
 				fmt.Printf("Skipping %s, it is not installed and only upgrades are requested.\n", name)
 				continue
 			}
+			if v, ok := onSystem[name]; reinstall && ok && v == p.Version {
+				seen[name] = true
+				out = append(out, change{kind: "reinst", name: name, from: v, to: v})
+				continue
+			}
 			add(p)
 		}
 	case "upgrade":
@@ -229,7 +253,7 @@ func resolve(m modelDef, st []installed, op string, names []string, onlyUpgrade 
 		}
 	case "remove":
 		for _, n := range names {
-			if v, ok := cur[n]; ok {
+			if v, ok := onSystem[n]; ok {
 				out = append(out, change{kind: "remv", name: n, from: v})
 			}
 		}
@@ -253,6 +277,20 @@ func realRun(m modelDef, st []installed, changes []change) int {
 		probe := unix.Flock_t{Type: unix.F_WRLCK}
 		_ = unix.FcntlFlock(f.Fd(), unix.F_GETLK, &probe)
 		lockMessage(int(probe.Pid), "apt-get")
+	}
+	// A real run refuses while dpkg's journal has entries (a simulation
+	// does not look: measured, S4c-7 and S7-7).
+	if ents, _ := os.ReadDir(filepath.Join(m.DpkgDir, "updates")); slices.ContainsFunc(ents, func(e os.DirEntry) bool { return strings.Trim(e.Name(), "0123456789") == "" }) {
+		fmt.Fprintln(os.Stderr, "E: dpkg was interrupted, you must manually run 'dpkg --configure -a' to correct the problem. ")
+		return 100
+	}
+	// dpkg refuses to remove a package that needs a reinstall (measured).
+	for _, c := range changes {
+		if i := slices.IndexFunc(st, func(p installed) bool { return p.name == c.name }); c.kind == "remv" && i >= 0 && strings.Contains(st[i].status, " reinstreq ") {
+			fmt.Fprintf(os.Stderr, "dpkg: error processing package %s (--remove):\n package is in a very bad inconsistent state; you should\n reinstall it before attempting a removal\n", c.name)
+			fmt.Fprintln(os.Stderr, "E: Sub-process /usr/bin/dpkg returned an error code (1)")
+			return 100
+		}
 	}
 	r := m.Run
 	if r.Stdout != "" {
@@ -316,7 +354,7 @@ func apply(st []installed, changes []change, unfinished, half string) []installe
 	for _, c := range changes {
 		i := slices.IndexFunc(out, func(p installed) bool { return p.name == c.name })
 		switch c.kind {
-		case "inst", "upg":
+		case "inst", "upg", "reinst":
 			p := installed{name: c.name, arch: "all", version: c.to, status: "install ok installed"}
 			if i >= 0 {
 				out[i] = p
@@ -343,8 +381,12 @@ func readStatus(dir string) []installed {
 		fmt.Fprintln(os.Stderr, "fakeapt: no status file")
 		os.Exit(2)
 	}
+	return parseStanzas(string(b))
+}
+
+func parseStanzas(s string) []installed {
 	var out []installed
-	for _, stanza := range strings.Split(strings.TrimSpace(string(b)), "\n\n") {
+	for _, stanza := range strings.Split(strings.TrimSpace(s), "\n\n") {
 		var p installed
 		for _, l := range strings.Split(stanza, "\n") {
 			k, v, _ := strings.Cut(l, ": ")
@@ -357,6 +399,8 @@ func readStatus(dir string) []installed {
 				p.version = v
 			case "Status":
 				p.status = v
+			case "Depends":
+				p.depends = v
 			}
 		}
 		if p.name != "" {
@@ -369,8 +413,11 @@ func readStatus(dir string) []installed {
 func writeStatus(dir string, st []installed) {
 	var b strings.Builder
 	for _, p := range st {
-		fmt.Fprintf(&b, "Package: %s\nStatus: %s\nPriority: optional\nArchitecture: %s\nVersion: %s\nDescription: invented\n continuation line\n\n",
-			p.name, p.status, p.arch, p.version)
+		fmt.Fprintf(&b, "Package: %s\nStatus: %s\nPriority: optional\nArchitecture: %s\nVersion: %s\n", p.name, p.status, p.arch, p.version)
+		if p.depends != "" {
+			fmt.Fprintf(&b, "Depends: %s\n", p.depends)
+		}
+		b.WriteString("Description: invented\n continuation line\n\n")
 	}
 	tmp := filepath.Join(dir, "status-new")
 	if err := os.WriteFile(tmp, []byte(b.String()), 0o644); err != nil { //nolint:gosec // G306: dpkg's status is world-readable

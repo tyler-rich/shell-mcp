@@ -59,6 +59,9 @@ type Options struct {
 	InjectMetadataReadBackFault func(fsx.Meta) fsx.Meta
 	// InjectDiscardStep is called at the points of a git_discard; tests only.
 	InjectDiscardStep func(step fsx.DiscardStep, path string)
+	// InjectBeforeExec is called by exec after the command was resolved
+	// (and its preview hash checked), just before it starts; tests only.
+	InjectBeforeExec func()
 	// testHooks is empty except in a test build (testhooks_gitconfig.go).
 	testHooks
 
@@ -153,6 +156,9 @@ type server struct {
 	// setAside is the path of an entry a delete set aside, or a move
 	// staged, and could not put back, for the audit line.
 	setAside string
+	// frame, when set, is the protocol version the response is framed in
+	// (a refusal of a request of another version: protocol.FrameVersion).
+	frame int
 }
 
 // Serve runs the gate for one request: install checks, policy load,
@@ -164,6 +170,9 @@ func Serve(o *Options, stdin io.Reader, stdout io.Writer) int {
 	s := &server{o: *o, gate: &protocol.GateInfo{Version: o.Version, Principal: o.Principal}}
 	resp := s.run(stdin)
 	resp.V = protocol.Version
+	if s.frame != 0 {
+		resp.V = s.frame
+	}
 	s.gate.DurationMS = time.Since(start).Milliseconds()
 	resp.Gate = s.gate
 	code := WriteResponse(stdout, resp)
@@ -293,6 +302,14 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 	req, err := protocol.DecodeRequest(stdin)
 	if err != nil {
 		var de *protocol.DecodeError
+		if errors.As(err, &de) && de.Code == protocol.CodeProtocolMismatch {
+			// Framed in the request's version when that is 1, so a 0.1.0
+			// server decodes the refusal and shows its message.
+			s.frame = protocol.FrameVersion(de.Peer)
+			return Failure("", de.Code, protocol.VersionRefusal("gate", de.Peer,
+				"upgrade the server (shell-mcp) to the gate's release",
+				"upgrade shell-mcp-gate and shell-mcp-privd on this host to the server's release"))
+		}
 		if errors.As(err, &de) {
 			return Failure("", de.Code, de.Msg)
 		}

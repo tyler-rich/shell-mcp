@@ -129,7 +129,7 @@ func TestPrivToolsListed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writes := "shell_priv_change_owner shell_priv_copy_path shell_priv_delete_path shell_priv_install_packages shell_priv_make_directory shell_priv_move_path shell_priv_remove_packages shell_priv_restore_backup shell_priv_run_command shell_priv_reboot_host shell_priv_set_permissions shell_priv_update_package_index shell_priv_upgrade_packages shell_priv_write_file"
+	writes := "shell_priv_change_owner shell_priv_copy_path shell_priv_delete_path shell_priv_install_packages shell_priv_make_directory shell_priv_move_path shell_priv_recover_packages shell_priv_reinstall_packages shell_priv_remove_packages shell_priv_restore_backup shell_priv_run_command shell_priv_reboot_host shell_priv_set_permissions shell_priv_update_package_index shell_priv_upgrade_packages shell_priv_write_file"
 	var got []string
 	for _, tool := range res.Tools {
 		if strings.HasPrefix(tool.Name, "shell_priv_") {
@@ -151,7 +151,7 @@ func TestPrivToolsListed(t *testing.T) {
 			}
 		}
 	}
-	if want := "shell_priv_cancel_power shell_priv_change_owner shell_priv_copy_path shell_priv_delete_path shell_priv_install_packages shell_priv_list_backups shell_priv_list_directory shell_priv_make_directory shell_priv_move_path shell_priv_preview_delete shell_priv_preview_packages shell_priv_read_file shell_priv_reboot_host shell_priv_remove_packages shell_priv_restore_backup shell_priv_run_command shell_priv_set_permissions shell_priv_stat_path shell_priv_update_package_index shell_priv_upgrade_packages shell_priv_write_file"; strings.Join(got, " ") != want {
+	if want := "shell_priv_cancel_power shell_priv_change_owner shell_priv_copy_path shell_priv_delete_path shell_priv_install_packages shell_priv_list_backups shell_priv_list_directory shell_priv_make_directory shell_priv_move_path shell_priv_preview_delete shell_priv_preview_packages shell_priv_read_file shell_priv_reboot_host shell_priv_recover_packages shell_priv_reinstall_packages shell_priv_remove_packages shell_priv_restore_backup shell_priv_run_command shell_priv_set_permissions shell_priv_stat_path shell_priv_update_package_index shell_priv_upgrade_packages shell_priv_write_file"; strings.Join(got, " ") != want {
 		t.Fatalf("privileged tools %v, want %s", got, want)
 	}
 }
@@ -294,7 +294,7 @@ func TestPrivTimeoutAnswerAfterCommandEnded(t *testing.T) {
 				a["unit"] = "broad"
 			}
 			args, _ := json.Marshal(a)
-			req := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"destructive","op":"priv_exec","args":%s,"timeout_ms":40000}`+"\n", newID(), args)
+			req := fmt.Sprintf(`{"v":2,"id":%q,"ceiling":"destructive","op":"priv_exec","args":%s,"timeout_ms":40000}`+"\n", newID(), args)
 			cmd := exec.CommandContext(t.Context(), gateBin, "serve", "--policy", short, "--principal", "e2e")
 			cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, svcShell)}
 			cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin"}

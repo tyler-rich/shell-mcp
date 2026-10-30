@@ -25,7 +25,7 @@ func (f *fixture) callAt(ceiling, op string, args any) response {
 	if ceiling != "" {
 		field = fmt.Sprintf(`"ceiling":%q,`, ceiling)
 	}
-	resp, _ := f.serveRaw(fmt.Sprintf(`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001",%s"op":%q,"args":%s,"timeout_ms":5000}`+"\n", field, op, a))
+	resp, _ := f.serveRaw(fmt.Sprintf(`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001",%s"op":%q,"args":%s,"timeout_ms":5000}`+"\n", field, op, a))
 	return resp
 }
 
@@ -60,8 +60,8 @@ func TestCeilingRequired(t *testing.T) {
 		}
 	}
 	for _, raw := range []string{
-		`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":null,"op":"exec","args":{"command_id":"probe-op","args":["write","` + marker + `"]}}`,
-		`{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":3,"op":"exec","args":{"command_id":"probe-op","args":["write","` + marker + `"]}}`,
+		`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":null,"op":"exec","args":{"command_id":"probe-op","args":["write","` + marker + `"]}}`,
+		`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":3,"op":"exec","args":{"command_id":"probe-op","args":["write","` + marker + `"]}}`,
 	} {
 		if r, _ := f.serveRaw(raw + "\n"); r.OK || r.Error == nil || r.Error.Code != "bad_request" {
 			t.Fatalf("%s: %+v", raw, r.Error)

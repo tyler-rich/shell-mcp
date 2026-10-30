@@ -7,7 +7,8 @@
 #     that verifies with the certificate identity of this run's workflow
 #     (release-build.yml at REF) and GitHub's OIDC issuer;
 #   - the image index and each platform image verify with cosign the same way;
-#   - every release file has a SLSA provenance attestation, and every binary
+#   - every file SHA256SUMS lists, and the image index, has a SLSA provenance
+#     attestation (SHA256SUMS itself has none), and every binary
 #     and platform image a CycloneDX SBOM attestation, signed by
 #     release-build.yml at REF in this repository (gh attestation verify);
 #   - and none of that verifies for another ref: the identity a user pins

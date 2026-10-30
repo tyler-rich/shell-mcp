@@ -49,12 +49,12 @@ func target(t *testing.T, exec sshtest.Exec, maxSessions int) (*sshx.Client, *ss
 func gate(respond func(req *protocol.Request) string) sshtest.Exec {
 	return func(_ context.Context, s *sshtest.Session) uint32 {
 		if s.OriginalCommand != protocol.Hello {
-			_, _ = io.WriteString(s.Stdout, `{"v":1,"id":"","ok":false,"error":{"code":"bad_request","message":"wrong hello"}}`+"\n")
+			_, _ = io.WriteString(s.Stdout, `{"v":2,"id":"","ok":false,"error":{"code":"bad_request","message":"wrong hello"}}`+"\n")
 			return 1
 		}
 		req, err := protocol.DecodeRequest(s.Stdin)
 		if err != nil {
-			_, _ = io.WriteString(s.Stdout, `{"v":1,"id":"","ok":false,"error":{"code":"bad_request","message":"undecodable"}}`+"\n")
+			_, _ = io.WriteString(s.Stdout, `{"v":2,"id":"","ok":false,"error":{"code":"bad_request","message":"undecodable"}}`+"\n")
 			return 1
 		}
 		_, _ = io.WriteString(s.Stdout, respond(req))
@@ -63,7 +63,7 @@ func gate(respond func(req *protocol.Request) string) sshtest.Exec {
 }
 
 func okFor(req *protocol.Request) string {
-	return fmt.Sprintf(`{"v":1,"id":%q,"ok":true,"data":{"op":%q,"timeout_ms":%d},"warnings":[],"gate":{"version":"0.1.0","principal":"readonly-key","policy_sha256":"ab","max_tier":"read","duration_ms":1}}`+"\n",
+	return fmt.Sprintf(`{"v":2,"id":%q,"ok":true,"data":{"op":%q,"timeout_ms":%d},"warnings":[],"gate":{"version":"0.1.0","principal":"readonly-key","policy_sha256":"ab","max_tier":"read","duration_ms":1}}`+"\n",
 		req.ID, req.Op, req.TimeoutMS)
 }
 
@@ -115,7 +115,7 @@ func TestRefusalWithoutRequestID(t *testing.T) {
 	for _, code := range []string{protocol.CodeInstallInsecure, protocol.CodeSandboxUnavailable, protocol.CodeHelperPolicyMismatch, protocol.CodeHelperInstallInsecure} {
 		t.Run(code, func(t *testing.T) {
 			c, _ := target(t, func(_ context.Context, s *sshtest.Session) uint32 {
-				_, _ = fmt.Fprintf(s.Stdout, `{"v":1,"id":"","ok":false,"error":{"code":%q,"message":"refused before the request"}}`+"\n", code)
+				_, _ = fmt.Fprintf(s.Stdout, `{"v":2,"id":"","ok":false,"error":{"code":%q,"message":"refused before the request"}}`+"\n", code)
 				return 0
 			}, 1)
 			resp, err := newClient().Call(t.Context(), c, protocol.OpHello, "read", nil, time.Second)
@@ -134,7 +134,7 @@ func TestAnswerBeforeRequestFullyWritten(t *testing.T) {
 	// still writing a request far larger than the SSH channel window: the
 	// write fails (closed channel), and must not hide the answer.
 	c, _ := target(t, func(_ context.Context, s *sshtest.Session) uint32 {
-		_, _ = io.WriteString(s.Stdout, `{"v":1,"id":"","ok":false,"error":{"code":"install_insecure","message":"early"}}`+"\n")
+		_, _ = io.WriteString(s.Stdout, `{"v":2,"id":"","ok":false,"error":{"code":"install_insecure","message":"early"}}`+"\n")
 		s.Close()
 		return 1
 	}, 1)
@@ -151,8 +151,8 @@ func TestAnswerBeforeRequestFullyWritten(t *testing.T) {
 func TestResponseIDMismatch(t *testing.T) {
 	other := "0b5c0000-0000-4000-8000-0000000000ff"
 	for name, body := range map[string]string{
-		"ok with another id":      `{"v":1,"id":"` + other + `","ok":true,"data":{},"warnings":[]}`,
-		"failure with another id": `{"v":1,"id":"` + other + `","ok":false,"error":{"code":"path_denied","message":"m"}}`,
+		"ok with another id":      `{"v":2,"id":"` + other + `","ok":true,"data":{},"warnings":[]}`,
+		"failure with another id": `{"v":2,"id":"` + other + `","ok":false,"error":{"code":"path_denied","message":"m"}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, _ := target(t, gate(func(*protocol.Request) string { return body + "\n" }), 1)
@@ -162,34 +162,51 @@ func TestResponseIDMismatch(t *testing.T) {
 	}
 }
 
+// TestProtocolVersionMismatch: a gate answering in another protocol version
+// refused the request (a 0.1.0 gate answers a version 2 request with
+// protocol_mismatch in version 1; a newer one may add fields). The server
+// names both versions and the side to upgrade, and the failure is not
+// marked as sent: the request never ran, so a privileged write's outcome
+// is known.
 func TestProtocolVersionMismatch(t *testing.T) {
-	// A gate speaking another version.
-	c, _ := target(t, gate(func(req *protocol.Request) string {
-		return `{"v":2,"id":"` + req.ID + `","ok":true,"data":{},"warnings":[]}` + "\n"
-	}), 1)
-	_, err := newClient().Call(t.Context(), c, protocol.OpHello, "read", nil, time.Second)
-	e := wantError(t, err, envelope.CodeProtocolMismatch)
-	if !strings.Contains(e.Message, "version") {
-		t.Fatalf("message = %q", e.Message)
-	}
-	// The gate refusing our version answers protocol_mismatch itself.
-	c, _ = target(t, func(_ context.Context, s *sshtest.Session) uint32 {
-		_, _ = io.WriteString(s.Stdout, `{"v":1,"id":"","ok":false,"error":{"code":"protocol_mismatch","message":"unsupported protocol version"}}`+"\n")
-		return 0
-	}, 1)
-	resp, err := newClient().Call(t.Context(), c, protocol.OpHello, "read", nil, time.Second)
-	if err != nil || resp.Error.Code != protocol.CodeProtocolMismatch {
-		t.Fatalf("resp %+v err %v", resp, err)
+	for _, c := range []struct {
+		name, answer string
+		message      []string
+	}{
+		{"a 0.1.0 gate", `{"v":1,"id":"","ok":false,"error":{"code":"protocol_mismatch","message":"unsupported protocol version"}}`,
+			[]string{"the gate speaks protocol version 1", "this server version 2", "upgrade shell-mcp-gate and shell-mcp-privd on the target"}},
+		{"a 0.1.0 gate's success", `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ok":true,"data":{},"warnings":[]}`,
+			[]string{"the gate speaks protocol version 1", "upgrade shell-mcp-gate and shell-mcp-privd on the target"}},
+		{"a newer gate", `{"v":3,"id":"","ok":false,"error":{"code":"protocol_mismatch","message":"m"},"warnings":[],"later":{"x":1}}`,
+			[]string{"the gate speaks protocol version 3", "this server version 2", "upgrade this server (shell-mcp)"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tg, _ := target(t, func(_ context.Context, s *sshtest.Session) uint32 {
+				_, _ = protocol.DecodeRequest(s.Stdin)
+				_, _ = io.WriteString(s.Stdout, c.answer+"\n")
+				return 0
+			}, 1)
+			_, err := newClient().Call(t.Context(), tg, protocol.OpPrivWriteFile, "operator", nil, time.Second)
+			e := wantError(t, err, envelope.CodeProtocolMismatch)
+			for _, w := range c.message {
+				if !strings.Contains(e.Message, w) {
+					t.Fatalf("message %q lacks %q", e.Message, w)
+				}
+			}
+			if RequestSent(err) {
+				t.Fatal("a refusal of the version is marked as sent (its outcome would be reported unknown)")
+			}
+		})
 	}
 }
 
 func TestMalformedResponses(t *testing.T) {
 	for name, body := range map[string]string{
 		"not json":            "hello\n",
-		"unknown field":       `{"v":1,"id":"","ok":false,"error":{"code":"internal","message":"m"},"extra":1}` + "\n",
-		"code outside closed": `{"v":1,"id":"","ok":false,"error":{"code":"made_up","message":"m"}}` + "\n",
-		"two values":          `{"v":1,"id":"","ok":false,"error":{"code":"internal","message":"m"}} {}` + "\n",
-		"ok without id":       `{"v":1,"id":"","ok":true,"data":{},"warnings":[]}` + "\n",
+		"unknown field":       `{"v":2,"id":"","ok":false,"error":{"code":"internal","message":"m"},"extra":1}` + "\n",
+		"code outside closed": `{"v":2,"id":"","ok":false,"error":{"code":"made_up","message":"m"}}` + "\n",
+		"two values":          `{"v":2,"id":"","ok":false,"error":{"code":"internal","message":"m"}} {}` + "\n",
+		"ok without id":       `{"v":2,"id":"","ok":true,"data":{},"warnings":[]}` + "\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			c, _ := target(t, func(_ context.Context, s *sshtest.Session) uint32 {

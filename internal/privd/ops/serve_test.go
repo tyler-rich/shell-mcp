@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/procself"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/privd/ops"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
@@ -98,7 +99,7 @@ func TestSelfCheckFailuresAnswered(t *testing.T) {
 			if err := json.Unmarshal([]byte(out), &r); err != nil || code == 0 {
 				t.Fatalf("exit %d, response %q", code, out)
 			}
-			if r.V != 1 || r.ID != "" || r.OK || r.Error == nil || r.Error.Code != c.code || strings.Count(out, "\n") != 1 || !strings.HasSuffix(out, "\n") {
+			if r.V != 2 || r.ID != "" || r.OK || r.Error == nil || r.Error.Code != c.code || strings.Count(out, "\n") != 1 || !strings.HasSuffix(out, "\n") {
 				t.Fatalf("response %q, want one line with %s and no id", out, c.code)
 			}
 			if msg := r.Error.Message; msg == "" || strings.Contains(msg, f.d) || strings.ContainsAny(msg, "\r\n") {
@@ -187,7 +188,7 @@ func TestNoRequestByteReadBeforeChecksPass(t *testing.T) {
 		"wrong peer":  func(f *fixture) { f.opts.UnitClientUID = strconv.FormatUint(uint64(f.uid)+1, 10) },
 		"no unit uid": func(f *fixture) { f.opts.UnitClientUID = "" },
 		"sandbox refuses": func(f *fixture) {
-			f.opts.ApplySandbox = func(*policy.Policy, string) (sandbox.Report, error) {
+			f.opts.ApplySandbox = func(*policy.Policy, string, *procself.Dir) (sandbox.Report, error) {
 				f.sandboxCalls++
 				return sandbox.Report{}, sandbox.ErrUnavailable
 			}
@@ -276,7 +277,7 @@ func TestServeAnswersAuthenticatedPeer(t *testing.T) {
 func TestSandboxRefusal(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	f.opts.ApplySandbox = func(*policy.Policy, string) (sandbox.Report, error) {
+	f.opts.ApplySandbox = func(*policy.Policy, string, *procself.Dir) (sandbox.Report, error) {
 		return sandbox.Report{}, sandbox.ErrUnavailable
 	}
 	in := request("priv_stat", m{"path": f.read})
@@ -300,9 +301,9 @@ func TestRequestErrors(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	for in, code := range map[string]string{
-		`{"v":1,"id":"` + reqID + `","ceiling":"destructive","op":"priv_stat","op":"priv_stat"}` + "\n": "bad_request",
-		`{"v":2,"id":"` + reqID + `","ceiling":"destructive","op":"priv_stat"}` + "\n":                  "protocol_mismatch",
-		`{"v":1,"id":"a","ceiling":"destructive","op":"priv_stat"}` + "\n":                              "bad_request",
+		`{"v":2,"id":"` + reqID + `","ceiling":"destructive","op":"priv_stat","op":"priv_stat"}` + "\n": "bad_request",
+		`{"v":3,"id":"` + reqID + `","ceiling":"destructive","op":"priv_stat"}` + "\n":                  "protocol_mismatch",
+		`{"v":2,"id":"a","ceiling":"destructive","op":"priv_stat"}` + "\n":                              "bad_request",
 		"not json\n": "bad_request",
 	} {
 		out, _ := f.serveRaw(in)

@@ -37,6 +37,9 @@ func testEnv(t *testing.T, y string) (env *loadEnv, policyPath string) {
 		executable:    exe,
 		systemBinDirs: []string{filepath.Join(d, "sysbin")},
 		varRun:        filepath.Join(d, "var-run"),
+		// The host's own parameter; TestCheckPolicyReportsMemoryLimit
+		// passes its own.
+		ignoreRLimitData: execx.IgnoreRLimitDataPath,
 		lookups: func(o *policy.LoadOptions) {
 			o.LookupUser = func(n string) (uint32, error) {
 				if n == "root" {
@@ -454,7 +457,7 @@ func TestCheckPolicyStickyIsOpen(t *testing.T) {
 func TestCheckPolicyReportsMultiCall(t *testing.T) {
 	y := validPolicy + "commands:\n" +
 		"  - id: owner\n    path: {D}/bin/chown\n    tier: read\n    templates: [[\"--version\"]]\n" +
-		"  - id: renew\n    path: {D}/bin/renew\n    tier: read\n    templates: [[]]\n"
+		"  - id: renew\n    path: {D}/bin/renew\n    tier: read\n    acknowledge: \"invented review note\"\n    templates: [[]]\n"
 	env, p := testEnv(t, y)
 	d := filepath.Dir(filepath.Dir(filepath.Dir(p)))
 	bin := filepath.Join(d, "bin")
@@ -465,7 +468,62 @@ func TestCheckPolicyReportsMultiCall(t *testing.T) {
 	var so, se bytes.Buffer
 	checkPolicyWith([]string{"--policy", p}, &so, &se, env)
 	if !strings.Contains(so.String(), "command owner: tier read, unit core, "+filepath.Join(bin, "chown")+" [uutils applet chown]") ||
-		!strings.Contains(so.String(), "command renew: tier read, unit core, "+filepath.Join(bin, "renew")+" [#! script run by "+filepath.Join(bin, "example-interp")+"]") {
+		!strings.Contains(so.String(), "command renew: tier read, unit core, "+filepath.Join(bin, "renew")+" [#! script run by "+filepath.Join(bin, "example-interp")+"] [script acknowledged: \"invented review note\"]") ||
+		!strings.Contains(so.String(), "REVIEW script renew: ") {
 		t.Fatalf("check-policy:\n%s\n%s", so.String(), se.String())
+	}
+}
+
+// TestCheckPolicyReportsMemoryLimit: check-policy reports the effective
+// memory limit of the helper's commands and the MemoryMax= its units get
+// (the limit plus 256 MiB for the helper itself), and warns when the
+// kernel's ignore_rlimit_data parameter is set (handoff N-30).
+func TestCheckPolicyReportsMemoryLimit(t *testing.T) {
+	env, p := testEnv(t, validPolicy)
+	env.ignoreRLimitData = filepath.Join(t.TempDir(), "ignore_rlimit_data")
+	if err := os.WriteFile(env.ignoreRLimitData, []byte("N\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var so, se bytes.Buffer
+	checkPolicyWith([]string{"--policy", p}, &so, &se, env)
+	if !strings.Contains(so.String(), "memory: limits.max_memory_mb 1024 MiB") || !strings.Contains(so.String(), "MemoryMax=1280M") ||
+		strings.Contains(so.String(), "ignore_rlimit_data") {
+		t.Fatalf("report:\n%s", so.String())
+	}
+	if err := os.WriteFile(env.ignoreRLimitData, []byte("Y\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	so.Reset()
+	checkPolicyWith([]string{"--policy", p}, &so, &se, env)
+	if !strings.Contains(so.String(), "WARN kernel: ignore_rlimit_data is set") {
+		t.Fatalf("ignore_rlimit_data=Y not flagged:\n%s", so.String())
+	}
+}
+
+// TestCheckPolicyReportsProtectHome (handoff N-28): check-policy says which
+// ProtectHome= the core unit gets — yes when nothing is under /home, /root
+// or /run/user, read-only naming the first root that is.
+func TestCheckPolicyReportsProtectHome(t *testing.T) {
+	env, p := testEnv(t, validPolicy)
+	var so, se bytes.Buffer
+	_ = checkPolicyWith([]string{"--policy", p}, &so, &se, env)
+	// The line follows what the generator decides for this policy (the
+	// scratch directory may itself be under /home, as CI's is).
+	loaded, err := env.load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ := units.ProtectHome(loaded)
+	if want := "core unit: ProtectHome=" + v + " ("; !strings.Contains(so.String(), want) {
+		t.Errorf("report lacks %q:\n%s", want, so.String())
+	}
+
+	y := strings.Replace(validPolicy, "read: [{D}/srv/app]", "read: [/home/example-app/data, {D}/srv/app]", 1)
+	env, p = testEnv(t, y)
+	so.Reset()
+	se.Reset()
+	_ = checkPolicyWith([]string{"--policy", p}, &so, &se, env)
+	if want := "core unit: ProtectHome=read-only (/home/example-app/data is under /home, /root or /run/user"; !strings.Contains(so.String(), want) {
+		t.Errorf("report lacks %q:\n%s", want, so.String())
 	}
 }

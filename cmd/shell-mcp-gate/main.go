@@ -16,8 +16,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 
+	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/install"
 	"github.com/tyler-rich/shell-mcp/internal/gate/ops"
@@ -25,6 +27,7 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/polkit"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
+	"github.com/tyler-rich/shell-mcp/internal/template"
 )
 
 // Set with -ldflags "-X main.version=… -X main.commit=…".
@@ -184,9 +187,18 @@ func polkitWith(args []string, stdout, stderr io.Writer, trust policy.Trust) int
 var (
 	probeNoReplace = fsx.ProbeNoReplace
 	probeExchange  = fsx.ProbeExchange
+	// devFDPath is where commands reopen a {path:read:fd}; tests replace
+	// it.
+	devFDPath = "/dev/fd"
 )
 
 func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust, home string) int {
+	return checkPolicyWithParam(args, stdout, stderr, trust, home, execx.IgnoreRLimitDataPath)
+}
+
+// checkPolicyWithParam is checkPolicyWith reading the kernel's
+// ignore_rlimit_data parameter from param.
+func checkPolicyWithParam(args []string, stdout, stderr io.Writer, trust policy.Trust, home, param string) int {
 	fs := flag.NewFlagSet("check-policy", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	policyPath := fs.String("policy", "", "")
@@ -243,12 +255,34 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust
 		}
 	} else {
 		pr("ok   policy: sha256 %s, max_tier %s, %d commands", p.SHA256, p.MaxTier, len(p.Commands))
+		usesFD := false
 		for i := range p.Commands {
+			if c := &p.Commands[i]; c.ReadsPrivateKeys {
+				pr("ok   commands[%s]: reads_private_keys: its {path:read} files may hold a private key, and its output also gets the PEM-width heuristic; "+
+					"the owner vouches that it never prints part of its input (POLICY §4)", c.ID)
+			}
 			if c := &p.Commands[i]; c.Applet != "" {
 				pr("ok   commands[%s]: %s is the uutils multi-call binary; it runs as %s (the name of the file it is executed by)", c.ID, c.Resolved, c.Applet)
 			}
+			if c := &p.Commands[i]; slices.ContainsFunc(c.Templates, template.Template.UsesPathReadFD) {
+				usesFD = true
+				pr("ok   commands[%s]: {path:read:fd} is passed as the gate's open descriptor (/dev/fd/4 and up, in template order); "+
+					"POLICY §4 lists the programs that give wrong results with one", c.ID)
+			}
+		}
+		// A command reopens a {path:read:fd} through /dev/fd (handoff N-22).
+		if usesFD {
+			if w := devFDWarning(devFDPath); w != "" {
+				pr("WARN %s", w)
+			} else {
+				pr("ok   %s: a link to /proc/self/fd, through which commands reopen a {path:read:fd}", devFDPath)
+			}
 		}
 		for _, w := range p.Warnings {
+			pr("WARN %s", w)
+		}
+		pr("ok   limits.max_memory_mb: %d MiB, the memory limit (RLIMIT_DATA, soft and hard) of every command, git, systemctl and journalctl process", p.Limits.MaxMemoryMB)
+		if w := rlimitDataWarning(param); w != "" {
 			pr("WARN %s", w)
 		}
 		// delete and every move (its stage, and without overwrite its commit)
@@ -349,4 +383,29 @@ func gitRefusal(repo string, err error) string {
 	}
 	msg := strings.TrimPrefix(fe.Msg, fmt.Sprintf("git is not run in the repository %q: ", repo))
 	return strings.TrimSuffix(msg, "; nothing was run")
+}
+
+// devFDWarning is check-policy's warning when p (/dev/fd) is not the link
+// to /proc/self/fd through which a command reopens a {path:read:fd}, or "".
+func devFDWarning(p string) string {
+	switch t, err := os.Readlink(p); {
+	case err != nil:
+		return fmt.Sprintf("%s: cannot be read as a symlink (%v); a command given a {path:read:fd} cannot reopen it as /dev/fd/N", p, err)
+	case t != "/proc/self/fd":
+		return fmt.Sprintf("%s: is a link to %q, not /proc/self/fd; a command given a {path:read:fd} cannot reopen it as /dev/fd/N", p, t)
+	}
+	return ""
+}
+
+// rlimitDataWarning is check-policy's warning about the kernel's
+// ignore_rlimit_data parameter at param, or "" when it is not set.
+func rlimitDataWarning(param string) string {
+	set, err := execx.IgnoreRLimitData(param)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("kernel: could not read ignore_rlimit_data (%v); if the boot option is set, limits.max_memory_mb binds brk(2) only, not mmap(2)", err)
+	case set:
+		return "kernel: ignore_rlimit_data is set (boot option); mmap(2) past limits.max_memory_mb only logs a warning, so the limit binds brk(2) only; remove the boot option"
+	}
+	return ""
 }

@@ -49,6 +49,7 @@ type opSpec struct {
 func opTable() map[string]opSpec {
 	return map[string]opSpec{
 		protocol.OpPrivReadFile:       {policy.TierRead, (*server).readFile},
+		protocol.OpPrivHashFile:       {policy.TierRead, (*server).hashFile},
 		protocol.OpPrivListDir:        {policy.TierRead, (*server).listDir},
 		protocol.OpPrivStat:           {policy.TierRead, (*server).stat},
 		protocol.OpPrivListBackups:    {policy.TierRead, (*server).listBackups},
@@ -78,6 +79,10 @@ func opTable() map[string]opSpec {
 		protocol.OpPrivPkgUpgradePreview:     {policy.TierRead, (*server).pkgUpgradePreview},
 		protocol.OpPrivPkgRemovePreview:      {policy.TierRead, (*server).pkgRemovePreview},
 		protocol.OpPrivPkgUpdateIndexPreview: {policy.TierRead, (*server).pkgUpdateIndexPreview},
+		protocol.OpPrivPkgRecover:            {policy.TierOperator, (*server).pkgRecover},
+		protocol.OpPrivPkgRecoverPreview:     {policy.TierRead, (*server).pkgRecoverPreview},
+		protocol.OpPrivPkgReinstall:          {policy.TierOperator, (*server).pkgReinstall},
+		protocol.OpPrivPkgReinstallPreview:   {policy.TierRead, (*server).pkgReinstallPreview},
 		protocol.OpPrivPower:                 {policy.TierDestructive, (*server).power},
 		protocol.OpPrivPowerPreview:          {policy.TierRead, (*server).powerPreview},
 		protocol.OpPrivPowerCancel:           {policy.TierRead, (*server).powerCancel},
@@ -91,6 +96,7 @@ var broadOps = []string{
 	protocol.OpPrivPkgUpdateIndex, protocol.OpPrivPkgInstall, protocol.OpPrivPkgUpgrade, protocol.OpPrivPkgRemove,
 	protocol.OpPrivPkgInstallPreview, protocol.OpPrivPkgUpgradePreview, protocol.OpPrivPkgRemovePreview, protocol.OpPrivPkgUpdateIndexPreview,
 	protocol.OpPrivPower, protocol.OpPrivPowerPreview, protocol.OpPrivPowerCancel,
+	protocol.OpPrivPkgRecover, protocol.OpPrivPkgRecoverPreview, protocol.OpPrivPkgReinstall, protocol.OpPrivPkgReinstallPreview,
 }
 
 // wrongUnit is the refusal of an operation meant for the other unit's

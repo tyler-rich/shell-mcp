@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,11 +38,22 @@ const (
 	DefaultKillGrace   = 2 * time.Second
 	// ChildNofile is the RLIMIT_NOFILE applied to every child.
 	ChildNofile = 1024
+	// FirstFile is the descriptor Spec.Files[0] is passed as (fd 3 is the
+	// trampoline's control socket); MaxFiles bounds Spec.Files.
+	FirstFile = 4
+	MaxFiles  = 8
 	// ChildExtraTasks bounds how many tasks a child and its descendants may
 	// add to the service user's count (RLIMIT_NPROC = current + this).
 	ChildExtraTasks = 256
-	// maxProcScan bounds the /proc walk that counts the user's tasks.
-	maxProcScan = 1 << 16
+	// MaxMemoryMB bounds Spec.MaxMemoryMB (the policies' own ceiling,
+	// limits.max_memory_mb ≤ 16384).
+	MaxMemoryMB = 16384
+	// procNonPIDEntries is the room the task count's /proc walk leaves above
+	// pid_max for /proc's own entries that are not processes (self, sys,
+	// meminfo, …; about 70 on Linux 6.x).
+	procNonPIDEntries = 4096
+	// procReadChunk is how many /proc entries the walk reads at a time.
+	procReadChunk = 4096
 )
 
 // Spec describes one process.
@@ -56,6 +68,17 @@ type Spec struct {
 	Lookahead   int           // 0 means DefaultLookahead
 	HardCeiling int64         // 0 means DefaultHardCeiling
 	KillGrace   time.Duration // 0 means DefaultKillGrace
+
+	// MaxMemoryMB is the command's RLIMIT_DATA, soft and hard, in MiB
+	// (the policy's limits.max_memory_mb). Required: Run refuses a Spec
+	// without one.
+	MaxMemoryMB int
+
+	// Files are passed to the command as descriptors FirstFile,
+	// FirstFile+1, … in order (at most MaxFiles), each a regular file
+	// open read-only: the gate's {path:read:fd} placeholders (POLICY §4).
+	// Every other descriptor above stderr stays close-on-exec.
+	Files []*os.File
 
 	// Trampoline is the absolute path of the running binary (the gate or
 	// the helper, resolved and ownership-checked by the caller). The
@@ -157,6 +180,8 @@ func Run(ctx context.Context, spec *Spec) (Result, error) {
 type hooks struct {
 	// afterStart runs in the parent right after the child started.
 	afterStart func()
+	// procDir replaces /proc for counting the user's tasks.
+	procDir string
 }
 
 func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
@@ -165,8 +190,20 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	if !filepath.IsAbs(s.Path) {
 		return Result{}, fmt.Errorf("%w: path is not absolute", ErrStart)
 	}
+	// Fail closed: nothing runs without a memory limit (handoff N-30).
+	if s.MaxMemoryMB < 1 || s.MaxMemoryMB > MaxMemoryMB {
+		return Result{}, fmt.Errorf("%w: no valid memory limit (MaxMemoryMB %d)", ErrStart, s.MaxMemoryMB)
+	}
 	if !filepath.IsAbs(s.Trampoline) {
 		return Result{}, fmt.Errorf("%w: no exec trampoline", ErrStart)
+	}
+	// The trampoline checks each passed descriptor itself (a regular file
+	// open read-only); here only the count and that each is a file.
+	if len(s.Files) > MaxFiles {
+		return Result{}, fmt.Errorf("%w: %d descriptors to pass, at most %d", ErrStart, len(s.Files), MaxFiles)
+	}
+	if slices.Contains(s.Files, nil) {
+		return Result{}, fmt.Errorf("%w: a descriptor to pass is nil", ErrStart)
 	}
 	if s.Lookahead == 0 {
 		s.Lookahead = DefaultLookahead
@@ -185,7 +222,12 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	if env == nil {
 		env = []string{}
 	}
-	cfg, err := encodeConfig(&trampolineConfig{Path: s.Path, Argv: append([]string{s.Path}, s.Args...), Env: env, Dir: dir, Limits: childLimits()})
+	limits, err := childLimits(s.MaxMemoryMB, procDirOf(h))
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: %w", ErrStart, err)
+	}
+	cfg, err := encodeConfig(&trampolineConfig{Path: s.Path, Argv: append([]string{s.Path}, s.Args...), Env: env, Dir: dir,
+		Files: uint32(len(s.Files)), Limits: limits}) //nolint:gosec // G115: at most MaxFiles
 	if err != nil {
 		return Result{}, startError(err)
 	}
@@ -206,7 +248,11 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	cmd := exec.CommandContext(ctx, s.Trampoline, TrampolineArg) //nolint:gosec // G204: the trampoline is the running binary, resolved and ownership-checked by the caller; the command's path was resolved and ownership-checked at policy load and its argv matched a policy template; no shell is involved
 	cmd.Env = []string{}
 	cmd.Dir = "/"
-	cmd.ExtraFiles = []*os.File{childCtl}
+	// fd 3 is the control socket; Spec.Files follow it from FirstFile, and
+	// os/exec passes all of them without close-on-exec. The trampoline marks
+	// every descriptor from 3 up close-on-exec again and clears it on
+	// exactly the files.
+	cmd.ExtraFiles = append([]*os.File{childCtl}, s.Files...)
 	// The parent-death signal fires when the thread that forked the child
 	// exits (prctl(2)). That thread is whichever one runs this goroutine,
 	// and it needs no pinning here: when the gate or helper dies, every
@@ -286,14 +332,29 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 // ChildNofile, and RLIMIT_NPROC = the service user's current task count +
 // ChildExtraTasks. RLIMIT_NPROC counts every task of the real uid, so a
 // fixed value would fail concurrent gates; relative to the current count it
-// bounds what one command can add. Each is only ever lowered, which needs no
-// privilege.
-func childLimits() []childLimit {
-	l := []childLimit{{Resource: unix.RLIMIT_CORE, Max: 0}, {Resource: unix.RLIMIT_NOFILE, Max: ChildNofile}}
-	if n := userTasks(os.Getuid()); n > 0 {
+// bounds what one command can add. RLIMIT_DATA is the policy's
+// limits.max_memory_mb (handoff N-30): it bounds the heap and every private
+// writable mapping (mmap(2) since Linux 4.7), not read-only file mappings
+// such as git's packs. Soft and hard limits are both set, so the command
+// cannot raise them without CAP_SYS_RESOURCE. Each is only ever lowered,
+// which needs no privilege.
+//
+// When the tasks cannot be counted, the command is refused rather than
+// started without RLIMIT_NPROC (handoff N-30's audit), except for uid 0:
+// the kernel never applies RLIMIT_NPROC to root's processes (copy_process
+// exempts INIT_USER), and the helper's core unit may read only its own
+// /proc/<pid>, so it is not counted there.
+func childLimits(memoryMB int, procDir string) ([]childLimit, error) {
+	l := []childLimit{{Resource: unix.RLIMIT_CORE, Max: 0}, {Resource: unix.RLIMIT_NOFILE, Max: ChildNofile},
+		{Resource: unix.RLIMIT_DATA, Max: uint64(memoryMB) << 20}} //nolint:gosec // G115: memoryMB is checked to be 1..MaxMemoryMB by run
+	if uid := os.Getuid(); uid != 0 {
+		n, err := userTasksIn(procDir, uid)
+		if err != nil {
+			return nil, fmt.Errorf("cannot count the user's tasks for RLIMIT_NPROC: %w", err)
+		}
 		l = append(l, childLimit{Resource: unix.RLIMIT_NPROC, Max: n + ChildExtraTasks})
 	}
-	return l
+	return l, nil
 }
 
 // handshake sends the encoded command to the trampoline, closes the
@@ -335,49 +396,92 @@ func startError(err error) error {
 	return fmt.Errorf("%w", ErrStart)
 }
 
-// userTasks counts the tasks (threads) whose real uid is uid, from
-// /proc/<pid>/status. It returns 0 if /proc cannot be read or the scan
-// would exceed its bound.
+// procDirOf is the test hooks' /proc, or /proc.
+func procDirOf(h *hooks) string {
+	if h != nil && h.procDir != "" {
+		return h.procDir
+	}
+	return "/proc"
+}
+
+// userTasks counts uid's tasks under /proc (userTasksIn).
 func userTasks(uid int) uint64 {
-	d, err := os.Open("/proc")
+	n, _ := userTasksIn("/proc", uid)
+	return n
+}
+
+// userTasksIn counts the tasks (threads) whose real uid is uid, from
+// procDir/<pid>/status. A process that went away, or whose status it
+// cannot read, is not counted (a lower count only lowers RLIMIT_NPROC). The
+// scan is bounded by the kernel's own limit on processes, pid_max
+// (procDir/sys/kernel/pid_max), plus procNonPIDEntries for /proc's other
+// entries, and it reads procDir in chunks; a pid_max it cannot read, a
+// procDir it cannot list, or more entries than that bound is an error
+// naming the reason, never a count of 0.
+func userTasksIn(procDir string, uid int) (uint64, error) {
+	b, err := os.ReadFile(procDir + "/sys/kernel/pid_max") //nolint:gosec // G304: /proc's own, or the tests' own directory
+	if err != nil {
+		return 0, fmt.Errorf("pid_max: %w", err)
+	}
+	pidMax, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 32)
+	if err != nil || pidMax == 0 {
+		return 0, fmt.Errorf("pid_max is %q, not a process count", strings.TrimSpace(string(b)))
+	}
+	bound := pidMax + procNonPIDEntries
+	d, err := os.Open(procDir) //nolint:gosec // G304: /proc, or the tests' own directory
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = d.Close() }()
+	want := strconv.Itoa(uid)
+	var total, seen uint64
+	for {
+		names, rerr := d.Readdirnames(procReadChunk)
+		seen += uint64(len(names))
+		if seen > bound {
+			return 0, fmt.Errorf("%s has more than %d entries (pid_max %d)", procDir, bound, pidMax)
+		}
+		for _, n := range names {
+			total += taskCount(procDir, n, want)
+		}
+		if errors.Is(rerr, io.EOF) || (rerr == nil && len(names) == 0) {
+			return total, nil
+		}
+		if rerr != nil {
+			return 0, rerr
+		}
+	}
+}
+
+// taskCount is the Threads of procDir/<n>/status when n is a process whose
+// real uid is uid, else 0 (also for one that went away or cannot be read).
+func taskCount(procDir, n, uid string) uint64 {
+	if n == "" || n[0] < '0' || n[0] > '9' {
+		return 0
+	}
+	f, err := os.Open(procDir + "/" + n + "/status") //nolint:gosec // G304: n is a numeric /proc entry name
 	if err != nil {
 		return 0
 	}
-	defer func() { _ = d.Close() }()
-	names, err := d.Readdirnames(maxProcScan + 1)
-	if err != nil || len(names) > maxProcScan {
+	defer func() { _ = f.Close() }()
+	var mine bool
+	var threads uint64
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		k, v, ok := strings.Cut(sc.Text(), ":")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "Uid":
+			fields := strings.Fields(v)
+			mine = len(fields) > 0 && fields[0] == uid
+		case "Threads":
+			threads, _ = strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+		}
+	}
+	if !mine {
 		return 0
 	}
-	want := strconv.Itoa(uid)
-	var total uint64
-	for _, n := range names {
-		if n == "" || n[0] < '0' || n[0] > '9' {
-			continue
-		}
-		f, err := os.Open("/proc/" + n + "/status") //nolint:gosec // G304: n is a numeric /proc entry name
-		if err != nil {
-			continue
-		}
-		var mine bool
-		var threads uint64
-		sc := bufio.NewScanner(f)
-		for sc.Scan() {
-			k, v, ok := strings.Cut(sc.Text(), ":")
-			if !ok {
-				continue
-			}
-			switch k {
-			case "Uid":
-				fields := strings.Fields(v)
-				mine = len(fields) > 0 && fields[0] == want
-			case "Threads":
-				threads, _ = strconv.ParseUint(strings.TrimSpace(v), 10, 64)
-			}
-		}
-		_ = f.Close()
-		if mine {
-			total += threads
-		}
-	}
-	return total
+	return threads
 }

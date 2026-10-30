@@ -17,6 +17,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/landlock-lsm/go-landlock/landlock"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/audit"
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
+	"github.com/tyler-rich/shell-mcp/internal/gate/procself"
 )
 
 // ABI levels that matter to the gate.
@@ -365,16 +367,30 @@ func build(r *Rules, abi int) (landlock.Config, []landlock.Rule, error) {
 // through libcap/psx. The ruleset is applied by go-landlock to every
 // thread: on ABI < 8 with psx (landlock_restrict_self on each thread), on
 // ABI >= 8 with LANDLOCK_RESTRICT_SELF_TSYNC (restrict, threadpath.go).
+//
+// The gate opens its own /proc/self for the thread check and closes it
+// afterwards: its ruleset grants /proc itself, the procfs root, which the
+// mount holds, so its later reads through a path stay covered.
 func Apply(p *policy.Policy) (Report, error) {
+	proc, err := procself.Open()
+	if err != nil {
+		return Report{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	defer func() { _ = proc.Close() }()
 	rules := Compute(p)
-	return ApplyRules(p.Sandbox.Landlock, &rules)
+	return ApplyRules(p.Sandbox.Landlock, &rules, proc)
 }
 
 // ApplyRules is Apply for a ruleset computed elsewhere: the privileged
 // helper applies one computed from its own policy (no TCP rule, so every
 // TCP bind and connect is denied from ABI 4), with the same all-thread
-// mechanism, MPTCP filter and verification.
-func ApplyRules(mode policy.LandlockMode, rules *Rules) (Report, error) {
+// mechanism, MPTCP filter and verification. proc is this process's own
+// /proc/<pid>, opened before the call (procself.Open); the thread check
+// after the sandbox reads through it.
+func ApplyRules(mode policy.LandlockMode, rules *Rules, proc *procself.Dir) (Report, error) {
+	if proc == nil {
+		return Report{}, fmt.Errorf("%w: no /proc/self descriptor for the thread check", ErrUnavailable)
+	}
 	abi := KernelABI()
 	r, err := PlanRules(mode, rules, abi)
 	r.KernelABI = rawKernelABI()
@@ -401,28 +417,49 @@ func ApplyRules(mode policy.LandlockMode, rules *Rules) (Report, error) {
 		}
 		r.MPTCP = "not blocked: seccomp is unavailable"
 	}
-	if err := allThreadsNoNewPrivs(r.MPTCP == MPTCPStatus); err != nil {
+	if err := allThreadsNoNewPrivsIn(proc, r.MPTCP == MPTCPStatus); err != nil {
 		return r, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	r.NoNewPrivs = true
 	return r, nil
 }
 
-// allThreadsNoNewPrivs checks /proc/self/task/*/status: NoNewPrivs is 1,
-// and (when the MPTCP filter was installed) Seccomp is 2 (filter mode).
-func allThreadsNoNewPrivs(wantSeccomp bool) error {
-	tasks, err := os.ReadDir("/proc/self/task")
+// maxThreads bounds the threads the self-check lists, maxStatusBytes one
+// thread's status file.
+const (
+	maxThreads     = 4096
+	maxStatusBytes = 64 << 10
+)
+
+// allThreadsNoNewPrivsIn checks every task/<tid>/status under proc
+// (production: this process's own /proc/<pid>, opened before the sandbox,
+// procself): NoNewPrivs is 1, and (when the MPTCP filter was installed)
+// Seccomp is 2 (filter mode). It reads through proc's descriptor, so the
+// helper's Landlock rule on its own /proc/<pid> keeps covering it
+// (procself's package comment).
+func allThreadsNoNewPrivsIn(proc *procself.Dir, wantSeccomp bool) error {
+	tasks, err := proc.ReadDirNames("task", maxThreads)
 	if err != nil {
 		return fmt.Errorf("cannot list threads: %w", err)
 	}
 	if len(tasks) == 0 {
 		return errors.New("no threads listed")
 	}
-	for _, t := range tasks {
-		b, err := os.ReadFile("/proc/self/task/" + t.Name() + "/status")
-		if err != nil {
-			continue // thread exited
+	checked := 0
+	for _, tid := range tasks {
+		if n, err := strconv.Atoi(tid); err != nil || n <= 0 {
+			return fmt.Errorf("task entry %q is not a thread id", tid)
 		}
+		b, err := proc.ReadFile("task/"+tid+"/status", maxStatusBytes)
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ESRCH) {
+			continue // the thread ended between the listing and the read
+		}
+		if err != nil {
+			// A live thread whose state cannot be read is not a thread
+			// checked (handoff N-30's audit).
+			return fmt.Errorf("thread %s: %w", tid, err)
+		}
+		checked++
 		nnp, filtered := false, false
 		for _, line := range strings.Split(string(b), "\n") {
 			k, v, found := strings.Cut(line, ":")
@@ -434,11 +471,14 @@ func allThreadsNoNewPrivs(wantSeccomp bool) error {
 			}
 		}
 		if !nnp {
-			return fmt.Errorf("thread %s does not have NoNewPrivs set", t.Name())
+			return fmt.Errorf("thread %s does not have NoNewPrivs set", tid)
 		}
 		if wantSeccomp && !filtered {
-			return fmt.Errorf("thread %s has no seccomp filter", t.Name())
+			return fmt.Errorf("thread %s has no seccomp filter", tid)
 		}
+	}
+	if checked == 0 {
+		return errors.New("no thread's status could be read")
 	}
 	return nil
 }

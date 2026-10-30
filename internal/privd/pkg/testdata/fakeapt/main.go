@@ -21,6 +21,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // logPath is set with -ldflags "-X main.logPath=…".
@@ -42,6 +43,14 @@ func main() {
 		_, _ = f.Write(append(b, '\n'))
 		_ = f.Close()
 	}
+	// The memory limit it runs with, one line per run in a log of its own
+	// (logPath.limits): data=<soft>/<hard>.
+	if f, err := os.OpenFile(logPath+".limits", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil { //nolint:gosec // G304: test log path baked in by the test
+		var l syscall.Rlimit
+		_ = syscall.Getrlimit(syscall.RLIMIT_DATA, &l)
+		_, _ = fmt.Fprintf(f, "data=%d/%d\n", l.Cur, l.Max)
+		_ = f.Close()
+	}
 	mode, _ := os.ReadFile(logPath + ".mode") //nolint:gosec // G304: test control file
 	fields := strings.Fields(string(mode))
 	if len(fields) == 0 {
@@ -51,6 +60,8 @@ func main() {
 	switch fields[0] {
 	case "model":
 		os.Exit(model(os.Args[1:]))
+	case "dpkg":
+		os.Exit(dpkgRun(os.Args[1:]))
 	case "ok":
 		fmt.Println("Reading package lists...")
 		fmt.Println("fake apt-get: done")

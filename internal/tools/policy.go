@@ -52,6 +52,7 @@ type limitsWire struct {
 	MaxFindDepth     int `json:"MaxFindDepth"`
 	MaxDeleteEntries int `json:"MaxDeleteEntries"`
 	MaxProcesses     int `json:"MaxProcesses"`
+	MaxMemoryMB      int `json:"MaxMemoryMB"`
 }
 
 // PolicyData is shell_get_policy's data.
@@ -97,6 +98,7 @@ type PrivLimits struct {
 	DefaultTimeoutS  int `json:"default_timeout_s" jsonschema:"Default operation timeout in seconds."`
 	MaxTimeoutS      int `json:"max_timeout_s" jsonschema:"Longest operation timeout in seconds."`
 	MaxDeleteEntries int `json:"max_delete_entries" jsonschema:"Most entries of a recursive delete, chown or chmod."`
+	MaxMemoryMB      int `json:"max_memory_mb" jsonschema:"Memory limit (RLIMIT_DATA) of every root command, apt-get included, in MiB."`
 }
 
 // PrivRoots are the privileged roots.
@@ -114,14 +116,15 @@ type PrivOwners struct {
 
 // PrivCommand is one declared root command.
 type PrivCommand struct {
-	ID             string     `json:"id" jsonschema:"Command id."`
-	Tier           string     `json:"tier" jsonschema:"read, operator or destructive."`
-	Unit           string     `json:"unit" jsonschema:"The unit it runs in: core or broad."`
-	Description    string     `json:"description" jsonschema:"The host owner's description."`
-	Templates      [][]string `json:"templates" jsonschema:"Argument templates; placeholders are typed."`
-	RootEquivalent bool       `json:"root_equivalent" jsonschema:"Whether the owner acknowledged the command as root-equivalent."`
-	Capabilities   []string   `json:"capabilities" jsonschema:"Capabilities the command adds."`
-	Approval       bool       `json:"approval" jsonschema:"Whether running it needs a human approval (operator and destructive commands always do)."`
+	ID               string     `json:"id" jsonschema:"Command id."`
+	Tier             string     `json:"tier" jsonschema:"read, operator or destructive."`
+	Unit             string     `json:"unit" jsonschema:"The unit it runs in: core or broad."`
+	Description      string     `json:"description" jsonschema:"The host owner's description."`
+	Templates        [][]string `json:"templates" jsonschema:"Argument templates; placeholders are typed."`
+	RootEquivalent   bool       `json:"root_equivalent" jsonschema:"Whether the owner acknowledged the command as root-equivalent."`
+	Capabilities     []string   `json:"capabilities" jsonschema:"Capabilities the command adds."`
+	ReadsPrivateKeys bool       `json:"reads_private_keys" jsonschema:"Whether the owner lets the command read files that hold a private key; its output is then also masked by the PEM-width heuristic."`
+	Approval         bool       `json:"approval" jsonschema:"Whether running it needs a human approval (operator and destructive commands always do)."`
 }
 
 // PrivPackages is the packages section.
@@ -131,6 +134,7 @@ type PrivPackages struct {
 	Remove           []string `json:"remove" jsonschema:"Packages that may be removed."`
 	AllowUpdateIndex bool     `json:"allow_update_index" jsonschema:"Whether the package index may be updated."`
 	AllowUpgrade     bool     `json:"allow_upgrade" jsonschema:"Whether installed packages may be upgraded."`
+	AllowRecover     bool     `json:"allow_recover" jsonschema:"Whether what an interrupted dpkg left unfinished may be finished (dpkg --configure --pending)."`
 }
 
 // PrivPower is the power section.
@@ -149,9 +153,9 @@ type PrivOp struct {
 // PrivFinding is a command whose program bypasses a bound operation.
 type PrivFinding struct {
 	CommandID string `json:"command_id" jsonschema:"Command id."`
-	Category  string `json:"category" jsonschema:"package (a package tool), power (a power binary) or exec (find with an action that runs, deletes or writes)."`
+	Category  string `json:"category" jsonschema:"package (a package tool), power (a power binary), exec (find with an action that runs, deletes or writes) or script (a #! script, run as root on whatever it contains)."`
 	Program   string `json:"program" jsonschema:"The program recognised."`
-	Match     string `json:"match" jsonschema:"How it was recognised: written (the path's name), resolved (the name it resolves to), identity (a copy of that program) or template (find's action in a template)."`
+	Match     string `json:"match" jsonschema:"How it was recognised: written (the path's name), resolved (the name it resolves to), identity (a copy of that program), template (find's action in a template) or script (the program is a #! script; program is then its innermost interpreter)."`
 }
 
 // GateHello identifies the gate.
@@ -228,6 +232,7 @@ type Limits struct {
 	MaxFindDepth     int `json:"max_find_depth" jsonschema:"Deepest find walk."`
 	MaxDeleteEntries int `json:"max_delete_entries" jsonschema:"Most entries of a recursive delete."`
 	MaxProcesses     int `json:"max_processes" jsonschema:"Most processes listed."`
+	MaxMemoryMB      int `json:"max_memory_mb" jsonschema:"Memory limit (RLIMIT_DATA) of every command and git process, in MiB."`
 }
 
 // Paths are the policy's roots.
@@ -263,11 +268,12 @@ type Repo struct {
 
 // Command is one declared command.
 type Command struct {
-	ID             string     `json:"id" jsonschema:"Command id."`
-	Description    string     `json:"description" jsonschema:"The host owner's description."`
-	Tier           string     `json:"tier" jsonschema:"read, operator or destructive."`
-	RootEquivalent bool       `json:"root_equivalent" jsonschema:"Whether the owner acknowledged the command as root-equivalent."`
-	Templates      [][]string `json:"templates" jsonschema:"Argument templates; placeholders are typed."`
+	ID               string     `json:"id" jsonschema:"Command id."`
+	Description      string     `json:"description" jsonschema:"The host owner's description."`
+	Tier             string     `json:"tier" jsonschema:"read, operator or destructive."`
+	RootEquivalent   bool       `json:"root_equivalent" jsonschema:"Whether the owner acknowledged the command as root-equivalent."`
+	ReadsPrivateKeys bool       `json:"reads_private_keys" jsonschema:"Whether the owner lets the command read files that hold a private key; its output is then also masked by the PEM-width heuristic."`
+	Templates        [][]string `json:"templates" jsonschema:"Argument templates; placeholders are typed."`
 }
 
 func getPolicy(d *Deps) Tool {
@@ -347,13 +353,14 @@ type privPolicyWire struct {
 }
 
 type privCmdWire struct {
-	ID             string     `json:"id"`
-	Tier           string     `json:"tier"`
-	Unit           string     `json:"unit"`
-	Description    string     `json:"description"`
-	Templates      [][]string `json:"templates"`
-	RootEquivalent bool       `json:"root_equivalent"`
-	Capabilities   []string   `json:"capabilities"`
+	ID               string     `json:"id"`
+	Tier             string     `json:"tier"`
+	Unit             string     `json:"unit"`
+	Description      string     `json:"description"`
+	Templates        [][]string `json:"templates"`
+	RootEquivalent   bool       `json:"root_equivalent"`
+	Capabilities     []string   `json:"capabilities"`
+	ReadsPrivateKeys bool       `json:"reads_private_keys"`
 }
 
 type privOpWire struct {
@@ -394,9 +401,10 @@ func (d *Deps) privPolicy(ctx context.Context, target string) (summary *PrivPoli
 		Owners: w.Owners, ModesMax: w.ModesMax, BackupsKeep: w.BackupsKeep, BackupsMaxStoreBytes: w.BackupsMaxStoreBytes,
 		Commands: []PrivCommand{}, Packages: w.Packages, Power: w.Power, Ops: []PrivOp{}, Findings: w.Findings,
 	}
-	for _, c := range w.Commands {
+	for i := range w.Commands {
+		c := &w.Commands[i]
 		p.Commands = append(p.Commands, PrivCommand{ID: c.ID, Tier: c.Tier, Unit: c.Unit, Description: c.Description, Templates: c.Templates,
-			RootEquivalent: c.RootEquivalent, Capabilities: c.Capabilities, Approval: privApproval(c.Tier)})
+			RootEquivalent: c.RootEquivalent, Capabilities: c.Capabilities, ReadsPrivateKeys: c.ReadsPrivateKeys, Approval: privApproval(c.Tier)})
 	}
 	for _, o := range w.Ops {
 		p.Ops = append(p.Ops, PrivOp{Op: o.Op, Tier: o.Tier, Unit: o.Unit, Approval: privApproval(o.Tier)})

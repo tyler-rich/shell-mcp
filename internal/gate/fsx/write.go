@@ -415,7 +415,7 @@ func (f *FS) MkdirAs(p string, mode *os.FileMode, parents bool, owner *Owner) (M
 	}
 	defer func() { _ = top.Close() }()
 	l := &loc{p: p, write: true, root: root, top: top}
-	if l.rootReal, err = realPathOfRoot(top); err != nil {
+	if l.rootReal, err = realPathOfRoot(f.cfg.Proc, top); err != nil {
 		return res, mapErr(err)
 	}
 	rel := pathx.Rel(root, p)
@@ -524,7 +524,7 @@ func (f *FS) mkdirIn(l *loc, dir *os.Root, dirReal, name string, m os.FileMode, 
 
 // CopyExpecting copies the regular file src (any root) to dst (a write root). The
 // copy is bounded by max_read_bytes, refused for files holding a private
-// key, and read-back verified. A new copy takes the source's mode, a copy
+// key anywhere, and read-back verified. A new copy takes the source's mode, a copy
 // over a file the destination's, without setuid, setgid, sticky or
 // world-write, and masked by ModesMax in the helper. With overwrite and
 // expected (expected_destination_sha256, P-9), the destination must be a
@@ -577,7 +577,9 @@ func (f *FS) CopyAs(src, dst string, overwrite bool, expected string, owner *Own
 	if len(data) > limit {
 		return WriteResult{}, errf(protocol.CodeTooLarge, "source exceeds max_read_bytes (%d)", limit)
 	}
-	if redact.ContainsPrivateKey(data[:min(len(data), sniffKeyBytes)]) {
+	// The whole source, as ReadFile searches a file (S7-3): a key past the
+	// first 64 KiB is not copied either.
+	if redact.ContainsPrivateKey(data) {
 		return WriteResult{}, errf(protocol.CodePathDenied, "file contains a private key")
 	}
 	ld, err := f.locate(dst, true)

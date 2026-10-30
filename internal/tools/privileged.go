@@ -26,6 +26,7 @@ func privilegedTools(d *Deps) []Tool {
 		privWriteFile(d), privMakeDirectory(d), privCopyPath(d), privMovePath(d), privChangeOwner(d), privSetPermissions(d),
 		privPreviewDelete(d), privDeletePath(d), privRestoreBackup(d), privRunCommand(d),
 		privPreviewPackages(d), privUpdatePackageIndex(d), privInstallPackages(d), privUpgradePackages(d), privRemovePackages(d),
+		privRecoverPackages(d), privReinstallPackages(d),
 		privRebootHost(d), privCancelPower(d)}
 }
 

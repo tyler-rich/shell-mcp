@@ -85,8 +85,50 @@ func TestTrampolineRefusal(t *testing.T) {
 func validConfig() *trampolineConfig {
 	return &trampolineConfig{
 		Path: "/usr/bin/example-tool", Argv: []string{"/usr/bin/example-tool", "a b", "", "\xff\xfe"},
-		Env: []string{"PATH=/usr/bin", "EMPTY="}, Dir: "/srv/app",
+		Env: []string{"PATH=/usr/bin", "EMPTY="}, Dir: "/srv/app", Files: 2,
 		Limits: []childLimit{{Resource: unix.RLIMIT_CORE, Max: 0}, {Resource: unix.RLIMIT_NPROC, Max: 300}},
+	}
+}
+
+// TestConfigMagic: the command's encoding carries passed descriptors since
+// SMX2, so a trampoline of another release refuses it instead of misreading
+// it.
+func TestConfigMagic(t *testing.T) {
+	if string(configMagic[:]) != "SMX2" {
+		t.Fatalf("magic %q", configMagic)
+	}
+	b, err := encodeConfig(validConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeConfig(append([]byte("SMX1"), b[4:]...)); !errors.Is(err, errConfig) {
+		t.Fatalf("an SMX1 command: %v", err)
+	}
+}
+
+// TestPassedFileRefusal: the trampoline passes a descriptor only when it is
+// a regular file open read-only.
+func TestPassedFileRefusal(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		mode uint32
+		fl   int
+		want string
+	}{
+		{"regular, read-only", unix.S_IFREG, unix.O_RDONLY | unix.O_NONBLOCK, ""},
+		{"read-write", unix.S_IFREG, unix.O_RDWR, "open read-only"},
+		{"write-only", unix.S_IFREG, unix.O_WRONLY, "open read-only"},
+		{"directory", unix.S_IFDIR, unix.O_RDONLY, "regular file"},
+		{"FIFO", unix.S_IFIFO, unix.O_RDONLY, "regular file"},
+		{"socket", unix.S_IFSOCK, unix.O_RDWR, "regular file"},
+		{"character device", unix.S_IFCHR, unix.O_RDONLY, "regular file"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			why := passedFileRefusal(5, c.mode, c.fl)
+			if (c.want == "") != (why == "") || !strings.Contains(why, c.want) || c.want != "" && !strings.Contains(why, "fd 5") {
+				t.Fatalf("refusal %q, want %q", why, c.want)
+			}
+		})
 	}
 }
 
@@ -142,6 +184,7 @@ func TestConfigDecodeStrict(t *testing.T) {
 		list(c.Argv)
 		list(c.Env)
 		str(c.Dir)
+		b = binary.LittleEndian.AppendUint32(b, c.Files)
 		b = binary.LittleEndian.AppendUint32(b, uint32(len(c.Limits))) //nolint:gosec // G115: test sizes
 		for _, l := range c.Limits {
 			b = binary.LittleEndian.AppendUint32(b, l.Resource)
@@ -171,6 +214,7 @@ func TestConfigDecodeStrict(t *testing.T) {
 		{"environment entry without a name", enc(func(c *trampolineConfig) { c.Env = []string{"=x"} })},
 		{"unknown resource", enc(func(c *trampolineConfig) { c.Limits = []childLimit{{Resource: rlimNLimits, Max: 1}} })},
 		{"too many limits", enc(func(c *trampolineConfig) { c.Limits = make([]childLimit, maxConfigLimits+1) })},
+		{"too many files", enc(func(c *trampolineConfig) { c.Files = MaxFiles + 1 })},
 		{"huge count", append(append([]byte(nil), configMagic[:]...), 0xff, 0xff, 0xff, 0xff)},
 		{"oversized", append(bytes.Clone(good), make([]byte, maxConfigBytes)...)},
 	} {
@@ -191,6 +235,7 @@ func FuzzDecodeConfig(f *testing.F) {
 	}
 	f.Add(good)
 	f.Add([]byte("SMX1"))
+	f.Add([]byte("SMX2"))
 	f.Add(append(bytes.Clone(good), 0))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		c, err := decodeConfig(b)

@@ -328,7 +328,7 @@ func checkRootChain(dir string, trusted func(uint32) bool, sticky bool) error {
 		return err
 	}
 	defer func() { _ = r.Close() }()
-	rp, err := realPathOfRoot(r)
+	rp, err := realPathOfRoot(nil, r) // check-policy, outside the sandbox: by path
 	if err != nil {
 		return err
 	}

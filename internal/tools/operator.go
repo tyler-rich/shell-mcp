@@ -225,7 +225,7 @@ func writeFile(d *Deps) Tool {
 	return define(d, spec[writeIn, WriteFile]{
 		name:        "shell_write_file",
 		title:       "Write file",
-		description: "Atomically replaces or creates a text file under the target policy's write roots and verifies it by reading it back, returning the old and new SHA-256 and line counts.",
+		description: "Atomically replaces or creates a text file under the target policy's write roots and verifies it by reading it back, returning the old and new SHA-256 and line counts. Content passes through the client and its model provider, so generate private keys on the host instead.",
 		tier:        TierOperator,
 		idempotent:  true,
 		schema: func(s *jsonschema.Schema) {

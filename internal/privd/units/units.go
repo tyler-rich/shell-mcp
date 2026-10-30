@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 
+	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/pathx"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 )
@@ -168,6 +169,7 @@ func Core(p *policy.Policy) (Files, error) {
 			removed = append(removed, g)
 		}
 	}
+	protectHome, _ := ProtectHome(p)
 	inacc := make([]string, len(inaccessible))
 	for i, pth := range inaccessible {
 		inacc[i] = "-" + pth
@@ -186,7 +188,7 @@ func Core(p *policy.Policy) (Files, error) {
 		{"ProtectSystem", "strict"},
 		{"ReadWritePaths", strings.Join(rw, " ")},
 		{"InaccessiblePaths", strings.Join(inacc, " ")},
-		{"ProtectHome", "read-only"},
+		{"ProtectHome", protectHome},
 		// /run holds the system bus, systemd's private socket and other
 		// sockets that are root-equivalent to a root client; the core unit
 		// sees an empty read-only tmpfs there. (Not InaccessiblePaths=:
@@ -217,7 +219,9 @@ func Core(p *policy.Policy) (Files, error) {
 		{"UMask", "0077"},
 		{"RuntimeMaxSec", strconv.Itoa(p.Limits.MaxTimeoutS + RuntimeSlackS)},
 		{"TasksMax", "64"},
-		{"MemoryMax", "256M"},
+		{"MemoryMax", MemoryMax(p)},
+		{"MemorySwapMax", "0"},
+		{"OOMPolicy", "continue"},
 		// A dead instance leaves nothing running for long: systemd sends
 		// SIGTERM to everything left in its cgroup, then SIGKILL after
 		// StopTimeoutS. A command that switched user lost its parent-death
@@ -233,12 +237,29 @@ func Core(p *policy.Policy) (Files, error) {
 	return Files{Socket: socket(p, h, "core", SocketPath), Service: svc.String()}, nil
 }
 
-// Broad unit limits: apt-get and dpkg with maintainer scripts need more
-// tasks and memory than one core-unit request.
-const (
-	BroadTasksMax  = "256"
-	BroadMemoryMax = "1G"
-)
+// BroadTasksMax is the broad unit's TasksMax=: apt-get and dpkg with
+// maintainer scripts need more tasks than one core-unit request.
+const BroadTasksMax = "256"
+
+// HelperMemoryMB is the room MemoryMax= leaves the helper itself above the
+// commands' limit: its buffers are bounded by the policy's output, read and
+// write caps (at most 4 MiB each) and the 4 MiB answer.
+const HelperMemoryMB = 256
+
+// MemoryMax is both units' MemoryMax=: limits.max_memory_mb plus
+// HelperMemoryMB (handoff N-30). A command reaches its own RLIMIT_DATA
+// (its allocation fails) before the instance reaches this; only a tree of
+// processes, each under its limit, can reach it. OOMPolicy=continue then
+// leaves the instance running after the kernel kills the process it
+// chose, so the helper answers with the command's signal and ends what is
+// left, instead of systemd stopping the instance (and the answer).
+// MemorySwapMax=0 (both units) makes MemoryMax= bound memory and swap
+// together: on a host with swap, the kernel would otherwise push the
+// instance's pages into swap past MemoryMax= instead of killing anything,
+// slowing the whole host until the request timed out.
+func MemoryMax(p *policy.Policy) string {
+	return strconv.Itoa(p.Limits.MaxMemoryMB+HelperMemoryMB) + "M"
+}
 
 // Broad generates the broad unit pair (PRIVILEGED §5.2) for a policy that
 // uses it (packages, unit: broad commands, power); it refuses otherwise.
@@ -278,7 +299,9 @@ func Broad(p *policy.Policy) (Files, error) {
 	lines = append(lines, [][2]string{
 		{"RuntimeMaxSec", strconv.Itoa(p.Limits.MaxTimeoutS + RuntimeSlackS)},
 		{"TasksMax", BroadTasksMax},
-		{"MemoryMax", BroadMemoryMax},
+		{"MemoryMax", MemoryMax(p)},
+		{"MemorySwapMax", "0"},
+		{"OOMPolicy", "continue"},
 		{"KillMode", "control-group"},
 		{"TimeoutStopSec", strconv.Itoa(StopTimeoutS)},
 	}...)
@@ -323,6 +346,9 @@ func check(p *policy.Policy) error {
 	}
 	if p.Limits.MaxTimeoutS < 1 || p.Limits.MaxTimeoutS > policy.MaxTimeoutCeiling {
 		return fmt.Errorf("limits.max_timeout_s %d is not in 1..%d", p.Limits.MaxTimeoutS, policy.MaxTimeoutCeiling)
+	}
+	if p.Limits.MaxMemoryMB < gpolicy.MaxMemoryMBMin || p.Limits.MaxMemoryMB > gpolicy.MaxMemoryMBMax {
+		return fmt.Errorf("limits.max_memory_mb %d is not in %d..%d", p.Limits.MaxMemoryMB, gpolicy.MaxMemoryMBMin, gpolicy.MaxMemoryMBMax)
 	}
 	for _, r := range p.Paths.WriteRoots() {
 		if err := safePath("write root", r); err != nil {

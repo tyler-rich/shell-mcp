@@ -117,6 +117,13 @@ func (c *Client) Call(ctx context.Context, o Opener, op, ceiling string, args an
 		return nil, sentError{envelope.Errorf(envelope.CodeTimeout, "the gate did not answer within the time budget")}
 	case r := <-done:
 		resp, err := check(ctx, id, r.resp, r.err)
+		var de *protocol.DecodeError
+		if errors.As(r.err, &de) && de.Code == protocol.CodeProtocolMismatch {
+			// A gate of another version refused the request before running
+			// anything (every released gate decodes the version first): not
+			// sent, so a privileged write is never reported outcome_unknown.
+			return nil, err
+		}
 		if err != nil {
 			return nil, sentError{envelope.AsError(err)}
 		}
@@ -162,7 +169,9 @@ func check(ctx context.Context, id string, resp *protocol.Response, err error) (
 		case protocol.CodeTooLarge:
 			return nil, envelope.Errorf(protocol.CodeTooLarge, "the gate's response exceeds 4 MiB")
 		case protocol.CodeProtocolMismatch:
-			return nil, envelope.Errorf(envelope.CodeProtocolMismatch, "the gate speaks another protocol version (this server speaks version %d)", protocol.Version)
+			return nil, envelope.Errorf(envelope.CodeProtocolMismatch, "%s", protocol.PeerVersionMessage("the gate", "this server", de.Peer,
+				"upgrade shell-mcp-gate and shell-mcp-privd on the target to this server's release",
+				"upgrade this server (shell-mcp) to the gate's release"))
 		}
 		return nil, envelope.Errorf(envelope.CodeProtocolMismatch, "the gate's response is malformed")
 	case err != nil:

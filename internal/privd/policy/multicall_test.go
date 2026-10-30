@@ -186,7 +186,8 @@ func TestProgramActions(t *testing.T) {
 
 // TestScriptInterpreterPrivileged: a #! script whose interpreter is on the
 // never list is refused; one whose interpreter needs an acknowledge needs
-// it; any other is loaded with a warning naming its interpreter.
+// it; any other needs one too (handoff N-26) and is loaded with a warning
+// naming its interpreter.
 func TestScriptInterpreterPrivileged(t *testing.T) {
 	f := newFixture(t)
 	sh := f.exe(t, "sh", "invented shell\n")
@@ -198,7 +199,9 @@ func TestScriptInterpreterPrivileged(t *testing.T) {
 		t.Fatalf("list B %d, interpreter %q", c.ListB, c.Interpreter)
 	}
 	interp := f.exe(t, "example-interp", "invented interpreter\n")
-	p := f.mustLoad(t, cmdWith(f.exe(t, "report", "#!"+interp+"\n"), "", "[[]]"))
+	report := f.exe(t, "report", "#!"+interp+"\n")
+	f.mustFail(t, cmdWith(report, "", "[[]]"), "acknowledge")
+	p := f.mustLoad(t, cmdWith(report, ack, "[[]]"))
 	if !hasWarning(p, "commands[x]", "#! script", interp) {
 		t.Fatalf("no script warning: %q", p.Warnings)
 	}

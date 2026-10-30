@@ -9,12 +9,15 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json/jsontext"
+	"os"
 	"path"
+	"syscall"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
+	"github.com/tyler-rich/shell-mcp/internal/redact"
 	"github.com/tyler-rich/shell-mcp/internal/template"
 )
 
@@ -32,6 +35,7 @@ type execArgs struct {
 type execData struct {
 	CommandID       string   `json:"command_id"`
 	Argv            []string `json:"argv"`
+	Fds             []execFD `json:"fds"`
 	ExitCode        *int     `json:"exit_code"`
 	Signal          *string  `json:"signal"`
 	TimedOut        bool     `json:"timed_out"`
@@ -52,6 +56,10 @@ func (r resolver) ResolvePath(v string, write bool) (string, error) {
 		return r.s.execFS.ResolveWrite(v)
 	}
 	return r.s.execFS.ResolveRead(v)
+}
+
+func (r resolver) ResolveReadFD(v string) (*os.File, string, error) {
+	return r.s.execFS.ResolveReadFD(v)
 }
 
 func (r resolver) MatchUnit(v string) bool {
@@ -75,13 +83,14 @@ func (s *server) exec(raw jsontext.Value) (data any, warns []string, failure err
 	if err != nil {
 		return nil, nil, err
 	}
+	defer rx.close()
 	if a.ExpectedPreviewSHA256 != nil {
 		if !fsx.ValidPreviewSHA256(*a.ExpectedPreviewSHA256) {
 			return nil, nil, errf(protocol.CodeBadRequest, "expected_preview_sha256 must be the preview_sha256 (64 lowercase hex digits) that exec_preview returned")
 		}
 		if rx.preview(s.p.SHA256).PreviewSHA256 != *a.ExpectedPreviewSHA256 {
 			return nil, nil, errf(protocol.CodeExists, "the command resolves differently than its preview (its preview_sha256 differs: "+
-				"the policy, the command's binary, a path placeholder or the cwd changed); nothing was run")
+				"the policy, the command's binary, a path placeholder, a file passed as a descriptor or the cwd changed); nothing was run")
 		}
 	}
 	c, args, dir := rx.c, rx.args, rx.dir
@@ -106,25 +115,36 @@ func (s *server) exec(raw jsontext.Value) (data any, warns []string, failure err
 		maxOut = a.MaxOutputBytes
 	}
 
+	if s.o.InjectBeforeExec != nil {
+		s.o.InjectBeforeExec()
+	}
+	// The command gets the descriptors the hash above covered.
 	res, err := execx.Run(context.Background(), &execx.Spec{
-		Trampoline: s.o.Executable,
-		Path:       c.Resolved,
-		Args:       args,
-		Env:        execx.Environment(s.p.ServiceHome),
-		Dir:        dir,
-		Stdin:      stdin,
-		Timeout:    s.timeout(),
-		MaxOutput:  maxOut,
+		Trampoline:  s.o.Executable,
+		Path:        c.Resolved,
+		Args:        args,
+		Env:         execx.Environment(s.p.ServiceHome),
+		Dir:         dir,
+		Stdin:       stdin,
+		Timeout:     s.timeout(),
+		MaxOutput:   maxOut,
+		MaxMemoryMB: s.p.Limits.MaxMemoryMB,
+		Files:       rx.files(),
 	})
 	if err != nil {
 		return nil, nil, err
 	}
 
+	if rx.strict {
+		res.Stdout = redact.MaskKeyBodies(s.red.Bytes(res.Stdout), redact.PlainLines)
+		res.Stderr = redact.MaskKeyBodies(s.red.Bytes(res.Stderr), redact.PlainLines)
+	}
 	stdout, cutOut := s.red.Truncate(res.Stdout, maxOut)
 	stderr, cutErr := s.red.Truncate(res.Stderr, maxOut)
 	d := execData{
 		CommandID:       c.ID,
 		Argv:            append([]string{c.Resolved}, args...),
+		Fds:             rx.fdList(),
 		ExitCode:        res.ExitCode,
 		TimedOut:        res.TimedOut,
 		Stdout:          string(stdout),
@@ -164,14 +184,60 @@ func (s *server) exec(raw jsontext.Value) (data any, warns []string, failure err
 
 // resolvedExec is a policy command resolved for one request: the command,
 // the template its arguments matched, the arguments as they are passed
-// (path placeholders resolved) and the working directory. exec and
-// exec_preview both get it from resolveExec, so what a preview shows is
-// what exec runs.
+// (path placeholders resolved, a {path:read:fd} as /dev/fd/N), the
+// descriptors opened for the {path:read:fd} placeholders with each file's
+// identity, and the working directory. exec and exec_preview both get it
+// from resolveExec, so what a preview shows is what exec runs; the caller
+// closes it.
 type resolvedExec struct {
 	c        *policy.Command
 	template int
 	args     []string
+	fds      []template.Descriptor
+	ids      []fileID
 	dir      string
+	// strict: the output gets redact.MaskKeyBodies, for a command that
+	// declares reads_private_keys or reads a file too large to search
+	// (handoff N-35).
+	strict bool
+}
+
+// fileID is a passed file's identity, read from its descriptor: the values
+// another gate instance reads for the same file, so that exec's recomputed
+// preview hash equals the preview's exactly when it passes the same file.
+// The mount id is left out (it is not stable across mount namespaces).
+type fileID struct{ dev, ino uint64 }
+
+// execFD is one passed descriptor, as exec_preview and exec report it.
+type execFD struct {
+	FD   int    `json:"fd"`
+	Path string `json:"path"`
+}
+
+func (rx *resolvedExec) close() {
+	for _, d := range rx.fds {
+		_ = d.File.Close()
+	}
+	rx.fds = nil
+}
+
+// files are the descriptors to pass, in order (execx passes the first as
+// template.FirstFD).
+func (rx *resolvedExec) files() []*os.File {
+	out := make([]*os.File, 0, len(rx.fds))
+	for _, d := range rx.fds {
+		out = append(out, d.File)
+	}
+	return out
+}
+
+// fdList is the descriptors as reported: never nil.
+func (rx *resolvedExec) fdList() []execFD {
+	out := make([]execFD, 0, len(rx.fds))
+	for _, d := range rx.fds {
+		out = append(out, execFD{FD: d.FD, Path: d.Path})
+	}
+	return out
 }
 
 // resolveExec looks the command up, checks its tier first (against
@@ -190,17 +256,45 @@ func (s *server) resolveExec(id string, args []string, cwd string) (*resolvedExe
 	if len(args) > template.MaxTokens {
 		return nil, errf(protocol.CodeBadRequest, "at most %d arguments", template.MaxTokens)
 	}
-	i, out, err := template.MatchIndex(c.Templates, args, resolver{s})
+	m, err := template.MatchFD(c.Templates, args, resolver{s})
 	if err != nil {
 		return nil, err
 	}
-	dir := "/"
+	rx := &resolvedExec{c: c, template: m.Index, args: m.Args, fds: m.Descriptors}
+	for _, d := range rx.fds {
+		fi, serr := d.File.Stat()
+		st, ok := fileStat(fi)
+		if serr != nil || !ok {
+			rx.close()
+			return nil, errf(protocol.CodeInternal, "a file passed as a descriptor could not be read (fstat); nothing was run")
+		}
+		rx.ids = append(rx.ids, fileID{dev: st.Dev, ino: st.Ino})
+	}
+	// A file that holds a private key could be printed in part, without its
+	// BEGIN line (handoff N-35): refused unless the command opts in.
+	over, err := s.execFS.CommandKeyInputs(c.ID, &c.Templates[m.Index], m.Args, m.Descriptors, c.ReadsPrivateKeys)
+	if err != nil {
+		rx.close()
+		return nil, err
+	}
+	rx.strict = over || c.ReadsPrivateKeys
+	rx.dir = "/"
 	if cwd != "" {
-		if dir, err = s.execFS.ResolveDir(cwd); err != nil {
+		if rx.dir, err = s.execFS.ResolveDir(cwd); err != nil {
+			rx.close()
 			return nil, err
 		}
 	}
-	return &resolvedExec{c: c, template: i, args: out, dir: dir}, nil
+	return rx, nil
+}
+
+// fileStat is fi's stat(2) record.
+func fileStat(fi os.FileInfo) (*syscall.Stat_t, bool) {
+	if fi == nil {
+		return nil, false
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	return st, ok
 }
 
 type execPreviewArgs struct {
@@ -218,19 +312,24 @@ type execPreviewData struct {
 	Template       []string `json:"template"`
 	Argv           []string `json:"argv"`
 	Cwd            string   `json:"cwd"`
+	Fds            []execFD `json:"fds"`
 	PolicySHA256   string   `json:"policy_sha256"`
 	PreviewSHA256  string   `json:"preview_sha256"`
 }
 
-const execPreviewDomain = "shell-mcp exec preview v1\x00"
+// execPreviewDomain is v2 since protocol version 2 (handoff N-22): the hash
+// also covers the passed descriptors.
+const execPreviewDomain = "shell-mcp exec preview v2\x00"
 
 // preview describes the resolved command; preview_sha256 covers every
-// field, the policy's SHA-256 included, each length-prefixed and counted.
+// field, the policy's SHA-256 included, each length-prefixed and counted,
+// and for each passed descriptor its number, path, device and inode, so
+// that another file under the same name is another preview.
 func (rx *resolvedExec) preview(policySHA string) execPreviewData {
 	d := execPreviewData{
 		CommandID: rx.c.ID, Tier: rx.c.Tier.String(), Description: rx.c.Description, RootEquivalent: rx.c.RootEquivalent,
 		Template: rx.c.Templates[rx.template].String(), Argv: append([]string{rx.c.Resolved}, rx.args...), Cwd: rx.dir,
-		PolicySHA256: policySHA,
+		Fds: rx.fdList(), PolicySHA256: policySHA,
 	}
 	b := []byte(execPreviewDomain)
 	for _, f := range []string{d.PolicySHA256, d.CommandID, d.Tier, d.Description, d.Cwd} {
@@ -247,6 +346,13 @@ func (rx *resolvedExec) preview(policySHA string) execPreviewData {
 			b = appendStr(b, f)
 		}
 	}
+	b = binary.AppendUvarint(b, uint64(len(d.Fds)))
+	for i, fd := range d.Fds {
+		b = binary.AppendUvarint(b, uint64(fd.FD)) //nolint:gosec // G115: a descriptor number from template.FirstFD
+		b = appendStr(b, fd.Path)
+		b = binary.AppendUvarint(b, rx.ids[i].dev)
+		b = binary.AppendUvarint(b, rx.ids[i].ino)
+	}
 	h := sha256.Sum256(b)
 	d.PreviewSHA256 = hex.EncodeToString(h[:])
 	return d
@@ -262,5 +368,6 @@ func (s *server) execPreview(raw jsontext.Value) (data any, failure error) {
 	if err != nil {
 		return nil, err
 	}
+	defer rx.close()
 	return rx.preview(s.p.SHA256), nil
 }

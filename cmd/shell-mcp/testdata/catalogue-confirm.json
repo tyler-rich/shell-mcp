@@ -232,7 +232,7 @@
     },
     "description": "Returns a target gate's version, principal, sandbox status and effective policy: roots, limits, services, repositories, commands with their templates, and privileged forwarding with the privileged helper's policy summary.",
     "input_schema_sha256": "42809bf68a1fbfc1ec56832b0e720e986e33781f27d916d7d9a1e9ebc2696207",
-    "output_schema_sha256": "fc01f1300abefbdabb69c3ec1872592cb6eef657a00175f41b0e286effffb31b",
+    "output_schema_sha256": "178ba7b19dedc524a10b501791b07a8775708f28aa8ec33c265177404161ae0e",
     "requires_user_interaction": false
   },
   {
@@ -712,8 +712,8 @@
       "title": "Preview packages as root"
     },
     "description": "Reports, as root, what installing, upgrading or removing packages would change, without changing anything: every package with its exact version, and a hash of the transaction.",
-    "input_schema_sha256": "30daa473d1e9535cf14cfcd170279261761a8d4b58a80a18d3117f19d279b10d",
-    "output_schema_sha256": "3f1e459d2419ddd8ef966bf88eb05d52a643ce400aafe14b06e8e6fa6173baa6",
+    "input_schema_sha256": "63d6a371be12f9ddf1e88b0d2284e5e52fe017539596b20acec1ff882fe581f3",
+    "output_schema_sha256": "e52332b92d1bcea94c6871c535732c8cb0a9b35419fca6de04fce98a689fb9b9",
     "requires_user_interaction": false
   },
   {
@@ -754,6 +754,46 @@
     "description": "Reboots or powers off the host as root: answers at once with the time the action will be requested from logind, 60 seconds later, unless it is cancelled, or blocked by a package operation or an inhibitor lock, first.",
     "input_schema_sha256": "71ad9ea19e01864a3594c237bfbcf0e060bea5489e3fc3b020e3bf7df8448d00",
     "output_schema_sha256": "0a307efb187453a59ffe019e743a7da94d3392fa1fe24f7d4b25e7ad91acbd66",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_recover_packages",
+    "title": "Recover unfinished packages as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Recover unfinished packages as root"
+    },
+    "description": "Finishes, as root, what an interrupted dpkg left unfinished, exactly as its approved preview listed it, without installing or removing packages; returns what dpkg shows was configured.",
+    "input_schema_sha256": "6ae8497bec2bac4c9473d84c65286fe270594c68ee8ef34676a32987e07cc6b8",
+    "output_schema_sha256": "e9eaec134f86e6b9d25cbe7cf0cbe43a3bc9675169fc380eb025f2416259e832",
+    "requires_user_interaction": true
+  },
+  {
+    "name": "shell_priv_reinstall_packages",
+    "title": "Reinstall unfinished packages as root",
+    "tier": "operator",
+    "profiles": [
+      "admin"
+    ],
+    "privileged": true,
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": true,
+      "readOnlyHint": false,
+      "title": "Reinstall unfinished packages as root"
+    },
+    "description": "Reinstalls, as root, exactly the packages an interrupted dpkg left needing a reinstall, each at the version dpkg names, as its approved preview listed them; returns what dpkg shows was reinstalled.",
+    "input_schema_sha256": "203e97f4cdec4401af00c6862eeb5a55da9f399c1b715519ca0f676ca1db97c5",
+    "output_schema_sha256": "b59912f49638b214a093931e7eec46b87513f9aabf91d3260f4d0c2769a3de87",
     "requires_user_interaction": true
   },
   {
@@ -813,7 +853,7 @@
     },
     "description": "Runs, as root, a command declared in the host's privileged policy with arguments matching one of its templates, exactly as its preview resolved it and in the unit it named, and returns its exit status and redacted, size-capped output.",
     "input_schema_sha256": "4b33128aabec2db14e21ab2e50b11dba9569d4a22b4c36f9f3235ce273a942c0",
-    "output_schema_sha256": "902ef605c4c66f3dafc616c51ea84be4dc924f3a23a42fbee5d93d6921f631e6",
+    "output_schema_sha256": "0111e607580b4f7aec40dd1851170909157587c89fa8d22fd0c6f8c07189da49",
     "requires_user_interaction": true
   },
   {
@@ -911,7 +951,7 @@
       "readOnlyHint": false,
       "title": "Write file as root"
     },
-    "description": "Atomically writes a text file as root within the host's privileged write roots, backing up what it replaces and verifying by read-back; returns the hashes, line counts, mode, owner and backup ids.",
+    "description": "Atomically writes a text file as root within the host's privileged write roots, backing up what it replaces and verifying by read-back; returns the hashes, line counts, mode, owner and backup ids. Content passes through the client and its model provider, so generate private keys on the host instead.",
     "input_schema_sha256": "984832f955db2c45207ba60b86df5dc50848d5094a4aa687192333cd702ab840",
     "output_schema_sha256": "8563e5a2f984f7df9290d702e45124f039f50ccc92fc433bf6472d78c10bd245",
     "requires_user_interaction": true
@@ -955,7 +995,7 @@
     },
     "description": "Runs a read- or operator-tier command declared in the target policy with arguments matching one of its templates and optional standard input, and returns its exit status and redacted, size-capped output.",
     "input_schema_sha256": "75ee38eb91069ff31f9f2e1eb15467bbee69212bb906fcdcce99f4e10763f323",
-    "output_schema_sha256": "902ef605c4c66f3dafc616c51ea84be4dc924f3a23a42fbee5d93d6921f631e6",
+    "output_schema_sha256": "0111e607580b4f7aec40dd1851170909157587c89fa8d22fd0c6f8c07189da49",
     "requires_user_interaction": true
   },
   {
@@ -975,7 +1015,7 @@
     },
     "description": "Runs a read-, operator- or destructive-tier command declared in the target policy with arguments matching one of its templates and optional standard input, exactly as its approved preview resolved it, and returns its exit status and redacted, size-capped output.",
     "input_schema_sha256": "664bf58040cdb13b74e323f6d8a4c4ea1c842fdb6f81c1a6b9a3cb757f7416e3",
-    "output_schema_sha256": "902ef605c4c66f3dafc616c51ea84be4dc924f3a23a42fbee5d93d6921f631e6",
+    "output_schema_sha256": "0111e607580b4f7aec40dd1851170909157587c89fa8d22fd0c6f8c07189da49",
     "requires_user_interaction": true
   },
   {
@@ -997,7 +1037,7 @@
     },
     "description": "Runs a read-tier command declared in the target policy with arguments matching one of its templates, and returns its exit status and redacted, size-capped output.",
     "input_schema_sha256": "590715efe716d349a69a5f0214a3312c08d76f9f6b018d00c7475b4a75fbe483",
-    "output_schema_sha256": "0f128ad826c1b9e1c1532826832e027902534bda0837da3890c3b77173a51636",
+    "output_schema_sha256": "f2f6858c28d9f80c476426244f78e7918b7f628fd971e28f0288a1fe6d868c07",
     "requires_user_interaction": false
   },
   {
@@ -1059,7 +1099,7 @@
       "readOnlyHint": false,
       "title": "Write file"
     },
-    "description": "Atomically replaces or creates a text file under the target policy's write roots and verifies it by reading it back, returning the old and new SHA-256 and line counts.",
+    "description": "Atomically replaces or creates a text file under the target policy's write roots and verifies it by reading it back, returning the old and new SHA-256 and line counts. Content passes through the client and its model provider, so generate private keys on the host instead.",
     "input_schema_sha256": "60317ac1fc958b9cf21b389b383c5fc99c02305852476df475257d0b76742dde",
     "output_schema_sha256": "9d01f4fb70b983e5bb6d30c16a2eb024f802db37270a97a9b40ba131d2dba096",
     "requires_user_interaction": true

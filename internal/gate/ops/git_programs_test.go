@@ -287,3 +287,78 @@ func TestGitSubmoduleKeyGapsFound(t *testing.T) {
 		t.Fatalf("an entry without an override, a flag or a reason: gaps %q", g)
 	}
 }
+
+// threadKeyGaps returns what table does not cover among git's keys that set
+// how many threads, workers or parallel jobs it runs (gitx.ThreadKeyName;
+// handoff N-30): a key the table does not list, a -c value not on the
+// gate's command line, and an entry with neither an override nor a reason.
+func threadKeyGaps(table []gitx.ThreadKey, keys, cvals []string) []string {
+	var gaps []string
+	for _, k := range keys {
+		if !gitx.ThreadKeyName(k) {
+			continue
+		}
+		i := slices.IndexFunc(table, func(e gitx.ThreadKey) bool { return strings.EqualFold(e.Key, k) })
+		if i < 0 {
+			gaps = append(gaps, k+": sets how many threads or jobs git runs, and gitx.ThreadKeys neither pins it nor says why it need not")
+			continue
+		}
+		e := &table[i]
+		for _, a := range e.Args {
+			if !slices.Contains(cvals, a) {
+				gaps = append(gaps, k+": -c "+a+" is not on the gate's command line")
+			}
+		}
+		if len(e.Args) == 0 && e.Why == "" {
+			gaps = append(gaps, k+": gitx.ThreadKeys lists it without an override or a reason")
+		}
+	}
+	return gaps
+}
+
+// TestGitThreadKeysCovered: every key the installed git knows that sets how
+// many threads, workers or jobs it runs is pinned on every gate git process
+// or listed with the reason it need not be, so a git operation's memory
+// need does not follow the host's CPU count (N-30).
+func TestGitThreadKeysCovered(t *testing.T) {
+	ver := strings.TrimSpace(installedGit(t, "version"))
+	keys := strings.Fields(installedGit(t, "help", "--config"))
+	matched := 0
+	for _, k := range keys {
+		if gitx.ThreadKeyName(k) {
+			matched++
+		}
+	}
+	// git 2.47 and later know at least these: core.preloadIndex,
+	// index.threads, pack.threads, grep.threads, checkout.workers,
+	// checkout.thresholdForParallelism, fetch.parallel, submodule.fetchJobs.
+	if len(keys) < 500 || matched < 8 {
+		t.Fatalf("%s: %d configuration keys, %d about threads; that is not the whole list", ver, len(keys), matched)
+	}
+	if gaps := threadKeyGaps(gitx.ThreadKeys, keys, gateCValues()); len(gaps) > 0 {
+		t.Fatalf("%s: what sets git's thread or job count is not pinned by the gate's git argv:\n%s", ver, strings.Join(gaps, "\n"))
+	}
+	t.Logf("%s: %d configuration keys, %d about threads: all covered", ver, len(keys), matched)
+}
+
+// TestGitThreadKeyGapsFound: the check fails for a key a future git could
+// add and for a table override missing from the gate's argv.
+func TestGitThreadKeyGapsFound(t *testing.T) {
+	cvals := gateCValues()
+	if g := threadKeyGaps(gitx.ThreadKeys, []string{"pack.threads", "user.name"}, cvals); len(g) != 0 {
+		t.Fatalf("covered keys reported: %q", g)
+	}
+	for _, c := range []struct {
+		keys, cvals []string
+		want        string
+	}{
+		{[]string{"diff.renameThreads"}, cvals, "diff.renameThreads"},
+		{[]string{"merge.workers"}, cvals, "merge.workers"},
+		{[]string{"status.parallel"}, cvals, "status.parallel"},
+		{[]string{"pack.threads"}, slices.DeleteFunc(slices.Clone(cvals), func(v string) bool { return strings.HasPrefix(v, "pack.threads=") }), "-c pack.threads="},
+	} {
+		if g := threadKeyGaps(gitx.ThreadKeys, c.keys, c.cvals); len(g) != 1 || !strings.Contains(g[0], c.want) {
+			t.Fatalf("keys %q: gaps %q, want one naming %s", c.keys, g, c.want)
+		}
+	}
+}

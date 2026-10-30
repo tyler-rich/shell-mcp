@@ -496,24 +496,34 @@ func TestExecNotStartedAfterHangup(t *testing.T) {
 }
 
 // TestExecReapFailureIsOutcomeUnknown (must-fix (a), fail closed): when the
-// helper cannot list the children a command left, it cannot confirm that
-// none is still running, so the answer is outcome_unknown, never the
-// command's success, and the journal line says why.
+// helper cannot list the children a command left while wait4 still reports
+// children, it cannot kill them or confirm that none is still running, so
+// after the reap's bound the answer is outcome_unknown, never the
+// command's success, and the journal line says why. When wait4 reports
+// that no child is left (ECHILD), the kernel has confirmed it and a failed
+// listing does not matter (handoff N-30).
 func TestExecReapFailureIsOutcomeUnknown(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	f.opts.ReapOrphans = true
 	f.opts.ReapHooks = &ops.ReapHooks{
 		Children: func() ([]int, error) { return nil, errors.New("injected: children unreadable") },
-		Wait:     func() (int, error) { return 0, unix.ECHILD },
+		Wait:     func() (int, error) { return 0, nil }, // a child is left, never ends
 	}
 	f.fail("priv_exec", m{"command_id": "probe-echo", "args": []string{"echo", "x"}}, "outcome_unknown")
 	if l := f.lastAudit(); !strings.Contains(l, `"outcome":"outcome_unknown"`) || !strings.Contains(l, "injected: children unreadable") {
 		t.Fatalf("audit %q", l)
 	}
+	// The listing fails, but wait4 confirms no child is left: the
+	// command's result.
+	f.opts.ReapHooks.Wait = func() (int, error) { return 0, unix.ECHILD }
+	var d execData
+	f.ok("priv_exec", m{"command_id": "probe-echo", "args": []string{"echo", "x"}}, &d)
+	if d.Stdout != "x\n" || strings.Contains(f.lastAudit(), "reap_error") {
+		t.Fatalf("ECHILD after a failed listing: %+v audit %q", d, f.lastAudit())
+	}
 	// Control: the same command with the children readable and none left.
 	f.opts.ReapHooks.Children = func() ([]int, error) { return []int{}, nil }
-	var d execData
 	f.ok("priv_exec", m{"command_id": "probe-echo", "args": []string{"echo", "x"}}, &d)
 	if d.Stdout != "x\n" || strings.Contains(f.lastAudit(), "reap_error") {
 		t.Fatalf("control %+v audit %q", d, f.lastAudit())

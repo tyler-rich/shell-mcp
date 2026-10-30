@@ -123,7 +123,7 @@ func TestPrivPolicySummary(t *testing.T) {
 	if helperUnitOf(&j) != "core" {
 		t.Fatalf("priv_policy answered by %q", j.Unit)
 	}
-	line := fmt.Sprintf(`{"v":1,"id":%q,"ceiling":"read","op":"priv_policy","args":{},"timeout_ms":5000}`+"\n", newID())
+	line := fmt.Sprintf(`{"v":2,"id":%q,"ceiling":"read","op":"priv_policy","args":{},"timeout_ms":5000}`+"\n", newID())
 	if out := directTo(t, svcShell, broadSocket, line); !strings.Contains(out, `"code":"helper_wrong_unit"`) {
 		t.Fatalf("the broad unit answered priv_policy: %s", out)
 	}

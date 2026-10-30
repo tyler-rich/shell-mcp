@@ -306,7 +306,7 @@ func TestApprovalWebFlow(t *testing.T) {
 		id := pendingID(t, srv.call(t, args))
 		fileIs(t, p, "v1\n")
 		// Only the preview's reads reached the gate.
-		conn.waitGate(t, `"principal":"`+opsWho+`"`, `"op":"read_file"`, `"`+p+`"`)
+		conn.waitGate(t, `"principal":"`+opsWho+`"`, `"op":"hash_file"`, `"`+p+`"`)
 		if n := writeLines(t, conn, p); n != 0 {
 			t.Fatalf("%d write_file lines before approval", n)
 		}

@@ -5,11 +5,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"reflect"
 	"strings"
 
 	"github.com/tyler-rich/shell-mcp/internal/envelope"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
+	"github.com/tyler-rich/shell-mcp/internal/redact"
 )
 
 // Approval previews of the operator tools (docs/TOOLS.md, "Approval
@@ -111,15 +113,18 @@ func countLines(b []byte) int {
 	return n
 }
 
-// writePreview: the file's current state (absent; or its size, mode,
-// content SHA-256 and line count; or another type), the new content's size,
-// SHA-256 and line count, and the line delta. Lines are counted only when
-// the gate returned the whole file as text, unredacted; otherwise null.
+// writePreview: the file's current state (absent; or its stat, content
+// SHA-256, line count and whether it holds a private key, through the
+// gate's hash_file, never its content (handoff N-5); or another type), the
+// new content's size, SHA-256, line count and whether it holds a private
+// key, and the line delta. Lines are counted for a text file of at most
+// read_file's default read; otherwise null. A file the gate gives no hash
+// for (above 256 MiB) is refused: the write would be bound to nothing.
 func (d *Deps) writePreview(ctx context.Context, in *writeIn, target string) (*preview, *envelope.Error) {
 	var acc policyAcc
 	content := []byte(*in.Content)
 	newLines := countLines(content)
-	next := map[string]any{"bytes": len(content), "sha256": sha256Hex(content), "lines": newLines}
+	next := map[string]any{"bytes": len(content), "sha256": sha256Hex(content), "lines": newLines, "private_key": redact.ContainsPrivateKey(content)}
 	st, e := d.statPreview(ctx, target, in.Path, &acc)
 	if e != nil {
 		return nil, e
@@ -135,30 +140,27 @@ func (d *Deps) writePreview(ctx context.Context, in *writeIn, target string) (*p
 		value["lines_delta"] = nil
 		return acc.result(value, "")
 	}
-	f, warns, pol, e := previewFetch[FileContent](ctx, d, target, protocol.OpReadFile, readFileWire{Path: in.Path}, true)
-	acc.add(pol)
+	cur, curSHA, e := d.gateFilePreview(ctx, target, st, &acc)
 	if e != nil {
 		return nil, e
 	}
-	if f == nil { // removed between the two reads
+	if cur == nil { // removed between the two requests
 		value["current"] = map[string]any{"state": "absent"}
 		value["lines_delta"] = newLines
 		return acc.absentResult(value)
 	}
-	cur := map[string]any{"state": "file", "size": st.Size, "mode": st.Mode, "sha256": f.SHA256, "lines": nil}
+	value["current"] = cur
 	value["lines_delta"] = nil
-	if !f.Binary && !f.Truncated && f.Offset == 0 && int64(len(f.Content)) == f.Size && len(warns) == 0 {
-		n := countLines([]byte(f.Content))
-		cur["lines"] = n
+	if n, ok := cur["lines"].(int); ok {
 		value["lines_delta"] = newLines - n
 	}
-	value["current"] = cur
-	return acc.result(value, f.SHA256)
+	return acc.result(value, curSHA)
 }
 
 // srcDstPreview: the stat of the source (possibly absent), overwrite, and
 // the destination's state: absent, or a regular file with its content hash
-// (P-9), which the re-call passes on (destPrecondition). A destination
+// (P-9) through the gate's hash_file, never its content (handoff N-5),
+// which the re-call passes on (destPrecondition). A destination
 // that would not be replaced refuses the preview (refuseDestination).
 func (d *Deps) srcDstPreview(ctx context.Context, in *srcDstIn, target string, isCopy bool) (*preview, *envelope.Error) {
 	var acc policyAcc
@@ -172,7 +174,7 @@ func (d *Deps) srcDstPreview(ctx context.Context, in *srcDstIn, target string, i
 	}
 	value := map[string]any{"source": entryPreview(src), "overwrite": in.Overwrite}
 	var cur map[string]any
-	var f *FileContent
+	var dstSHA string
 	if dst != nil {
 		srcType := ""
 		if src != nil {
@@ -181,7 +183,7 @@ func (d *Deps) srcDstPreview(ctx context.Context, in *srcDstIn, target string, i
 		if re := refuseDestination(dst, srcType, isCopy, in.Overwrite); re != nil {
 			return nil, re
 		}
-		if cur, f, e = d.boundFilePreview(ctx, target, protocol.OpReadFile, "gate", dst, &acc); e != nil {
+		if cur, dstSHA, e = d.gateFilePreview(ctx, target, dst, &acc); e != nil {
 			return nil, e
 		}
 		delete(cur, "lines")
@@ -191,7 +193,7 @@ func (d *Deps) srcDstPreview(ctx context.Context, in *srcDstIn, target string, i
 		return acc.absentResult(value)
 	}
 	value["destination"] = cur
-	return acc.result(value, f.SHA256)
+	return acc.result(value, dstSHA)
 }
 
 // refuseDestination refuses, at the preview of a copy or move (the gate's
@@ -265,15 +267,16 @@ func (d *Deps) gitPullPreview(ctx context.Context, in repoIn, target string) (*p
 
 // execPreviewWire is the gate's exec_preview data and its arguments.
 type execPreviewWire struct {
-	CommandID      string   `json:"command_id"`
-	Tier           string   `json:"tier"`
-	Description    string   `json:"description"`
-	RootEquivalent bool     `json:"root_equivalent"`
-	Template       []string `json:"template"`
-	Argv           []string `json:"argv"`
-	Cwd            string   `json:"cwd"`
-	PolicySHA256   string   `json:"policy_sha256"`
-	PreviewSHA256  string   `json:"preview_sha256"`
+	CommandID      string      `json:"command_id"`
+	Tier           string      `json:"tier"`
+	Description    string      `json:"description"`
+	RootEquivalent bool        `json:"root_equivalent"`
+	Template       []string    `json:"template"`
+	Argv           []string    `json:"argv"`
+	Cwd            string      `json:"cwd"`
+	Fds            []CommandFD `json:"fds"`
+	PolicySHA256   string      `json:"policy_sha256"`
+	PreviewSHA256  string      `json:"preview_sha256"`
 }
 
 type execPreviewArgsWire struct {
@@ -287,9 +290,10 @@ type execPreviewArgsWire struct {
 // command's tier against the tool's ceiling, the template the arguments
 // match, path placeholders and the cwd resolved on the target) and runs
 // nothing: the command id, tier, description, root_equivalent flag, the
-// matched template, the resolved argv and cwd, and preview_sha256, which
-// the re-call sends to exec as expected_preview_sha256. The hash is taken
-// from the gate's answer before the server's redaction.
+// matched template, the resolved argv and cwd, the files passed as
+// descriptors ({path:read:fd}), and preview_sha256, which the re-call sends
+// to exec as expected_preview_sha256. The hash is taken from the gate's
+// answer before the server's redaction.
 func (d *Deps) runCommandPreview(ctx context.Context, in *runCommandIn, target string) (*preview, *envelope.Error) {
 	args := in.Args
 	if args == nil {
@@ -318,8 +322,13 @@ func (d *Deps) runCommandPreview(ctx context.Context, in *runCommandIn, target s
 			*l = []string{}
 		}
 	}
+	// Each passed descriptor as one line next to the argv's /dev/fd/N.
+	fds := make([]string, 0, len(x.Fds))
+	for _, f := range x.Fds {
+		fds = append(fds, fmt.Sprintf("fd %d: %s, opened read-only by the gate", f.FD, f.Path))
+	}
 	value := map[string]any{"command_id": x.CommandID, "tier": x.Tier, "description": x.Description, "root_equivalent": x.RootEquivalent,
-		"template": x.Template, "argv": x.Argv, "cwd": x.Cwd, "preview_sha256": hash}
+		"template": x.Template, "argv": x.Argv, "cwd": x.Cwd, "fds": fds, "preview_sha256": hash}
 	tier, ok := map[string]Tier{"read": TierRead, "operator": TierOperator, "destructive": TierDestructive}[env.Data.Tier]
 	if !ok {
 		return nil, envelope.Errorf("internal", "the gate's preview names no known tier")

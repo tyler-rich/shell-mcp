@@ -101,7 +101,7 @@ func checkNames(op Op, names []string) error {
 		switch {
 		case !ValidName(n):
 			return fmt.Errorf("%q is not a Debian package name", n)
-		case op == OpInstall && strings.HasSuffix(n, "-"), op == OpRemove && strings.HasSuffix(n, "+"):
+		case (op == OpInstall || op == OpReinstall) && strings.HasSuffix(n, "-"), op == OpRemove && strings.HasSuffix(n, "+"):
 			// apt-get reads a trailing "-" on install as a removal and a
 			// trailing "+" on remove as an installation.
 			return fmt.Errorf("%q would change the operation's direction", n)
@@ -224,6 +224,12 @@ var lockMessages = [][]byte{
 	[]byte("Unable to acquire the dpkg frontend lock"),
 	[]byte("Unable to lock the administration directory"),
 	[]byte("Unable to lock directory "),
+	// dpkg's own (dpkg 1.22.22, lib/dpkg/lock.c and dbmodify.c), for the
+	// recovery, which runs dpkg directly; dpkg too refuses before changing
+	// anything.
+	[]byte("dpkg frontend lock was locked by "),
+	[]byte("dpkg frontend lock is locked by "),
+	[]byte("dpkg status database is locked by "),
 }
 
 // LockHeld reports whether stderr says a lock was held.
@@ -251,6 +257,9 @@ type Runner struct {
 	Trampoline string
 	Env        []string
 	MaxOutput  int
+	// MaxMemoryMB is apt-get's RLIMIT_DATA (execx.Spec.MaxMemoryMB),
+	// inherited by dpkg and the maintainer scripts.
+	MaxMemoryMB int
 	// LockWait bounds how long a held lock is waited for.
 	LockWait time.Duration
 	// Retry is the pause between attempts (0 means DefaultRetry).
@@ -288,7 +297,8 @@ func (r *Runner) Run(ctx context.Context, timeout time.Duration, args []string) 
 		if run == nil {
 			run = execx.Run
 		}
-		er, err := run(ctx, &execx.Spec{Path: r.AptGet, Trampoline: r.Trampoline, Args: args, Env: r.Env, Dir: "/", Timeout: remaining, MaxOutput: r.MaxOutput})
+		er, err := run(ctx, &execx.Spec{Path: r.AptGet, Trampoline: r.Trampoline, Args: args, Env: r.Env, Dir: "/", Timeout: remaining, MaxOutput: r.MaxOutput,
+			MaxMemoryMB: r.MaxMemoryMB})
 		if err != nil {
 			return res, err
 		}

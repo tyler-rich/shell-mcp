@@ -35,7 +35,7 @@ func TestPolkitUsage(t *testing.T) {
 // server gets install_insecure, not a broken session), and exits 0.
 func TestServeMalformedForcedCommand(t *testing.T) {
 	for _, args := range [][]string{{"serve"}, {"serve", "--policy"}, {"serve", "--policy", "/x", "--bogus"}, {"serve", "--policy", "/x", "extra"}} {
-		code, out, errb := runCmd(args, `{"v":1,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`+"\n")
+		code, out, errb := runCmd(args, `{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`+"\n")
 		var r struct {
 			OK    bool `json:"ok"`
 			Error struct {
@@ -358,5 +358,96 @@ func TestCheckPolicyReportsMultiCall(t *testing.T) {
 	if !strings.Contains(out.String(), "ok   commands[owner]: "+filepath.Join(bin, "chown")+" is the uutils multi-call binary; it runs as chown") ||
 		!strings.Contains(out.String(), "WARN commands[renew]: "+filepath.Join(bin, "renew")+" is a #! script run by "+filepath.Join(bin, "example-interp")) {
 		t.Fatalf("check-policy:\n%s", out.String())
+	}
+}
+
+// TestCheckPolicyReportsMemoryLimit: check-policy reports the effective
+// child memory limit (default and set), and warns when the kernel's
+// ignore_rlimit_data parameter is set or unreadable (handoff N-30).
+func TestCheckPolicyReportsMemoryLimit(t *testing.T) {
+	d := gatetest.SecureDir(t)
+	gatetest.Mkdir(t, filepath.Join(d, "home"), 0o755)
+	param := filepath.Join(d, "ignore_rlimit_data")
+	p := filepath.Join(d, "etc", "policy.yaml")
+	check := func(policyYAML, paramValue string) string {
+		t.Helper()
+		gatetest.WriteFile(t, p, policyYAML, 0o644)
+		_ = os.Remove(param)
+		if paramValue != "" {
+			gatetest.WriteFile(t, param, paramValue, 0o644)
+		}
+		var out, errb bytes.Buffer
+		checkPolicyWithParam([]string{"--policy", p}, &out, &errb, gatetest.Trust(), filepath.Join(d, "home"), param)
+		return out.String()
+	}
+	base := "version: 1\nmax_tier: read\nsandbox:\n  landlock: best-effort\n"
+	out := check(base, "N\n")
+	if !strings.Contains(out, "ok   limits.max_memory_mb: 1024 MiB") || strings.Contains(out, "ignore_rlimit_data") {
+		t.Fatalf("default limit:\n%s", out)
+	}
+	out = check(base+"limits:\n  max_memory_mb: 256\n", "N\n")
+	if !strings.Contains(out, "ok   limits.max_memory_mb: 256 MiB") {
+		t.Fatalf("limit 256:\n%s", out)
+	}
+	out = check(base, "Y\n")
+	if !strings.Contains(out, "WARN kernel: ignore_rlimit_data is set") {
+		t.Fatalf("ignore_rlimit_data=Y not flagged:\n%s", out)
+	}
+	out = check(base, "")
+	if !strings.Contains(out, "WARN kernel: could not read ignore_rlimit_data") {
+		t.Fatalf("an unreadable parameter not flagged:\n%s", out)
+	}
+}
+
+// TestCheckPolicyReportsPathReadFD (handoff N-22): check-policy names each
+// command that takes a {path:read:fd} and, only when one does, checks that
+// /dev/fd is the link to /proc/self/fd that commands reopen the descriptor
+// through, and warns otherwise.
+func TestCheckPolicyReportsPathReadFD(t *testing.T) {
+	d := gatetest.SecureDir(t)
+	gatetest.Mkdir(t, filepath.Join(d, "home"), 0o755)
+	bin := filepath.Join(d, "bin")
+	gatetest.WriteFile(t, filepath.Join(bin, "cat"), "invented binary\n", 0o755)
+	p := filepath.Join(d, "etc", "policy.yaml")
+	good := filepath.Join(d, "devfd-good")
+	if err := os.Symlink("/proc/self/fd", good); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(d, "devfd-other")
+	if err := os.Symlink("/proc/1/fd", other); err != nil {
+		t.Fatal(err)
+	}
+	base := "version: 1\nmax_tier: read\nsandbox:\n  landlock: best-effort\n  system_read_exec: [" + bin + "]\ncommands:\n" +
+		"  - id: plain\n    path: " + filepath.Join(bin, "cat") + "\n    tier: read\n    templates: [[\"{path:read}\"]]\n"
+	withFD := base + "  - id: cat-fd\n    path: " + filepath.Join(bin, "cat") + "\n    tier: read\n    templates: [[\"{path:read:fd}\"], [\"-n\", \"{path:read:fd}\", \"{path:read:fd}\"]]\n"
+	check := func(policyYAML, devfd string) string {
+		t.Helper()
+		gatetest.WriteFile(t, p, policyYAML, 0o644)
+		old := devFDPath
+		devFDPath = devfd
+		defer func() { devFDPath = old }()
+		var out, errb bytes.Buffer
+		checkPolicyWith([]string{"--policy", p}, &out, &errb, gatetest.Trust(), filepath.Join(d, "home"))
+		return out.String()
+	}
+	out := check(withFD, good)
+	for _, want := range []string{
+		"ok   commands[cat-fd]: {path:read:fd} is passed as the gate's open descriptor (/dev/fd/4 and up, in template order); POLICY §4 lists the programs that give wrong results with one",
+		"ok   " + good + ": a link to /proc/self/fd, through which commands reopen a {path:read:fd}",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "commands[plain]: {path:read:fd}") {
+		t.Fatalf("a command without a descriptor reported:\n%s", out)
+	}
+	for _, devfd := range []string{other, filepath.Join(d, "missing")} {
+		if out := check(withFD, devfd); !strings.Contains(out, "WARN "+devfd+": ") || !strings.Contains(out, "a command given a {path:read:fd} cannot reopen it") {
+			t.Fatalf("%s not flagged:\n%s", devfd, out)
+		}
+	}
+	if out := check(base, filepath.Join(d, "missing")); strings.Contains(out, filepath.Join(d, "missing")) {
+		t.Fatalf("/dev/fd checked for a policy without {path:read:fd}:\n%s", out)
 	}
 }
