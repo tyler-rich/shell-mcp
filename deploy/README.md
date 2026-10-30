@@ -1,7 +1,7 @@
 # Deploying shell-mcp
 
-> **Pin the image by digest.** The commands below and the reference compose use the 0.1.0 image index by digest, `ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:9c19075aadb69950eb71d69d840e64ba021fcabf22c7df32a76a229d3c387dd4`, as its release notes give it and as
-> `docker buildx imagetools inspect ghcr.io/tyler-rich/shell-mcp:0.1.0 --format '{{.Manifest.Digest}}'` prints it.
+> **Pin the image by digest.** The commands below and the reference compose use the 0.2.0 image index by digest, `ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:323149155f5be042949ec5291812104351f365a693dbdfb8cd2171b95ee30e6a`, as its release notes give it and as
+> `docker buildx imagetools inspect ghcr.io/tyler-rich/shell-mcp:0.2.0 --format '{{.Manifest.Digest}}'` prints it.
 > Verify it before you deploy it (README, "Verifying a release"). For a later release, use that release's digest.
 
 The server needs only two secrets, the MCP bearer token and the SSH private key, plus each target's pinned host-key fingerprint. It needs no Docker socket, host mounts or capabilities. See [`../docs/SECURITY.md`](../docs/SECURITY.md) §3 and §7, and [`.env.example`](.env.example) for every variable.
@@ -41,10 +41,10 @@ docker run -d --name shell-mcp \
   -e "SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:placeholder" \
   -v "$PWD/secrets/mcp_token:/run/secrets/mcp_token:ro" \
   -v "$PWD/secrets/ssh_key:/run/secrets/ssh_key:ro" \
-  ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:9c19075aadb69950eb71d69d840e64ba021fcabf22c7df32a76a229d3c387dd4
+  ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:323149155f5be042949ec5291812104351f365a693dbdfb8cd2171b95ee30e6a
 ```
 
-`docker run --rm ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:9c19075aadb69950eb71d69d840e64ba021fcabf22c7df32a76a229d3c387dd4 check` (with the same environment and mounts) validates the configuration, connects to every target, verifies its host key and calls the gate's `hello`, and prints the result: the configuration with the token shown only as a length and the key only as its fingerprint, then per target the verified host-key pin, gate version, protocol, principal, policy hash, `max_tier`, sandbox status and the profile's tools that target can serve. It exits non-zero if any target fails.
+`docker run --rm ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:323149155f5be042949ec5291812104351f365a693dbdfb8cd2171b95ee30e6a check` (with the same environment and mounts) validates the configuration, connects to every target, verifies its host key and calls the gate's `hello`, and prints the result: the configuration with the token shown only as a length and the key only as its fingerprint, then per target the verified host-key pin, gate version, protocol, principal, policy hash, `max_tier`, sandbox status and the profile's tools that target can serve. It exits non-zero if any target fails.
 
 ## Docker Compose
 

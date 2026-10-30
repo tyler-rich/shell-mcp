@@ -150,7 +150,7 @@ A secret file readable by group/other logs a WARN on every start (container secr
 ```yaml
 services:
   shell-mcp:
-    image: ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:9c19075aadb69950eb71d69d840e64ba021fcabf22c7df32a76a229d3c387dd4
+    image: ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:323149155f5be042949ec5291812104351f365a693dbdfb8cd2171b95ee30e6a
     restart: unless-stopped
     user: "65532:65532"
     read_only: true
