@@ -1,6 +1,6 @@
 # shell-mcp — Project Plan
 
-> Status: **`v0.1.0` is released (every v1 session done, S0–S5b). The open items after it are verified, planned and decided (maintainer, 2026-10-25) in `docs/handoff/POST-RELEASE.md`: next, sessions S6-1 to S6-5 in that order, and `0.2.0` once S6-1 to S6-3 are merged.** Last updated 2026-10-25.
+> Status: **`v0.1.0` is released (every v1 session done, S0–S5b). The open items after it were decided (maintainer, 2026-10-25) in `docs/handoff/POST-RELEASE.md` and done in S6-1 to S7-7 (#61 to #73); `0.2.0` is being released (CHANGELOG `## [0.2.0]`).** Last updated 2026-10-30.
 > Read `CLAUDE.md` first, then this file, then `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/POLICY.md` and `docs/PRIVILEGED.md`.
 
 ## 1. What this is

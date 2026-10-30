@@ -6,7 +6,7 @@
 
 shell-mcp is a [Model Context Protocol](https://modelcontextprotocol.io) server that gives AI clients (Claude Code, Claude Desktop, MCP Inspector, any client that can send a bearer header) bounded, audited access to Linux hosts over SSH. It reads and changes what container managers cannot reach: systemd services and the journal, host and root-owned configuration files, ownership and permissions, packages, disks, processes, TLS certificates and git checkouts. It is **not a remote shell**: there is no shell, no PTY, no interpreter and no free-form command line, and every operation runs on the host under a root-owned policy that the server cannot change.
 
-**Status: 0.1.0, the first release.** Before 1.0, tool names, arguments and configuration can change in a minor release; read [`CHANGELOG.md`](CHANGELOG.md) before upgrading, and pin the image by digest.
+**Status: 0.2.0.** Before 1.0, tool names, arguments and configuration can change in a minor release; read [`CHANGELOG.md`](CHANGELOG.md) before upgrading, and pin the image by digest.
 
 ## Contents
 
@@ -49,7 +49,7 @@ What makes it different from a shell over SSH: no command line is ever interpret
 
 ### Tools
 
-50 tools, generated from the server's catalogue (`shell-mcp tools`). A profile registers its own tier and every tier below it; tools above it do not exist for the client. *Approval* is what a call needs under `SHELL_MCP_APPROVAL_METHOD=web`; with the default `none`, every tool that would need approval refuses.
+52 tools, generated from the server's catalogue (`shell-mcp tools`). A profile registers its own tier and every tier below it; tools above it do not exist for the client. *Approval* is what a call needs under `SHELL_MCP_APPROVAL_METHOD=web`; with the default `none`, every tool that would need approval refuses.
 
 #### Read tools: every profile (19)
 
@@ -96,7 +96,7 @@ What makes it different from a shell over SSH: no command line is ever interpret
 | `shell_discard_git_changes` | always | Restores a repository's tracked files and index to HEAD and, with include_untracked, removes untracked files, exactly as its approved preview listed them. Superproject only: submodule work trees are never inspected (not their changes or checked-out commit); staged gitlink changes are seen. |
 | `shell_run_command` | by the command's tier | Runs a read-, operator- or destructive-tier command declared in the target policy with arguments matching one of its templates and optional standard input, exactly as its approved preview resolved it, and returns its exit status and redacted, size-capped output. |
 
-#### Privileged tools (as root, through the helper): `admin` only (21)
+#### Privileged tools (as root, through the helper): `admin` only (23)
 
 | Tool | Tier | Approval | What it does |
 |---|---|---|---|
@@ -112,6 +112,8 @@ What makes it different from a shell over SSH: no command line is ever interpret
 | `shell_priv_install_packages` | operator | always | Installs, as root, allow-listed packages exactly as their approved preview resolved them, every package at its approved version, never removing any; returns what dpkg shows was installed. |
 | `shell_priv_make_directory` | operator | always | Creates a directory as root, and optionally its missing parents, within the host's privileged write roots; returns its mode and owner. |
 | `shell_priv_move_path` | operator | always | Renames a file or directory as root within one of the host's privileged write roots (same filesystem only), backing up a replaced destination file; returns what was moved and the backup ids. |
+| `shell_priv_recover_packages` | operator | always | Finishes, as root, what an interrupted dpkg left unfinished, exactly as its approved preview listed it, without installing or removing packages; returns what dpkg shows was configured. |
+| `shell_priv_reinstall_packages` | operator | always | Reinstalls, as root, exactly the packages an interrupted dpkg left needing a reinstall, each at the version dpkg names, as its approved preview listed them; returns what dpkg shows was reinstalled. |
 | `shell_priv_restore_backup` | operator | always | Restores, as root, a backup the privileged helper kept, over exactly the version its approved preview showed (that version is backed up first), with the recorded owner and the recorded mode within the host's mask; returns the modes set and the new backup's id. |
 | `shell_priv_set_permissions` | operator | always | Sets the mode of a file or directory as root (with recursive, also of everything under it) within the host's privileged write roots, exactly as its approved preview listed; returns the counts and the old and new mode. |
 | `shell_priv_update_package_index` | operator | always | Updates, as root, the host's package index from its configured sources; returns apt-get's exit status and redacted, size-capped output. |
@@ -205,11 +207,11 @@ The shortest path to a working read-only setup: one target, the server on your o
 2. **On the target, verify and install the gate** ([Verifying a release](#verifying-a-release) checks the signature too):
 
    ```bash
-   gh release download v0.1.0 --repo tyler-rich/shell-mcp \
-     --pattern 'shell-mcp-gate_0.1.0_linux_amd64*' --pattern 'shell-mcp_0.1.0_examples.tar.gz*' --pattern 'SHA256SUMS*'
+   gh release download v0.2.0 --repo tyler-rich/shell-mcp \
+     --pattern 'shell-mcp-gate_0.2.0_linux_amd64*' --pattern 'shell-mcp_0.2.0_examples.tar.gz*' --pattern 'SHA256SUMS*'
    sha256sum --ignore-missing -c SHA256SUMS
-   install -o root -g root -m 0755 shell-mcp-gate_0.1.0_linux_amd64 /usr/local/bin/shell-mcp-gate
-   tar -xzf shell-mcp_0.1.0_examples.tar.gz
+   install -o root -g root -m 0755 shell-mcp-gate_0.2.0_linux_amd64 /usr/local/bin/shell-mcp-gate
+   tar -xzf shell-mcp_0.2.0_examples.tar.gz
    ```
 
 3. **Create the service account and the read-only policy**, then check it as that account:
@@ -219,7 +221,7 @@ The shortest path to a working read-only setup: one target, the server on your o
    useradd --uid 60123 --gid svc-shell --home-dir /var/lib/svc-shell --create-home --shell /bin/sh svc-shell
    passwd -l svc-shell
    install -o root -g root -m 0755 -d /etc/shell-mcp
-   install -o root -g root -m 0644 shell-mcp_0.1.0/examples/policies/read-only.yaml /etc/shell-mcp/read-only.yaml
+   install -o root -g root -m 0644 shell-mcp_0.2.0/examples/policies/read-only.yaml /etc/shell-mcp/read-only.yaml
    runuser -u svc-shell -- shell-mcp-gate check-policy --policy /etc/shell-mcp/read-only.yaml
    ```
 
@@ -246,7 +248,7 @@ The shortest path to a working read-only setup: one target, the server on your o
      -e SHELL_MCP_TARGET_NAME=app-host -e SHELL_MCP_TARGET_HOST=target-a.example.test -e SHELL_MCP_TARGET_USER=svc-shell \
      -e "SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:<fingerprint from step 4>" \
      -v "$PWD/secrets/mcp_token:/run/secrets/mcp_token:ro" -v "$PWD/secrets/ssh_key:/run/secrets/ssh_key:ro" \
-     ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:<digest> check
+     ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:<digest> check
    ```
 
    `check` connects, verifies the host key, calls the gate and prints what the target allows; it exits non-zero on any failure. Then run the same command with `-d --name shell-mcp -p 127.0.0.1:8080:8080 -e SHELL_MCP_BIND=0.0.0.0` in place of `--rm`, and `serve` in place of `check`.
@@ -268,7 +270,7 @@ The shortest path to a working read-only setup: one target, the server on your o
 
 1. Copy `deploy/` (also in the release's examples archive) and work in it: Compose reads `./secrets` relative to the compose file.
 2. Create `secrets/mcp_token` and `secrets/ssh_key` as in the [Quick start](#quick-start), and `chown 65532:65532` both.
-3. Edit the environment: the `image:` line (`ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:<digest>`), the target (`SHELL_MCP_TARGET_*`, or a targets file), `SHELL_MCP_ALLOWED_HOSTS` (the name clients use) and the profile. Every variable: [Configuration reference](#configuration-reference) and [`deploy/.env.example`](deploy/.env.example).
+3. Edit the environment: the `image:` line (`ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:<digest>`), the target (`SHELL_MCP_TARGET_*`, or a targets file), `SHELL_MCP_ALLOWED_HOSTS` (the name clients use) and the profile. Every variable: [Configuration reference](#configuration-reference) and [`deploy/.env.example`](deploy/.env.example).
 4. Attach your reverse proxy to `front` at `172.30.80.5`, forwarding your MCP name (`mcp.example.test`) to `http://172.30.80.10:8080` and appending `X-Forwarded-For`. Only the proxy publishes a port, on a LAN or VPN address. **Never** put the Docker network's gateway in `SHELL_MCP_TRUSTED_PROXIES`: a request through a published port often arrives from the gateway, and trusting it would let any local process set its own client address. Confirm the proxy's address from the server's `authentication failed` log line ([CLIENTS §1](docs/CLIENTS.md#1-two-transports)).
 5. Check, then start:
 
@@ -289,9 +291,9 @@ As root on each target ([`docs/TARGET-SETUP.md`](docs/TARGET-SETUP.md) has every
 1. **Verify and install** the gate (and the helper, if you want root actions): [Verifying a release](#verifying-a-release), then
 
    ```bash
-   install -o root -g root -m 0755 shell-mcp-gate_0.1.0_linux_amd64 /usr/local/bin/shell-mcp-gate
+   install -o root -g root -m 0755 shell-mcp-gate_0.2.0_linux_amd64 /usr/local/bin/shell-mcp-gate
    install -o root -g root -m 0755 -d /usr/local/libexec
-   install -o root -g root -m 0755 shell-mcp-privd_0.1.0_linux_amd64 /usr/local/libexec/shell-mcp-privd
+   install -o root -g root -m 0755 shell-mcp-privd_0.2.0_linux_amd64 /usr/local/libexec/shell-mcp-privd
    ```
 
 2. **The service account**, with an explicit uid and gid that nothing on the host owns (`getent passwd 60123`, `find / -xdev -uid 60123`), a real shell (sshd runs the forced command through it), a locked password, and only the groups it needs (`systemd-journal` for journal reads, the helper's socket group for root actions; never `docker`, `sudo`, `adm` or similar: the gate refuses to run with them).
@@ -324,7 +326,7 @@ Only for root actions, and only with the `admin` profile. Read [PRIVILEGED §3](
 
    ```bash
    groupadd --gid 60124 svc-shell-priv && usermod -aG svc-shell-priv svc-shell
-   install -o root -g root -m 0600 shell-mcp_0.1.0/examples/privileged/privileged.yaml /etc/shell-mcp/privileged.yaml
+   install -o root -g root -m 0600 shell-mcp_0.2.0/examples/privileged/privileged.yaml /etc/shell-mcp/privileged.yaml
    /usr/local/libexec/shell-mcp-privd check-policy --policy /etc/shell-mcp/privileged.yaml
    ```
 
@@ -484,12 +486,12 @@ or in a project's `.mcp.json`, with the token taken from the environment:
 }
 ```
 
-**Profiles.** `read-only` has 19 tools, `operator` 27, `admin` 50. Pair each with an SSH key whose gate policy has the matching `max_tier`, and run separate instances for separate ceilings.
+**Profiles.** `read-only` has 19 tools, `operator` 27, `admin` 52. Pair each with an SSH key whose gate policy has the matching `max_tier`, and run separate instances for separate ceilings.
 
 **Approvals and TOTP enrolment.** With `SHELL_MCP_APPROVAL_METHOD=web`, a gated call answers `approval_pending` with the approval page's URL; the approver opens the page **from a bookmark** of `SHELL_MCP_APPROVAL_PUBLIC_URL` (never from a chat link), checks the preview, and approves with the current code from their authenticator; the model then calls again with `approval_id`. Enrol the approver on the server host, never where the agent runs. The seed is shown once, and only on a terminal; `secrets/` must be writable by uid 65532 while you enrol, and the file it writes must stay `0600` and owned by 65532:
 
 ```bash
-docker run --rm -it -v "$PWD/secrets:/run/secrets" ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:<digest> \
+docker run --rm -it -v "$PWD/secrets:/run/secrets" ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:<digest> \
   approver add --name alice --file /run/secrets/approvers
 ```
 
@@ -497,33 +499,33 @@ Then set `SHELL_MCP_APPROVAL_METHOD=web`, `SHELL_MCP_APPROVAL_PUBLIC_URL=https:/
 
 ## Verifying a release
 
-Each [GitHub release](https://github.com/tyler-rich/shell-mcp/releases) has the binaries (`shell-mcp`, `shell-mcp-gate`, `shell-mcp-privd`, as `<name>_X.Y.Z_linux_<arch>`), `shell-mcp_X.Y.Z_examples.tar.gz`, CycloneDX SBOMs, `LICENSE` and `NOTICE`, `SHA256SUMS`, and a Sigstore bundle `<file>.sigstore.json` for every binary, the archive and `SHA256SUMS`. The image is `ghcr.io/tyler-rich/shell-mcp:X.Y.Z`, with its digest in the release notes. Everything is signed by the release workflow **at the release's tag**, and only that identity is a release: a dry run or a branch build has another one and fails these checks. For 0.1.0:
+Each [GitHub release](https://github.com/tyler-rich/shell-mcp/releases) has the binaries (`shell-mcp`, `shell-mcp-gate`, `shell-mcp-privd`, as `<name>_X.Y.Z_linux_<arch>`), `shell-mcp_X.Y.Z_examples.tar.gz`, CycloneDX SBOMs, `LICENSE` and `NOTICE`, `SHA256SUMS`, and a Sigstore bundle `<file>.sigstore.json` for every binary, the archive and `SHA256SUMS`. The image is `ghcr.io/tyler-rich/shell-mcp:X.Y.Z`, with its digest in the release notes. Everything is signed by the release workflow **at the release's tag**, and only that identity is a release: a dry run or a branch build has another one and fails these checks. For 0.2.0:
 
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
 ```
 
 ```bash
-cosign verify-blob --bundle shell-mcp-gate_0.1.0_linux_amd64.sigstore.json \
-  --certificate-identity https://github.com/tyler-rich/shell-mcp/.github/workflows/release-build.yml@refs/tags/v0.1.0 \
+cosign verify-blob --bundle shell-mcp-gate_0.2.0_linux_amd64.sigstore.json \
+  --certificate-identity https://github.com/tyler-rich/shell-mcp/.github/workflows/release-build.yml@refs/tags/v0.2.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  shell-mcp-gate_0.1.0_linux_amd64
+  shell-mcp-gate_0.2.0_linux_amd64
 ```
 
 ```bash
-gh attestation verify shell-mcp-gate_0.1.0_linux_amd64 --repo tyler-rich/shell-mcp \
-  --signer-workflow tyler-rich/shell-mcp/.github/workflows/release-build.yml --source-ref refs/tags/v0.1.0
+gh attestation verify shell-mcp-gate_0.2.0_linux_amd64 --repo tyler-rich/shell-mcp \
+  --signer-workflow tyler-rich/shell-mcp/.github/workflows/release-build.yml --source-ref refs/tags/v0.2.0
 ```
 
 ```bash
 cosign verify ghcr.io/tyler-rich/shell-mcp@sha256:<digest from the release notes> \
-  --certificate-identity https://github.com/tyler-rich/shell-mcp/.github/workflows/release-build.yml@refs/tags/v0.1.0 \
+  --certificate-identity https://github.com/tyler-rich/shell-mcp/.github/workflows/release-build.yml@refs/tags/v0.2.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
 ```bash
 gh attestation verify oci://ghcr.io/tyler-rich/shell-mcp@sha256:<digest from the release notes> --repo tyler-rich/shell-mcp \
-  --signer-workflow tyler-rich/shell-mcp/.github/workflows/release-build.yml --source-ref refs/tags/v0.1.0
+  --signer-workflow tyler-rich/shell-mcp/.github/workflows/release-build.yml --source-ref refs/tags/v0.2.0
 ```
 
 Run the `cosign verify-blob` line for each binary you use, the examples archive and `SHA256SUMS`, and the `gh attestation verify` line for each file you use that `SHA256SUMS` lists. `SHA256SUMS` itself has a signature but no attestation of its own: the provenance is recorded for each file it lists, so `gh attestation verify SHA256SUMS` finds nothing (HTTP 404). These are the checks the release workflow itself runs after signing, together with the refusal of another ref ([ARCHITECTURE §7](docs/ARCHITECTURE.md#7-build-release-and-supply-chain)).
@@ -535,7 +537,7 @@ Run the `cosign verify-blob` line for each binary you use, the examples archive 
 3. **Targets first.** [Verify](#verifying-a-release) and `install` the new `shell-mcp-gate` (and `shell-mcp-privd`) over the old ones; both start per request, so nothing restarts. Run both `check-policy` commands. A new helper with an unchanged policy needs no new units; if the release notes change the units, run `units` and `systemctl daemon-reload`.
 4. **Then the server.** Set the new `image: …@sha256:<digest>`, run `docker compose run --rm shell-mcp check`, then `docker compose up -d`. Approval records are in memory: pending approvals are lost on restart.
 
-The gate and the server check each other's protocol version and refuse a mismatch with an actionable error (`protocol_mismatch`), so upgrade both within one window. Details: [TARGET-SETUP §11](docs/TARGET-SETUP.md#11-updating-and-removing).
+The server, the gate and the helper check each other's protocol version and refuse a mismatch with an actionable error (`protocol_mismatch`, naming the side to upgrade; nothing runs), so upgrade all three within one window. From 0.1.0 to 0.2.0 the protocol version changes and the helper's units must be regenerated: follow the numbered steps in [`CHANGELOG.md`](CHANGELOG.md), "Upgrading from 0.1.0". Details: [TARGET-SETUP §11](docs/TARGET-SETUP.md#11-updating-and-removing).
 
 ## Troubleshooting
 

@@ -35,8 +35,10 @@ jobs:
     # never released, scripts/release-binary-check.sh). The tsync entry also
     # runs the sandbox and gate tests under that tag, on its ABI 8 kernel.
     # Each entry requires its ABI, so the kernel-dependent tests fail rather
-    # than skip, and asserts which path it took.
-    name: go (fmt, vet, lint, test, vuln, build) — ${{ matrix.image }}, Landlock ABI ${{ matrix.abi }} (${{ matrix.path }}${{ matrix.tags && ', forced' || '' }})
+    # than skip, and asserts which path it took. The forced entry's name says
+    # "effective ABI": its kernel reports a higher ABI (display name only; the
+    # job id and the ci aggregate's needs are unchanged).
+    name: go (fmt, vet, lint, test, vuln, build) — ${{ matrix.image }}, ${{ matrix.tags && format('Landlock {0} forced, effective ABI {1}', matrix.path, matrix.abi) || format('Landlock ABI {0} ({1})', matrix.abi, matrix.path) }}
     runs-on: ${{ matrix.image }}
     timeout-minutes: 20
     strategy:

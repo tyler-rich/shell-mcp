@@ -35,12 +35,12 @@ systemctl --version
 
 ## 2. Download and verify the release *(real host: needs the published release)*
 
-Each release on GitHub carries, per architecture, `shell-mcp_X.Y.Z_linux_<arch>` (the server), `shell-mcp-gate_X.Y.Z_linux_<arch>` and `shell-mcp-privd_X.Y.Z_linux_<arch>`, plus `shell-mcp_X.Y.Z_examples.tar.gz` (the example policies and `deploy/`), `SHA256SUMS`, a Sigstore bundle `<file>.sigstore.json` for every binary, the archive and `SHA256SUMS`, and a CycloneDX SBOM per binary. The examples below use 0.1.0 on amd64.
+Each release on GitHub carries, per architecture, `shell-mcp_X.Y.Z_linux_<arch>` (the server), `shell-mcp-gate_X.Y.Z_linux_<arch>` and `shell-mcp-privd_X.Y.Z_linux_<arch>`, plus `shell-mcp_X.Y.Z_examples.tar.gz` (the example policies and `deploy/`), `SHA256SUMS`, a Sigstore bundle `<file>.sigstore.json` for every binary, the archive and `SHA256SUMS`, and a CycloneDX SBOM per binary. The examples below use 0.2.0 on amd64.
 
 ```bash
-gh release download v0.1.0 --repo tyler-rich/shell-mcp \
-  --pattern 'shell-mcp-gate_0.1.0_linux_amd64*' --pattern 'shell-mcp-privd_0.1.0_linux_amd64*' \
-  --pattern 'shell-mcp_0.1.0_examples.tar.gz*' --pattern 'SHA256SUMS*'
+gh release download v0.2.0 --repo tyler-rich/shell-mcp \
+  --pattern 'shell-mcp-gate_0.2.0_linux_amd64*' --pattern 'shell-mcp-privd_0.2.0_linux_amd64*' \
+  --pattern 'shell-mcp_0.2.0_examples.tar.gz*' --pattern 'SHA256SUMS*'
 ```
 
 Verify the checksums, then the signature of each file you install. The certificate identity pins the release workflow at the release's own tag: anything signed by another ref (a dry run, a branch) is not a release and fails this check.
@@ -50,9 +50,9 @@ sha256sum --ignore-missing -c SHA256SUMS
 ```
 
 ```bash
-for f in SHA256SUMS shell-mcp-gate_0.1.0_linux_amd64 shell-mcp-privd_0.1.0_linux_amd64 shell-mcp_0.1.0_examples.tar.gz; do
+for f in SHA256SUMS shell-mcp-gate_0.2.0_linux_amd64 shell-mcp-privd_0.2.0_linux_amd64 shell-mcp_0.2.0_examples.tar.gz; do
   cosign verify-blob --bundle "$f.sigstore.json" \
-    --certificate-identity https://github.com/tyler-rich/shell-mcp/.github/workflows/release-build.yml@refs/tags/v0.1.0 \
+    --certificate-identity https://github.com/tyler-rich/shell-mcp/.github/workflows/release-build.yml@refs/tags/v0.2.0 \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     "$f" || echo "FAILED: $f"
 done
@@ -61,8 +61,8 @@ done
 The build provenance (SLSA) can be checked with the GitHub CLI as well:
 
 ```bash
-gh attestation verify shell-mcp-gate_0.1.0_linux_amd64 --repo tyler-rich/shell-mcp \
-  --signer-workflow tyler-rich/shell-mcp/.github/workflows/release-build.yml --source-ref refs/tags/v0.1.0
+gh attestation verify shell-mcp-gate_0.2.0_linux_amd64 --repo tyler-rich/shell-mcp \
+  --signer-workflow tyler-rich/shell-mcp/.github/workflows/release-build.yml --source-ref refs/tags/v0.2.0
 ```
 
 These are the commands the release workflow's own `scripts/release/verify.sh` runs after signing, including the refusal of another ref; they cannot be run before the release exists. The release notes repeat them with the image digest.
@@ -70,9 +70,9 @@ These are the commands the release workflow's own `scripts/release/verify.sh` ru
 ## 3. Install the binaries *(container)*
 
 ```bash
-install -o root -g root -m 0755 shell-mcp-gate_0.1.0_linux_amd64 /usr/local/bin/shell-mcp-gate
+install -o root -g root -m 0755 shell-mcp-gate_0.2.0_linux_amd64 /usr/local/bin/shell-mcp-gate
 install -o root -g root -m 0755 -d /usr/local/libexec
-install -o root -g root -m 0755 shell-mcp-privd_0.1.0_linux_amd64 /usr/local/libexec/shell-mcp-privd
+install -o root -g root -m 0755 shell-mcp-privd_0.2.0_linux_amd64 /usr/local/libexec/shell-mcp-privd
 shell-mcp-gate version
 ```
 
@@ -81,10 +81,10 @@ Install the helper only if you want root actions (step 9). Keep these paths: the
 To unpack the example policies:
 
 ```bash
-tar -xzf shell-mcp_0.1.0_examples.tar.gz
+tar -xzf shell-mcp_0.2.0_examples.tar.gz
 ```
 
-They are under `shell-mcp_0.1.0/examples/policies/` (`read-only.yaml`, `operator.yaml`, `admin.yaml`) and `shell-mcp_0.1.0/examples/privileged/privileged.yaml`; the steps below use those paths.
+They are under `shell-mcp_0.2.0/examples/policies/` (`read-only.yaml`, `operator.yaml`, `admin.yaml`) and `shell-mcp_0.2.0/examples/privileged/privileged.yaml`; the steps below use those paths.
 
 ## 4. Create the service account *(container)*
 
@@ -136,7 +136,7 @@ One policy per SSH key, so each server instance gets its own ceiling. Start from
 
 ```bash
 install -o root -g root -m 0755 -d /etc/shell-mcp
-install -o root -g root -m 0644 shell-mcp_0.1.0/examples/policies/read-only.yaml /etc/shell-mcp/read-only.yaml
+install -o root -g root -m 0644 shell-mcp_0.2.0/examples/policies/read-only.yaml /etc/shell-mcp/read-only.yaml
 ```
 
 The policy and every directory above it must be root's and not group- or world-writable (`0640 root:svc-shell` also works). Then check it **as the service account**, so the uid, group and home-directory checks describe that account, and the chain checks trust root and that account, as the gate will:
@@ -284,7 +284,7 @@ The helper runs one root process per request, socket-activated, inside a generat
 Start from `examples/privileged/privileged.yaml`. Set `client_uid` to the service account's uid (`id -u svc-shell`) and `socket_group` to the group from step 4.
 
 ```bash
-install -o root -g root -m 0600 shell-mcp_0.1.0/examples/privileged/privileged.yaml /etc/shell-mcp/privileged.yaml
+install -o root -g root -m 0600 shell-mcp_0.2.0/examples/privileged/privileged.yaml /etc/shell-mcp/privileged.yaml
 /usr/local/libexec/shell-mcp-privd check-policy --policy /etc/shell-mcp/privileged.yaml
 ```
 
@@ -364,7 +364,7 @@ The gate writes one JSON line per request (authpriv), the helper one per connect
 
 ## 11. Updating and removing
 
-- **A new release:** verify it (step 2) and `install` the new binaries over the old ones (step 3). The gate and the helper start per request, so nothing needs restarting. Read the release notes for policy changes and run both `check-policy` commands.
+- **A new release:** verify it (step 2) and `install` the new binaries over the old ones (step 3). The gate and the helper start per request, so nothing needs restarting. Read the release notes for policy changes and run both `check-policy` commands. When the notes change the helper's units (0.2.0 does), run `units` and `systemctl daemon-reload` (step 9.2) after any policy edit. Upgrading from 0.1.0: the numbered steps in `CHANGELOG.md`, "Upgrading from 0.1.0".
 - **A gate policy edit:** `check-policy` (step 5); regenerate the polkit rule if `services.control` changed (step 8).
 - **A privileged policy edit:** `check-policy`, `units`, `systemctl daemon-reload` (step 9.2).
 - **Revoking a server:** remove its line from `/etc/ssh/authorized_keys.d/svc-shell`. sshd reads the file on every login.
