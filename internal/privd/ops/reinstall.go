@@ -94,12 +94,12 @@ func reinstallPins(st *pkg.State, names []string) ([]pkg.Version, error) {
 // reinstallSim simulates the pinned reinstall and checks that its
 // transaction is exactly the reinstall; it returns the argv, the
 // simulation and the preview's hash.
-func (s *server) reinstallSim(st *pkg.State, names []string, pins []pkg.Version, deadline time.Time) ([]string, *simulation, string, error) {
-	argv, err := pkg.ReinstallArgs(true, pins)
+func (s *server) reinstallSim(st *pkg.State, names []string, pins []pkg.Version, deadline time.Time) (argv []string, sim *simulation, hash string, err error) {
+	argv, err = pkg.ReinstallArgs(true, pins)
 	if err != nil {
 		return nil, nil, "", errf(protocol.CodeExecFailed, "the reinstall cannot be pinned to the versions dpkg's status names (%s); nothing was requested", err.Error())
 	}
-	sim, err := s.simulate(argv, deadline)
+	sim, err = s.simulate(argv, deadline)
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -119,11 +119,11 @@ func (s *server) pkgReinstallPreview(raw jsontext.Value) (data any, warns []stri
 	if aerr := s.pkgAllowed(pkg.OpReinstall, names); aerr != nil {
 		return nil, nil, aerr
 	}
-	if err := s.notInProgress(); err != nil {
-		return nil, nil, err
+	if perr := s.notInProgress(); perr != nil {
+		return nil, nil, perr
 	}
-	if err := s.lockFree(); err != nil {
-		return nil, nil, err
+	if lerr := s.lockFree(); lerr != nil {
+		return nil, nil, lerr
 	}
 	st, err := s.readState()
 	if err != nil {

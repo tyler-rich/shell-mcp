@@ -586,8 +586,8 @@ func (s *server) pkgPreview(raw jsontext.Value, op pkg.Op) (data any, warns []st
 	if aerr := s.pkgAllowed(op, names); aerr != nil {
 		return nil, nil, aerr
 	}
-	if err := s.notInProgress(); err != nil {
-		return nil, nil, err
+	if perr := s.notInProgress(); perr != nil {
+		return nil, nil, perr
 	}
 	st, err := s.readState()
 	if err != nil {
