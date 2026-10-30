@@ -51,7 +51,7 @@ One server instance has one profile, set by `SHELL_MCP_PROFILE` at start (D-005)
 |---|---|---|---|
 | `read-only` (default) | 19 | System, disk, processes, services, journal, files, find, certificates, git status/log/diff, read-tier policy commands, delete and discard previews, `shell_get_policy`, `shell_list_targets` | Never needed |
 | `operator` | 27 | Service control, write, mkdir, copy, move, chmod, `git pull`, `shell_run_command` (read and operator commands) | Only if `SHELL_MCP_APPROVAL_TIERS=operator,destructive` |
-| `admin` | 50 | Delete, git discard, destructive commands, and the 21 `shell_priv_*` tools (root, through the helper) | Always for destructive tools and for privileged tools of tier operator or above |
+| `admin` | 52 | Delete, git discard, destructive commands, and the 23 `shell_priv_*` tools (root, through the helper) | Always for destructive tools and for privileged tools of tier operator or above |
 
 `shell-mcp tools` prints the catalogue with each tool's tier, profiles, annotations and schema hashes; keep its output to diff against the next release (tool poisoning, SECURITY §2). `SHELL_MCP_DISABLE_TOOLS` removes individual tools; nothing adds a tool above the profile. The full catalogue is `docs/TOOLS.md`.
 
