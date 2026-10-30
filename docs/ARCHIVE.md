@@ -4417,7 +4417,7 @@ The docs changed after the run (documentation only). **Fuzz:** `FuzzValidName` (
 
 **Fuzz, 60 s each, all passed:** `FuzzHeaderlessKeyBody` 6.36M execs (an invented key of any length and width PEM uses, any window of its lines, with or without journal prefixes: no full body line survives, and none at all when the window reaches the END), `FuzzRedactKeyBlocks` 29.6M, `FuzzRedact` 30.5M, `FuzzPrivateKeyBlocks` 18.1M, `FuzzParseNames` 73.9M, `FuzzPrivExecPreviewMatchesExec` 98.9k (the helper's one resolution with the key search in it).
 
-CILOCAL_PLACEHOLDER
+**`scripts/ci-local.sh` on `c571c88`** (run alone): every step passed: gofmt, go vet (both build-tag sets), golangci-lint (both), the offline exposure check (systemd 255/257/259) and its self-test, `go test -race` in every build, the e2e runner-only guards, govulncheck, the linux/amd64 and arm64 builds, the release snapshot, deps-current and the self-tests. Landlock (ABI 3) and the unprivileged systemd container were available. e2e-host runs in CI only.
 
 **Alternatives rejected:**
 - **Fetching extra journal entries and cutting back.** It needs entry parsing around boot markers and continuation lines, plus a second run for `--since`, and still misses keys longer than its margin.
