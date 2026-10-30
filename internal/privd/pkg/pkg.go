@@ -101,7 +101,7 @@ func checkNames(op Op, names []string) error {
 		switch {
 		case !ValidName(n):
 			return fmt.Errorf("%q is not a Debian package name", n)
-		case op == OpInstall && strings.HasSuffix(n, "-"), op == OpRemove && strings.HasSuffix(n, "+"):
+		case (op == OpInstall || op == OpReinstall) && strings.HasSuffix(n, "-"), op == OpRemove && strings.HasSuffix(n, "+"):
 			// apt-get reads a trailing "-" on install as a removal and a
 			// trailing "+" on remove as an installation.
 			return fmt.Errorf("%q would change the operation's direction", n)

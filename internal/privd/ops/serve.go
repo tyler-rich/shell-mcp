@@ -259,11 +259,12 @@ type server struct {
 	// unfinished the packages dpkg left part-way, for the audit line.
 	applied    *auditApplied
 	unfinished []string
-	// configured are the packages a recovery configured, for the audit
-	// line; program is the program a package operation runs ("apt-get",
+	// configured and reinstalled are the packages a recovery configured
+	// and a reinstall finished, for the audit line; program is the program a package operation runs ("apt-get",
 	// or "dpkg" for the recovery), for its early answer.
-	configured []string
-	program    string
+	configured  []string
+	reinstalled []string
+	program     string
 	// powerState is what became of priv_power's action ("not_delivered",
 	// "cancelled", "refused", "unconfirmed", "requested"), powerAt its
 	// scheduled time and powerDetail why it was refused, for the audit line.

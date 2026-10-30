@@ -5,6 +5,7 @@ package ops
 import (
 	"encoding/json/jsontext"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -86,9 +87,12 @@ func recoverable(u []pkg.UnfinishedPackage) (configure, reinstall []recoverEntry
 }
 
 // nothingToConfigure refuses a state where configuring would change
-// nothing: only packages that need a reinstall, and no journal.
-func nothingToConfigure(st *pkg.State, u []pkg.UnfinishedPackage, configure, reinstall []recoverEntry) error {
-	if len(configure) > 0 || len(reinstall) == 0 || len(st.Journal) > 0 {
+// nothing, with no journal to fold in: only packages that need a
+// reinstall (configuring leaves them, measured in S7-4) or whose
+// dependency nothing provides (dpkg exits 1 and leaves them, measured in
+// S7-7, F1), and none to configure.
+func nothingToConfigure(st *pkg.State, u []pkg.UnfinishedPackage) error {
+	if len(u) == 0 || len(st.Journal) > 0 || slices.ContainsFunc(u, func(p pkg.UnfinishedPackage) bool { return p.Recovery == pkg.RecoverConfigure }) {
 		return nil
 	}
 	return errf(protocol.CodeExecFailed, "dpkg left only %s, so a recovery would change nothing; nothing was requested", describeUnfinished(u, 0))
@@ -122,7 +126,7 @@ func (s *server) pkgRecoverPreview(raw jsontext.Value) (data any, warns []string
 	}
 	u := st.UnfinishedPackages()
 	configure, reinstall := recoverable(u)
-	if rerr := nothingToConfigure(&st, u, configure, reinstall); rerr != nil {
+	if rerr := nothingToConfigure(&st, u); rerr != nil {
 		return nil, nil, rerr
 	}
 	argv := pkg.RecoverArgs()
@@ -162,16 +166,15 @@ func (s *server) pkgRecover(raw jsontext.Value) (data any, warns []string, failu
 		return nil, nil, err
 	}
 	u := before.UnfinishedPackages()
+	if rerr := nothingToConfigure(&before, u); rerr != nil {
+		return nil, nil, rerr
+	}
 	argv := pkg.RecoverArgs()
 	if pkg.RecoverPreviewHash(s.p.SHA256, argv, u, before.Journal) != *a.ExpectedPreviewSHA256 {
 		return nil, nil, errf(protocol.CodeExists, "dpkg's unfinished packages or its journal changed since the preview (or the privileged policy did); nothing was run; preview again")
 	}
 	if len(u) == 0 && len(before.Journal) == 0 {
 		return recoverData{Op: string(pkg.OpRecover), Configured: []recoverConfigured{}, LockWaitMS: waited.Milliseconds()}, nil, nil
-	}
-	configure, reinstall := recoverable(u)
-	if rerr := nothingToConfigure(&before, u, configure, reinstall); rerr != nil {
-		return nil, nil, rerr
 	}
 	res, attempts, err := s.runLocked(s.o.Dpkg, argv, st, lockBudget, false)
 	if err != nil {

@@ -518,17 +518,19 @@ func TestUnfinishedRefusalNamesRecovery(t *testing.T) {
 		want    []string
 		not     []string
 	}{
-		"unpacked":         {state: pkgStanza("example-a", "install ok unpacked", "1.0", ""), want: []string{"example-a", "to configure", "dpkg --configure -a"}},
-		"half-configured":  {state: pkgStanza("example-a", "install ok half-configured", "1.0", ""), want: []string{"example-a", "to configure"}},
+		"unpacked":         {state: pkgStanza("example-a", "install ok unpacked", "1.0", ""), want: []string{"example-a", "to configure", "dpkg --configure -a", "priv_pkg_recover"}},
+		"half-configured":  {state: pkgStanza("example-a", "install ok half-configured", "1.0", ""), want: []string{"example-a", "to configure", "priv_pkg_recover"}},
 		"triggers-pending": {state: pkgStanza("example-a", "install ok triggers-pending", "1.0", ""), want: []string{"example-a", "to configure"}},
+		// S7-7 (F2): dpkg refuses to remove a package that needs a
+		// reinstall, so the route named is the reinstall, never a removal.
 		"reinstreq": {state: pkgStanza("example-c", "install reinstreq half-installed", "1.0", ""),
-			want: []string{"example-c", "to reinstall", "does not fix"}, not: []string{"to configure"}},
+			want: []string{"example-c", "to reinstall", "does not fix", "priv_pkg_reinstall", "cannot be removed"}, not: []string{"to configure", "or removes them"}},
 		"half-installed": {state: pkgStanza("example-c", "install ok half-installed", "1.0", ""),
-			want: []string{"example-c", "to reinstall"}, not: []string{"to configure"}},
+			want: []string{"example-c", "to reinstall", "priv_pkg_reinstall"}, not: []string{"to configure", "or removes them"}},
 		"missing dependency": {state: pkgStanza("example-d", "install ok unpacked", "1.0", "Depends: example-missing"),
-			want: []string{"example-d", "example-missing", "missing dependency"}, not: []string{"to configure"}},
+			want: []string{"example-d", "example-missing", "missing dependency", "priv_pkg_remove", "exactly"}, not: []string{"to configure"}},
 		"journal": {state: pkgStanza("example-a", "install ok unpacked", "1.0", ""),
-			journal: map[string]string{"0000": pkgStanza("example-a", "install ok installed", "1.0", "")}, want: []string{"journal"}, not: []string{"to configure", "example-a"}},
+			journal: map[string]string{"0000": pkgStanza("example-a", "install ok installed", "1.0", "")}, want: []string{"journal", "priv_pkg_recover"}, not: []string{"to configure", "example-a"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

@@ -189,6 +189,11 @@ const (
 	// report of the unfinished packages (handoff N-14; broad).
 	OpPrivPkgRecover        = "priv_pkg_recover"
 	OpPrivPkgRecoverPreview = "priv_pkg_recover_preview"
+	// OpPrivPkgReinstall reinstalls exactly the packages dpkg left
+	// needing a reinstall, each pinned to the version dpkg's status names,
+	// bound to OpPrivPkgReinstallPreview's simulation (handoff N-36; broad).
+	OpPrivPkgReinstall        = "priv_pkg_reinstall"
+	OpPrivPkgReinstallPreview = "priv_pkg_reinstall_preview"
 	// OpPrivPower answers first, then asks logind to reboot or power off
 	// after a fixed delay (broad unit; PRIVILEGED §6, "Power").
 	OpPrivPower = "priv_power"
@@ -229,7 +234,7 @@ var privReadOps = []string{
 	OpPrivReadFile, OpPrivHashFile, OpPrivListDir, OpPrivStat, OpPrivListBackups, OpPrivBackupCheck,
 	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview, OpPrivExecPreview,
 	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPkgUpdateIndexPreview, OpPrivPowerPreview, OpPrivPolicy,
-	OpPrivPkgRecoverPreview,
+	OpPrivPkgRecoverPreview, OpPrivPkgReinstallPreview,
 }
 
 // PrivMayChange reports whether a privileged request can change the host:
@@ -253,7 +258,7 @@ var PrivOps = []string{
 	OpPrivPkgInstallPreview, OpPrivPkgUpgradePreview, OpPrivPkgRemovePreview, OpPrivPower, OpPrivBackupCheck,
 	OpPrivChownPreview, OpPrivChmodPreview, OpPrivDeletePreview, OpPrivRestorePreview, OpPrivExecPreview,
 	OpPrivPkgUpdateIndexPreview, OpPrivPowerPreview, OpPrivPowerCancel, OpPrivPolicy, OpPrivHashFile,
-	OpPrivPkgRecover, OpPrivPkgRecoverPreview,
+	OpPrivPkgRecover, OpPrivPkgRecoverPreview, OpPrivPkgReinstall, OpPrivPkgReinstallPreview,
 }
 
 // Tier names on the wire: a request's ceiling, and max_tier in the gate

@@ -251,8 +251,9 @@ func TestCodesClosedSet(t *testing.T) {
 	// preview (P-2d), the index update preview (P-2e), and the power preview
 	// and cancel (P-2f, P-13), the policy summary (P-8), and the hash op
 	// for overwrite previews (handoff N-5), and the recovery and its preview
-	// (handoff N-14).
-	if len(PrivOps) != 34 || !slices.Contains(PrivOps, OpPrivPkgRecover) || !slices.Contains(PrivOps, OpPrivPkgRecoverPreview) {
+	// (handoff N-14), and the reinstall and its preview (handoff N-36).
+	if len(PrivOps) != 36 || !slices.Contains(PrivOps, OpPrivPkgRecover) || !slices.Contains(PrivOps, OpPrivPkgRecoverPreview) ||
+		!slices.Contains(PrivOps, OpPrivPkgReinstall) || !slices.Contains(PrivOps, OpPrivPkgReinstallPreview) {
 		t.Fatalf("PrivOps has %d entries", len(PrivOps))
 	}
 }
@@ -366,6 +367,8 @@ func TestPrivMayChange(t *testing.T) {
 		{OpPrivPkgInstall, TierOperator, true},
 		{OpPrivPkgRecover, TierOperator, true},
 		{OpPrivPkgRecoverPreview, TierOperator, false},
+		{OpPrivPkgReinstall, TierOperator, true},
+		{OpPrivPkgReinstallPreview, TierOperator, false},
 		{OpPrivWriteFile, TierOperator, true},
 		{OpPrivDelete, TierDestructive, true},
 		{OpPrivRestoreBackup, TierOperator, true},

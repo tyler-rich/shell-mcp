@@ -192,26 +192,29 @@ func TestPackageRecoverStopPoints(t *testing.T) {
 }
 
 // TestPackageRecoverMissingDependency: a package whose dependency nothing
-// provides: the install preview's refusal names it, the recovery preview
-// lists it with the missing dependency, and the recovery leaves it as it
-// was: verify_failed naming the dependency.
+// provides: the install preview's refusal names it and the removal; the
+// recovery preview is refused (S7-7, F1: configuring would change nothing,
+// measured), so shell_priv_recover_packages asks for no approval; dpkg
+// ran nothing.
 func TestPackageRecoverMissingDependency(t *testing.T) {
 	installPolicy(t, "privileged-recover.yaml")
 	cleanupPackages(t)
 	unpackOnHost(t, "example-needs_1.0_all.deb")
 	if r, _ := gate(t, svcShell, "priv_pkg_install_preview", helloArgs); r.code() != "exec_failed" || !strings.Contains(r.Error.Message, "missing dependency") ||
-		!strings.Contains(r.Error.Message, "example-absent") {
+		!strings.Contains(r.Error.Message, "example-absent") || !strings.Contains(r.Error.Message, "priv_pkg_remove") {
 		t.Fatalf("install preview: %s %+v", r.code(), r.Error)
 	}
-	p := recoverPreview(t)
-	if len(p.Unfinished) != 1 || p.Unfinished[0].Name != "example-needs" || !slices.Equal(p.Unfinished[0].MissingDepends, []string{"example-absent"}) {
-		t.Fatalf("preview %+v", p)
+	if r, _ := gate(t, svcShell, "priv_pkg_recover_preview", map[string]any{}); r.code() != "exec_failed" || !strings.Contains(r.Error.Message, "would change nothing") ||
+		!strings.Contains(r.Error.Message, "example-absent") {
+		t.Fatalf("recovery preview: %s %+v", r.code(), r.Error)
 	}
-	r, _ := gateAt(t, svcShell, "operator", "priv_pkg_recover", map[string]any{"expected_preview_sha256": p.PreviewSHA256})
-	if r.code() != "exec_failed" && r.code() != "verify_failed" || !strings.Contains(r.Error.Message, "example-absent") {
-		t.Fatalf("answer %s %+v", r.code(), r.Error)
+	srv, _ := privWriteServer(t)
+	env := srv.callTool(t, "shell_priv_recover_packages", map[string]any{})
+	if env["approval"] != nil {
+		t.Fatalf("an approval was requested: %v", env)
 	}
-	if got := installed(t, "example-needs"); strings.HasPrefix(got, "installed") {
+	refusal(t, env, "exec_failed", "would change nothing")
+	if got := status(t, "example-needs"); got != "install ok unpacked 1.0" {
 		t.Fatalf("example-needs %q", got)
 	}
 }

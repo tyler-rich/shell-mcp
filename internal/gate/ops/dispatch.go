@@ -107,6 +107,8 @@ var privTiers = map[string]policy.Tier{
 	protocol.OpPrivPowerPreview: policy.TierRead, protocol.OpPrivPowerCancel: policy.TierRead,
 	// The recovery (handoff N-14): its preview read, the recovery operator.
 	protocol.OpPrivPkgRecoverPreview: policy.TierRead, protocol.OpPrivPkgRecover: policy.TierOperator,
+	// The reinstall (handoff N-36): its preview read, the reinstall operator.
+	protocol.OpPrivPkgReinstallPreview: policy.TierRead, protocol.OpPrivPkgReinstall: policy.TierOperator,
 }
 
 func (s *server) dispatch() *protocol.Response {

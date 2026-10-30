@@ -135,6 +135,10 @@ type previewData struct {
 	Install  []pkgVersion `json:"install"`
 	Upgrade  []pkgUpgrade `json:"upgrade"`
 	Remove   []pkgRemoval `json:"remove"`
+	// Unfinished are the packages dpkg left unfinished, each with its
+	// version and state, for a removal of exactly them (handoff N-36);
+	// empty for a clean database, which every other preview requires.
+	Unfinished []recoverEntry `json:"unfinished"`
 	// Complete is always true: an incomplete simulation is refused, so no
 	// approval is requested for it (handoff D5 §1).
 	Complete        bool     `json:"complete"`
@@ -199,10 +203,11 @@ func (s *server) pkgRemovePreview(raw jsontext.Value) (data any, warns []string,
 // is then required and well formed.
 func pkgNames(raw jsontext.Value, op pkg.Op, bound bool) (names []string, want string, err error) {
 	var a pkgBoundArgs
+	takesNames := op == pkg.OpInstall || op == pkg.OpRemove || op == pkg.OpReinstall
 	switch {
-	case (op == pkg.OpInstall || op == pkg.OpRemove) && bound:
+	case takesNames && bound:
 		err = decode(raw, &a)
-	case op == pkg.OpInstall || op == pkg.OpRemove:
+	case takesNames:
 		var p pkgArgs
 		err = decode(raw, &p)
 		a.Packages = p.Packages
@@ -216,10 +221,14 @@ func pkgNames(raw jsontext.Value, op pkg.Op, bound bool) (names []string, want s
 	if err != nil {
 		return nil, "", err
 	}
-	if (op == pkg.OpInstall || op == pkg.OpRemove) && a.Packages == nil {
+	if takesNames && a.Packages == nil {
 		return nil, "", errf(protocol.CodeBadRequest, "packages is required")
 	}
-	if _, aerr := pkg.Args(op, false, a.Packages); aerr != nil {
+	check := func() error { _, e := pkg.Args(op, false, a.Packages); return e }
+	if op == pkg.OpReinstall {
+		check = func() error { return pkg.CheckNames(op, a.Packages) }
+	}
+	if aerr := check(); aerr != nil {
 		return nil, "", errf(protocol.CodeBadRequest, "packages: %s", aerr.Error())
 	}
 	if bound {
@@ -264,7 +273,8 @@ func (s *server) pkgAllowed(op pkg.Op, names []string) error {
 		if !pp.AllowRecover {
 			return errf(protocol.CodePolicyDenied, "packages.allow_recover is not set")
 		}
-	case pkg.OpInstall, pkg.OpRemove:
+	case pkg.OpInstall, pkg.OpRemove, pkg.OpReinstall:
+		// A reinstall installs an archive again: packages.install.
 		allowed, list := pp.Install, "packages.install"
 		if op == pkg.OpRemove {
 			allowed, list = pp.Remove, "packages.remove"
@@ -395,25 +405,87 @@ func aptErrors(stderr []byte, s *server) string {
 	return "; apt-get said: " + strings.Join(lines, " | ")
 }
 
-// pkgChecks are the checks a preview and its operation share, before
-// anything is simulated: no package operation of this helper in progress
-// (its record), the dpkg frontend lock free (previews only: an operation
-// waits for it), and nothing dpkg left unfinished.
-func (s *server) pkgChecks() error {
-	if err := s.notInProgress(); err != nil {
-		return err
+// pkgState is the check a preview and its operation share on dpkg's
+// state, before anything is simulated: nothing dpkg left unfinished, or,
+// for a removal, the unfinished mode (removalMode). It returns the state
+// and whether the request is a removal in the unfinished mode.
+func pkgState(st *pkg.State, op pkg.Op, names []string) (unfinished bool, err error) {
+	if len(st.UnfinishedPackages()) == 0 && len(st.Journal) == 0 {
+		return false, nil
 	}
-	return s.notUnfinished()
+	if op != pkg.OpRemove {
+		return false, unfinishedErr(*st, "nothing was changed")
+	}
+	return true, removalMode(st, names)
 }
 
-// notUnfinished refuses a database dpkg left part-way: unfinished
-// packages, or entries in its journal (PRIVILEGED §6).
-func (s *server) notUnfinished() error {
-	st, err := pkg.ReadState(s.o.DpkgDir)
-	if err != nil {
-		return stateErr(err, "nothing was changed")
+// removalMode is the unfinished mode of a removal (handoff N-36, S7-7):
+// with dpkg's journal empty (apt refuses to run otherwise, measured), the
+// request must name exactly the unfinished packages that do not need a
+// reinstall. Those that need one are left as they are: dpkg refuses to
+// remove them, and apt leaves them alone (M1, measured). Anything else is
+// refused before anything runs, naming what each package needs.
+func removalMode(st *pkg.State, names []string) error {
+	u := st.UnfinishedPackages()
+	if len(st.Journal) > 0 {
+		return unfinishedErr(*st, "nothing was changed")
 	}
-	return unfinishedErr(st, "nothing was changed")
+	set := removable(u)
+	req := slices.Clone(names)
+	slices.Sort(req)
+	if slices.Equal(req, set) {
+		return nil
+	}
+	which := "none: every unfinished package needs a reinstall"
+	if len(set) > 0 {
+		which = firstNames(set)
+	}
+	return errf(protocol.CodeExecFailed, "dpkg was interrupted and left %s; in this state a removal must name exactly the unfinished packages that do not need a reinstall (%s); nothing was changed",
+		describeUnfinished(u, 0), which)
+}
+
+// removable are the unfinished packages a removal in the unfinished mode
+// removes: every one that does not need a reinstall, sorted.
+func removable(u []pkg.UnfinishedPackage) []string {
+	out := []string{}
+	for _, p := range u {
+		if p.Recovery != pkg.RecoverReinstall {
+			out = append(out, p.Name)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// removesExactly checks a removal's transaction in the unfinished mode:
+// it removes exactly the unfinished packages named, each at the version
+// dpkg's state names, and installs or changes nothing.
+func removesExactly(st *pkg.State, tx pkg.Transaction) error {
+	want := []pkg.Removal{}
+	for _, p := range st.UnfinishedPackages() {
+		if p.Recovery != pkg.RecoverReinstall {
+			want = append(want, pkg.Removal{Name: p.Name, Version: p.Version})
+		}
+	}
+	got := tx.Remove
+	if got == nil {
+		got = []pkg.Removal{}
+	}
+	if len(tx.Install)+len(tx.Upgrade) == 0 && slices.Equal(got, want) {
+		return nil
+	}
+	return errf(protocol.CodeExecFailed, "the removal would change more than the unfinished packages (%s); in this state a removal removes exactly them; nothing was requested",
+		txSummary(tx))
+}
+
+// unfinishedEntries are the unfinished packages on the wire: each with
+// its version, state, flag and missing dependencies.
+func unfinishedEntries(u []pkg.UnfinishedPackage) []recoverEntry {
+	out := []recoverEntry{}
+	for _, p := range u {
+		out = append(out, recoverEntry{Name: p.Name, Version: p.Version, State: p.State, Flag: p.Flag, MissingDepends: append([]string{}, p.Missing...)})
+	}
+	return out
 }
 
 // stateErr refuses when dpkg's state could not be read: as an interrupted
@@ -452,21 +524,28 @@ func describeUnfinished(u []pkg.UnfinishedPackage, journal int) string {
 			conf = append(conf, n)
 		}
 	}
+	// Each part names the route that fits its state (S7-7): the
+	// recovery, a removal of exactly the unfinished packages, or the
+	// reinstall; with entries in the journal the recovery comes first,
+	// since apt refuses to run until they are folded in (measured).
 	var parts []string
 	if len(conf) > 0 {
 		parts = append(parts, fmt.Sprintf("%d package(s) to configure (%s): dpkg --configure -a finishes them "+
 			"(the helper's recovery, priv_pkg_recover, where packages.allow_recover is set, or an administrator on the host)", len(conf), firstNames(conf)))
 	}
 	if len(dep) > 0 {
-		parts = append(parts, fmt.Sprintf("%d package(s) with a missing dependency (%s): configuring leaves them unfinished "+
-			"until an administrator installs the dependency or removes them on the host", len(dep), firstNames(dep)))
+		parts = append(parts, fmt.Sprintf("%d package(s) with a missing dependency (%s): configuring leaves them unfinished; "+
+			"a removal naming exactly the unfinished packages that do not need a reinstall removes them (priv_pkg_remove, where packages.remove lists them), "+
+			"or an administrator installs the dependency on the host", len(dep), firstNames(dep)))
 	}
 	if len(re) > 0 {
-		parts = append(parts, fmt.Sprintf("%d package(s) to reinstall (%s): dpkg --configure -a does not fix them; "+
-			"an administrator reinstalls them (apt-get install --reinstall) or removes them on the host", len(re), firstNames(re)))
+		parts = append(parts, fmt.Sprintf("%d package(s) to reinstall (%s): dpkg --configure -a does not fix them and they cannot be removed (dpkg refuses); "+
+			"a reinstall at the same version naming exactly them repairs them (priv_pkg_reinstall, where packages.install lists them and the package index has that version), "+
+			"or an administrator reinstalls them on the host", len(re), firstNames(re)))
 	}
 	if journal > 0 {
-		parts = append(parts, fmt.Sprintf("%d entr(ies) in its journal /var/lib/dpkg/updates, which dpkg --configure -a folds in", journal))
+		parts = append(parts, fmt.Sprintf("%d entr(ies) in its journal /var/lib/dpkg/updates, which dpkg --configure -a folds in "+
+			"(priv_pkg_recover first, where packages.allow_recover is set: apt refuses to run until it is folded in)", journal))
 	}
 	if len(parts) == 0 {
 		return "nothing unfinished"
@@ -507,8 +586,16 @@ func (s *server) pkgPreview(raw jsontext.Value, op pkg.Op) (data any, warns []st
 	if aerr := s.pkgAllowed(op, names); aerr != nil {
 		return nil, nil, aerr
 	}
-	if cerr := s.pkgChecks(); cerr != nil {
-		return nil, nil, cerr
+	if perr := s.notInProgress(); perr != nil {
+		return nil, nil, perr
+	}
+	st, err := s.readState()
+	if err != nil {
+		return nil, nil, err
+	}
+	unfinished, err := pkgState(&st, op, names)
+	if err != nil {
+		return nil, nil, err
 	}
 	if lerr := s.lockFree(); lerr != nil {
 		return nil, nil, lerr
@@ -521,14 +608,32 @@ func (s *server) pkgPreview(raw jsontext.Value, op pkg.Op) (data any, warns []st
 	if rerr := neverRemoves(op, sim.tx); rerr != nil {
 		return nil, nil, rerr
 	}
+	entries := []recoverEntry{}
+	if unfinished {
+		if rerr := removesExactly(&st, sim.tx); rerr != nil {
+			return nil, nil, rerr
+		}
+		entries = unfinishedEntries(st.UnfinishedPackages())
+	}
 	w := wireTx(sim.tx)
 	stderr, cut := s.red.Truncate(sim.res.Stderr, s.p.Limits.MaxOutputBytes)
 	d := previewData{
-		Op: string(op), Packages: names, Install: w.Install, Upgrade: w.Upgrade, Remove: w.Remove, Complete: true, Argv: argv,
+		Op: string(op), Packages: names, Install: w.Install, Upgrade: w.Upgrade, Remove: w.Remove, Unfinished: entries, Complete: true, Argv: argv,
 		ExitCode: sim.res.ExitCode, Stderr: string(stderr), StderrTruncated: sim.res.StderrTruncated || cut, DurationMS: sim.res.Duration.Milliseconds(),
-		PolicySHA256: s.p.SHA256, PreviewSHA256: pkg.PreviewHash(s.p.SHA256, op, names, sim.tx, argv),
+		PolicySHA256: s.p.SHA256, PreviewSHA256: previewHash(s.p.SHA256, op, names, sim.tx, argv, &st, unfinished),
 	}
 	return d, nil, nil
+}
+
+// previewHash is an install's, upgrade's or removal's preview_sha256; a
+// removal in the unfinished mode binds dpkg's unfinished state too, in a
+// domain of its own (handoff N-36).
+func previewHash(policySHA string, op pkg.Op, names []string, tx pkg.Transaction, argv []string, st *pkg.State, unfinished bool) string {
+	h := pkg.PreviewHash(policySHA, op, names, tx, argv)
+	if unfinished {
+		h = pkg.UnfinishedPreviewHash(h, st.UnfinishedPackages(), st.Journal)
+	}
+	return h
 }
 
 // neverRemoves refuses an install or upgrade whose transaction removes a
@@ -580,14 +685,16 @@ func (s *server) pkgChange(raw jsontext.Value, op pkg.Op) (data any, warns []str
 	if err != nil {
 		return nil, nil, err
 	}
-	before, err := pkg.ReadState(s.o.DpkgDir)
+	before, err := s.readState()
 	if err != nil {
-		return nil, nil, stateErr(err, "nothing was changed")
+		return nil, nil, err
 	}
-	if uerr := unfinishedErr(before, "nothing was changed"); uerr != nil {
-		return nil, nil, uerr
+	unfinished, err := pkgState(&before, op, names)
+	if err != nil {
+		return nil, nil, err
 	}
-	// (1) The preview, recomputed with its own argv.
+	// (1) The preview, recomputed with its own argv (and, for a removal in
+	// the unfinished mode, dpkg's unfinished state).
 	argv, _ := pkg.Args(op, true, names)
 	sim, err := s.simulate(argv, st.deadline)
 	if err != nil {
@@ -596,8 +703,14 @@ func (s *server) pkgChange(raw jsontext.Value, op pkg.Op) (data any, warns []str
 	if rerr := neverRemoves(op, sim.tx); rerr != nil {
 		return nil, nil, rerr
 	}
-	if pkg.PreviewHash(s.p.SHA256, op, names, sim.tx, argv) != want {
-		return nil, nil, errf(protocol.CodeExists, "the transaction differs from its preview (a new candidate version, dependency or removal, or the privileged policy changed); nothing was run; preview again")
+	if previewHash(s.p.SHA256, op, names, sim.tx, argv, &before, unfinished) != want {
+		return nil, nil, errf(protocol.CodeExists, "the transaction differs from its preview (a new candidate version, dependency or removal, "+
+			"a change to the packages dpkg left unfinished, or the privileged policy changed); nothing was run; preview again")
+	}
+	if unfinished {
+		if rerr := removesExactly(&before, sim.tx); rerr != nil {
+			return nil, nil, rerr
+		}
 	}
 	tx := sim.tx
 	if pkgHook != nil {
@@ -638,7 +751,7 @@ func (s *server) pkgChange(raw jsontext.Value, op pkg.Op) (data any, warns []str
 	if err != nil {
 		return nil, nil, err
 	}
-	return s.pkgOutcome(op, names, before.Status, tx, &res, attempts, waited)
+	return s.pkgOutcome(op, names, &before, tx, &res, attempts, waited)
 }
 
 func ptr[T any](v T) *T { return &v }
@@ -866,12 +979,12 @@ func (s *server) answerEarly(when string) {
 // condition 2): the transaction applied exactly and nothing unfinished is
 // a success; nothing changed is exec_failed; anything else verify_failed.
 // apt's exit code decides nothing.
-func (s *server) pkgOutcome(op pkg.Op, names []string, before pkg.Status, tx pkg.Transaction, res *execx.Result, attempts int, waited time.Duration) (data any, warns []string, failure error) {
+func (s *server) pkgOutcome(op pkg.Op, names []string, before *pkg.State, tx pkg.Transaction, res *execx.Result, attempts int, waited time.Duration) (data any, warns []string, failure error) {
 	after, err := pkg.ReadState(s.o.DpkgDir)
 	if err != nil {
 		return nil, nil, errf(protocol.CodeOutcomeUnknown, "apt-get ran, but dpkg's state could not be read afterwards (%s); check the host", err.Error())
 	}
-	diff := pkg.Diff(before, after.Status)
+	diff := pkg.Diff(before.Status, after.Status)
 	s.recordApplied(diff)
 	s.unfinished = after.Unfinished()
 	if len(s.unfinished) > maxAuditChanged {
@@ -894,10 +1007,18 @@ func (s *server) pkgOutcome(op pkg.Op, names []string, before pkg.Status, tx pkg
 	case "killed":
 		how = "apt-get was killed at the helper's limit; "
 	}
-	if uerr := unfinishedErr(after, "the transaction cannot be undone"); uerr != nil {
-		var oe *opError
-		errors.As(uerr, &oe)
-		return nil, nil, errf(protocol.CodeVerifyFailed, "%s%s; applied %s, approved %s", how, oe.msg, txSummary(diff), txSummary(tx))
+	if before.Same(after) {
+		// Nothing changed, a removal in the unfinished mode included,
+		// whose unfinished packages are still as they were.
+		code := "none"
+		if res.ExitCode != nil {
+			code = fmt.Sprint(*res.ExitCode)
+		}
+		return nil, nil, errf(protocol.CodeExecFailed, "%sapt-get changed nothing (exit code %s)%s; nothing was changed", how, code, aptErrors(res.Stderr, s))
+	}
+	if left := stillUnfinished(before, &after); len(left) > 0 || len(after.Journal) > 0 {
+		return nil, nil, errf(protocol.CodeVerifyFailed, "%sdpkg was interrupted and left %s; the transaction cannot be undone; applied %s, approved %s",
+			how, describeUnfinished(left, len(after.Journal)), txSummary(diff), txSummary(tx))
 	}
 	switch {
 	case diff.Equal(tx):
@@ -916,4 +1037,21 @@ func (s *server) pkgOutcome(op pkg.Op, names []string, before pkg.Status, tx pkg
 	}
 	return nil, nil, errf(protocol.CodeVerifyFailed, "%sthe transaction differed from the approved one: applied %s, approved %s; it cannot be undone; preview again",
 		how, txSummary(diff), txSummary(tx))
+}
+
+// stillUnfinished are the packages dpkg left unfinished after an
+// operation, less those that needed a reinstall before it and are exactly
+// as they were: a removal in the unfinished mode leaves them alone (M1,
+// handoff N-36), which is not a failure. A clean database before (every
+// other operation) tolerates nothing.
+func stillUnfinished(before, after *pkg.State) []pkg.UnfinishedPackage {
+	var out []pkg.UnfinishedPackage
+	for _, p := range after.UnfinishedPackages() {
+		b, ok := before.Packages[p.Name]
+		if ok && p.Recovery == pkg.RecoverReinstall && b == after.Packages[p.Name] {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }

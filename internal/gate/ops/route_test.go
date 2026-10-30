@@ -111,6 +111,8 @@ func TestRouting(t *testing.T) {
 		"priv_pkg_remove_preview":       {`{"packages":["htop"]}`, "broad"},
 		"priv_pkg_recover":              {`{}`, "broad"},
 		"priv_pkg_recover_preview":      {`{}`, "broad"},
+		"priv_pkg_reinstall":            {`{"packages":["htop"]}`, "broad"},
+		"priv_pkg_reinstall_preview":    {`{"packages":["htop"]}`, "broad"},
 		"priv_power":                    {`{"action":"reboot"}`, "broad"},
 		"priv_power_preview":            {`{"action":"reboot"}`, "broad"},
 		"priv_power_cancel":             {`{}`, "broad"},
@@ -178,19 +180,20 @@ func TestRoutingRefusals(t *testing.T) {
 func TestRoutingTiers(t *testing.T) {
 	f := newFixture(t, "destructive")
 	h := startTwoHelpers(t, f, "privileged:\n  enabled: true\n  socket: "+coreSock+"\n  broad_socket: "+broadSock+"\n  max_tier: read\n")
-	for _, op := range []string{"priv_pkg_update_index_preview", "priv_pkg_install_preview", "priv_pkg_upgrade_preview", "priv_pkg_remove_preview", "priv_power_preview", "priv_power_cancel", "priv_pkg_recover_preview"} {
+	for _, op := range []string{"priv_pkg_update_index_preview", "priv_pkg_install_preview", "priv_pkg_upgrade_preview", "priv_pkg_remove_preview", "priv_power_preview", "priv_power_cancel", "priv_pkg_recover_preview", "priv_pkg_reinstall_preview"} {
 		f.ok(op, m{}, nil)
 	}
-	for _, op := range []string{"priv_pkg_update_index", "priv_pkg_install", "priv_pkg_upgrade", "priv_pkg_remove", "priv_power", "priv_pkg_recover"} {
+	for _, op := range []string{"priv_pkg_update_index", "priv_pkg_install", "priv_pkg_upgrade", "priv_pkg_remove", "priv_power", "priv_pkg_recover", "priv_pkg_reinstall"} {
 		f.fail(op, m{}, "tier_denied")
 	}
 	f.writePolicy("destructive", "privileged:\n  enabled: true\n  socket: "+coreSock+"\n  broad_socket: "+broadSock+"\n  max_tier: operator\n")
 	f.ok("priv_pkg_install", m{}, nil)
 	f.ok("priv_pkg_recover", m{}, nil)
+	f.ok("priv_pkg_reinstall", m{}, nil)
 	f.fail("priv_pkg_remove", m{}, "tier_denied")
 	f.fail("priv_power", m{}, "tier_denied")
-	if h.count(broadSock) != 9 {
-		t.Fatalf("broad got %d requests, want 9", h.count(broadSock))
+	if h.count(broadSock) != 11 {
+		t.Fatalf("broad got %d requests, want 11", h.count(broadSock))
 	}
 }
 

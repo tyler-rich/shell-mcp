@@ -33,7 +33,7 @@ var broadOps = []string{
 	protocol.OpPrivPkgUpdateIndex, protocol.OpPrivPkgInstall, protocol.OpPrivPkgUpgrade, protocol.OpPrivPkgRemove,
 	protocol.OpPrivPkgInstallPreview, protocol.OpPrivPkgUpgradePreview, protocol.OpPrivPkgRemovePreview, protocol.OpPrivPkgUpdateIndexPreview,
 	protocol.OpPrivPower, protocol.OpPrivPowerPreview, protocol.OpPrivPowerCancel,
-	protocol.OpPrivPkgRecover, protocol.OpPrivPkgRecoverPreview,
+	protocol.OpPrivPkgRecover, protocol.OpPrivPkgRecoverPreview, protocol.OpPrivPkgReinstall, protocol.OpPrivPkgReinstallPreview,
 }
 
 // route picks the helper socket for a privileged op: privileged.broad_socket

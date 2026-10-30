@@ -179,6 +179,22 @@ install -d "$d/DEBIAN"
 printf 'Package: example-needs\nVersion: 1.0\nArchitecture: all\nMaintainer: shell-mcp end-to-end tests <e2e@example.test>\nDepends: example-absent\nDescription: invented package for the shell-mcp end-to-end tests\n' >"$d/DEBIAN/control"
 dpkg-deb --root-owner-group --build "$d" "$bin/debs/example-needs_1.0_all.deb" >/dev/null
 rm -rf "$d"
+# What the recovery leaves (handoff N-36, S7-7): example-reinst's preinst and
+# postrm fail while /run/shell-mcp-e2e-pkg-fail exists, so an install then
+# leaves it half-installed and flagged reinstreq (measured); its postinst
+# waits for the release file, as example-blocked's does, so a reinstall can
+# be held at its stop points. Invented package.
+d="$(mktemp -d)"
+install -d "$d/DEBIAN" "$d/usr/share/example-reinst"
+printf 'example-reinst 1.0\n' >"$d/usr/share/example-reinst/version"
+printf 'Package: example-reinst\nVersion: 1.0\nArchitecture: all\nMaintainer: shell-mcp end-to-end tests <e2e@example.test>\nDescription: invented package for the shell-mcp end-to-end tests\n' >"$d/DEBIAN/control"
+for s in preinst postrm; do
+	printf '#!/bin/sh\nif [ -e /run/shell-mcp-e2e-pkg-fail ]; then echo "invented failure" >&2; exit 1; fi\nexit 0\n' >"$d/DEBIAN/$s"
+done
+printf '#!/bin/sh\ni=0; while [ ! -e /run/shell-mcp-e2e-pkg-release ] && [ ! -e /run/shell-mcp-e2e-pkg-fast ] && [ $i -lt 600 ]; do sleep 1; i=$((i+1)); done\n' >"$d/DEBIAN/postinst"
+chmod 0755 "$d/DEBIAN/preinst" "$d/DEBIAN/postrm" "$d/DEBIAN/postinst"
+dpkg-deb --root-owner-group --build "$d" "$bin/debs/example-reinst_1.0_all.deb" >/dev/null
+rm -rf "$d"
 
 # --- Policies ---------------------------------------------------------------
 install -o root -g root -m 0755 -d /etc/shell-mcp
@@ -576,8 +592,8 @@ power:
 packages:
   enabled: true
   manager: apt
-  install: [example-hello, example-conf, example-slow, example-slow-a, example-slow-b, example-stuck, example-blocked]
-  remove: [example-hello, example-conf]
+  install: [example-hello, example-conf, example-slow, example-slow-a, example-slow-b, example-stuck, example-blocked, example-reinst]
+  remove: [example-hello, example-conf, example-needs]
   allow_update_index: true
   allow_upgrade: $3
 EOF

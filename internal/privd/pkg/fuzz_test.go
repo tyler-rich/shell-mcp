@@ -230,3 +230,30 @@ func FuzzReadStateJournal(f *testing.F) {
 		}
 	})
 }
+
+// FuzzReinstallArgs: the reinstall's pins are host data (a name and the
+// version dpkg's status names); the argv is either refused or the fixed
+// options, then "--", then only name=version pins of a valid name and a
+// Debian version, never an option.
+func FuzzReinstallArgs(f *testing.F) {
+	for _, s := range [][2]string{{"example-a", "1.0"}, {"example-a", "2:1.4+dfsg-3"}, {"example-a", "-o"}, {"-s", "1.0"}, {"example-a-", "1"}, {"example-a", "1.0-"}, {"x", ""}} {
+		f.Add(s[0], s[1], "example-b", "1.0")
+	}
+	f.Fuzz(func(t *testing.T, n1, v1, n2, v2 string) {
+		args, err := pkg.ReinstallArgs(true, []pkg.Version{{Name: n1, Version: v1}, {Name: n2, Version: v2}})
+		if err != nil {
+			return
+		}
+		i := slices.Index(args, "--")
+		if i < 0 || !slices.Equal(args[i-3:i], []string{"-s", "install", "--reinstall"}) || len(args) != i+3 {
+			t.Fatalf("argv %q", args)
+		}
+		for _, a := range args[i+1:] {
+			name, version, ok := strings.Cut(a, "=")
+			if !ok || !pkg.ValidName(name) || strings.HasPrefix(a, "-") || strings.HasSuffix(name, "-") || version == "" || version[0] < '0' || version[0] > '9' ||
+				strings.HasSuffix(version, "-") || strings.ContainsAny(version, " /=\t\n") {
+				t.Fatalf("pin %q in %q", a, args)
+			}
+		}
+	})
+}

@@ -4,7 +4,6 @@ package pkg
 
 import (
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -237,17 +236,9 @@ const recoverDomain = "shell-mcp priv pkg recover preview v1\x00"
 // names (sorted), each length-prefixed and every list counted. Never what
 // is derived from them (Recovery, Missing), stderr or durations.
 func RecoverPreviewHash(policySHA string, argv []string, unfinished []UnfinishedPackage, journal []string) string {
-	u := slices.Clone(unfinished)
-	slices.SortFunc(u, func(a, b UnfinishedPackage) int { return strings.Compare(a.Name, b.Name) })
-	j := slices.Clone(journal)
-	slices.Sort(j)
 	b := field([]byte(recoverDomain), policySHA)
 	b = list(b, argv)
-	b = binary.AppendUvarint(b, uint64(len(u)))
-	for _, p := range u {
-		b = field(field(field(field(field(b, p.Name), p.Version), p.Want), p.Flag), p.State)
-	}
-	b = list(b, j)
+	b = appendState(b, unfinished, journal)
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
