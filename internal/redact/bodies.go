@@ -128,7 +128,7 @@ func base64Line(c []byte) bool {
 		return false
 	}
 	for _, x := range c[:end] {
-		if !(x >= 'A' && x <= 'Z' || x >= 'a' && x <= 'z' || x >= '0' && x <= '9' || x == '+' || x == '/') {
+		if !isBase64(x) {
 			return false
 		}
 	}
@@ -154,9 +154,15 @@ func fullLine(c []byte) bool {
 		return false
 	}
 	for _, x := range c {
-		if !(x >= '0' && x <= '9' || x >= 'a' && x <= 'f' || x >= 'A' && x <= 'F') {
+		if !isHex(x) {
 			return true
 		}
 	}
 	return false
 }
+
+func isBase64(x byte) bool {
+	return x >= 'A' && x <= 'Z' || x >= 'a' && x <= 'z' || x >= '0' && x <= '9' || x == '+' || x == '/'
+}
+
+func isHex(x byte) bool { return x >= '0' && x <= '9' || x >= 'a' && x <= 'f' || x >= 'A' && x <= 'F' }

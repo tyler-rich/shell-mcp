@@ -401,7 +401,8 @@ func (d *Deps) privPolicy(ctx context.Context, target string) (summary *PrivPoli
 		Owners: w.Owners, ModesMax: w.ModesMax, BackupsKeep: w.BackupsKeep, BackupsMaxStoreBytes: w.BackupsMaxStoreBytes,
 		Commands: []PrivCommand{}, Packages: w.Packages, Power: w.Power, Ops: []PrivOp{}, Findings: w.Findings,
 	}
-	for _, c := range w.Commands {
+	for i := range w.Commands {
+		c := &w.Commands[i]
 		p.Commands = append(p.Commands, PrivCommand{ID: c.ID, Tier: c.Tier, Unit: c.Unit, Description: c.Description, Templates: c.Templates,
 			RootEquivalent: c.RootEquivalent, Capabilities: c.Capabilities, ReadsPrivateKeys: c.ReadsPrivateKeys, Approval: privApproval(c.Tier)})
 	}

@@ -4415,7 +4415,7 @@ The docs changed after the run (documentation only). **Fuzz:** `FuzzValidName` (
 - **Helper and policies:** `TestPrivExecKeyInput`, `TestReadsPrivateKeysParsed`, `TestReadsPrivateKeysRangeWarning`, `TestRangeProgramsListShape`, and the helper's `TestReadsPrivateKeys`.
 - **Passing against the old code too, as they should:** `TestOrphanEndOrdinaryTextUnchanged` and `TestMaskKeyBodiesOrdinaryOutputUnchanged`, which pin ordinary output.
 
-FUZZ_PLACEHOLDER
+**Fuzz, 60 s each, all passed:** `FuzzHeaderlessKeyBody` 6.36M execs (an invented key of any length and width PEM uses, any window of its lines, with or without journal prefixes: no full body line survives, and none at all when the window reaches the END), `FuzzRedactKeyBlocks` 29.6M, `FuzzRedact` 30.5M, `FuzzPrivateKeyBlocks` 18.1M, `FuzzParseNames` 73.9M, `FuzzPrivExecPreviewMatchesExec` 98.9k (the helper's one resolution with the key search in it).
 
 CILOCAL_PLACEHOLDER
 
