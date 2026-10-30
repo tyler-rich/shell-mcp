@@ -19,6 +19,7 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/gate/systemd"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
+	"github.com/tyler-rich/shell-mcp/internal/redact"
 )
 
 // Built-in systemd operations (ARCHITECTURE §4.3). They run fixed argv
@@ -325,7 +326,10 @@ func (s *server) journal(raw jsontext.Value) (data any, warns []string, failure 
 		}
 		return nil, nil, errf(protocol.CodeExecFailed, "%s", msg)
 	}
-	out, cut := s.red.Truncate(res.Stdout, s.p.Limits.MaxOutputBytes)
+	// -n and --until cut the window by entries, so it can begin, or lie
+	// wholly, inside a key a service logged line by line: the width
+	// heuristic masks a body shown without its BEGIN line (handoff N-35).
+	out, cut := s.red.Truncate(redact.MaskKeyBodies(s.red.Bytes(res.Stdout), redact.JournalLines), s.p.Limits.MaxOutputBytes)
 	var warnings []string
 	if bytes.Contains(res.Stderr, []byte("not seeing messages")) {
 		warnings = append(warnings, "journalctl reports limited access: add the service account to the systemd-journal group to see all messages")

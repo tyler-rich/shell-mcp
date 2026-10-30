@@ -301,7 +301,7 @@ func TestGetPolicy(t *testing.T) {
 		`"limits":{"default_timeout_s":30,"max_delete_entries":1000,"max_find_depth":8,"max_find_results":1000,"max_memory_mb":1024,"max_output_bytes":1048576,"max_processes":2000,"max_read_bytes":1048576,"max_stdin_bytes":1048576,"max_timeout_s":300,"max_write_bytes":1048576}`,
 		`"paths":{"deny":[],"read":["/srv/app"],"write":[]}`,
 		`"repos":[{"path":"/srv/app","remote":"https://git.example.test/app.git"}]`,
-		`"commands":[{"description":"Show the version","id":"app-version","root_equivalent":false,"templates":[["--version"]],"tier":"read"}]`,
+		`"commands":[{"description":"Show the version","id":"app-version","reads_private_keys":false,"root_equivalent":false,"templates":[["--version"]],"tier":"read"}]`,
 	} {
 		if !strings.Contains(string(b), want) {
 			t.Fatalf("data lacks %s:\n%s", want, b)

@@ -116,14 +116,15 @@ type PrivOwners struct {
 
 // PrivCommand is one declared root command.
 type PrivCommand struct {
-	ID             string     `json:"id" jsonschema:"Command id."`
-	Tier           string     `json:"tier" jsonschema:"read, operator or destructive."`
-	Unit           string     `json:"unit" jsonschema:"The unit it runs in: core or broad."`
-	Description    string     `json:"description" jsonschema:"The host owner's description."`
-	Templates      [][]string `json:"templates" jsonschema:"Argument templates; placeholders are typed."`
-	RootEquivalent bool       `json:"root_equivalent" jsonschema:"Whether the owner acknowledged the command as root-equivalent."`
-	Capabilities   []string   `json:"capabilities" jsonschema:"Capabilities the command adds."`
-	Approval       bool       `json:"approval" jsonschema:"Whether running it needs a human approval (operator and destructive commands always do)."`
+	ID               string     `json:"id" jsonschema:"Command id."`
+	Tier             string     `json:"tier" jsonschema:"read, operator or destructive."`
+	Unit             string     `json:"unit" jsonschema:"The unit it runs in: core or broad."`
+	Description      string     `json:"description" jsonschema:"The host owner's description."`
+	Templates        [][]string `json:"templates" jsonschema:"Argument templates; placeholders are typed."`
+	RootEquivalent   bool       `json:"root_equivalent" jsonschema:"Whether the owner acknowledged the command as root-equivalent."`
+	Capabilities     []string   `json:"capabilities" jsonschema:"Capabilities the command adds."`
+	ReadsPrivateKeys bool       `json:"reads_private_keys" jsonschema:"Whether the owner lets the command read files that hold a private key; its output is then also masked by the PEM-width heuristic."`
+	Approval         bool       `json:"approval" jsonschema:"Whether running it needs a human approval (operator and destructive commands always do)."`
 }
 
 // PrivPackages is the packages section.
@@ -267,11 +268,12 @@ type Repo struct {
 
 // Command is one declared command.
 type Command struct {
-	ID             string     `json:"id" jsonschema:"Command id."`
-	Description    string     `json:"description" jsonschema:"The host owner's description."`
-	Tier           string     `json:"tier" jsonschema:"read, operator or destructive."`
-	RootEquivalent bool       `json:"root_equivalent" jsonschema:"Whether the owner acknowledged the command as root-equivalent."`
-	Templates      [][]string `json:"templates" jsonschema:"Argument templates; placeholders are typed."`
+	ID               string     `json:"id" jsonschema:"Command id."`
+	Description      string     `json:"description" jsonschema:"The host owner's description."`
+	Tier             string     `json:"tier" jsonschema:"read, operator or destructive."`
+	RootEquivalent   bool       `json:"root_equivalent" jsonschema:"Whether the owner acknowledged the command as root-equivalent."`
+	ReadsPrivateKeys bool       `json:"reads_private_keys" jsonschema:"Whether the owner lets the command read files that hold a private key; its output is then also masked by the PEM-width heuristic."`
+	Templates        [][]string `json:"templates" jsonschema:"Argument templates; placeholders are typed."`
 }
 
 func getPolicy(d *Deps) Tool {
@@ -351,13 +353,14 @@ type privPolicyWire struct {
 }
 
 type privCmdWire struct {
-	ID             string     `json:"id"`
-	Tier           string     `json:"tier"`
-	Unit           string     `json:"unit"`
-	Description    string     `json:"description"`
-	Templates      [][]string `json:"templates"`
-	RootEquivalent bool       `json:"root_equivalent"`
-	Capabilities   []string   `json:"capabilities"`
+	ID               string     `json:"id"`
+	Tier             string     `json:"tier"`
+	Unit             string     `json:"unit"`
+	Description      string     `json:"description"`
+	Templates        [][]string `json:"templates"`
+	RootEquivalent   bool       `json:"root_equivalent"`
+	Capabilities     []string   `json:"capabilities"`
+	ReadsPrivateKeys bool       `json:"reads_private_keys"`
 }
 
 type privOpWire struct {
@@ -398,9 +401,10 @@ func (d *Deps) privPolicy(ctx context.Context, target string) (summary *PrivPoli
 		Owners: w.Owners, ModesMax: w.ModesMax, BackupsKeep: w.BackupsKeep, BackupsMaxStoreBytes: w.BackupsMaxStoreBytes,
 		Commands: []PrivCommand{}, Packages: w.Packages, Power: w.Power, Ops: []PrivOp{}, Findings: w.Findings,
 	}
-	for _, c := range w.Commands {
+	for i := range w.Commands {
+		c := &w.Commands[i]
 		p.Commands = append(p.Commands, PrivCommand{ID: c.ID, Tier: c.Tier, Unit: c.Unit, Description: c.Description, Templates: c.Templates,
-			RootEquivalent: c.RootEquivalent, Capabilities: c.Capabilities, Approval: privApproval(c.Tier)})
+			RootEquivalent: c.RootEquivalent, Capabilities: c.Capabilities, ReadsPrivateKeys: c.ReadsPrivateKeys, Approval: privApproval(c.Tier)})
 	}
 	for _, o := range w.Ops {
 		p.Ops = append(p.Ops, PrivOp{Op: o.Op, Tier: o.Tier, Unit: o.Unit, Approval: privApproval(o.Tier)})

@@ -83,7 +83,7 @@ func scanDenied(dirs, extra []string) []*deniedFile {
 		_ = f.Close()
 		slices.Sort(names)
 		for _, n := range names {
-			isScanned, isListed := scanned(n, extra), listedOf(n) != ""
+			isScanned, isListed := scanned(n, extra), listedOf(n) != "" || isRangeProgram(CanonicalName(n))
 			if !isScanned && !isListed {
 				continue
 			}
@@ -146,8 +146,9 @@ type Identity struct {
 	// Scanned are the matches with the files the check refuses or
 	// classifies (MatchAll).
 	Scanned []IdentityMatch
-	// Listed are the GTFOBins-listed programs it is identical to, by their
-	// canonical names (handoff N-33), in directory and name order.
+	// Listed are the GTFOBins-listed and range programs (keyrange.go) it is
+	// identical to, by their canonical names (handoff N-33, N-35), in
+	// directory and name order.
 	Listed []ListedMatch
 	// Skipped is why a comparison with a listed program's file was
 	// impossible, or nil. It never fails the check: the GTFOBins warning

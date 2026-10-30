@@ -162,8 +162,12 @@ type Command struct {
 	Description    string
 	Unit           Unit
 	RootEquivalent bool
-	Capabilities   []string
-	Acknowledge    string
+	// ReadsPrivateKeys lets the command's {path:read} (and {path:read:fd})
+	// files hold a private key, which is otherwise refused; its output then
+	// gets redact.MaskKeyBodies (POLICY §4, handoff N-35).
+	ReadsPrivateKeys bool
+	Capabilities     []string
+	Acknowledge      string
 	// ListB is the POLICY §5 group (11–13) the binary belongs to, or 0.
 	ListB     int
 	Templates []template.Template

@@ -4363,3 +4363,76 @@ The docs changed after the run (documentation only). **Fuzz:** `FuzzValidName` (
 - Out of scope: N-35, N-36, the 0.2.0 release.
 
 **Versions:** Go 1.27.3 (D-013: deps-current reported 13 modules in scope, all current, so no refresh commit). Direct modules unchanged: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0. No dependency added. systemd in the exposure images: 255.4, 257.13, 259.9.
+
+### 2026-10-30 — Headerless private-key output closed in journal, command and diff output (S7-6: N-35) (branch fix/headerless-key-output)
+
+**Scope (the session prompt):** N-35, a private key's body reaching the client without its BEGIN line through journal, command or diff output, decided before 0.2.0: phase 1 (each path verified against the code with a benign reproduction, the options with their trade-offs, a heuristic's false-positive rate measured on real text, a recommendation), then what the maintainer approved, tests first on a tests-only draft PR.
+
+**What phase 1 found (verified from the code, reproduced through the real gate ops with keys generated at run time).**
+- **Caps never cut a key before redaction.** `execx`'s capture keeps the head, `Truncate` redacts before and after its cut, and the server keeps the head. Only a source can cut its own slice.
+- **Journal:** `journalctl -o short-iso -n N [--since] [--until]`. A service that writes a key to stdout gets one entry per line, so `lines: 12` showed 10 of an RSA-2048 key's 26 body lines. `--until` can also end a window inside a body. A window from `-n` alone always ends at the newest entry, so it holds the END whenever it holds a body line and the END was logged.
+- **Commands:** a declared `tail -n {int} -- {path:read}` over a key file showed 9 body lines.
+- **`git diff`:** a changed body line showed 8 old and 8 new body lines: the hunk's 6 context lines, the changed lines, and the hunk header. Git fills the header from the last line before the hunk that starts with a letter (`@@ -12,7 +12,7 @@ <body line>`), a second way out that the handoff had not named. The context is always git's default 3: no `diff.*` key is on the allowlist. `git_log` returns subjects only, so `git_diff` is the only patch output.
+- **Pushback.** There is no privileged journal read (the "join" is audit lines joined by request id); `priv_exec` is a fourth source-cut path. A name list (`*.key`) is weaker than searching content. An output heuristic alone cannot stop a hostile caller with a fragment template (`cut -c`, `head -c`); only a search of the command's input can.
+
+**Measured (the PEM-width heuristic).**
+- **The corpus:** 12,348,739 lines in 58,685 text files: the Go 1.27.3 tree, a 922 MB module cache, `/etc`, `/usr/share`, `/var/log` of the Go image, and this repository's `git log -p --all`.
+- **The rule:** runs of lines that are 64 or 70 base64 characters (after a diff marker or journal prefix), not all hex.
+- **Runs of 2 or more lines.** 120 inside private keys and 737 inside other PEM blocks. 6 outside any block, all of them encrypted keys in `crypto/x509/pem_decrypt_test.go` whose header is a Go string concatenation.
+- **Runs of 1 or more lines.** 11 outside a block (5 more: base64 test data).
+- **END lines with no BEGIN:** 1 in the whole corpus.
+- **No real journal was available**, so none was measured.
+
+**Decision (maintainer, 2026-10-30, phase 1).**
+- **Journal:** the END rule (b1) in `redact.Bytes` for every caller, plus the width heuristic (b2), as a separate entry point on journal message content only.
+- **Diff:** decide by content, with `git diff --name-only -z` and `git grep` on both sides. Leave key files out with literal exclude pathspecs, add a mask line naming each, and apply b1. No `private_key_files` field.
+- **Commands:** search each `{path:read}`/`{path:read:fd}` regular file at resolution with the existing whole-file scanner, refuse with `path_denied`, in the gate and the helper. Over 256 MiB, run with b2. Literal paths and directories are the documented residual. No `check-policy` WARN for range programs without the opt-in.
+- **Approved schema change:** a per-command opt-in in both policies that accepts such a file. It is shown in `check-policy` and both summaries, b2 applies to that command's output, and `check-policy` warns when the opted-in program is a range or filter program.
+
+**What changed.**
+- **`redact`.**
+  - **The END rule.** `maskKeyBlocks` masks, in the text between key blocks, each `-----END … PRIVATE KEY-----` (any private-key label) back to the start of the text or the previous mask (`orphanEnds`). `PrivateKeyBlocks` and the approval page are unchanged.
+  - **`MaskKeyBodies(b, PlainLines|JournalLines)`** (`bodies.go`) is the heuristic. A run of 64- or 70-wide base64 lines, all of one width and not all hex, is masked, with a following shorter line whose length can end a body: a multiple of 4 after 64, even after 70. It is not applied inside a PEM block whose BEGIN is shown. Each line's content is replaced by the mask; prefixes and line endings are kept. The last-line length rule was added after the tests showed a trailing ordinary word ("after") taken for a last line.
+- **Journal:** `journal` applies `MaskKeyBodies(Bytes(out), JournalLines)`, then `Truncate`.
+- **Commands.**
+  - **The search.** `fsx.CommandKeyInputs` searches each `{path:read}` (opened as `ResolveRead` opens it) and `{path:read:fd}` (through the gate's descriptor, `ReadAt`, offset unchanged) of the matched template, regular files only, up to 256 MiB. It is called in both `resolveExec`s, so the preview refuses too.
+  - **The refusal** is `path_denied`, naming the file and `reads_private_keys`.
+  - **Strict output.** A command with the opt-in, or with a file over the cap, gets `MaskKeyBodies(Bytes(…), PlainLines)` on stdout and stderr before `Truncate`.
+- **Policies.**
+  - **The key.** `reads_private_keys` (bool, default false) in both. The name says what the gate checks, that the command reads key files, and parallels `root_equivalent` as an owner's declaration.
+  - **The warning.** `KeyRangeWarnings` uses the range-program list (`keyrange.go`: 29 names) with the GTFOBins matcher, generalised as `matchesOf`. Matching is by written name, resolved name and binary identity (the identity scan now also collects those names; it only ever warns).
+  - **Where it is shown.** `check-policy` prints an `ok` line (gate) or `[reads_private_keys]` (helper). The summaries `policy`, `priv_policy` and `shell_get_policy` carry the field, and the catalogue snapshots were regenerated.
+- **`git_diff`.**
+  - **`keyFiles`** runs `diff --name-only -z --no-renames` with the diff's own flags, then `git grep -l -z -a -E --full-name --no-textconv --no-recurse-submodules -e <header>` on each side, with `:(top,literal)` pathspecs. The sides are the index and the work tree, or HEAD and the index; only the index while HEAD is unborn.
+  - **The patch** runs with `:(top,literal,exclude)` for each match, and `[REDACTED] "<path>": holds a private key; its changes are not shown` lines go before it.
+  - **Bounds and fallbacks.** Beyond 1000 names or 128 KiB, or a truncated name list, the whole tree is searched. Too many key files is `too_large`.
+  - **The subcommand table.** `grep` joins `gitx.GitCommands` with `--no-recurse-submodules`. The gap test's example of an unlisted subcommand moved from `grep` to `blame`. `gitx.ParseNames` parses the NUL lists.
+- **Test infrastructure.** fakesys's journalctl prints the last N lines of a journal file a test writes. The e2e read policy lists `example-keylog.service`, and the e2e read repository commits a key file and changes one of its body lines.
+
+**Tests, failing first.** The tests-only commit `b4770b4` (draft PR #72) failed against the old code. It carried compile stubs only: `MaskKeyBodies` returned its input, `RangeProgramNames` returned nil, and `ReadsPrivateKeys` was a field nothing set. Failing tests:
+- **`redact`:** `TestOrphanEndMasksBack`, `TestMaskKeyBodiesWindowInsideBody`, `TestMaskKeyBodiesJournal`, the new seeds of `FuzzRedactKeyBlocks` (its reference now includes the END rule), and `FuzzHeaderlessKeyBody`.
+- **Gate:** `TestJournalHeaderlessKey` (lines 12: 10 body lines), `TestExecKeyInputRefused`, `TestExecKeyInputOptIn`, `TestExecKeyInputLargeFile`, `TestGitDiffKeyFileExcluded` (24 body lines), `TestGitDiffKeyFileUnbornHead`.
+- **Helper and policies:** `TestPrivExecKeyInput`, `TestReadsPrivateKeysParsed`, `TestReadsPrivateKeysRangeWarning`, `TestRangeProgramsListShape`, and the helper's `TestReadsPrivateKeys`.
+- **Passing against the old code too, as they should:** `TestOrphanEndOrdinaryTextUnchanged` and `TestMaskKeyBodiesOrdinaryOutputUnchanged`, which pin ordinary output.
+
+**Fuzz, 60 s each, all passed:** `FuzzHeaderlessKeyBody` 6.36M execs (an invented key of any length and width PEM uses, any window of its lines, with or without journal prefixes: no full body line survives, and none at all when the window reaches the END), `FuzzRedactKeyBlocks` 29.6M, `FuzzRedact` 30.5M, `FuzzPrivateKeyBlocks` 18.1M, `FuzzParseNames` 73.9M, `FuzzPrivExecPreviewMatchesExec` 98.9k (the helper's one resolution with the key search in it).
+
+**`scripts/ci-local.sh` on `c571c88`** (run alone): every step passed: gofmt, go vet (both build-tag sets), golangci-lint (both), the offline exposure check (systemd 255/257/259) and its self-test, `go test -race` in every build, the e2e runner-only guards, govulncheck, the linux/amd64 and arm64 builds, the release snapshot, deps-current and the self-tests. Landlock (ABI 3) and the unprivileged systemd container were available. e2e-host runs in CI only.
+
+**Alternatives rejected:**
+- **Fetching extra journal entries and cutting back.** It needs entry parsing around boot markers and continuation lines, plus a second run for `--since`, and still misses keys longer than its margin.
+- **`git diff -U<large>`.** It inflates every diff, has to re-split merged hunks, and is bounded by its margin.
+- **A key-file name list.** Content is cheap to search with `git grep`.
+- **The heuristic on every command's output.** It would change ordinary output (windows into certificates, `openssl base64`), and it does not stop fragment templates.
+- **A `check-policy` WARN for range programs without the opt-in:** declined by the maintainer.
+
+**Deferred / documented residual** (POLICY §3):
+- Paths written literally in templates, and files a program opens by itself (directories included).
+- A file holding a key body without its header.
+- The owner-matched `{path:read}` swap between the search and the command's lookup.
+- A journal window of only a key's short last line.
+- Fragments under one PEM-width line from an opted-in command.
+- No real journal corpus was measured.
+- Out of scope: N-36, the 0.2.0 release.
+
+**Versions:** Go 1.27.3 (D-013: deps-current reported 13 modules in scope, all current, so no refresh commit). Direct modules unchanged: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0. No dependency added.

@@ -17,6 +17,7 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
+	"github.com/tyler-rich/shell-mcp/internal/redact"
 	"github.com/tyler-rich/shell-mcp/internal/template"
 )
 
@@ -134,6 +135,10 @@ func (s *server) exec(raw jsontext.Value) (data any, warns []string, failure err
 		return nil, nil, err
 	}
 
+	if rx.strict {
+		res.Stdout = redact.MaskKeyBodies(s.red.Bytes(res.Stdout), redact.PlainLines)
+		res.Stderr = redact.MaskKeyBodies(s.red.Bytes(res.Stderr), redact.PlainLines)
+	}
 	stdout, cutOut := s.red.Truncate(res.Stdout, maxOut)
 	stderr, cutErr := s.red.Truncate(res.Stderr, maxOut)
 	d := execData{
@@ -191,6 +196,10 @@ type resolvedExec struct {
 	fds      []template.Descriptor
 	ids      []fileID
 	dir      string
+	// strict: the output gets redact.MaskKeyBodies, for a command that
+	// declares reads_private_keys or reads a file too large to search
+	// (handoff N-35).
+	strict bool
 }
 
 // fileID is a passed file's identity, read from its descriptor: the values
@@ -261,6 +270,14 @@ func (s *server) resolveExec(id string, args []string, cwd string) (*resolvedExe
 		}
 		rx.ids = append(rx.ids, fileID{dev: st.Dev, ino: st.Ino})
 	}
+	// A file that holds a private key could be printed in part, without its
+	// BEGIN line (handoff N-35): refused unless the command opts in.
+	over, err := s.execFS.CommandKeyInputs(c.ID, &c.Templates[m.Index], m.Args, m.Descriptors, c.ReadsPrivateKeys)
+	if err != nil {
+		rx.close()
+		return nil, err
+	}
+	rx.strict = over || c.ReadsPrivateKeys
 	rx.dir = "/"
 	if cwd != "" {
 		if rx.dir, err = s.execFS.ResolveDir(cwd); err != nil {

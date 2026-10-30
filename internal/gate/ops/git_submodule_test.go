@@ -457,7 +457,7 @@ func TestGitWorkTreeGapsFound(t *testing.T) {
 		{argv("diff", "--cached", "--raw", "--ignore-submodules=all"), "hides gitlink commit changes"},
 		{argv("diff", "--cached", "--ignore-submodules=dirty"), "without --submodule=short"},
 		{argv("update-index", "-q", "--refresh"), "lacks --ignore-submodules"},
-		{argv("grep", "x"), "not in gitx.GitCommands"},
+		{argv("blame", "x"), "not in gitx.GitCommands"},
 		{[]string{"-C", "/srv/app/deploy", "--no-pager", "--no-optional-locks", "log"}, "lacks -c"},
 	} {
 		if g := workTreeGaps(gitx.GitCommands, gitx.SubmoduleKeys, [][]string{c.run}); len(g) == 0 || !strings.Contains(strings.Join(g, "\n"), c.want) {

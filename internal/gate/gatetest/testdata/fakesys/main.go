@@ -170,6 +170,15 @@ func journalctl(args []string) int {
 			n, _ = strconv.Atoi(args[i+1])
 		}
 	}
+	// logPath.journal, when the test wrote one, holds one entry per line:
+	// print the last n, as journalctl -n does.
+	if b, err := os.ReadFile(logPath + ".journal"); err == nil { //nolint:gosec // G304: test path baked in by the test
+		entries := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+		for _, e := range entries[max(0, len(entries)-n):] {
+			fmt.Println(e)
+		}
+		return 0
+	}
 	for i := 0; i < n && i < 50; i++ {
 		fmt.Printf("2026-09-27T10:00:%02d+00:00 target-a %s[4242]: line %d api_key=abc123\n", i%60, strings.TrimSuffix(unit, ".service"), i)
 	}
