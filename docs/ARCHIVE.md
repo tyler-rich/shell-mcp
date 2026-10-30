@@ -4492,3 +4492,35 @@ The docs changed after the run (documentation only). **Fuzz:** `FuzzValidName` (
 - **Checks:** `bash scripts/ci-local.sh`, every step PASS.
 
 **Versions:** Go 1.27.3 (D-013: deps-current reported 13 modules in scope, all current, so no refresh commit). Direct modules unchanged: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0. Tools: golangci-lint v2.15.0, govulncheck v1.9.0, Trivy v0.76.1, Grype v0.121.0, gitleaks v8.30.1, cosign v3.1.4. No dependency added.
+
+### 2026-10-30 — Release 0.2.0, its verification, and the image digest pinned (N-29) (branch chore/pin-image-0.2.0)
+**The release (D-010).** #74 ("chore: prepare 0.2.0") went to `dev`; `dev` at `4f36d92` went to `main` by PR #75 ("Release 0.2.0", #58 to #74), merged by the maintainer with a merge commit: `b47e94b35ea7e9f74dbe684c570450d47da7e0ca` (parents `5797225`, `4f36d92`). `ci`, `analyze (go)` and `analyze (actions)` ran on that commit from the push to `main` and succeeded. The `workflow_dispatch` dry run on `main` (`version=0.2.0`, run 41040199009) passed on the same commit: preflight (`ci` and `analyze (go)` succeeded on it, the CHANGELOG's 0.2.0 section, the `release` environment with a required reviewer, custom policies and exactly `tag:v*.*.*`), build, verify, sign into the loopback registry (`verify.sh`: every check passed for `…@refs/heads/main`); approve and publish skipped; afterwards no release and no tag. The maintainer created the annotated tag `v0.2.0` (tag object `ce22fd4b…`) on `b47e94b…`, pushed it and approved the `release` environment. The release run (run 41041885227) passed every job: preflight (the tagged commit is on `main` included), build, verify, approve, sign and attest to GHCR (`verify.sh`: 43 checks, 3 of them refusals for another ref, "every check passed for …/release-build.yml@refs/tags/v0.2.0"), publish. Published 2026-10-30T10:49:15Z: https://github.com/tyler-rich/shell-mcp/releases/tag/v0.2.0.
+
+**The image:** `ghcr.io/tyler-rich/shell-mcp:0.2.0`, index `sha256:323149155f5be042949ec5291812104351f365a693dbdfb8cd2171b95ee30e6a` (linux/amd64 `sha256:1379c7b7345cb9df201a555e2c698c06db0fbbc97426b09ae6b5d09b39afa1a7`, linux/arm64 `sha256:d1e425430bd5950ec462153bfc8abf2791bf7761936afcd2850fb912eaca0f3a`). `version` in the image prints `shell-mcp 0.2.0 (commit b47e94b35ea7e9f74dbe684c570450d47da7e0ca, go1.27.3)`.
+
+**Verified as a user would** (README "Verifying a release", in a new empty directory, on the maintainer's Windows workstation with Git Bash; Docker with an empty `DOCKER_CONFIG`, so nothing was signed in):
+
+| Check | Result |
+|---|---|
+| `gh release download v0.2.0` (every asset) | 26 files: 6 binaries, 8 SBOMs, the examples archive, `LICENSE`, `NOTICE`, `SHA256SUMS`, 8 Sigstore bundles |
+| `sha256sum --ignore-missing -c SHA256SUMS`, and `--strict -c` | 17 of 17 OK; every downloaded file other than the bundles and `SHA256SUMS` is listed |
+| `cosign verify-blob` (v3.1.4) for the 6 binaries, the examples archive and `SHA256SUMS`, identity `…/release-build.yml@refs/tags/v0.2.0`, issuer `https://token.actions.githubusercontent.com` | 8 of 8 "Verified OK" |
+| the same with the `refs/heads/main` identity (`SHA256SUMS`) and the `refs/tags/v0.1.0` identity (the amd64 gate) | both refused ("no matching CertificateIdentity found") |
+| `cosign verify` of the image index and of each platform image | 3 of 3 pass; the index with the `refs/heads/main` identity refused |
+| `gh attestation verify` (SLSA provenance, `--signer-workflow …/release-build.yml --source-ref refs/tags/v0.2.0`) for each of the 17 files `SHA256SUMS` lists | 17 of 17 pass; the certificate's SAN is `…/release-build.yml@refs/tags/v0.2.0`, source digest `b47e94b…` |
+| the same for `SHA256SUMS` itself | HTTP 404, as documented (no attestation of its own) |
+| the same with `--source-ref refs/heads/main` | refused ("expected SourceRepositoryRef to be refs/heads/main, got refs/tags/v0.2.0") |
+| `gh attestation verify oci://…@sha256:32314915…` (provenance of the index) | pass |
+| `--predicate-type https://cyclonedx.org/bom` for each of the 6 binaries and each platform image | 8 of 8 pass |
+| the release is immutable | `immutable: true`, not a draft or pre-release |
+| the notes | the CHANGELOG's `0.2.0` section, identical to `scripts/release/notes.sh 0.2.0` (up to blank lines at its edge), then `## Verify` with the index digest and the five commands, pinned to `refs/tags/v0.2.0` |
+| the image is publicly pullable | `docker buildx imagetools inspect` (`:0.2.0` resolves to the index above) and `docker pull` by digest with no credentials; the package's visibility is `public` |
+| no `latest` tag | `imagetools inspect …:latest`: not found; the package's tags are `0.1.0`, `0.2.0` and the `sha256-<digest>` signature and attestation tags (for 0.2.0: the index and both images) |
+
+cosign ran from `ghcr.io/sigstore/cosign/cosign:v3.1.4@sha256:0f06154836d2de34f887a5c273506d52ca43edaa1d9e53e6510fa78a48f69c2d` (the version the release workflow uses), one labelled container per command, files put in with `docker cp` (no host mount), removed by id; none was left. **Findings: none.** Every command in README's "Verifying a release" worked as written; in Git Bash, `docker create -w /work` needs `MSYS_NO_PATHCONV=1` (the shell's, not the README's, as for 0.1.0).
+
+**N-29 (done for 0.2.0).** `deploy/docker-compose.yml` (and its comment), SECURITY §7's copy, `deploy/README.md` (the notice and both `docker run` lines) and `docs/CLIENTS.md` (the enrolment and stdio examples) now use `ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:323149155f5be042949ec5291812104351f365a693dbdfb8cd2171b95ee30e6a`. README's quick start and installation keep `0.2.0@sha256:<digest>` ("in the release notes"). plan.md's status line says 0.2.0 is released.
+
+**Deferred:** the next release's pin repeats N-29; N-32, N-36 option (i) and the N-5 caps as recorded in the CHANGELOG's "Decided, not built".
+
+**Versions:** Go 1.27.3; direct modules unchanged: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.5, x/crypto v0.58.0, x/sys v0.49.0. No dependency added. Release tools: cosign v3.1.4, syft v1.55.0, Trivy v0.76.1, Grype v0.121.0, govulncheck v1.9.0.
