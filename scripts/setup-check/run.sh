@@ -141,11 +141,11 @@ for i in "${images[@]}"; do
 	before="$(ex "$t" bash /src/scripts/setup-check/target.sh snapshot)"
 	install "$t" "${args[@]}" --dry-run
 	after="$(ex "$t" bash /src/scripts/setup-check/target.sh snapshot)"
-	if [[ "$code" == 0 && "$before" == "$after" ]]; then ok "$i: dry run on a fresh image: exit 0, filesystem identical"; else bad "$i: dry run: exit $code, identical: $([[ "$before" == "$after" ]] && echo yes || echo no)"; echo "$out" | tail -n 5; fi
+	if [[ "$code" == 0 && "$before" == "$after" ]]; then ok "$i: dry run on a fresh image: exit 0, filesystem identical"; else bad "$i: dry run: exit $code, identical: $([[ "$before" == "$after" ]] && echo yes || echo no)"; echo "$out" | tail -n 5 || true; fi
 
 	# The install.
 	install "$t" "${args[@]}"
-	if [[ "$code" == 0 ]] && grep -q '^SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:' <<<"$out"; then ok "$i: install on a fresh image"; else bad "$i: install exit $code"; echo "$out" | tail -n 30; fi
+	if [[ "$code" == 0 ]] && grep -q '^SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:' <<<"$out"; then ok "$i: install on a fresh image"; else bad "$i: install exit $code"; echo "$out" | tail -n 30 || true; fi
 	pin="$(sed -n 's/^SHELL_MCP_TARGET_HOST_KEYS=//p' <<<"$out")"
 	grep -q 'check-policy as svc-shell: serve would accept' <<<"$out" && ok "$i: check-policy ran as the account (execx's credential option)" || bad "$i: check-policy as the account"
 	no_temps "$t" "$i: install"
@@ -154,7 +154,7 @@ for i in "${images[@]}"; do
 		ok "$i: second run: only unchanged"
 	else
 		bad "$i: second run exit $code"
-		echo "$out" | tail -n 20
+		echo "$out" | tail -n 20 || true
 	fi
 	before="$(ex "$t" bash /src/scripts/setup-check/target.sh snapshot)"
 	install "$t" "${args[@]}" --dry-run
@@ -169,17 +169,17 @@ for i in "${images[@]}"; do
 	sshc=(ssh -i /root/ssh_key -o UserKnownHostsFile=/root/known_hosts -o StrictHostKeyChecking=yes -o BatchMode=yes -o ConnectTimeout=10)
 	for _ in $(seq 1 20); do ex "$c" bash -c "exec 3<>/dev/tcp/$tip/22" 2>/dev/null && break || sleep 0.5; done
 	r="$(printf '%s\n' '{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"read","op":"hello"}' | docker exec -i "$c" "${sshc[@]}" "svc-shell@$tip" shell-mcp-gate/1 2>&1 || true)"
-	grep -q '"ok":true' <<<"$r" && ok "$i: the gate answers hello over SSH" || { bad "$i: hello over SSH"; echo "$r" | tail -n 5; }
+	grep -q '"ok":true' <<<"$r" && ok "$i: the gate answers hello over SSH" || { bad "$i: hello over SSH"; echo "$r" | tail -n 5 || true; }
 	r="$(docker exec -i "$c" "${sshc[@]}" "svc-shell@$tip" </dev/null 2>&1 || true)"
-	grep -q 'bad_request' <<<"$r" && ok "$i: no shell without a command (the gate's bad_request)" || { bad "$i: a session without a command"; echo "$r" | tail -n 3; }
+	grep -q 'bad_request' <<<"$r" && ok "$i: no shell without a command (the gate's bad_request)" || { bad "$i: a session without a command"; echo "$r" | tail -n 3 || true; }
 	r="$(docker exec -i "$c" "${sshc[@]}" -tt "svc-shell@$tip" shell-mcp-gate/1 </dev/null 2>&1 || true)"
-	grep -q 'PTY allocation request failed' <<<"$r" && ok "$i: no PTY" || { bad "$i: a PTY request"; echo "$r" | tail -n 3; }
+	grep -q 'PTY allocation request failed' <<<"$r" && ok "$i: no PTY" || { bad "$i: a PTY request"; echo "$r" | tail -n 3 || true; }
 	tok="$(head -c 48 /dev/urandom | base64 | tr -d '/+=\n' | head -c 48)"
 	cenv=(-e SHELL_MCP_TOKEN="$tok" -e SHELL_MCP_TARGET_NAME=target-a -e SHELL_MCP_TARGET_HOST="$tip" -e SHELL_MCP_TARGET_USER=svc-shell -e SHELL_MCP_SSH_KEY_FILE=/root/ssh_key)
 	r="$(docker exec "${cenv[@]}" -e SHELL_MCP_TARGET_HOST_KEYS="$pin" "$c" /usr/local/bin/shell-mcp check 2>&1)" && rc=0 || rc=$?
-	[[ "$rc" == 0 ]] && grep "host_key_verified" <<<"$r" | grep -qF -- "$pin" && ok "$i: shell-mcp check verifies install's pin" || { bad "$i: shell-mcp check exit $rc"; echo "$r" | tail -n 10; }
+	[[ "$rc" == 0 ]] && grep "host_key_verified" <<<"$r" | grep -qF -- "$pin" && ok "$i: shell-mcp check verifies install's pin" || { bad "$i: shell-mcp check exit $rc"; echo "$r" | tail -n 10 || true; }
 	r="$(docker exec "${cenv[@]}" -e SHELL_MCP_TARGET_HOST_KEYS="ssh-ed25519 SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" "$c" /usr/local/bin/shell-mcp check 2>&1)" && rc=0 || rc=$?
-	[[ "$rc" != 0 ]] && grep -q 'not pinned' <<<"$r" && ok "$i: shell-mcp check refuses a wrong pin" || { bad "$i: a wrong pin, exit $rc"; echo "$r" | tail -n 5; }
+	[[ "$rc" != 0 ]] && grep -q 'not pinned' <<<"$r" && ok "$i: shell-mcp check refuses a wrong pin" || { bad "$i: a wrong pin, exit $rc"; echo "$r" | tail -n 5 || true; }
 
 	# A host set up by hand: install over it reports every item unchanged.
 	h="$(new "$i")"
@@ -190,7 +190,7 @@ for i in "${images[@]}"; do
 		ok "$i: TARGET-SETUP §4, §7, §8 by hand: install finds every file byte-identical"
 	else
 		bad "$i: install over the hand steps, exit $code"
-		echo "$out" | grep -E 'FAIL|differ|^     \|' | head -n 30
+		echo "$out" | grep -E 'FAIL|differ|^     \|' | head -n 30 || true
 	fi
 
 	# The refusals a container can build (TARGET-SETUP §12.1), each on a fresh
@@ -210,7 +210,7 @@ for i in "${images[@]}"; do
 		esac
 		[[ "$name" == from-16 ]] || ex "$x" bash /src/scripts/setup-check/target.sh break "$name"
 		install "$x" "${a[@]}"
-		if [[ "$code" == 1 ]] && grep -qF -- "$want" <<<"$out"; then ok "$i: refused: $name"; else bad "$i: $name: exit $code"; echo "$out" | grep -E 'FAIL' | head -n 5; fi
+		if [[ "$code" == 1 ]] && grep -qF -- "$want" <<<"$out"; then ok "$i: refused: $name"; else bad "$i: $name: exit $code"; echo "$out" | grep -E 'FAIL' | head -n 5 || true; fi
 		no_temps "$x" "$i: $name"
 		if [[ "$name" == match-wins ]]; then
 			ex "$x" sh -c '! test -e /etc/ssh/sshd_config.d/60-shell-mcp.conf && ! test -e /etc/ssh/authorized_keys.d/svc-shell' &&
@@ -224,7 +224,7 @@ for i in "${images[@]}"; do
 	docker cp "$c:/root/ssh_key.pub" - | docker cp - "$p:/root"
 	install "$p" --policy /etc/shell-mcp/admin.yaml --principal admin --from "$cip" --key /root/ssh_key.pub --uid 60123 --gid 60123 \
 		--socket-group svc-shell-priv --socket-gid 60124 --no-reload
-	[[ "$code" == 0 ]] && ok "$i: install with the socket group" || { bad "$i: install with the socket group, exit $code"; echo "$out" | grep FAIL | head; }
+	[[ "$code" == 0 ]] && ok "$i: install with the socket group" || { bad "$i: install with the socket group, exit $code"; echo "$out" | grep FAIL | head || true; }
 	pi=(docker exec "$p" /usr/local/libexec/shell-mcp-privd install --policy /etc/shell-mcp/privileged.yaml --gate-policy /etc/shell-mcp/admin.yaml --no-start)
 	rc=0
 	r="$("${pi[@]}" 2>/dev/null)" || rc=$?
@@ -237,7 +237,7 @@ for i in "${images[@]}"; do
 	[[ "$rc" == 0 && "$before" == "$after" ]] && ok "$i: privd dry run: exit 0, filesystem identical" || bad "$i: privd dry run: exit $rc"
 	rc=0
 	r="$("${pi[@]}" --accept "$hash" 2>/dev/null)" || rc=$?
-	[[ "$rc" == 0 ]] && grep -q 'systemd-analyze verify: shell-mcp-privd.socket, shell-mcp-privd@.service' <<<"$r" && ok "$i: privd install --no-start: written and verified" || { bad "$i: privd install exit $rc"; echo "$r" | grep -E 'FAIL|verify' | head; }
+	[[ "$rc" == 0 ]] && grep -q 'systemd-analyze verify: shell-mcp-privd.socket, shell-mcp-privd@.service' <<<"$r" && ok "$i: privd install --no-start: written and verified" || { bad "$i: privd install exit $rc"; echo "$r" | grep -E 'FAIL|verify' | head || true; }
 	ex "$p" sh -c 'mkdir -p /tmp/u && /usr/local/libexec/shell-mcp-privd units --policy /etc/shell-mcp/privileged.yaml --out /tmp/u >/dev/null &&
 		cmp /tmp/u/shell-mcp-privd.socket /etc/systemd/system/shell-mcp-privd.socket && cmp /tmp/u/shell-mcp-privd@.service /etc/systemd/system/shell-mcp-privd@.service &&
 		test "$(stat -c "%U:%G %a" /var/lib/shell-mcp /var/lib/shell-mcp/backups /etc/systemd/system/shell-mcp-privd.socket | tr "\n" " ")" = "root:root 700 root:root 700 root:root 644 "' &&
@@ -257,7 +257,7 @@ for i in "${images[@]}"; do
 	ex "$q" bash /src/scripts/setup-check/target.sh hand-units
 	rc=0
 	r="$(docker exec "$q" /usr/local/libexec/shell-mcp-privd install --policy /etc/shell-mcp/privileged.yaml --no-start --accept "$hash" 2>/dev/null)" || rc=$?
-	[[ "$rc" == 0 ]] && grep -q 'nothing to do: every item unchanged' <<<"$r" && ok "$i: TARGET-SETUP §9.2 by hand: privd install finds every unit byte-identical" || { bad "$i: privd install over §9.2 by hand: exit $rc"; echo "$r" | grep -E 'FAIL|replace|create' | head; }
+	[[ "$rc" == 0 ]] && grep -q 'nothing to do: every item unchanged' <<<"$r" && ok "$i: TARGET-SETUP §9.2 by hand: privd install finds every unit byte-identical" || { bad "$i: privd install over §9.2 by hand: exit $rc"; echo "$r" | grep -E 'FAIL|replace|create' | head || true; }
 	x="$(new "$i")"
 	ex "$x" bash /src/scripts/setup-check/target.sh break privileged-0644
 	rc=0
