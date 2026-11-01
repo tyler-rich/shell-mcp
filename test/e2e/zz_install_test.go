@@ -278,7 +278,7 @@ func TestPrivdInstallOnRunner(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "ran systemctl restart shell-mcp-privd.socket") {
 		t.Fatalf("install after the edit: exit %d", code)
 	}
-	if !regexp.MustCompile(`(ok   |WARN )systemd-analyze security shell-mcp-privd@.service: d.d`).MatchString(out) {
+	if !regexp.MustCompile(`(ok   |WARN )systemd-analyze security shell-mcp-privd@.service: \d\.\d`).MatchString(out) {
 		t.Error("install printed no exposure level for the core unit")
 	}
 	mustGate(t, "priv_stat", map[string]any{"path": "/etc/example-app"}, nil)
