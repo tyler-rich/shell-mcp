@@ -151,7 +151,8 @@ break)
 	match-wins) printf 'Match User svc-shell\n    PermitTTY yes\n' >/etc/ssh/sshd_config.d/10-setup-check.conf ;;
 	line-without-restrict)
 		install -o root -g root -m 0755 -d /etc/ssh/authorized_keys.d
-		echo 'from="192.0.2.10",command="/usr/local/bin/shell-mcp-gate serve --policy /etc/shell-mcp/read-only.yaml" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOtkpAyjSr3PWKh9nNx2m+Uu2Kq7ZtqMyJ1Y0rfvJ9Ur hand-added' \
+		ssh-keygen -q -t ed25519 -N '' -C hand-added -f /tmp/hand-added
+		echo "from=\"192.0.2.10\",command=\"/usr/local/bin/shell-mcp-gate serve --policy /etc/shell-mcp/read-only.yaml\" $(cat /tmp/hand-added.pub)" \
 			>/etc/ssh/authorized_keys.d/svc-shell
 		;;
 	policy-with-space) cp /etc/shell-mcp/read-only.yaml "/etc/shell-mcp/read only.yaml" ;;

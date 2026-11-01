@@ -1,9 +1,14 @@
 package setup_test
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"encoding/base64"
 	"errors"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/setup"
 )
@@ -85,7 +90,16 @@ func FuzzParseFrom(f *testing.F) {
 	})
 }
 
-const testKey = "AAAAC3NzaC1lZDI1NTE5AAAAIOtkpAyjSr3PWKh9nNx2m+Uu2Kq7ZtqMyJ1Y0rfvJ9Ur" // invented
+// testKey is an invented Ed25519 public key (the base64 of its wire form),
+// built from a fixed seed at run time so that no key-like literal is
+// committed.
+var testKey = func() string {
+	k, err := ssh.NewPublicKey(ed25519.NewKeyFromSeed(bytes.Repeat([]byte{7}, ed25519.SeedSize)).Public())
+	if err != nil {
+		panic(err)
+	}
+	return base64.StdEncoding.EncodeToString(k.Marshal())
+}()
 
 // TestParsePubFile: the one line of an Ed25519 ssh_key.pub, and every
 // refusal; a private key is refused without any of it in the message.
