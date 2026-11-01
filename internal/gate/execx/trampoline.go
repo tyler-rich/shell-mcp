@@ -83,6 +83,8 @@ type trampolineConfig struct {
 	Dir    string
 	Files  uint32 // descriptors FirstFile… passed to the command
 	Limits []childLimit
+	// Cred is Spec.Credential (nil: none).
+	Cred *Credential
 }
 
 var errConfig = errors.New("malformed trampoline command")

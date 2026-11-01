@@ -92,6 +92,16 @@ type Spec struct {
 	// refuses a signal once Run has waited for the process, so a reused pid
 	// is never signalled.
 	Started func(*os.Process)
+
+	// Credential, when set, runs the command as another account: exactly
+	// its uid, primary gid and supplementary groups. Run honours it only in
+	// a process running as uid 0, real and effective, and refuses it
+	// otherwise (CredentialError) before anything starts. The trampoline
+	// switches after all its own checks and verifies the result before the
+	// execve (trampoline.go). Nil, the default, is the behaviour without
+	// it, exactly. Its only caller is shell-mcp-gate install's check-policy
+	// step (TARGET-SETUP §12.1); a call-site test enforces that.
+	Credential *Credential
 }
 
 // Result reports what happened. Stdout and Stderr hold at most

@@ -1,0 +1,269 @@
+//go:build linux
+
+package execx
+
+import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"math"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func validCredential() *Credential {
+	return &Credential{UID: 4200006, GID: 4200007, Groups: []uint32{4200008, 4200009}}
+}
+
+// TestCredentialRefusal: Run refuses root's ids, the overflow id, group 0,
+// a duplicate group and more than MaxCredentialGroups groups.
+func TestCredentialRefusal(t *testing.T) {
+	if why := credentialRefusal(validCredential()); why != "" {
+		t.Fatalf("a valid credential: refused %q", why)
+	}
+	if why := credentialRefusal(&Credential{UID: 4200006, GID: 4200007}); why != "" {
+		t.Fatalf("no supplementary groups: refused %q", why)
+	}
+	many := make([]uint32, MaxCredentialGroups)
+	for i := range many {
+		many[i] = uint32(4300000 + i) //nolint:gosec // G115: small test values
+	}
+	if why := credentialRefusal(&Credential{UID: 4200006, GID: 4200007, Groups: many}); why != "" {
+		t.Fatalf("%d groups: refused %q", MaxCredentialGroups, why)
+	}
+	for _, c := range []struct {
+		name string
+		mod  func(*Credential)
+		want string
+	}{
+		{"uid 0", func(c *Credential) { c.UID = 0 }, "uid 0"},
+		{"gid 0", func(c *Credential) { c.GID = 0 }, "gid 0"},
+		{"overflow uid", func(c *Credential) { c.UID = math.MaxUint32 }, "uid 4294967295"},
+		{"overflow gid", func(c *Credential) { c.GID = math.MaxUint32 }, "gid 4294967295"},
+		{"group 0", func(c *Credential) { c.Groups = []uint32{4200008, 0} }, "group 0"},
+		{"overflow group", func(c *Credential) { c.Groups = []uint32{math.MaxUint32} }, "group 4294967295"},
+		{"duplicate group", func(c *Credential) { c.Groups = []uint32{4200008, 4200009, 4200008} }, "group 4200008 twice"},
+		{"too many groups", func(c *Credential) { c.Groups = append(many, 4400000) }, "65 supplementary groups"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cr := validCredential()
+			c.mod(cr)
+			if why := credentialRefusal(cr); !strings.Contains(why, c.want) {
+				t.Fatalf("refusal %q, want %q", why, c.want)
+			}
+		})
+	}
+}
+
+// TestCredentialSwitchRefusal: the trampoline switches only while it runs
+// as uid 0, real and effective, whatever Run checked.
+func TestCredentialSwitchRefusal(t *testing.T) {
+	if why := credentialSwitchRefusal(0, 0); why != "" {
+		t.Fatalf("as root: refused %q", why)
+	}
+	for _, c := range [][2]int{{60123, 60123}, {0, 60123}, {60123, 0}} {
+		if why := credentialSwitchRefusal(c[0], c[1]); !strings.Contains(why, "not running as uid 0") {
+			t.Fatalf("uid %d, euid %d: %q", c[0], c[1], why)
+		}
+	}
+}
+
+// observed is what a correct switch to validCredential reads back.
+func observed() *observedCreds {
+	th := func(tid string) threadCreds {
+		return threadCreds{TID: tid, UID: [4]uint64{4200006, 4200006, 4200006, 4200006}, GID: [4]uint64{4200007, 4200007, 4200007, 4200007},
+			Groups: []uint64{4200009, 4200008}}
+	}
+	return &observedCreds{RUID: 4200006, EUID: 4200006, SUID: 4200006, RGID: 4200007, EGID: 4200007, SGID: 4200007,
+		Groups: []int{4200009, 4200008}, Threads: []threadCreds{th("100"), th("101")}}
+}
+
+// TestCredentialMismatch: after the switch every id, the group list (as a
+// set), every thread and the capability sets must be exactly the account's;
+// anything else refuses the command.
+func TestCredentialMismatch(t *testing.T) {
+	want := validCredential()
+	if why := credentialMismatch(want, observed()); why != "" {
+		t.Fatalf("a correct switch: refused %q", why)
+	}
+	for _, c := range []struct {
+		name string
+		mod  func(*observedCreds)
+		want string
+	}{
+		{"real uid", func(o *observedCreds) { o.RUID = 0 }, "uid"},
+		{"saved uid", func(o *observedCreds) { o.SUID = 0 }, "uid"},
+		{"effective gid", func(o *observedCreds) { o.EGID = 0 }, "gid"},
+		{"saved gid", func(o *observedCreds) { o.SGID = 0 }, "gid"},
+		{"leftover group 0", func(o *observedCreds) { o.Groups = append(o.Groups, 0) }, "groups"},
+		{"a group missing", func(o *observedCreds) { o.Groups = o.Groups[:1] }, "groups"},
+		{"permitted capability", func(o *observedCreds) { o.Permitted = 1 << 21 }, "capabilities"},
+		{"effective capability", func(o *observedCreds) { o.Effective = 1 }, "capabilities"},
+		{"no threads read", func(o *observedCreds) { o.Threads = nil }, "thread"},
+		{"a thread kept uid 0", func(o *observedCreds) { o.Threads[1].UID = [4]uint64{0, 0, 0, 0} }, "thread 101"},
+		{"a thread kept fsuid 0", func(o *observedCreds) { o.Threads[1].UID[3] = 0 }, "thread 101"},
+		{"a thread kept gid 0", func(o *observedCreds) { o.Threads[0].GID[1] = 0 }, "thread 100"},
+		{"a thread kept group 0", func(o *observedCreds) { o.Threads[0].Groups = []uint64{0, 4200008, 4200009} }, "thread 100"},
+		{"a thread kept a permitted capability", func(o *observedCreds) { o.Threads[0].Prm = 1 }, "thread 100"},
+		{"a thread kept an ambient capability", func(o *observedCreds) { o.Threads[1].Amb = 1 << 7 }, "thread 101"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			o := observed()
+			c.mod(o)
+			if why := credentialMismatch(want, o); !strings.Contains(why, c.want) {
+				t.Fatalf("mismatch %q, want %q", why, c.want)
+			}
+		})
+	}
+	// No supplementary groups: an empty list on both sides.
+	empty := &Credential{UID: 4200006, GID: 4200007}
+	o := observed()
+	o.Groups = nil
+	for i := range o.Threads {
+		o.Threads[i].Groups = nil
+	}
+	if why := credentialMismatch(empty, o); why != "" {
+		t.Fatalf("no groups: refused %q", why)
+	}
+}
+
+// legacyEncoding is the SMX2 encoding exactly as it was before the
+// credential option, written out independently of encodeConfig.
+func legacyEncoding(c *trampolineConfig) []byte {
+	b := []byte("SMX2")
+	str := func(s string) { b = binary.LittleEndian.AppendUint32(b, uint32(len(s))); b = append(b, s...) } //nolint:gosec // G115: test sizes
+	list := func(l []string) {
+		b = binary.LittleEndian.AppendUint32(b, uint32(len(l))) //nolint:gosec // G115: test sizes
+		for _, s := range l {
+			str(s)
+		}
+	}
+	str(c.Path)
+	list(c.Argv)
+	list(c.Env)
+	str(c.Dir)
+	b = binary.LittleEndian.AppendUint32(b, c.Files)
+	b = binary.LittleEndian.AppendUint32(b, uint32(len(c.Limits))) //nolint:gosec // G115: test sizes
+	for _, l := range c.Limits {
+		b = binary.LittleEndian.AppendUint32(b, l.Resource)
+		b = binary.LittleEndian.AppendUint64(b, l.Max)
+	}
+	return b
+}
+
+// TestNilCredentialEncodesAsBefore: without a credential the trampoline
+// gets exactly the bytes it got before the option existed (SMX2), so every
+// existing caller's command is unchanged. (A guard: it passes before and
+// after the option.)
+func TestNilCredentialEncodesAsBefore(t *testing.T) {
+	c := validConfig()
+	got, err := encodeConfig(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := legacyEncoding(c); !bytes.Equal(got, want) {
+		t.Fatalf("nil credential encodes as\n%x\nwant\n%x", got, want)
+	}
+}
+
+// TestConfigRoundTripCredential: a credential travels to the trampoline
+// (as SMX3) and back exactly.
+func TestConfigRoundTripCredential(t *testing.T) {
+	c := validConfig()
+	c.Cred = validCredential()
+	b, err := encodeConfig(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b[:4]) != "SMX3" {
+		t.Fatalf("magic %q, want SMX3", b[:4])
+	}
+	got, err := decodeConfig(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, c) {
+		t.Fatalf("round trip:\n%+v\nwant\n%+v", got, c)
+	}
+	c.Cred = &Credential{UID: 4200006, GID: 4200007}
+	if b, err = encodeConfig(c); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = decodeConfig(b); err != nil || got.Cred == nil || len(got.Cred.Groups) != 0 {
+		t.Fatalf("no groups: %+v %v", got, err)
+	}
+}
+
+// TestConfigDecodeStrictCredential: the decoder refuses a credential that
+// Run would refuse, and an SMX2 command never carries one.
+func TestConfigDecodeStrictCredential(t *testing.T) {
+	enc := func(cr *Credential) []byte {
+		c := validConfig()
+		b := legacyEncoding(c)
+		// Rebuild as SMX3: the credential sits between the descriptor count
+		// and the limits.
+		tail := 4 + 12*len(c.Limits)
+		head, limits := b[:len(b)-tail], b[len(b)-tail:]
+		out := append([]byte("SMX3"), head[4:]...)
+		out = binary.LittleEndian.AppendUint32(out, cr.UID)
+		out = binary.LittleEndian.AppendUint32(out, cr.GID)
+		out = binary.LittleEndian.AppendUint32(out, uint32(len(cr.Groups))) //nolint:gosec // G115: test sizes
+		for _, g := range cr.Groups {
+			out = binary.LittleEndian.AppendUint32(out, g)
+		}
+		return append(out, limits...)
+	}
+	if c, err := decodeConfig(enc(validCredential())); err != nil || !reflect.DeepEqual(c.Cred, validCredential()) {
+		t.Fatalf("control: %+v %v", c, err)
+	}
+	for _, c := range []struct {
+		name string
+		b    []byte
+	}{
+		{"uid 0", enc(&Credential{UID: 0, GID: 4200007})},
+		{"gid 0", enc(&Credential{UID: 4200006, GID: 0})},
+		{"group 0", enc(&Credential{UID: 4200006, GID: 4200007, Groups: []uint32{0}})},
+		{"duplicate group", enc(&Credential{UID: 4200006, GID: 4200007, Groups: []uint32{4200008, 4200008}})},
+		{"too many groups", enc(&Credential{UID: 4200006, GID: 4200007, Groups: make([]uint32, MaxCredentialGroups+1)})},
+		{"truncated credential", enc(validCredential())[:60]},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := decodeConfig(c.b); !errors.Is(err, errConfig) {
+				t.Fatalf("decoded: %v", err)
+			}
+		})
+	}
+}
+
+// FuzzDecodeConfigCredential: FuzzDecodeConfig's property from an SMX3
+// seed: the decoder never panics, never accepts a credential Run would
+// refuse, and re-encodes whatever it accepts to the same bytes.
+func FuzzDecodeConfigCredential(f *testing.F) {
+	c := validConfig()
+	c.Cred = validCredential()
+	good, err := encodeConfig(c)
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(good)
+	f.Add([]byte("SMX3"))
+	f.Fuzz(func(t *testing.T, b []byte) {
+		c, err := decodeConfig(b)
+		if err != nil {
+			return
+		}
+		if c.Cred != nil {
+			if why := credentialRefusal(c.Cred); why != "" {
+				t.Fatalf("accepted a credential Run refuses (%s): %x", why, b)
+			}
+		}
+		again, err := encodeConfig(c)
+		if err != nil {
+			t.Fatalf("accepted %x but cannot encode it: %v", b, err)
+		}
+		if !bytes.Equal(again, b) {
+			t.Fatalf("accepted %x, re-encodes as %x", b, again)
+		}
+	})
+}
