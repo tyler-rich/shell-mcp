@@ -156,6 +156,7 @@ break)
 			>/etc/ssh/authorized_keys.d/svc-shell
 		;;
 	policy-with-space) cp /etc/shell-mcp/read-only.yaml "/etc/shell-mcp/read only.yaml" ;;
+	no-privsep-dir) rm -rf /run/sshd ;;
 	privileged-0644) chmod 0644 /etc/shell-mcp/privileged.yaml ;;
 	*)
 		echo "target.sh: unknown case $2" >&2

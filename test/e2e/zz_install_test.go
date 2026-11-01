@@ -9,9 +9,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -112,6 +114,22 @@ func TestInstallGateOnRunnerSSHD(t *testing.T) {
 	keysBefore := dirNames(t, runnerKeysDir)
 	other := "user=svc-shell,host=client.example.test,addr=127.0.0.1"
 	otherKeysFile := effective(t, other, "authorizedkeysfile")
+	// The runner's sshd as found; when neither unit is active the test
+	// starts ssh.service (approved under handoff §7 Q3) and stops it again in
+	// a cleanup that runs even on failure, then checks it is back as found.
+	active := func(u string) bool { _, code := runCode(t, "systemctl", "is-active", "--quiet", u); return code == 0 }
+	serviceBefore, socketBefore := active("ssh.service"), active("ssh.socket")
+	if !serviceBefore && !socketBefore {
+		t.Cleanup(func() {
+			if out, code := runCode(t, "systemctl", "stop", "ssh.service"); code != 0 {
+				t.Errorf("cleanup: stop ssh.service: %s", out)
+			}
+			if active("ssh.service") || active("ssh.socket") {
+				t.Error("cleanup: the runner's ssh units are not back as found (neither active)")
+			}
+		})
+		run(t, "systemctl", "start", "ssh.service")
+	}
 
 	run(t, "install", "-o", "root", "-g", "root", "-m", "0755", "-d", installRoot)
 	pol := "version: 1\nmax_tier: read\nsandbox:\n  landlock: required\npaths:\n  read: [" + installRoot + "]\njournal:\n  units: [example-app.service]\n"
@@ -260,6 +278,9 @@ func TestPrivdInstallOnRunner(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "ran systemctl restart shell-mcp-privd.socket") {
 		t.Fatalf("install after the edit: exit %d", code)
 	}
+	if !regexp.MustCompile(`(ok   |WARN )systemd-analyze security shell-mcp-privd@.service: d.d`).MatchString(out) {
+		t.Error("install printed no exposure level for the core unit")
+	}
 	mustGate(t, "priv_stat", map[string]any{"path": "/etc/example-app"}, nil)
 
 	// A policy without the broad unit: its socket disabled, the pair removed.
@@ -272,10 +293,23 @@ func TestPrivdInstallOnRunner(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "ran systemctl disable --now shell-mcp-privd-broad.socket") {
 		t.Fatalf("install of a core-only policy: exit %d", code)
 	}
-	for _, p := range []string{"/etc/systemd/system/shell-mcp-privd-broad.socket", "/etc/systemd/system/shell-mcp-privd-broad@.service", broadSocket} {
+	for _, p := range []string{"/etc/systemd/system/shell-mcp-privd-broad.socket", "/etc/systemd/system/shell-mcp-privd-broad@.service"} {
 		if exists(p) {
 			t.Errorf("%s left in place", p)
 		}
+	}
+	// systemd keeps a stopped socket's node (RemoveOnStop= is off by
+	// default, systemd.socket(5)): install leaves it and says so, and
+	// nothing listens on it.
+	if !strings.Contains(out, "NOTE "+broadSocket+" stays as a file node") {
+		t.Error("install did not say that the stopped broad socket's node stays")
+	}
+	if _, code := runCode(t, "systemctl", "is-active", "--quiet", "shell-mcp-privd-broad.socket"); code == 0 {
+		t.Error("the broad socket is still active")
+	}
+	if c, err := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(t.Context(), "unix", broadSocket); err == nil {
+		_ = c.Close()
+		t.Error("something still listens on the broad socket")
 	}
 	if _, code := runCode(t, "systemctl", "is-enabled", "--quiet", "shell-mcp-privd-broad.socket"); code == 0 {
 		t.Error("the broad socket is still enabled")

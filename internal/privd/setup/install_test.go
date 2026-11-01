@@ -64,6 +64,8 @@ type host struct {
 	order    []string
 	// onCheck runs after CheckPolicy has read the policy.
 	onCheck func()
+	// security replaces systemd-analyze security's output.
+	security *setupx.Output
 }
 
 func (h *host) CheckPolicy(path string, out io.Writer) (p *policy.Policy, fails int) {
@@ -92,6 +94,8 @@ func (h *host) programs(f *setuptest.Fake, prog string, args []string) (setupx.O
 		if h.verifyErr {
 			return setuptest.Failed("shell-mcp-privd@.service: Unknown key name 'Bogus'"), nil
 		}
+	case prog == setupx.SystemdAnalyze && args[0] == "security" && h.security != nil:
+		return *h.security, nil
 	case prog == setupx.SystemdAnalyze && args[0] == "security":
 		return setuptest.OK("→ Overall exposure level for shell-mcp-privd@.service: 1.3 OK :-)\n"), nil
 	case prog == setupx.Systemctl && args[0] == "enable":
@@ -295,6 +299,11 @@ func TestBroadPairRemoved(t *testing.T) {
 	if !strings.Contains(r.audit, `"action":"remove","object":"unit","path":"`+bsock) {
 		t.Fatalf("audit:\n%s", r.audit)
 	}
+	// systemd keeps a stopped socket's node (RemoveOnStop= is off); install
+	// leaves it, and says that nothing listens on it.
+	if !strings.Contains(r.out, "NOTE "+units.BroadSocketPath+" stays as a file node") {
+		t.Fatalf("no NOTE about the stopped socket's node:\n%s", r.out)
+	}
 }
 
 // TestRollbackOnVerify: when systemd-analyze verify fails, the previous
@@ -452,5 +461,16 @@ func TestParseFlags(t *testing.T) {
 		if _, err := setup.ParseFlags(args); err == nil {
 			t.Errorf("%q: accepted", args)
 		}
+	}
+}
+
+// TestScoreDiagnostics: when systemd-analyze security gives no exposure
+// level, the WARN says why: its exit code and the first lines it printed.
+func TestScoreDiagnostics(t *testing.T) {
+	h := newHost(corePolicy(hashA))
+	h.security = &setupx.Output{Exit: 1, Stderr: []byte("Failed to connect to bus: invented reason\n")}
+	r := install(t, h, "--accept", hashA)
+	if r.code != 0 || !strings.Contains(r.out, "WARN systemd-analyze security shell-mcp-privd@.service gave no exposure level (exit 1: Failed to connect to bus: invented reason)") {
+		t.Fatalf("%d:\n%s", r.code, r.out)
 	}
 }

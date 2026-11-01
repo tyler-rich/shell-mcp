@@ -219,6 +219,24 @@ for i in "${images[@]}"; do
 		docker rm -f "$x" >/dev/null
 	done
 
+	# No /run/sshd (sshd -t cannot run): refused before anything is written,
+	# naming this image's remedy, and the directory is never created.
+	remedy="systemd-tmpfiles --create /usr/lib/tmpfiles.d/20-systemd-ssh-generator.conf"
+	[[ "$i" == ubuntu2404 ]] && remedy="systemctl start ssh.service"
+	x="$(new "$i")"
+	docker cp "$c:/root/ssh_key.pub" - | docker cp - "$x:/root"
+	ex "$x" bash /src/scripts/setup-check/target.sh break no-privsep-dir
+	before="$(ex "$x" bash /src/scripts/setup-check/target.sh snapshot)"
+	install "$x" "${args[@]}"
+	after="$(ex "$x" bash /src/scripts/setup-check/target.sh snapshot)"
+	if [[ "$code" == 1 && "$before" == "$after" ]] && grep -qF -- "$remedy" <<<"$out" && ex "$x" sh -c '! test -e /run/sshd'; then
+		ok "$i: refused without /run/sshd, naming $remedy; nothing written"
+	else
+		bad "$i: no /run/sshd: exit $code"
+		echo "$out" | grep -E 'FAIL' | head -n 5 || true
+	fi
+	docker rm -f "$x" >/dev/null
+
 	# The helper: install --no-start.
 	p="$(new "$i")"
 	docker cp "$c:/root/ssh_key.pub" - | docker cp - "$p:/root"

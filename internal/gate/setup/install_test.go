@@ -191,6 +191,7 @@ func newHost(t *testing.T) (h *host, keyLine string) {
 		f.Dir(d, 0o755, 0, 0)
 	}
 	f.Dir("/etc/polkit-1", 0o755, 0, 0)
+	f.Dir("/run/sshd", 0o755, 0, 0)
 	f.Dir("/etc/polkit-1/rules.d", 0o750, 0, 990)
 	f.Put(polPath, "invented policy\n", 0o644, 0, 0)
 	hostLine := pubLine(t)
@@ -458,7 +459,6 @@ func TestInstallRefusals(t *testing.T) {
 		}, []string{"--socket-group", "svc-shell-priv", "--socket-gid", "60124"}, "group svc-shell-priv exists with gid 60300"},
 		{"home exists", func(h *host) { h.Dir("/var/lib/svc-shell", 0o755, 0, 0) }, nil, "the home /var/lib/svc-shell exists already"},
 		{"an id owns files", func(h *host) { h.scan.Hit = "/srv/app/data/old.db" }, nil, "/srv/app/data/old.db is owned by one of the new ids"},
-		{"scan paths with nothing to scan", func(h *host) { existing(h, "/var/lib/svc-shell", "/bin/sh"); h.Dir("/srv", 0o755, 0, 0) }, []string{"--owner-scan-paths", "/srv"}, "nothing to scan for"},
 		{"scan path not a directory", nil, []string{"--owner-scan-paths", "/etc/passwd"}, "not an existing directory"},
 		{"drop-in differs", func(h *host) {
 			h.Put(dropPath, strings.Replace(string(setup.DropIn("svc-shell")), "PermitTTY no", "PermitTTY yes", 1), 0o644, 0, 0)
@@ -697,6 +697,12 @@ func TestInstallNoReload(t *testing.T) {
 	if r.code != 0 || !strings.Contains(r.out, "--no-reload: reload sshd yourself") {
 		t.Fatalf("exit %d:\n%s", r.code, r.out)
 	}
+	if !strings.Contains(r.out, "WARN --no-reload: skipped systemctl daemon-reload and the systemctl show check of user-60123.slice; the memory limit (MemoryMax=4G) is not active until systemd is reloaded") {
+		t.Fatalf("no WARN for the skipped reload:\n%s", r.out)
+	}
+	if !strings.Contains(strings.Join(r.audit, "\n"), `"action":"warn","object":"slice","path":"/etc/systemd/system/user-60123.slice.d/50-shell-mcp.conf","reason":"no_reload"`) {
+		t.Fatalf("the skipped reload is not audited: %v", r.audit)
+	}
 	for _, o := range h.order {
 		if strings.HasPrefix(o, "/usr/bin/systemctl") {
 			t.Fatalf("ran %q", o)
@@ -758,5 +764,65 @@ func TestHostKey(t *testing.T) {
 	out.Reset()
 	if code := setup.HostKey(h, &out); code != 1 {
 		t.Fatalf("no host key: %d\n%s", code, out.String())
+	}
+}
+
+// TestInstallScanPathsNothingCreated: with the account and its groups in
+// place there is nothing to scan for, and --owner-scan-paths is accepted
+// with a NOTE, so a second run with the same flags reports only unchanged
+// (decided 2026-11-01: same-flags idempotency over the refusal).
+func TestInstallScanPathsNothingCreated(t *testing.T) {
+	h, _ := newHost(t)
+	h.Dir("/srv", 0o755, 0, 0)
+	if r := install(t, h, "--owner-scan-paths", "/srv"); r.code != 0 {
+		t.Fatalf("first run %d:\n%s", r.code, r.out)
+	}
+	h.scanned = nil
+	r := install(t, h, "--owner-scan-paths", "/srv")
+	if r.code != 0 || !strings.Contains(r.out, "NOTE --owner-scan-paths: no account or group is created in this run, so nothing is scanned") ||
+		!strings.Contains(r.out, "nothing to do: every item unchanged") || len(h.scanned) != 0 {
+		t.Fatalf("second run with the same flags %d, scanned %v:\n%s", r.code, h.scanned, r.out)
+	}
+	// The flag's own checks still apply.
+	if r := install(t, h, "--owner-scan-paths", "/etc/passwd"); r.code != 1 || !strings.Contains(r.out, "not an existing directory") {
+		t.Fatalf("a file as a scan path: %d:\n%s", r.code, r.out)
+	}
+}
+
+// TestInstallNoPrivsepDir: without /run/sshd, sshd -t and sshd -T fail
+// ("Missing privilege separation directory"); install refuses before it
+// writes or runs anything that changes the host, never creates the
+// directory, and names this host's remedy: the tmpfiles entry that creates
+// it when one exists (systemd 256 and later ship one), otherwise starting
+// the ssh unit once (Ubuntu 24.04: RuntimeDirectory=sshd).
+func TestInstallNoPrivsepDir(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		mod    func(*host)
+		remedy string
+	}{
+		{"no tmpfiles entry", func(*host) {}, "systemctl start ssh.service"},
+		{"a tmpfiles entry", func(h *host) {
+			h.Dir("/usr/lib/tmpfiles.d", 0o755, 0, 0)
+			h.Put("/usr/lib/tmpfiles.d/20-systemd-ssh-generator.conf", "L$ /etc/ssh/ssh_config.d/x.conf - - - - /usr/lib/x\nd /run/sshd 0755\n", 0o644, 0, 0)
+		}, "systemd-tmpfiles --create /usr/lib/tmpfiles.d/20-systemd-ssh-generator.conf"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h, _ := newHost(t)
+			delete(h.Files, "/run/sshd")
+			c.mod(h)
+			r := install(t, h)
+			if r.code != 1 || !strings.Contains(r.out, "/run/sshd") || !strings.Contains(r.out, c.remedy) {
+				t.Fatalf("exit %d, want 1 naming %q:\n%s", r.code, c.remedy, r.out)
+			}
+			if !reflect.DeepEqual(h.Snapshot(), r.before) {
+				t.Fatal("the run changed the filesystem")
+			}
+			for _, o := range h.order {
+				if strings.HasPrefix(o, "sshd") || strings.HasPrefix(o, "groupadd") || strings.HasPrefix(o, "write") || strings.HasPrefix(o, "mkdir") {
+					t.Fatalf("the run ran %q", o)
+				}
+			}
+		})
 	}
 }
