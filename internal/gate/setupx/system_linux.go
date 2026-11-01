@@ -3,11 +3,16 @@
 package setupx
 
 import (
+	"context"
 	"errors"
-
+	"fmt"
 	"io/fs"
-
+	"os"
+	"path/filepath"
 	"sync"
+
+	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
+	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
 )
 
 // Bounds of a program run.
@@ -27,62 +32,75 @@ type System struct {
 
 // NewSystem returns the real host, with the running binary resolved (the
 // trampoline of every program it runs).
-func NewSystem() (*System, error) { var stub0 *System; var stub1 error; return stub0, stub1 }
+func NewSystem() (*System, error) {
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve own path: %w", err)
+	}
+	return &System{exe: exe, chains: map[string]error{}}, nil
+}
 
 // Euid implements Host.
-func (s *System) Euid() int { var stub0 int; return stub0 }
+func (s *System) Euid() int { return os.Geteuid() }
 
 // LookupEnv implements Host.
-func (s *System) LookupEnv(name string) (string, bool) {
-	var stub0 string
-	var stub1 bool
-	return stub0, stub1
-}
+func (s *System) LookupEnv(name string) (string, bool) { return os.LookupEnv(name) }
 
 // Executable implements Host.
-func (s *System) Executable() (string, error) { var stub0 string; var stub1 error; return stub0, stub1 }
+func (s *System) Executable() (string, error) { return s.exe, nil }
 
 // CheckChain implements Host.
-func (s *System) CheckChain(path string) error { var stub0 error; return stub0 }
+func (s *System) CheckChain(path string) error {
+	_, err := policy.CheckChain(policy.RootTrust(), path)
+	return err
+}
 
 // checked is CheckChain, once per path for the run.
-func (s *System) checked(path string) error { var stub0 error; return stub0 }
+func (s *System) checked(path string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err, ok := s.chains[path]; ok {
+		return err
+	}
+	err := s.CheckChain(path)
+	s.chains[path] = err
+	return err
+}
 
 // State implements Host.
-func (s *System) State(path string, limit int64) (FileState, error) {
-	var stub0 FileState
-	var stub1 error
-	return stub0, stub1
-}
+func (s *System) State(path string, limit int64) (FileState, error) { return ReadState(path, limit) }
 
 // ReadDir implements Host.
 func (s *System) ReadDir(path string) ([]string, error) {
-	var stub0 []string
-	var stub1 error
-	return stub0, stub1
+	ents, err := os.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, len(ents))
+	for i, e := range ents {
+		out[i] = e.Name()
+	}
+	return out, nil
 }
 
 // WriteFile implements Host.
 func (s *System) WriteFile(path string, data []byte, mode fs.FileMode, owner Owner) error {
-	var stub0 error
-	return stub0
+	return WriteFile(path, data, mode, owner)
 }
 
 // Mkdir implements Host.
 func (s *System) Mkdir(path string, mode fs.FileMode, owner Owner) error {
-	var stub0 error
-	return stub0
+	return Mkdir(path, mode, owner)
 }
 
 // Remove implements Host.
-func (s *System) Remove(path string) error { var stub0 error; return stub0 }
+func (s *System) Remove(path string) error { return Remove(path) }
 
 // RemoveLeftovers implements Host.
-func (s *System) RemoveLeftovers(target string) ([]string, error) {
-	var stub0 []string
-	var stub1 error
-	return stub0, stub1
-}
+func (s *System) RemoveLeftovers(target string) ([]string, error) { return RemoveLeftovers(target) }
 
 // ErrProgram is a program that is not on the list, or whose path or the
 // trampoline's fails the chain check.
@@ -95,17 +113,56 @@ var ErrOutputCut = errors.New("the program's output was cut at its cap")
 // trampoline, an empty environment, stdin /dev/null, the program's timeout,
 // a memory limit and capped output that must be complete.
 func (s *System) Run(prog string, args ...string) (Output, error) {
-	var stub0 Output
-	var stub1 error
-	return stub0, stub1
+	timeout, ok := programTimeouts[prog]
+	if !ok {
+		return Output{}, fmt.Errorf("%w: %s is not one of the installer's programs", ErrProgram, prog)
+	}
+	for _, p := range []string{s.exe, prog} {
+		if err := s.checked(p); err != nil {
+			return Output{}, fmt.Errorf("%w: %s: %w", ErrProgram, p, err)
+		}
+	}
+	r, err := execx.Run(context.Background(), &execx.Spec{Path: prog, Args: args, Env: []string{}, Dir: "/", Timeout: timeout,
+		MaxOutput: programOutput, MaxMemoryMB: programMemoryMB, Trampoline: s.exe})
+	if err != nil {
+		return Output{}, err
+	}
+	out := Output{Stdout: r.Stdout, Stderr: r.Stderr, Exit: -1, Signal: r.Signal, TimedOut: r.TimedOut}
+	if r.ExitCode != nil {
+		out.Exit = *r.ExitCode
+	}
+	if r.StdoutTruncated || r.StderrTruncated || r.OutputCeilingHit {
+		return out, fmt.Errorf("%s: %w", prog, ErrOutputCut)
+	}
+	return out, nil
 }
 
 // Accounts implements Host.
 func (s *System) Accounts() (*Accounts, error) {
-	var stub0 *Accounts
-	var stub1 error
-	return stub0, stub1
+	pw, err := ReadState("/etc/passwd", MaxDatabaseBytes)
+	if err != nil {
+		return nil, err
+	}
+	gr, err := ReadState("/etc/group", MaxDatabaseBytes)
+	if err != nil {
+		return nil, err
+	}
+	if !pw.IsRegular() || !gr.IsRegular() {
+		return nil, fmt.Errorf("%w: /etc/passwd and /etc/group must be regular files", ErrDatabase)
+	}
+	users, err := ParsePasswd(pw.Data)
+	if err != nil {
+		return nil, err
+	}
+	groups, err := ParseGroup(gr.Data)
+	if err != nil {
+		return nil, err
+	}
+	return &Accounts{Users: users, Groups: groups}, nil
 }
 
 // SystemdRunning implements Host.
-func (s *System) SystemdRunning() bool { var stub0 bool; return stub0 }
+func (s *System) SystemdRunning() bool {
+	fi, err := os.Lstat("/run/systemd/system")
+	return err == nil && fi.IsDir()
+}

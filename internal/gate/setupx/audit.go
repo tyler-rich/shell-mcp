@@ -11,9 +11,15 @@
 package setupx
 
 import (
+	"context"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
+	"fmt"
 	"io"
-
+	"net"
+	"os"
 	"time"
+	"unicode/utf8"
 )
 
 // Audit priorities: facility authpriv (10) as the gate's request audit,
@@ -70,12 +76,48 @@ type Record struct {
 // Event is every Record's event name.
 const Event = "install"
 
-func truncate(s string) string { var stub0 string; return stub0 }
+func truncate(s string) string {
+	if len(s) <= maxText {
+		return s
+	}
+	s = s[:maxText]
+	for !utf8.ValidString(s) && s != "" {
+		s = s[:len(s)-1]
+	}
+	return s + "..."
+}
 
-func truncateAll(l []string) []string { var stub0 []string; return stub0 }
+func truncateAll(l []string) []string {
+	if l == nil {
+		return nil
+	}
+	out := make([]string, 0, min(len(l), 64))
+	for i, s := range l {
+		if i == 64 {
+			out = append(out, "...")
+			break
+		}
+		out = append(out, truncate(s))
+	}
+	return out
+}
 
 // Line renders r as one JSON object on one line, every string bounded.
-func Line(r *Record) string { var stub0 string; return stub0 }
+func Line(r *Record) string {
+	c := *r
+	c.Event = Event
+	for _, p := range []*string{&c.Component, &c.Action, &c.Object, &c.Path, &c.SHA256, &c.Mode, &c.Owner, &c.User, &c.Group, &c.ID,
+		&c.Fingerprint, &c.Principal, &c.Policy, &c.PolicySHA256, &c.Unit, &c.Reason, &c.Detail, &c.OwnerScan} {
+		*p = truncate(*p)
+	}
+	c.Command = truncateAll(c.Command)
+	c.Paths = truncateAll(c.Paths)
+	b, err := json.Marshal(c, json.Deterministic(true), jsontext.AllowInvalidUTF8(true))
+	if err != nil {
+		return `{"event":"install","error":"audit record could not be encoded"}`
+	}
+	return string(b)
+}
 
 // Auditor writes each record to stderr and, unless Syslog is "", to the
 // syslog socket at Syslog (production: /dev/log) as one bounded RFC 3164
@@ -90,4 +132,30 @@ type Auditor struct {
 }
 
 // Log writes r.
-func (a *Auditor) Log(r *Record) {}
+func (a *Auditor) Log(r *Record) {
+	if a == nil || a.DryRun {
+		return
+	}
+	c := *r
+	c.Component = a.Component
+	l := Line(&c)
+	if a.Stderr != nil {
+		_, _ = fmt.Fprintln(a.Stderr, l)
+	}
+	if a.Syslog == "" {
+		return
+	}
+	pri := priChange
+	if c.Action == ActionRefuse {
+		pri = priRefuse
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), dialTimeout)
+	defer cancel()
+	conn, err := (&net.Dialer{}).DialContext(ctx, "unixgram", a.Syslog)
+	if err != nil {
+		return
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	_, _ = fmt.Fprintf(conn, "<%d>%s %s[%d]: %s\n", pri, time.Now().Format(time.Stamp), a.Tag, os.Getpid(), l)
+}

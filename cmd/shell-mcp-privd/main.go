@@ -274,8 +274,27 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 		return 2
 	}
 	pr := func(format string, a ...any) { _, _ = fmt.Fprintf(stdout, format+"\n", a...) }
-	pr("shell-mcp-privd %s check-policy %s", version, *policyPath)
-	failures := 0
+	p, failures := checkPolicyReport(*policyPath, stdout, env)
+	if p == nil {
+		pr("serve would refuse this policy")
+		return 1
+	}
+	if failures > 0 {
+		pr("%d problem(s): serve would refuse", failures)
+		return 1
+	}
+	pr("OK: the helper would serve this policy once its units are generated from it (shell-mcp-privd units --policy %s)", *policyPath)
+	return 0
+}
+
+// checkPolicyReport loads the policy at path once, exactly as serve would,
+// and prints check-policy's report for it. It returns the policy (nil when
+// it does not load) and the number of FAIL lines. check-policy and install
+// both call it, so their checks cannot drift (handoff §3.7), and install
+// generates its units from the very policy reported here.
+func checkPolicyReport(path string, stdout io.Writer, env *loadEnv) (p *policy.Policy, failures int) {
+	pr := func(format string, a ...any) { _, _ = fmt.Fprintf(stdout, format+"\n", a...) }
+	pr("shell-mcp-privd %s check-policy %s", version, path)
 	if builtWithCGO() {
 		failures++
 		pr("FAIL binary: built with cgo; serve refuses (rebuild with CGO_ENABLED=0)")
@@ -284,7 +303,7 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 		failures++
 		pr("FAIL binary: this is the end-to-end test build, with the helper's own checks bypassed; never deploy it")
 	}
-	p, err := env.load(*policyPath)
+	p, err := env.load(path)
 	if err != nil {
 		for _, line := range strings.Split(err.Error(), "\n") {
 			pr("FAIL %s", line)
@@ -293,14 +312,13 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 		if errors.As(err, &oe) {
 			pr("     the policy, its directories and command binaries must be owned by root and not group/other-writable")
 		}
-		pr("serve would refuse this policy")
-		return 1
+		return nil, failures + 1
 	}
 	if err := env.checkVarRun(); err != nil {
 		failures++
 		pr("FAIL host: %v", err)
 	}
-	if fi, err := os.Stat(*policyPath); err == nil && fi.Mode().Perm()&0o077 != 0 {
+	if fi, err := os.Stat(path); err == nil && fi.Mode().Perm()&0o077 != 0 {
 		pr("WARN the policy file is mode %04o; make it root:root 0600 (only root reads it, PRIVILEGED §2)", fi.Mode().Perm())
 	}
 	pr("policy sha256: %s", p.SHA256)
@@ -474,10 +492,5 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 		failures++
 		pr("FAIL sandbox: %v", perr)
 	}
-	if failures > 0 {
-		pr("%d problem(s): serve would refuse", failures)
-		return 1
-	}
-	pr("OK: the helper would serve this policy once its units are generated from it (shell-mcp-privd units --policy %s)", *policyPath)
-	return 0
+	return p, failures
 }

@@ -4,7 +4,7 @@ package setupx
 
 import (
 	"io/fs"
-
+	"slices"
 	"time"
 )
 
@@ -26,10 +26,20 @@ var programTimeouts = map[string]time.Duration{
 }
 
 // Programs is every program an installer may run, sorted.
-func Programs() []string { var stub0 []string; return stub0 }
+func Programs() []string {
+	out := make([]string, 0, len(programTimeouts))
+	for p := range programTimeouts {
+		out = append(out, p)
+	}
+	slices.Sort(out)
+	return out
+}
 
 // IsProgram reports whether prog is one of Programs.
-func IsProgram(prog string) bool { var stub0 bool; return stub0 }
+func IsProgram(prog string) bool {
+	_, ok := programTimeouts[prog]
+	return ok
+}
 
 // Output is a program's result. Exit is -1 when it ended by a signal or
 // timed out.
@@ -41,7 +51,7 @@ type Output struct {
 }
 
 // OK reports exit status 0.
-func (o *Output) OK() bool { var stub0 bool; return stub0 }
+func (o *Output) OK() bool { return o.Exit == 0 && o.Signal == "" && !o.TimedOut }
 
 // Host is everything an installer reads and changes on the host. The only
 // production implementation is System; tests use setuptest.Fake. No flag or
