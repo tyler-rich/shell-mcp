@@ -474,3 +474,20 @@ func TestScoreDiagnostics(t *testing.T) {
 		t.Fatalf("%d:\n%s", r.code, r.out)
 	}
 }
+
+// TestScoreColored: the exposure level is read also when systemd-analyze
+// colours it (an escape sequence between ": " and the digits), and a miss
+// shows the output's last lines, where the level is printed.
+func TestScoreColored(t *testing.T) {
+	h := newHost(corePolicy(hashA))
+	h.security = &setupx.Output{Stdout: []byte("NAME DESCRIPTION EXPOSURE\n\n\u2192 \x1b[0;1;39mOverall exposure level for shell-mcp-privd@test_instance.service\x1b[0m: \x1b[0;32m1.3 OK\x1b[0m \U0001F642\n")}
+	r := install(t, h, "--accept", hashA)
+	if r.code != 0 || !strings.Contains(r.out, "ok   systemd-analyze security shell-mcp-privd@.service: 1.3 (expected 1.3)") {
+		t.Fatalf("%d:\n%s", r.code, r.out)
+	}
+	h2 := newHost(corePolicy(hashA))
+	h2.security = &setupx.Output{Stdout: []byte("row 1\nrow 2\nrow 3\nrow 4\nthe last line\n")}
+	if r := install(t, h2, "--accept", hashA); !strings.Contains(r.out, "the last line") || strings.Contains(r.out, "row 1") {
+		t.Fatalf("a miss must show the last lines:\n%s", r.out)
+	}
+}
