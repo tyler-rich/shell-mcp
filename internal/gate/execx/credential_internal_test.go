@@ -7,9 +7,14 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+	"os"
+	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func validCredential() *Credential {
@@ -76,7 +81,7 @@ func observed() *observedCreds {
 			Groups: []uint64{4200009, 4200008}}
 	}
 	return &observedCreds{RUID: 4200006, EUID: 4200006, SUID: 4200006, RGID: 4200007, EGID: 4200007, SGID: 4200007,
-		Groups: []int{4200009, 4200008}, Threads: []threadCreds{th("100"), th("101")}}
+		Groups: []uint64{4200009, 4200008}, Threads: []threadCreds{th("100"), th("101")}}
 }
 
 // TestCredentialMismatch: after the switch every id, the group list (as a
@@ -329,4 +334,36 @@ func FuzzParseThreadStatus(f *testing.F) {
 			}
 		}
 	})
+}
+
+// TestUserTasksHighUID: RLIMIT_NPROC counts the tasks of a uid above
+// 2147483647 (the account a Spec.Credential names), carried as the
+// kernel's uint32 end to end: with any narrowing to int on the way, a
+// 32-bit build would count another (negative) uid's tasks, none, and the
+// command's limit would not bound what the account already runs.
+func TestUserTasksHighUID(t *testing.T) {
+	const high = 3000000000
+	d := t.TempDir()
+	for p, s := range map[string]string{
+		"sys/kernel/pid_max": "32768\n",
+		"100/status":         "Name:\ta\nUid:\t3000000000\t3000000000\t3000000000\t3000000000\nThreads:\t3\n",
+		"101/status":         "Name:\tb\nUid:\t4294967294\t4294967294\t4294967294\t4294967294\nThreads:\t9\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(d, p)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, p), []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := userTasksIn(d, high); err != nil || n != 3 {
+		t.Fatalf("tasks of uid %d: %d %v, want 3", uint32(high), n, err)
+	}
+	l, err := childLimits(256, d, high)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(l, childLimit{Resource: unix.RLIMIT_NPROC, Max: 3 + ChildExtraTasks}) {
+		t.Fatalf("limits %+v, want RLIMIT_NPROC %d", l, 3+ChildExtraTasks)
+	}
 }

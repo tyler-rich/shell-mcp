@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -197,12 +198,12 @@ type hooks struct {
 func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	// A credential is checked before anything else, so that a refusal starts
 	// nothing: no socketpair, no fork.
-	uid := os.Getuid()
+	uid := uidOf(os.Getuid())
 	if spec.Credential != nil {
 		if err := checkCredential(spec.Credential); err != nil {
 			return Result{}, err
 		}
-		uid = int(spec.Credential.UID)
+		uid = spec.Credential.UID
 	}
 	sc := *spec // defaults below must not change the caller's Spec
 	s := &sc
@@ -368,7 +369,7 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 // /proc/<pid>, so it is not counted there. uid is the uid the command will
 // run as: the caller's, or a Spec.Credential's, whose tasks are counted as
 // for any non-root command.
-func childLimits(memoryMB int, procDir string, uid int) ([]childLimit, error) {
+func childLimits(memoryMB int, procDir string, uid uint32) ([]childLimit, error) {
 	l := []childLimit{{Resource: unix.RLIMIT_CORE, Max: 0}, {Resource: unix.RLIMIT_NOFILE, Max: ChildNofile},
 		{Resource: unix.RLIMIT_DATA, Max: uint64(memoryMB) << 20}} //nolint:gosec // G115: memoryMB is checked to be 1..MaxMemoryMB by run
 	if uid != 0 {
@@ -429,7 +430,7 @@ func procDirOf(h *hooks) string {
 }
 
 // userTasks counts uid's tasks under /proc (userTasksIn).
-func userTasks(uid int) uint64 {
+func userTasks(uid uint32) uint64 {
 	n, _ := userTasksIn("/proc", uid)
 	return n
 }
@@ -442,7 +443,7 @@ func userTasks(uid int) uint64 {
 // entries, and it reads procDir in chunks; a pid_max it cannot read, a
 // procDir it cannot list, or more entries than that bound is an error
 // naming the reason, never a count of 0.
-func userTasksIn(procDir string, uid int) (uint64, error) {
+func userTasksIn(procDir string, uid uint32) (uint64, error) {
 	b, err := os.ReadFile(procDir + "/sys/kernel/pid_max") //nolint:gosec // G304: /proc's own, or the tests' own directory
 	if err != nil {
 		return 0, fmt.Errorf("pid_max: %w", err)
@@ -457,7 +458,7 @@ func userTasksIn(procDir string, uid int) (uint64, error) {
 		return 0, err
 	}
 	defer func() { _ = d.Close() }()
-	want := strconv.Itoa(uid)
+	want := strconv.FormatUint(uint64(uid), 10)
 	var total, seen uint64
 	for {
 		names, rerr := d.Readdirnames(procReadChunk)
@@ -508,4 +509,13 @@ func taskCount(procDir, n, uid string) uint64 {
 		return 0
 	}
 	return threads
+}
+
+// uidOf is an id from the os package (an int) as the uint32 the kernel
+// uses; anything out of range is the overflow id, which no task has.
+func uidOf(v int) uint32 {
+	if v < 0 || uint64(v) > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(v)
 }

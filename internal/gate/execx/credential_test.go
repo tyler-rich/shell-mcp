@@ -5,6 +5,7 @@ package execx_test
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -173,6 +174,8 @@ func TestCredentialRefusedValuesAsRoot(t *testing.T) {
 	for _, c := range []*execx.Credential{
 		{UID: 0, GID: credGID}, {UID: credUID, GID: 0}, {UID: credUID, GID: credGID, Groups: []uint32{0}},
 		{UID: credUID, GID: credGID, Groups: []uint32{credGroup1, credGroup1}},
+		// (uid_t)-1, which setresuid(2) and setresgid(2) read as "unchanged".
+		{UID: math.MaxUint32, GID: credGID}, {UID: credUID, GID: math.MaxUint32}, {UID: credUID, GID: credGID, Groups: []uint32{credGroup1, math.MaxUint32}},
 	} {
 		marker := filepath.Join(t.TempDir(), "ran")
 		_, err := execx.Run(context.Background(), &execx.Spec{MaxMemoryMB: testMemoryMB, Path: probePath(t), Args: []string{"write", marker},

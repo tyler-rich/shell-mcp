@@ -13,7 +13,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -110,9 +109,9 @@ func credentialSwitchRefusal(uid, euid int) string {
 
 // observedCreds is what the trampoline reads back after the switch.
 type observedCreds struct {
-	RUID, EUID, SUID int
-	RGID, EGID, SGID int
-	Groups           []int
+	RUID, EUID, SUID uint64
+	RGID, EGID, SGID uint64
+	Groups           []uint64
 	// Permitted and Effective are capget(2)'s sets of the calling thread.
 	Permitted, Effective uint64
 	// Threads is every thread's /proc/self/task/<tid>/status.
@@ -131,15 +130,15 @@ type threadCreds struct {
 
 // sameSet reports whether a and b hold the same ids (the kernel keeps the
 // group list sorted; the caller's order does not matter).
-func sameSet[T int | uint64](a []T, want []uint32) bool {
+func sameSet(a []uint64, want []uint32) bool {
 	if len(a) != len(want) {
 		return false
 	}
 	x := slices.Clone(a)
 	slices.Sort(x)
-	w := make([]T, len(want))
+	w := make([]uint64, len(want))
 	for i, g := range want {
-		w[i] = T(g)
+		w[i] = uint64(g)
 	}
 	slices.Sort(w)
 	return slices.Equal(x, w)
@@ -150,7 +149,7 @@ func sameSet[T int | uint64](a []T, want []uint32) bool {
 // permitted and effective capabilities, and for every thread its four uids
 // and gids, its groups and its permitted, effective and ambient sets.
 func credentialMismatch(want *Credential, got *observedCreds) string {
-	u, g := int(want.UID), int(want.GID)
+	u, g := uint64(want.UID), uint64(want.GID)
 	switch {
 	case got.RUID != u || got.EUID != u || got.SUID != u:
 		return fmt.Sprintf("uid after the switch: real %d, effective %d, saved %d; want %d", got.RUID, got.EUID, got.SUID, u)
@@ -269,13 +268,17 @@ func parseThreadStatus(tid string, b []byte) (threadCreds, error) {
 // every thread's status file.
 func liveCreds() (*observedCreds, error) {
 	o := &observedCreds{}
-	o.RUID, o.EUID, o.SUID = unix.Getresuid()
-	o.RGID, o.EGID, o.SGID = unix.Getresgid()
+	r, e, s := unix.Getresuid()
+	o.RUID, o.EUID, o.SUID = id64(r), id64(e), id64(s)
+	r, e, s = unix.Getresgid()
+	o.RGID, o.EGID, o.SGID = id64(r), id64(e), id64(s)
 	g, err := unix.Getgroups()
 	if err != nil {
 		return nil, fmt.Errorf("getgroups: %w", err)
 	}
-	o.Groups = g
+	for _, x := range g {
+		o.Groups = append(o.Groups, id64(x))
+	}
 	hdr := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}
 	var d [capVersion3Sets]unix.CapUserData
 	if err = unix.Capget(&hdr, &d[0]); err != nil {
@@ -323,11 +326,12 @@ func liveCreds() (*observedCreds, error) {
 // setuid set the real, effective and saved ids (setuid(2), setgid(2)); when
 // all of them become non-zero the kernel clears the permitted, effective
 // and ambient capability sets, unless SECBIT_KEEP_CAPS is set
-// (capabilities(7)), which the verification below would catch. The calls
-// are syscall's, not x/sys/unix's: syscall.Setgroups, Setgid and Setuid
-// apply to every thread of the process (AllThreadsSyscall in a binary
-// without cgo, which these binaries are; the C library's broadcast with
-// it), while unix.Setgroups changes only the calling thread.
+// (capabilities(7)), which the verification below would catch. setIDs
+// makes the three calls on every thread of the process, through
+// AllThreadsSyscall as syscall.Setgroups, Setgid and Setuid do in a binary
+// without cgo (which these binaries are), with the ids as uint32, never
+// narrowed through int; unix.Setgroups would change only the calling
+// thread.
 //
 // The kernel clears the parent-death signal when the effective or
 // filesystem ids change (PR_SET_PDEATHSIG(2const)), so it is set again,
@@ -343,18 +347,8 @@ func becomeAccount(c *Credential, ppid int) string {
 	if why := credentialRefusal(c); why != "" {
 		return why
 	}
-	groups := make([]int, len(c.Groups))
-	for i, g := range c.Groups {
-		groups[i] = int(g)
-	}
-	if err := syscall.Setgroups(groups); err != nil {
-		return fmt.Sprintf("setgroups: %v", err)
-	}
-	if err := syscall.Setgid(int(c.GID)); err != nil {
-		return fmt.Sprintf("setgid %d: %v", c.GID, err)
-	}
-	if err := syscall.Setuid(int(c.UID)); err != nil {
-		return fmt.Sprintf("setuid %d: %v", c.UID, err)
+	if step, err := setIDs(c); err != nil {
+		return fmt.Sprintf("%s: %v", step, err)
 	}
 	o, err := liveCreds()
 	if err != nil {
@@ -373,4 +367,13 @@ func becomeAccount(c *Credential, ppid int) string {
 		return fmt.Sprintf("PR_SET_NO_NEW_PRIVS: %v", err)
 	}
 	return ""
+}
+
+// id64 is an id the os and unix packages return as an int, widened; a
+// negative one (none is) is the overflow id, which never matches.
+func id64(v int) uint64 {
+	if v < 0 {
+		return overflowID
+	}
+	return uint64(v)
 }
