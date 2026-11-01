@@ -27,7 +27,7 @@ func TestCredentialRefusal(t *testing.T) {
 	}
 	many := make([]uint32, MaxCredentialGroups)
 	for i := range many {
-		many[i] = uint32(4300000 + i) //nolint:gosec // G115: small test values
+		many[i] = uint32(4300000 + i)
 	}
 	if why := credentialRefusal(&Credential{UID: 4200006, GID: 4200007, Groups: many}); why != "" {
 		t.Fatalf("%d groups: refused %q", MaxCredentialGroups, why)
@@ -44,7 +44,7 @@ func TestCredentialRefusal(t *testing.T) {
 		{"group 0", func(c *Credential) { c.Groups = []uint32{4200008, 0} }, "group 0"},
 		{"overflow group", func(c *Credential) { c.Groups = []uint32{math.MaxUint32} }, "group 4294967295"},
 		{"duplicate group", func(c *Credential) { c.Groups = []uint32{4200008, 4200009, 4200008} }, "group 4200008 twice"},
-		{"too many groups", func(c *Credential) { c.Groups = append(many, 4400000) }, "65 supplementary groups"},
+		{"too many groups", func(c *Credential) { c.Groups = append(append([]uint32(nil), many...), 4400000) }, "65 supplementary groups"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			cr := validCredential()
@@ -264,6 +264,69 @@ func FuzzDecodeConfigCredential(f *testing.F) {
 		}
 		if !bytes.Equal(again, b) {
 			t.Fatalf("accepted %x, re-encodes as %x", b, again)
+		}
+	})
+}
+
+// statusFixture is a task status file (proc_pid_status(5)) as Linux 6.x
+// writes it, with the credential lines of a switched thread (invented).
+const statusFixture = "Name:\tshell-mcp-gate\nUmask:\t0022\nState:\tR (running)\nTgid:\t4242\nPid:\t4243\n" +
+	"Uid:\t4200006\t4200006\t4200006\t4200006\nGid:\t4200007\t4200007\t4200007\t4200007\nFDSize:\t64\n" +
+	"Groups:\t4200008 4200009 \nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\n" +
+	"CapBnd:\t000001ffffffffff\nCapAmb:\t0000000000000000\nNoNewPrivs:\t0\n"
+
+// TestParseThreadStatus: the read-back takes each credential line exactly
+// once and refuses a status file it cannot read completely.
+func TestParseThreadStatus(t *testing.T) {
+	th, err := parseThreadStatus("4243", []byte(statusFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := threadCreds{TID: "4243", UID: [4]uint64{4200006, 4200006, 4200006, 4200006}, GID: [4]uint64{4200007, 4200007, 4200007, 4200007},
+		Groups: []uint64{4200008, 4200009}}
+	if !reflect.DeepEqual(th, want) {
+		t.Fatalf("parsed %+v, want %+v", th, want)
+	}
+	root := strings.NewReplacer("4200006", "0", "CapPrm:\t0000000000000000", "CapPrm:\t000001ffffffffff").Replace(statusFixture)
+	if th, err = parseThreadStatus("1", []byte(root)); err != nil || th.UID != [4]uint64{} || th.Prm != 0x1ffffffffff {
+		t.Fatalf("root's thread: %+v %v", th, err)
+	}
+	if th, err = parseThreadStatus("1", []byte(strings.Replace(statusFixture, "Groups:\t4200008 4200009 ", "Groups:\t", 1))); err != nil || th.Groups != nil {
+		t.Fatalf("no groups: %+v %v", th, err)
+	}
+	for _, c := range []struct{ name, in string }{
+		{"no Uid", strings.Replace(statusFixture, "Uid:", "Xid:", 1)},
+		{"no CapAmb", strings.Replace(statusFixture, "CapAmb:", "CapXmb:", 1)},
+		{"Uid twice", statusFixture + "Uid:\t0\t0\t0\t0\n"},
+		{"three uids", strings.Replace(statusFixture, "Uid:\t4200006\t", "Uid:\t", 1)},
+		{"a uid that is not a number", strings.Replace(statusFixture, "Uid:\t4200006", "Uid:\tx", 1)},
+		{"a uid above 32 bits", strings.Replace(statusFixture, "Uid:\t4200006", "Uid:\t4294967296", 1)},
+		{"a short capability set", strings.Replace(statusFixture, "CapEff:\t0000000000000000", "CapEff:\t0", 1)},
+		{"a capability set that is not hex", strings.Replace(statusFixture, "CapEff:\t0000000000000000", "CapEff:\t000000000000000g", 1)},
+		{"oversized", statusFixture + strings.Repeat("x", maxStatusBytes)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := parseThreadStatus("1", []byte(c.in)); !errors.Is(err, errThreadStatus) {
+				t.Fatalf("parsed: %v", err)
+			}
+		})
+	}
+}
+
+// FuzzParseThreadStatus: the parser never panics, and what it accepts has
+// every id within 32 bits.
+func FuzzParseThreadStatus(f *testing.F) {
+	f.Add([]byte(statusFixture))
+	f.Add([]byte("Uid:\t0\t0\t0\t0\n"))
+	f.Fuzz(func(t *testing.T, b []byte) {
+		th, err := parseThreadStatus("1", b)
+		if err != nil {
+			return
+		}
+		for _, x := range append(append(th.UID[:], th.GID[:]...), th.Groups...) {
+			if x > math.MaxUint32 {
+				t.Fatalf("accepted id %d", x)
+			}
 		}
 	})
 }

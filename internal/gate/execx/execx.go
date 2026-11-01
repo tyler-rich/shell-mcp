@@ -195,8 +195,20 @@ type hooks struct {
 }
 
 func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
+	// A credential is checked before anything else, so that a refusal starts
+	// nothing: no socketpair, no fork.
+	uid := os.Getuid()
+	if spec.Credential != nil {
+		if err := checkCredential(spec.Credential); err != nil {
+			return Result{}, err
+		}
+		uid = int(spec.Credential.UID)
+	}
 	sc := *spec // defaults below must not change the caller's Spec
 	s := &sc
+	if s.Credential != nil {
+		s.Credential = &Credential{UID: s.Credential.UID, GID: s.Credential.GID, Groups: slices.Clone(s.Credential.Groups)}
+	}
 	if !filepath.IsAbs(s.Path) {
 		return Result{}, fmt.Errorf("%w: path is not absolute", ErrStart)
 	}
@@ -232,12 +244,12 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	if env == nil {
 		env = []string{}
 	}
-	limits, err := childLimits(s.MaxMemoryMB, procDirOf(h))
+	limits, err := childLimits(s.MaxMemoryMB, procDirOf(h), uid)
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: %w", ErrStart, err)
 	}
 	cfg, err := encodeConfig(&trampolineConfig{Path: s.Path, Argv: append([]string{s.Path}, s.Args...), Env: env, Dir: dir,
-		Files: uint32(len(s.Files)), Limits: limits}) //nolint:gosec // G115: at most MaxFiles
+		Files: uint32(len(s.Files)), Limits: limits, Cred: s.Credential}) //nolint:gosec // G115: at most MaxFiles
 	if err != nil {
 		return Result{}, startError(err)
 	}
@@ -353,11 +365,13 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 // started without RLIMIT_NPROC (handoff N-30's audit), except for uid 0:
 // the kernel never applies RLIMIT_NPROC to root's processes (copy_process
 // exempts INIT_USER), and the helper's core unit may read only its own
-// /proc/<pid>, so it is not counted there.
-func childLimits(memoryMB int, procDir string) ([]childLimit, error) {
+// /proc/<pid>, so it is not counted there. uid is the uid the command will
+// run as: the caller's, or a Spec.Credential's, whose tasks are counted as
+// for any non-root command.
+func childLimits(memoryMB int, procDir string, uid int) ([]childLimit, error) {
 	l := []childLimit{{Resource: unix.RLIMIT_CORE, Max: 0}, {Resource: unix.RLIMIT_NOFILE, Max: ChildNofile},
 		{Resource: unix.RLIMIT_DATA, Max: uint64(memoryMB) << 20}} //nolint:gosec // G115: memoryMB is checked to be 1..MaxMemoryMB by run
-	if uid := os.Getuid(); uid != 0 {
+	if uid != 0 {
 		n, err := userTasksIn(procDir, uid)
 		if err != nil {
 			return nil, fmt.Errorf("cannot count the user's tasks for RLIMIT_NPROC: %w", err)
