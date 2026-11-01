@@ -22,7 +22,7 @@ This document is normative. The helper implements it exactly; changing it is a S
 | `/etc/shell-mcp/privileged.yaml` | `root:root 0600` | The privileged policy (§4). Only root reads it. |
 | `shell-mcp-privd.socket` + `shell-mcp-privd@.service` | generated, `root:root 0644` in `/etc/systemd/system/` | **Core** unit: tight sandbox, no network (§5.1). |
 | `shell-mcp-privd-broad.socket` + `shell-mcp-privd-broad@.service` | generated, same | **Broad** unit: for package management, commands declared `unit: broad` and the power operation (§5.2). Generated and installed only when the policy uses it (`packages.enabled`, a `unit: broad` command, or `power`). |
-| Socket group (placeholder name `svc-shell-priv`) | system group | The gate's service account is its only member; sockets are `root:<group> 0660`. |
+| Socket group (placeholder name `svc-shell-priv`) | group with an explicit gid (D-020) | The gate's service account is its only member; sockets are `root:<group> 0660`. |
 | `/run/shell-mcp/` | `root:root 0711` | Created by systemd for the socket (`DirectoryMode=0711`). `SocketUser=`/`SocketGroup=` apply to the socket node only, so the directory stays root's; the gate needs only search permission to reach the socket by name, not to list the directory. |
 | `/var/lib/shell-mcp/backups/` | `root:root 0700` | Previous versions of files the helper overwrites or deletes (§6). Created at install; the core unit lists it in `ReadWritePaths=` and does not start without it. |
 
