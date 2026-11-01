@@ -12,13 +12,19 @@
 package setup
 
 import (
+	"flag"
+	"fmt"
 	"io"
-
+	"io/fs"
+	"path"
 	"regexp"
+	"slices"
+	"strings"
 
 	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/gate/setupx"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
+	"github.com/tyler-rich/shell-mcp/internal/privd/units"
 )
 
 // Fixed paths (PRIVILEGED §2, TARGET-SETUP §9.2).
@@ -58,16 +64,35 @@ const Usage = "usage: shell-mcp-privd install --policy <file> [--accept <sha256>
 
 type repeated []string
 
-func (r *repeated) String() string     { var stub0 string; return stub0 }
-func (r *repeated) Set(v string) error { var stub0 error; return stub0 }
+func (r *repeated) String() string     { return strings.Join(*r, ",") }
+func (r *repeated) Set(v string) error { *r = append(*r, v); return nil }
 
 var hashRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // ParseFlags parses install's arguments.
 func ParseFlags(args []string) (*Options, error) {
-	var stub0 *Options
-	var stub1 error
-	return stub0, stub1
+	fset := flag.NewFlagSet("install", flag.ContinueOnError)
+	fset.SetOutput(io.Discard)
+	o := &Options{}
+	var gates repeated
+	fset.StringVar(&o.Policy, "policy", "", "")
+	fset.StringVar(&o.Accept, "accept", "", "")
+	fset.Var(&gates, "gate-policy", "")
+	fset.BoolVar(&o.DryRun, "dry-run", false, "")
+	fset.BoolVar(&o.NoStart, "no-start", false, "")
+	if err := fset.Parse(args); err != nil {
+		return nil, err
+	}
+	switch {
+	case fset.NArg() != 0:
+		return nil, fmt.Errorf("unexpected argument %q", fset.Arg(0))
+	case o.Policy == "":
+		return nil, fmt.Errorf("--policy is required")
+	case o.Accept != "" && !hashRE.MatchString(o.Accept):
+		return nil, fmt.Errorf("--accept %q is not a SHA-256 (64 lowercase hex digits)", o.Accept)
+	}
+	o.GatePolicies = gates
+	return o, nil
 }
 
 // Host is what install reads and changes beyond setupx.Host. The only
@@ -91,7 +116,7 @@ type unit struct {
 	class string // create, unchanged, replace
 }
 
-func (u *unit) path() string { var stub0 string; return stub0 }
+func (u *unit) path() string { return SystemdDir + "/" + u.name }
 
 type installer struct {
 	o *Options
@@ -110,77 +135,531 @@ type installer struct {
 // Install runs shell-mcp-privd install on h. It returns the exit code: 0
 // done, 1 refused or failed, 3 stopped for review.
 func Install(o *Options, h Host, stdout io.Writer, a *setupx.Auditor) int {
-	var stub0 int
-	return stub0
+	in := &installer{o: o, h: h, r: &setupx.Report{W: stdout}, a: a}
+	return in.run()
 }
 
-func (in *installer) refuse(object, reason, format string, args ...any) {}
+func (in *installer) refuse(object, reason, format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	in.r.Fail("%s", msg)
+	in.a.Log(&setupx.Record{Action: setupx.ActionRefuse, Object: object, Reason: reason, Detail: msg})
+}
 
-func (in *installer) run() int { var stub0 int; return stub0 }
+func (in *installer) run() int {
+	o, r, h := in.o, in.r, in.h
+	mode := ""
+	if o.DryRun {
+		mode = " (dry run: nothing is changed; only commands that read are run)"
+	}
+	r.Info("shell-mcp-privd install%s: policy %s", mode, o.Policy)
+	if _, ok := h.LookupEnv("SSH_ORIGINAL_COMMAND"); ok {
+		in.refuse("process", "forced_command", "SSH_ORIGINAL_COMMAND is set: install never runs as an SSH forced command")
+		return ExitFail
+	}
+	if h.Euid() != 0 {
+		in.refuse("process", "not_root", "install runs as root only (effective uid %d)", h.Euid())
+		return ExitFail
+	}
+	in.preChecks()
+	if r.Failures > 0 {
+		r.Info("%d problem(s): install refused; nothing was changed", r.Failures)
+		return ExitFail
+	}
+	p, fails := h.CheckPolicy(o.Policy, r.W)
+	if p == nil || fails > 0 {
+		in.refuse("policy", "check_policy", "check-policy reports %d problem(s): the helper would refuse this policy; nothing was changed", max(fails, 1))
+		return ExitFail
+	}
+	in.p = p
+	if code, stop := in.review(); stop {
+		return code
+	}
+	in.crossChecks()
+	in.planDirs()
+	in.planUnits()
+	if r.Failures > 0 {
+		r.Info("%d problem(s): install refused; nothing was changed", r.Failures)
+		return ExitFail
+	}
+	if o.DryRun {
+		in.describe()
+		if !in.changed {
+			if err := in.verify(); err != nil {
+				in.refuse("unit", "verify", "%v", err)
+				return ExitFail
+			}
+		}
+		r.OK("dry run: every check passed; the run above would be made")
+		return ExitOK
+	}
+	return in.apply()
+}
 
-func (in *installer) preChecks() {}
+func (in *installer) preChecks() {
+	o, h := in.o, in.h
+	exe, err := h.Executable()
+	if err != nil || exe != units.HelperPath {
+		in.refuse("binary", "binary_path", "the running binary is %s, not %s, which the units run: install the helper there (TARGET-SETUP §3) and run it from there", exe, units.HelperPath)
+	}
+	progs := []string{setupx.SystemdAnalyze}
+	if !o.NoStart {
+		progs = append(progs, setupx.Systemctl)
+	}
+	for _, p := range append([]string{units.HelperPath}, progs...) {
+		if cerr := h.CheckChain(p); cerr != nil {
+			in.refuse("binary", "binary_insecure", "%s: %v (it and every directory above it must be root's and not group- or world-writable)", p, cerr)
+		}
+	}
+	st, err := h.State(o.Policy, maxUnitFile)
+	switch {
+	case err != nil:
+		in.refuse("policy", "policy_file", "%s: %v", o.Policy, err)
+	case !st.IsRegular():
+		in.refuse("policy", "policy_file", "%s is not a regular file", o.Policy)
+	case st.Owner != setupx.Root || st.Perm()&0o077 != 0:
+		in.refuse("policy", "policy_mode", "%s is %s %04o; it must be root:root with no group or other bits (0600, PRIVILEGED §2): only root reads it", o.Policy, st.Owner, st.Perm())
+	}
+	if !o.NoStart && !h.SystemdRunning() {
+		in.refuse("systemd", "no_systemd", "systemd is not running as PID 1; run with --no-start to write and verify the units only")
+	}
+}
 
 // review is step 2: the review lines, then --accept, which must be the
 // policy's SHA-256 on every run that writes or activates anything
 // (handoff §7 Q4). The policy was read once, so the hash accepted and the
 // hash in the units are of the same bytes.
-func (in *installer) review() (int, bool) { var stub0 int; var stub1 bool; return stub0, stub1 }
+func (in *installer) review() (int, bool) {
+	o, p, r := in.o, in.p, in.r
+	r.Review("policy %s: sha256 %s", o.Policy, p.SHA256)
+	if p.UsesBroad() {
+		r.Review("the broad unit (%s, %s) is ROOT-EQUIVALENT by design: network and full root capabilities (PRIVILEGED §5.2)", units.BroadSocketUnit, units.BroadServiceUnit)
+	}
+	if o.Accept == p.SHA256 {
+		in.a.Log(&setupx.Record{Action: setupx.ActionAccept, Object: "review", Policy: o.Policy, PolicySHA256: p.SHA256})
+		r.OK("--accept matches the policy's SHA-256: your review covers these bytes")
+		return 0, false
+	}
+	if o.Accept != "" {
+		r.Fail("--accept %s is not this policy's SHA-256 (%s): the policy changed since your review, or the hash is mistyped; review it again", o.Accept, p.SHA256)
+	}
+	cmd := "shell-mcp-privd install --policy " + o.Policy
+	for _, g := range o.GatePolicies {
+		cmd += " --gate-policy " + g
+	}
+	if o.NoStart {
+		cmd += " --no-start"
+	}
+	r.Note("read every REVIEW and WARN line above; then install exactly this policy with:")
+	r.Info("%s --accept %s", cmd, p.SHA256)
+	in.a.Log(&setupx.Record{Action: setupx.ActionReview, Object: "review", Policy: o.Policy, PolicySHA256: p.SHA256})
+	r.Info("stopped for review: nothing was changed")
+	return ExitReview, true
+}
 
 // crossChecks is step 3.
-func (in *installer) crossChecks() {}
+func (in *installer) crossChecks() {
+	p := in.p
+	db, err := in.h.Accounts()
+	if err != nil {
+		in.refuse("account", "accounts", "cannot read the user and group databases: %v", err)
+		return
+	}
+	users := db.UsersByUID(p.ClientUID)
+	if len(users) != 1 {
+		in.refuse("account", "client_uid", "client_uid %d is %d local accounts; it must be exactly one, the gate's service account (create it first: shell-mcp-gate install)", p.ClientUID, len(users))
+		return
+	}
+	u := users[0]
+	g, ok := db.Group(p.SocketGroup)
+	switch {
+	case !ok:
+		in.refuse("account", "socket_group", "socket_group %s is not a local group", p.SocketGroup)
+	case g.GID != p.SocketGID:
+		in.refuse("account", "socket_group", "socket_group %s has gid %d, not the policy's %d", p.SocketGroup, g.GID, p.SocketGID)
+	case !slices.Contains(g.Members, u.Name):
+		in.refuse("account", "socket_group", "account %s (client_uid %d) is not a member of socket_group %s, so the gate could not connect (shell-mcp-gate install --socket-group adds it)", u.Name, u.UID, p.SocketGroup)
+	default:
+		in.r.OK("client_uid %d is %s, a member of %s (gid %d)", u.UID, u.Name, g.Name, g.GID)
+	}
+	in.socketGID = p.SocketGID
+	for _, gp := range in.o.GatePolicies {
+		q, err := in.h.LoadGatePolicy(gp, u.Home)
+		if err != nil {
+			in.refuse("policy", "gate_policy", "--gate-policy %s does not load: %s", gp, strings.ReplaceAll(err.Error(), "\n", "; "))
+			continue
+		}
+		wantBroad := ""
+		if p.UsesBroad() {
+			wantBroad = units.BroadSocketPath
+		}
+		switch {
+		case !q.Privileged.Enabled:
+			in.refuse("policy", "gate_policy", "--gate-policy %s does not have privileged.enabled: true", gp)
+		case q.Privileged.Socket != units.SocketPath:
+			in.refuse("policy", "gate_policy", "--gate-policy %s: privileged.socket is %q, want %s", gp, q.Privileged.Socket, units.SocketPath)
+		case q.Privileged.BroadSocket != wantBroad:
+			in.refuse("policy", "gate_policy", "--gate-policy %s: privileged.broad_socket is %q, want %q (the broad pair is %s)", gp, q.Privileged.BroadSocket, wantBroad,
+				map[bool]string{true: "generated", false: "not generated"}[p.UsesBroad()])
+		default:
+			in.r.OK("--gate-policy %s forwards to %s%s", gp, units.SocketPath, map[bool]string{true: " and " + units.BroadSocketPath, false: ""}[p.UsesBroad()])
+		}
+	}
+}
 
 // planDirs is step 4: the backup store, root:root 0700.
-func (in *installer) planDirs() {}
+func (in *installer) planDirs() {
+	st, err := in.h.State(VarLib, 0)
+	if err != nil || !st.IsDir() {
+		in.refuse("file", "directory_missing", "%s does not exist", VarLib)
+		return
+	}
+	for _, d := range []string{StateDir, units.BackupDir} {
+		st, err := in.h.State(d, 0)
+		switch {
+		case err != nil:
+			in.refuse("file", "directory", "%s: %v", d, err)
+		case !st.Exists:
+			in.dirs = append(in.dirs, d)
+			in.changed = true
+		case !st.IsDir() || st.Owner != setupx.Root || st.Perm()&0o077 != 0:
+			in.refuse("file", "backup_store", "%s exists but is not a root:root directory without group or other bits (%s %s); fix it and run again", d, st.Owner, st.Mode)
+		}
+	}
+}
 
 // planUnits is step 5's plan: the units generated in memory and compared
 // with the files in place (the generated class, handoff §3.2), and an
 // unused broad pair to remove.
-func (in *installer) planUnits() {}
+func (in *installer) planUnits() {
+	p := in.p
+	if !in.requireDir(SystemdDir) {
+		return
+	}
+	core, err := units.Core(p)
+	if err != nil {
+		in.refuse("unit", "generate", "units: %v", err)
+		return
+	}
+	want := []*unit{{name: units.SocketUnit, data: []byte(core.Socket)}, {name: units.ServiceUnit, data: []byte(core.Service)}}
+	if p.UsesBroad() {
+		b, err := units.Broad(p)
+		if err != nil {
+			in.refuse("unit", "generate", "units: %v", err)
+			return
+		}
+		want = append(want, &unit{name: units.BroadSocketUnit, data: []byte(b.Socket)}, &unit{name: units.BroadServiceUnit, data: []byte(b.Service)})
+	}
+	for _, u := range want {
+		st, ok := in.unitState(u.path())
+		if !ok {
+			continue
+		}
+		u.prev = st
+		switch {
+		case !st.Exists:
+			u.class = "create"
+			in.changed = true
+		case st.Same(u.data, 0o644, setupx.Root):
+			u.class = "unchanged"
+		default:
+			u.class = "replace"
+			in.changed = true
+		}
+		in.units = append(in.units, u)
+	}
+	if !p.UsesBroad() {
+		for _, n := range []string{units.BroadSocketUnit, units.BroadServiceUnit} {
+			u := &unit{name: n}
+			st, ok := in.unitState(u.path())
+			if ok && st.Exists {
+				u.prev = st
+				in.removals = append(in.removals, u)
+				in.changed = true
+			}
+		}
+	}
+}
 
 // unitState reads a unit file in place; one that exists must be a regular
 // file carrying the generated marker, or install refuses to touch it.
 func (in *installer) unitState(p string) (setupx.FileState, bool) {
-	var stub0 setupx.FileState
-	var stub1 bool
-	return stub0, stub1
+	st, err := in.h.State(p, maxUnitFile)
+	if err != nil {
+		in.refuse("unit", "unit_unreadable", "%s: %v", p, err)
+		return st, false
+	}
+	if st.Exists && (!st.IsRegular() || !strings.HasPrefix(string(st.Data), Marker)) {
+		in.refuse("unit", "unit_hand_written", "%s exists without the %q header: install replaces or removes only units it generated; move it away and run again", p, Marker)
+		return st, false
+	}
+	return st, true
 }
 
-func (in *installer) requireDir(p string) bool { var stub0 bool; return stub0 }
+func (in *installer) requireDir(p string) bool {
+	st, err := in.h.State(p, 0)
+	if err != nil || !st.IsDir() {
+		in.refuse("file", "directory_missing", "%s does not exist or is not a directory", p)
+		return false
+	}
+	if err := in.h.CheckChain(p); err != nil {
+		in.refuse("file", "directory_insecure", "%s: %v", p, err)
+		return false
+	}
+	return true
+}
 
-func (in *installer) describe() {}
+func (in *installer) describe() {
+	r := in.r
+	for _, d := range in.dirs {
+		r.Info("directory %s root:root 0700: create", d)
+	}
+	for _, u := range in.units {
+		r.Info("file %s root:root 0644: %s", u.path(), u.class)
+		switch u.class {
+		case "create":
+			r.Block(string(u.data))
+		case "replace":
+			r.Block(setupx.UnifiedDiff(u.path()+" (on the host)", u.path()+" (install)", u.prev.Data, u.data))
+		}
+	}
+	for _, u := range in.removals {
+		r.Info("would remove %s: the policy no longer uses the broad unit", u.path())
+	}
+	r.Info("would run %s verify --man=no on each pair", setupx.SystemdAnalyze)
+	if in.o.NoStart {
+		r.Info("--no-start: no daemon-reload, enable, restart or disable")
+		return
+	}
+	if len(in.removals) > 0 {
+		r.Info("would run %s disable --now %s", setupx.Systemctl, units.BroadSocketUnit)
+	}
+	if in.changed {
+		r.Info("would run %s daemon-reload", setupx.Systemctl)
+	}
+	for _, s := range in.sockets() {
+		r.Info("would run %s enable --now %s", setupx.Systemctl, s.name)
+		if s.class == "replace" {
+			r.Info("would run %s restart %s (its unit changed)", setupx.Systemctl, s.name)
+		}
+	}
+}
 
 // sockets are the socket units of the plan.
-func (in *installer) sockets() []*unit { var stub0 []*unit; return stub0 }
+func (in *installer) sockets() []*unit {
+	var out []*unit
+	for _, u := range in.units {
+		if strings.HasSuffix(u.name, ".socket") {
+			out = append(out, u)
+		}
+	}
+	return out
+}
 
-func (in *installer) systemctl(args ...string) error { var stub0 error; return stub0 }
+func (in *installer) systemctl(args ...string) error {
+	prog := setupx.Systemctl
+	out, err := in.h.Run(prog, args...)
+	if err == nil && !out.OK() {
+		err = fmt.Errorf("exit %d: %s", out.Exit, firstLines(out.Stderr, 6))
+	}
+	if err != nil {
+		return fmt.Errorf("%s %s: %w", path.Base(prog), strings.Join(args, " "), err)
+	}
+	in.r.OK("ran %s %s", path.Base(prog), strings.Join(args, " "))
+	in.a.Log(&setupx.Record{Action: setupx.ActionRun, Object: "systemd", Command: append([]string{prog}, args...)})
+	return nil
+}
 
-func firstLines(b []byte, n int) string { var stub0 string; return stub0 }
+func firstLines(b []byte, n int) string {
+	l := strings.Split(strings.TrimSpace(string(b)), "\n")
+	if len(l) > n {
+		l = append(l[:n], "...")
+	}
+	return strings.Join(l, " | ")
+}
 
 // verify runs systemd-analyze verify --man=no on the core pair and, when
 // generated, the broad pair, as they are in place.
-func (in *installer) verify() error { var stub0 error; return stub0 }
+func (in *installer) verify() error {
+	pairs := [][]string{{units.SocketUnit, units.ServiceUnit}}
+	if in.p.UsesBroad() {
+		pairs = append(pairs, []string{units.BroadSocketUnit, units.BroadServiceUnit})
+	}
+	for _, pr := range pairs {
+		out, err := in.h.Run(setupx.SystemdAnalyze, "verify", "--man=no", SystemdDir+"/"+pr[0], SystemdDir+"/"+pr[1])
+		if err == nil && !out.OK() {
+			err = fmt.Errorf("exit %d: %s", out.Exit, firstLines(out.Stderr, 10))
+		}
+		if err != nil {
+			return fmt.Errorf("systemd-analyze verify %s %s: %w", pr[0], pr[1], err)
+		}
+		in.r.OK("systemd-analyze verify: %s, %s", pr[0], pr[1])
+	}
+	return nil
+}
 
 // apply makes the run (steps 4 to 7).
-func (in *installer) apply() int { var stub0 int; return stub0 }
+func (in *installer) apply() int {
+	o, r, h := in.o, in.r, in.h
+	j := setupx.NewJournal(h, in.a)
+	rollback := func(err error) int {
+		in.refuse("unit", "verify", "%v", err)
+		undone, failed := j.Rollback()
+		for _, p := range undone {
+			r.Info("rolled back %s", p)
+		}
+		for _, err := range failed {
+			r.Fail("%v", err)
+		}
+		r.Info("install failed: every file this run changed was restored")
+		return ExitFail
+	}
+	for _, u := range in.units {
+		left, err := h.RemoveLeftovers(u.path())
+		for _, l := range left {
+			r.Warn("removed %s, a temp file a killed run left", l)
+		}
+		if err != nil {
+			return rollback(err)
+		}
+	}
+	for _, d := range in.dirs {
+		if err := j.Mkdir(d, 0o700, setupx.Root, &setupx.Record{Object: "backup_store", Owner: "root:root"}); err != nil {
+			return rollback(err)
+		}
+		r.OK("%s: created (root:root 0700)", d)
+	}
+	for _, u := range in.units {
+		if u.class == "unchanged" {
+			r.OK("%s: unchanged", u.path())
+			continue
+		}
+		rec := &setupx.Record{Object: "unit", Unit: u.name, Owner: "root:root", Policy: o.Policy, PolicySHA256: in.p.SHA256}
+		if err := j.Write(u.path(), u.prev, u.data, 0o644, setupx.Root, rec); err != nil {
+			return rollback(err)
+		}
+		r.OK("%s: %s (root:root 0644)", u.path(), rec.Action)
+	}
+	if err := in.verify(); err != nil {
+		return rollback(err)
+	}
+	if o.NoStart {
+		if len(in.removals) > 0 {
+			r.Note("the policy no longer uses the broad unit, but --no-start leaves %s and %s in place: run install without --no-start to disable and remove them",
+				units.BroadSocketUnit, units.BroadServiceUnit)
+		}
+		r.Note("--no-start: run systemctl daemon-reload and systemctl enable --now %s yourself where systemd runs", strings.Join(socketNames(in.sockets()), " "))
+		in.done(j)
+		return ExitOK
+	}
+	// Step 6: activation. An unused broad pair is disabled and removed
+	// first; the sockets whose own unit changed are restarted (their
+	// running instances are not stopped by it: an Accept=yes instance
+	// depends on its socket only by After= and TriggeredBy=, which
+	// propagate no stop, systemd 255, 257 and 259 service_set_socket_fd).
+	if len(in.removals) > 0 {
+		if err := in.systemctl("disable", "--now", units.BroadSocketUnit); err != nil {
+			r.Fail("%v", err)
+			return ExitFail
+		}
+		for _, u := range in.removals {
+			if err := j.Remove(u.path(), u.prev, &setupx.Record{Object: "unit", Unit: u.name, PolicySHA256: in.p.SHA256}); err != nil {
+				r.Fail("%v", err)
+				return ExitFail
+			}
+			r.OK("%s: removed (the policy no longer uses the broad unit)", u.path())
+		}
+	}
+	if j.Changed() {
+		if err := in.systemctl("daemon-reload"); err != nil {
+			r.Fail("%v", err)
+			return ExitFail
+		}
+	}
+	for _, s := range in.sockets() {
+		if err := in.systemctl("enable", "--now", s.name); err != nil {
+			r.Fail("%v", err)
+			return ExitFail
+		}
+		if s.class == "replace" {
+			if err := in.systemctl("restart", s.name); err != nil {
+				r.Fail("%v", err)
+				return ExitFail
+			}
+		}
+	}
+	// Step 7: what systemd made of it.
+	if !in.checkSockets() {
+		r.Info("the units are in place and enabled; fix what is named above")
+		return ExitFail
+	}
+	in.score()
+	in.done(j)
+	return ExitOK
+}
 
-// Step 6: activation. An unused broad pair is disabled and removed
-// first; the sockets whose own unit changed are restarted (their
-// running instances are not stopped by it: an Accept=yes instance
-// depends on its socket only by After= and TriggeredBy=, which
-// propagate no stop, systemd 255, 257 and 259 service_set_socket_fd).
+func socketNames(us []*unit) []string {
+	var out []string
+	for _, u := range us {
+		out = append(out, u.name)
+	}
+	return out
+}
 
-// Step 7: what systemd made of it.
-
-func socketNames(us []*unit) []string { var stub0 []string; return stub0 }
-
-func (in *installer) done(j *setupx.Journal) {}
+func (in *installer) done(j *setupx.Journal) {
+	if j.Changed() {
+		in.r.OK("installed: %d change(s) for policy sha256 %s", len(j.Paths()), in.p.SHA256)
+	} else {
+		in.r.OK("nothing to do: every item unchanged (policy sha256 %s)", in.p.SHA256)
+	}
+}
 
 // checkSockets is step 7's check of what systemd created: /run/shell-mcp
 // root:root 0711, each socket root:<socket group> 0660.
-func (in *installer) checkSockets() bool { var stub0 bool; return stub0 }
+func (in *installer) checkSockets() bool {
+	ok := true
+	st, err := in.h.State(RunDir, 0)
+	if err != nil || !st.IsDir() || st.Owner != setupx.Root || st.Perm() != 0o711 {
+		in.refuse("socket", "run_dir", "%s is not a root:root 0711 directory after activation (%s %s)", RunDir, st.Owner, st.Mode)
+		ok = false
+	}
+	paths := []string{units.SocketPath}
+	if in.p.UsesBroad() {
+		paths = append(paths, units.BroadSocketPath)
+	}
+	for _, p := range paths {
+		st, err := in.h.State(p, 0)
+		if err != nil || st.Mode.Type() != fs.ModeSocket || st.Perm() != 0o660 || st.Owner != (setupx.Owner{UID: 0, GID: in.socketGID}) {
+			in.refuse("socket", "socket_mode", "%s is not a root:%d 0660 socket after activation (%s %s)", p, in.socketGID, st.Owner, st.Mode)
+			ok = false
+			continue
+		}
+		in.r.OK("%s: srw-rw---- root:%s", p, in.p.SocketGroup)
+	}
+	return ok
+}
 
 var scoreRE = regexp.MustCompile(`Overall exposure level for [^:]*: (d+.d)`)
 
 // score prints systemd-analyze security's exposure for the core unit with
 // the value PRIVILEGED §5.1 and TARGET-SETUP §9.4 expect, and a WARN above.
-func (in *installer) score() {}
+func (in *installer) score() {
+	out, err := in.h.Run(setupx.SystemdAnalyze, "security", "--no-pager", units.ServiceUnit)
+	m := scoreRE.FindSubmatch(append(out.Stdout, out.Stderr...))
+	if err != nil || m == nil {
+		in.r.Warn("systemd-analyze security %s gave no exposure level; check it by hand (TARGET-SETUP §9.4)", units.ServiceUnit)
+		return
+	}
+	want := "1.3"
+	if v, _ := units.ProtectHome(in.p); v == "read-only" {
+		want = "1.4"
+	}
+	if slices.Contains(in.p.Capabilities, "CAP_KILL") {
+		want = "1.6"
+	}
+	got := string(m[1])
+	if got > want {
+		in.r.Warn("systemd-analyze security %s: %s, above the expected %s (TARGET-SETUP §9.4)", units.ServiceUnit, got, want)
+		return
+	}
+	in.r.OK("systemd-analyze security %s: %s (expected %s)", units.ServiceUnit, got, want)
+}
