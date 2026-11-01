@@ -10,8 +10,11 @@ package setup
 
 import (
 	"errors"
-
+	"fmt"
+	"path/filepath"
 	"regexp"
+	"strconv"
+	"strings"
 )
 
 // Fixed paths (TARGET-SETUP §4, §7, §8).
@@ -34,10 +37,12 @@ const (
 )
 
 // SliceDir is the account slice's drop-in directory.
-func SliceDir(uid uint32) string { var stub0 string; return stub0 }
+func SliceDir(uid uint32) string {
+	return fmt.Sprintf("%s/user-%d.slice.d", SystemdDir, uid)
+}
 
 // KeysFile is the account's keys file.
-func KeysFile(user string) string { var stub0 string; return stub0 }
+func KeysFile(user string) string { return KeysDir + "/" + user }
 
 var (
 	// nameRE is an account or group name (handoff §3.1).
@@ -53,21 +58,54 @@ var (
 var ErrUsage = errors.New("usage")
 
 // ValidName reports whether s is a plain account or group name.
-func ValidName(s string) bool { var stub0 bool; return stub0 }
+func ValidName(s string) bool { return nameRE.MatchString(s) }
 
 // ValidPrincipal reports whether s is a --principal label.
-func ValidPrincipal(s string) bool { var stub0 bool; return stub0 }
+func ValidPrincipal(s string) bool { return principalRE.MatchString(s) }
 
 // CheckSafePath refuses a path that is not absolute and clean, holds a
 // character outside A-Z a-z 0-9 . _ / -, or has a component starting with
 // "-" (it would read as an option in an argv).
-func CheckSafePath(what, p string) error { var stub0 error; return stub0 }
+func CheckSafePath(what, p string) error {
+	switch {
+	case p == "" || !filepath.IsAbs(p) || filepath.Clean(p) != p:
+		return fmt.Errorf("%s %q must be an absolute, clean path", what, p)
+	case !pathRE.MatchString(p):
+		return fmt.Errorf("%s %q holds characters other than A-Z a-z 0-9 . _ / - (sshd runs the forced command through /bin/sh)", what, p)
+	case strings.Contains(p, "/-"):
+		return fmt.Errorf("%s %q has a component starting with -", what, p)
+	}
+	return nil
+}
 
 // ParseID parses a decimal uid or gid: digits only, no sign, no leading
 // zero, at most 32 bits.
-func ParseID(s string) (uint32, error) { var stub0 uint32; var stub1 error; return stub0, stub1 }
+func ParseID(s string) (uint32, error) {
+	if s == "" || s[0] < '0' || s[0] > '9' || (len(s) > 1 && s[0] == '0') {
+		return 0, fmt.Errorf("%q is not a decimal id", s)
+	}
+	v, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a decimal id", s)
+	}
+	return uint32(v), nil
+}
 
 // idRefusal says why id may not be the account's or a group's (D-020), or
 // "": root's, nobody's (65534), below 1000 (distributions' system range),
 // systemd's dynamic range 61184–65519, or the overflow id.
-func idRefusal(what string, id uint32) string { var stub0 string; return stub0 }
+func idRefusal(what string, id uint32) string {
+	switch {
+	case id == 0:
+		return fmt.Sprintf("%s 0 is root's", what)
+	case id == 65534:
+		return fmt.Sprintf("%s 65534 is nobody's", what)
+	case id < 1000:
+		return fmt.Sprintf("%s %d is in the system range below 1000; choose an explicit id of 1000 or above that nothing uses", what, id)
+	case id >= 61184 && id <= 65519:
+		return fmt.Sprintf("%s %d is in systemd's dynamic-user range 61184-65519", what, id)
+	case id == 4294967295:
+		return fmt.Sprintf("%s 4294967295 is the overflow id", what)
+	}
+	return ""
+}

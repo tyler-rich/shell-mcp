@@ -3,11 +3,18 @@
 package setup
 
 import (
+	"bufio"
+	"bytes"
+	"context"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
-
+	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/gate/setupx"
 )
 
@@ -47,29 +54,61 @@ type host struct {
 }
 
 // NewHost is the real host.
-func NewHost() (Host, error) { var stub0 Host; var stub1 error; return stub0, stub1 }
+func NewHost() (Host, error) {
+	s, err := setupx.NewSystem()
+	if err != nil {
+		return nil, err
+	}
+	return &host{s}, nil
+}
 
 func (h *host) LoadPolicy(path, home string) (*policy.Policy, error) {
-	var stub0 *policy.Policy
-	var stub1 error
-	return stub0, stub1
+	exe, _ := h.Executable()
+	return policy.Load(path, &policy.LoadOptions{Trust: policy.RootTrust(), GateExecutable: exe, ServiceHome: home})
 }
 
 func (h *host) CheckSandbox(p *policy.Policy) (int, error) {
-	var stub0 int
-	var stub1 error
-	return stub0, stub1
+	abi := sandbox.KernelABI()
+	_, err := sandbox.Plan(p, abi)
+	return abi, err
 }
 
-func (h *host) MemTotal() (uint64, error) { var stub0 uint64; var stub1 error; return stub0, stub1 }
+func (h *host) MemTotal() (uint64, error) {
+	b, err := setupx.ReadState("/proc/meminfo", 1<<20)
+	if err != nil {
+		return 0, err
+	}
+	return parseMemTotal(b.Data)
+}
 
 // parseMemTotal reads MemTotal (kB) from /proc/meminfo.
-func parseMemTotal(b []byte) (uint64, error) { var stub0 uint64; var stub1 error; return stub0, stub1 }
+func parseMemTotal(b []byte) (uint64, error) {
+	sc := bufio.NewScanner(bytes.NewReader(b))
+	for sc.Scan() {
+		if v, ok := strings.CutPrefix(sc.Text(), "MemTotal:"); ok {
+			f := strings.Fields(v)
+			if len(f) == 2 && f[1] == "kB" {
+				n, err := strconv.ParseUint(f[0], 10, 64)
+				if err == nil && n < 1<<44 {
+					return n << 10, nil
+				}
+			}
+			break
+		}
+	}
+	return 0, fmt.Errorf("no MemTotal in /proc/meminfo")
+}
 
 func (h *host) OwnerScan(uids, gids []uint32, paths []string) (ScanResult, error) {
-	var stub0 ScanResult
-	var stub1 error
-	return stub0, stub1
+	b, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return ScanResult{}, err
+	}
+	mounts, err := ParseMountinfo(b)
+	if err != nil {
+		return ScanResult{}, err
+	}
+	return ownerScan(mounts, uids, gids, paths)
 }
 
 // checkPolicyTimeout bounds check-policy as the account.
@@ -79,7 +118,18 @@ const checkPolicyTimeout = 5 * time.Minute
 // §12.1 step 4; a call-site test in execx enforces it): the installed gate
 // binary, an empty environment, as the account.
 func (h *host) RunAs(cred *execx.Credential, memoryMB int, args ...string) (setupx.Output, error) {
-	var stub0 setupx.Output
-	var stub1 error
-	return stub0, stub1
+	exe, _ := h.Executable()
+	r, err := execx.Run(context.Background(), &execx.Spec{Path: GatePath, Args: args, Env: []string{}, Dir: "/", Timeout: checkPolicyTimeout,
+		MaxOutput: 4 << 20, MaxMemoryMB: memoryMB, Trampoline: exe, Credential: cred})
+	if err != nil {
+		return setupx.Output{}, err
+	}
+	out := setupx.Output{Stdout: r.Stdout, Stderr: r.Stderr, Exit: -1, Signal: r.Signal, TimedOut: r.TimedOut}
+	if r.ExitCode != nil {
+		out.Exit = *r.ExitCode
+	}
+	if r.StdoutTruncated || r.StderrTruncated {
+		return out, setupx.ErrOutputCut
+	}
+	return out, nil
 }
