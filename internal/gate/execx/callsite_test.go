@@ -120,7 +120,7 @@ func credentialUses(t *testing.T, root string) []credentialUse {
 // credential option, so serve (cmd/shell-mcp-gate and every other gate
 // package), the helper (cmd/shell-mcp-privd, internal/privd) and the server
 // (cmd/shell-mcp, the rest of internal) never set it; inside it the option
-// is set in at most one place.
+// is set in exactly one place: the check-policy step's RunAs.
 func TestCredentialCallSites(t *testing.T) {
 	uses := credentialUses(t, moduleRoot(t))
 	sets := 0
@@ -133,7 +133,7 @@ func TestCredentialCallSites(t *testing.T) {
 			sets++
 		}
 	}
-	if sets > 1 {
-		t.Errorf("%s sets the credential option in %d places, want at most 1", credentialCaller, sets)
+	if sets != 1 {
+		t.Errorf("%s sets the credential option in %d places, want exactly 1 (install's check-policy step)", credentialCaller, sets)
 	}
 }
