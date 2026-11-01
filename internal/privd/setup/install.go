@@ -639,15 +639,20 @@ func (in *installer) checkSockets() bool {
 	return ok
 }
 
-var scoreRE = regexp.MustCompile(`Overall exposure level for [^:]*: (d+.d)`)
+var scoreRE = regexp.MustCompile(`Overall exposure level for [^:]*: (\d+\.\d)`)
+
+// ansiRE is a terminal escape sequence (CSI), which systemd prints around
+// the unit name and the level when it colours its output.
+var ansiRE = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 
 // score prints systemd-analyze security's exposure for the core unit with
 // the value PRIVILEGED §5.1 and TARGET-SETUP §9.4 expect, and a WARN above.
 func (in *installer) score() {
 	out, err := in.h.Run(setupx.SystemdAnalyze, "security", "--no-pager", units.ServiceUnit)
-	m := scoreRE.FindSubmatch(append(out.Stdout, out.Stderr...))
+	text := ansiRE.ReplaceAll(append(append([]byte(nil), out.Stdout...), out.Stderr...), nil)
+	m := scoreRE.FindSubmatch(text)
 	if err != nil || m == nil {
-		why := fmt.Sprintf("exit %d: %s", out.Exit, firstLines(append(out.Stderr, out.Stdout...), 3))
+		why := fmt.Sprintf("exit %d: %s", out.Exit, lastLines(text, 3))
 		if err != nil {
 			why = err.Error()
 		}
@@ -667,4 +672,18 @@ func (in *installer) score() {
 		return
 	}
 	in.r.OK("systemd-analyze security %s: %s (expected %s)", units.ServiceUnit, got, want)
+}
+
+// lastLines is b's last n non-empty lines, joined, for a message.
+func lastLines(b []byte, n int) string {
+	var l []string
+	for _, s := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if s = strings.TrimSpace(s); s != "" {
+			l = append(l, s)
+		}
+	}
+	if len(l) > n {
+		l = append([]string{"..."}, l[len(l)-n:]...)
+	}
+	return strings.Join(l, " | ")
 }
