@@ -295,6 +295,9 @@ func firstLine(b []byte) string {
 }
 
 func (in *installer) checkSSHD() {
+	if !in.checkPrivsep() {
+		return
+	}
 	m, _, err := in.sshdT("")
 	if err != nil {
 		in.refuse("sshd", "sshd_config", "sshd -T: %v", err)
@@ -665,8 +668,11 @@ func (in *installer) checkOwnerScan() {
 		gids = append(gids, o.SocketGID)
 	}
 	if len(uids)+len(gids) == 0 {
-		if o.OwnerScanPaths != nil {
-			in.refuse("owner_scan", "nothing_to_scan", "--owner-scan-paths: the account and its groups exist already, so there is nothing to scan for; leave the flag out")
+		// Nothing is created, so no id can own anything new: a second run
+		// with the same flags is accepted (decided 2026-11-01, same-flags
+		// idempotency), the flag's own checks still apply.
+		if o.OwnerScanPaths != nil && in.scanPathsOK() {
+			in.r.Note("--owner-scan-paths: no account or group is created in this run, so nothing is scanned")
 		}
 		return
 	}
@@ -674,12 +680,8 @@ func (in *installer) checkOwnerScan() {
 		// The ids are refused already; a scan would only take time.
 		return
 	}
-	for _, p := range o.OwnerScanPaths {
-		st, ok := in.state(p)
-		if ok && (!st.IsDir() || st.Mode&fs.ModeSymlink != 0) {
-			in.refuse("owner_scan", "scan_path", "--owner-scan-paths: %s is not an existing directory (a symlink is refused)", p)
-			return
-		}
+	if !in.scanPathsOK() {
+		return
 	}
 	res, err := in.h.OwnerScan(uids, gids, o.OwnerScanPaths)
 	if err != nil {
@@ -712,6 +714,19 @@ func limited(l []string, n int) string {
 		return strings.Join(l[:n], ", ") + fmt.Sprintf(" and %d more", len(l)-n)
 	}
 	return strings.Join(l, ", ")
+}
+
+// scanPathsOK checks each --owner-scan-paths entry: an existing directory,
+// not a symlink.
+func (in *installer) scanPathsOK() bool {
+	for _, p := range in.o.OwnerScanPaths {
+		st, ok := in.state(p)
+		if ok && (!st.IsDir() || st.Mode&fs.ModeSymlink != 0) {
+			in.refuse("owner_scan", "scan_path", "--owner-scan-paths: %s is not an existing directory (a symlink is refused)", p)
+			return false
+		}
+	}
+	return true
 }
 
 // checkReload is step 1's reload check: unless --no-reload, systemd must
@@ -824,6 +839,9 @@ func (in *installer) describe() {
 	}
 	r.Info("would run %s check-policy --policy %s as %s (uid %d, gid %d, groups %s)", GatePath, in.o.Policy, in.o.User, in.o.UID, in.o.GID, allowedText(in.allowed))
 	in.describeFiles(in.polkitFile, in.dropIn, in.keysDir, in.keysFile)
+	if in.o.NoReload && in.memoryText != "" {
+		r.Info("--no-reload: would skip systemctl daemon-reload and the slice check; the memory limit would not be active until systemd is reloaded")
+	}
 	r.Info("would check %s -t and %s -T -C %s and -C %s", setupx.Sshd, setupx.Sshd, in.checkSpec(), in.otherSpec())
 	in.describeReload()
 }
@@ -919,6 +937,13 @@ func (in *installer) apply() int {
 		if err := in.checkSliceShow(); err != nil {
 			return fail("%v", err)
 		}
+	}
+	if o.NoReload && in.memoryText != "" {
+		unit := fmt.Sprintf("user-%d.slice", o.UID)
+		msg := fmt.Sprintf("--no-reload: skipped systemctl daemon-reload and the systemctl show check of %s; the memory limit (MemoryMax=%s) is not active until systemd is reloaded: "+
+			"run systemctl daemon-reload, then systemctl show -p MemoryMax -p MemorySwapMax %s", unit, in.memoryText, unit)
+		r.Warn("%s", msg)
+		in.a.Log(&setupx.Record{Action: setupx.ActionWarn, Object: "slice", Path: in.sliceFile.path, Reason: "no_reload", Detail: msg})
 	}
 	// Step 4: check-policy as the account.
 	if err := in.checkPolicyAsAccount(cred); err != nil {
@@ -1101,8 +1126,7 @@ func (in *installer) reload() {
 	case in.dropIn.class == classUnchanged:
 		in.r.OK("sshd: the drop-in is unchanged; no reload (a new key line needs none: sshd reads the keys file at every login)")
 	case in.o.NoReload:
-		in.r.Note("--no-reload: reload sshd yourself (systemctl reload ssh.service, or restart the sshd you run)%s",
-			map[bool]string{true: ", and run systemctl daemon-reload for the slice drop-in", false: ""}[in.sliceFile.class != classUnchanged && in.memoryText != ""])
+		in.r.Note("--no-reload: reload sshd yourself (systemctl reload ssh.service, or restart the sshd you run)")
 	case in.reloadSSH != "":
 		if err := in.systemctl("reload", in.reloadSSH); err != nil {
 			in.r.Warn("%v; the files are in place and verified: reload sshd yourself", err)
@@ -1133,3 +1157,57 @@ func (in *installer) rollback(j *setupx.Journal, reloaded bool) {
 
 // ErrNoHostKey is a host without host keys.
 var ErrNoHostKey = errors.New("no host key in " + SSHDir)
+
+// PrivsepDir is sshd's privilege separation directory: sshd -t and sshd -T
+// refuse to run without it ("Missing privilege separation directory").
+const PrivsepDir = "/run/sshd"
+
+// tmpfilesDirs are where systemd-tmpfiles reads its configuration
+// (tmpfiles.d(5)), in its order of precedence.
+var tmpfilesDirs = []string{"/etc/tmpfiles.d", "/run/tmpfiles.d", "/usr/lib/tmpfiles.d"}
+
+// checkPrivsep requires /run/sshd before anything else of sshd is run. It
+// never creates it (not one of install's files): it names the remedy for
+// this host. Debian 13 (systemd 257) and Ubuntu 26.04 (259) create it at
+// boot from systemd's tmpfiles entry (20-systemd-ssh-generator.conf, "d
+// /run/sshd 0755"); Ubuntu 24.04 (255) has none, and only ssh.service's
+// RuntimeDirectory=sshd creates it, which with the default ssh.socket
+// happens at the first connection.
+func (in *installer) checkPrivsep() bool {
+	if st, ok := in.state(PrivsepDir); !ok || st.IsDir() {
+		return ok
+	}
+	remedy := "systemctl start ssh.service (its RuntimeDirectory=sshd creates " + PrivsepDir + "; with ssh.socket, ssh.service then serves the socket's connections)"
+	if f := in.tmpfilesEntry(); f != "" {
+		remedy = "systemd-tmpfiles --create " + f + " (the entry that creates " + PrivsepDir + " at boot)"
+	}
+	in.refuse("sshd", "no_privsep_dir", "%s does not exist, so sshd -t and sshd -T cannot run (\"Missing privilege separation directory\"); install does not create it: run %s, then install again",
+		PrivsepDir, remedy)
+	return false
+}
+
+// tmpfilesEntry is the tmpfiles.d file whose d or D line creates
+// /run/sshd, or "".
+func (in *installer) tmpfilesEntry() string {
+	for _, d := range tmpfilesDirs {
+		names, err := in.h.ReadDir(d)
+		if err != nil {
+			continue
+		}
+		for _, n := range names {
+			if !strings.HasSuffix(n, ".conf") {
+				continue
+			}
+			st, err := in.h.State(d+"/"+n, 1<<20)
+			if err != nil || !st.IsRegular() {
+				continue
+			}
+			for _, l := range strings.Split(string(st.Data), "\n") {
+				if f := strings.Fields(l); len(f) >= 2 && (f[0] == "d" || f[0] == "D") && f[1] == PrivsepDir {
+					return d + "/" + n
+				}
+			}
+		}
+	}
+	return ""
+}

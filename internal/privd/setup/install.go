@@ -568,6 +568,7 @@ func (in *installer) apply() int {
 			}
 			r.OK("%s: removed (the policy no longer uses the broad unit)", u.path())
 		}
+		r.Note("%s stays as a file node: systemd does not remove a stopped socket's node (RemoveOnStop= is off, systemd.socket(5)); nothing listens on it, so a connection to it is refused", units.BroadSocketPath)
 	}
 	if j.Changed() {
 		if err := in.systemctl("daemon-reload"); err != nil {
@@ -646,7 +647,11 @@ func (in *installer) score() {
 	out, err := in.h.Run(setupx.SystemdAnalyze, "security", "--no-pager", units.ServiceUnit)
 	m := scoreRE.FindSubmatch(append(out.Stdout, out.Stderr...))
 	if err != nil || m == nil {
-		in.r.Warn("systemd-analyze security %s gave no exposure level; check it by hand (TARGET-SETUP §9.4)", units.ServiceUnit)
+		why := fmt.Sprintf("exit %d: %s", out.Exit, firstLines(append(out.Stderr, out.Stdout...), 3))
+		if err != nil {
+			why = err.Error()
+		}
+		in.r.Warn("systemd-analyze security %s gave no exposure level (%s); check it by hand (TARGET-SETUP §9.4)", units.ServiceUnit, why)
 		return
 	}
 	want := "1.3"
