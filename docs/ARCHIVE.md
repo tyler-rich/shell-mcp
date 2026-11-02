@@ -4618,3 +4618,20 @@ A factual slip in the handoff was corrected: the helper already imports gate pac
   - install now refuses before anything is written, naming the host's remedy (`systemd-tmpfiles --create <that file>`, else `systemctl start ssh.service`), and never creates the directory. There are unit tests and a setup-check case on every image, red first in 29c1dea. TARGET-SETUP §7 carries the same note for the hand step.
 - **`--no-reload`** now WARNs that `daemon-reload` and the slice check were skipped and that the memory limit is not active until systemd is reloaded, and records it as an audit line (`"action":"warn","object":"slice","reason":"no_reload"`). Tested, red first in 29c1dea.
 - setup-check after these changes: 129 passed, 0 failed (Debian 13, Ubuntu 24.04, Ubuntu 26.04).
+
+**Follow-up 2 (maintainer, 2026-11-01): the switch's raw `AllThreadsSyscall` calls, checked against Go's own wrapper.**
+- **setgroups.** Go 1.27.3's `syscall.Setgroups` (`src/syscall/syscall_linux.go:419`):
+  - with no groups it calls `AllThreadsSyscall(_SYS_setgroups, 0, 0, 0)`;
+  - otherwise it calls `AllThreadsSyscall(_SYS_setgroups, n, uintptr(unsafe.Pointer(&a[0])), 0)` on a fresh `[]_Gid_t` (`_Gid_t` is `uint32` on amd64 and arm64, and `_SYS_setgroups` is `SYS_SETGROUPS`), with no `runtime.KeepAlive`.
+
+  `AllThreadsSyscall` is declared `//go:uintptrescapes` (`syscall_linux.go:1122`). Per `cmd/compile/doc.go`, uintptr arguments converted from pointers in the argument list "must be on the heap and kept alive for the duration of the call". `unsafe.Pointer` rule (4) requires that conversion to appear in the call expression itself. The switch already converted inline, but for no groups it passed a pointer to a sentinel element where the wrapper passes NULL. `setIDsWith` now matches the wrapper exactly. Red first: `TestSetIDsPattern` in 3a2f736.
+- **cgo builds.** Every build of the gate sets `CGO_ENABLED=0`:
+  - the release (`scripts/release/build.sh:51`, run by `release-build.yml:85` and checked by `release-binary-check.sh` at `release-build.yml:198` and `:246`);
+  - CI's cross-build (`ci.yml:201`), e2e-host (`ci.yml:358`), ci-local (`ci-local.sh:152`) and setup-check (`run.sh:79`).
+
+  There is no Makefile or goreleaser configuration. In a cgo build the ENOTSUP was never ignored: the switch refused. But the trampoline answered `EPERM` and `Run` drops the trampoline's stderr on a start error, so install reported only "process could not be started: EPERM", at step 4, after its first writes (then rolled back). Now:
+  - the trampoline passes the switch's own errno back;
+  - install probes its own binary (`AllThreadsSyscall(SYS_GETPID)`), which in production is the trampoline, before anything is written, and refuses naming cgo and `CGO_ENABLED=0`;
+  - `Run` does not probe, because a caller may name another trampoline, as the tests do: the `go test` binary links cgo while the trampoline it starts does not.
+
+  Red first in 3a2f736: `TestCredentialSupported`, `TestBecomeAccountReportsErrno` (root), `TestInstallCredentialUnsupported`; `TestSetIDsNotSupported` passed before too. Also checked with a real `CGO_ENABLED=1` build of `shell-mcp-gate` in the Debian 13 setup image: `install --dry-run` refused before anything was written with "this binary links cgo, so syscall.AllThreadsSyscall cannot reach every thread (operation not supported); the credential option needs a CGO_ENABLED=0 build".
