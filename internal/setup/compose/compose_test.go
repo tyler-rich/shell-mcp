@@ -416,3 +416,16 @@ func TestParseImage(t *testing.T) {
 		}
 	}
 }
+
+// TestAmbiguousValuesStayStrings: values the server's rules accept that YAML
+// would read as a number, a boolean or null are quoted, so Compose passes
+// the server exactly what was given.
+func TestAmbiguousValuesStayStrings(t *testing.T) {
+	args := replace(replace(replace(base(), "--target-name", "00000000"), "--target-host", "true"), "--target-user", "null")
+	e := env(t, parse(t, render(t, args)))
+	for k, want := range map[string]string{"SHELL_MCP_TARGET_NAME": "00000000", "SHELL_MCP_TARGET_HOST": "true", "SHELL_MCP_TARGET_USER": "null"} {
+		if e[k] != want {
+			t.Errorf("%s = %q, want %q", k, e[k], want)
+		}
+	}
+}
