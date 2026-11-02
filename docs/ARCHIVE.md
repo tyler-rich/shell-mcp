@@ -4774,3 +4774,115 @@ How it writes, and what it prints:
 **Not covered, and why.** The gate's `policy new` does not check `root:` against list A: that needs the privileged loader, which the gate binary must not link (handoff §5). The helper's `policy new` refuses it, and until then forwarding to an absent helper fails closed. The quick start's order is S8-4's.
 
 **Versions (D-013):** Go 1.27.3 (go.mod; deps-current: the newest stable with a published `golang:1.27.3-trixie`). `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing. Direct modules: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6, x/crypto v0.58.0, x/sys v0.49.0. Tools: golangci-lint v2.15.0, govulncheck v1.9.0. No dependency added.
+
+### 2026-11-02 — `shell-mcp doctor`, `verify-release.sh`, `deploy/caddy/`, the ten-step quick start (S8-4: handoff items E, F, G and H) (branch feat/s8-4-doctor-verify-quickstart)
+**Scope (the session prompt, handoff §6 S8-4):** the last S8 session.
+- **What was built:** a diagnostic command beside `check`, a release verification script for users, an example reverse-proxy configuration with the properties every proxy needs, and the quick start with TARGET-SETUP as its reference part.
+- **Checked first:** V-3 and V-4, at the source.
+- **What did not change:** every check `check` already made, any route or helper op, `deploy/docker-compose.yml` and `deploy/`'s hardening flags, and the S8-1 to S8-3 commands, which are only documented.
+- **Out of scope:** `keys list`/`revoke`, uninstall, and the release itself.
+
+**V-3 and V-4, verified first** (handoff §2 records both):
+- **V-3, true.** Docker Compose v5.6.1 was given the reference network shape (a fixed `ipv4_address`, no `container_name`) with a stand-in image, labelled, unprivileged, and removed afterwards.
+  - It named the container `<project>-shell-mcp-1`.
+  - `docker compose run` of the running service failed with "Address already in use", while `docker compose exec` worked.
+  - README's Upgrading step, which ran `compose run … check` with the server up, is corrected.
+- **V-4, true, from Caddy v2.11.7's source** (`addForwardedHeaders`, `determineTrustedProxy`, `MatchRemoteIP`).
+  - Without `trusted_proxies`, `reverse_proxy` sets `X-Forwarded-For` to the peer, replacing a client's; with it, it appends the peer.
+  - `remote_ip` matches the direct connection.
+  - `caddy validate` passes with no network, a read-only root, no capabilities, `no-new-privileges` and uid 65532, and requests no certificate.
+  - One finding: the official binary's file capability (`cap_net_bind_service=ep`) cannot be exec'd under no capabilities (EPERM, capabilities(7)). The test-only image removes it, so no network and no root are needed, and nothing was stopped on.
+
+**Decided with the maintainer (2026-11-02), on three disagreements raised before building:**
+- **F in the release workflow.** Dry runs sign with the run's own ref, never a tag.
+  - A release's signed files must pass `verify-release.sh`, and every run must refuse each tampered case for its own reason.
+  - The maintainer's rule: a version `X.Y.Z-dryrun.<commit>` can never make the script exit 0, under any flags, `--sums` included. It only names the files. No identity override exists in any form.
+- **doctor's HTTP rows.** A 403 without the server's own headers is a WARN that says the proxy refused the container's address. A LAN/VPN-only proxy may do that, and healthy deployments must not exit 1 for it.
+- **The broad probe.** It keeps the handoff's two operations. The handoff's "this policy has no read operation on it" is false for package policies without the index update, whose previews are read operations, so the line now says which two operations doctor uses.
+
+**doctor (handoff §4.E; TARGET-SETUP §12.6).** `shell-mcp doctor [--json] [--mcp-url <url>] [--ca-file <file>]`, run inside the server's container (`docker compose exec shell-mcp /shell-mcp doctor`, or a stack editor's exec).
+- **Rows:** one row each, with status `ok`, `WARN`, `FAIL` or `NOTE`, the component, the detail and a fix naming the command and section. Exit 1 on any FAIL.
+- **`configuration`:** `config.Load` as `serve`. A refusal is a FAIL naming the variable, and nothing else runs.
+- **`secret <var>`:** for each `*_FILE` secret, any group or other bit, or not a regular file, is a FAIL; an owner other than the process's uid is a WARN.
+- **`target <name>`:** `tools.Probe`, unchanged, as `check`. The pin, gate, protocol, principal, policy hash, `max_tier`, sandbox and served tools are reported, and a sandbox not applied or `best-effort` is a WARN. Each code has its fix (host-key §12.2, the key line §12.1, the gate §3, …).
+- **`helper <name> core`:** `tools.ProbeHelper`, `priv_policy` at ceiling read. The helper block must come from the core unit with the summary's hash. `helper_unavailable`, `helper_refused`, `helper_policy_mismatch` and `protocol_mismatch` each have a remedy.
+- **`helper <name> broad`:** `tools.BroadProbeOp`, then `ProbeHelperBroad`.
+  - The probe is `priv_pkg_update_index_preview`, else `priv_power_preview` with the first allowed action.
+  - The helper block must come from the broad unit. The broad helper's own refusal (a lock, a blocker) still shows the socket works.
+  - When neither operation is allowed, a NOTE says so, with the `systemctl status` hint.
+- **`trusted proxy <entry>`:** a gateway from `/proc/net/route` or `/proc/net/ipv6_route` (every `RTF_GATEWAY` route) inside the entry is a FAIL. A prefix, or an address on no attached network (`net.InterfaceAddrs`), is a WARN. A NOTE says the dynamic check is CLIENTS §1's log-line procedure.
+- **`approval page`:** under `web`, a GET of the public URL with no proxy, no redirect followed, and the system roots or `--ca-file`.
+  - The page is told by its own CSP, `X-Frame-Options` and `Cache-Control` headers; the certificate's days are reported, and fewer than 14 is a WARN.
+  - A 403 with the page's headers is a FAIL that names `SHELL_MCP_TRUSTED_PROXIES`. A redirect, another service, a bad certificate or no answer is a FAIL.
+  - A NOTE says reachability from outside is not shown.
+- **`mcp endpoint`:** with `--mcp-url`, one POST without a token. A 401 with `Bearer realm="shell-mcp"` is ok; 421 names `SHELL_MCP_ALLOWED_HOSTS`; 2xx is a FAIL (not behind the token).
+- **What it never does:** write anything, or send the token. `shell_get_policy` builds its summary through the same extracted function (`privPolicyOf`), and its tests pass unchanged.
+
+**verify-release.sh (handoff §4.F; TARGET-SETUP §12.7, README "Verifying a release").** POSIX sh, any user, writes nothing, downloads nothing itself. It is in the repository and, through `scripts/release/build.sh`, in the examples archive.
+- **Always:** every file in `--dir` but the bundles and `SHA256SUMS` must be listed, with well-formed lines, and must match; every binary and the archive must be of the version.
+- **cosign:** `SHA256SUMS`, the binaries and the archive verify against their bundles, with `verify.sh`'s identity (`release-build.yml@refs/tags/v<version>`) and issuer. A self-test holds the two scripts' identity and issuer equal.
+- **gh:** a provenance attestation per listed file, at the tag.
+- **Both,** when both are installed.
+- **`--sums`** alone otherwise: a SHA256SUMS verified elsewhere, with a differing `SHA256SUMS` in `--dir` refused.
+- **Refused:** no tool and no `--sums`; an unlisted file; a mismatch; a missing bundle; another identity or issuer; another version's files; a dry-run version, always.
+- **In the release workflow:** `scripts/release/verify-release-check.sh` runs it after `verify.sh`. A release must pass with cosign and gh and with `--sums`. Every run must refuse a changed binary (its checksum and its bundle), a changed SHA256SUMS (the checksum and SHA256SUMS's bundle), a missing bundle, and another release's identity. A dry run's files must be refused, with the checks still run. `release.yml` now also runs on changes to `scripts/verify-release.sh`.
+
+**deploy/caddy/ (handoff §4.G).**
+- **`Caddyfile`:** the MCP and approval sites, each with a LAN/VPN `remote_ip` matcher, `reverse_proxy` to the reference compose's server inside `handle @private` and `respond 403` in a separate `handle {}`. There is no `trusted_proxies`, and comments cover TLS and the restart after an edit of a single-file mount.
+- **`README.md`:** the five properties in terms Caddy, nginx and Traefik users can follow, each linked to CLIENTS:
+  - the server's network at a fixed address;
+  - the address the proxy saw, never a client's;
+  - that address alone in `SHELL_MCP_TRUSTED_PROXIES`, never the gateway;
+  - the approval page from the LAN or VPN only;
+  - restart, not reload.
+
+  The nginx (`$proxy_add_x_forwarded_for`, `proxy_set_header Host`) and Traefik (`ipAllowList` `sourceRange`, 403 by default, remote address by default; `forwardedHeaders.insecure`) settings were checked against their documentation. The README ends with the log-line check.
+- **No compose file or image in `deploy/`;** `deploy/docker-compose.yml` is unchanged.
+- **`scripts/caddy-check/`** checks drift (upstreams against the compose's server address and ports, the README's addresses), the shape, no `trusted_proxies`, and `caddy validate` in the test-only image pinned by digest, with a broken Caddyfile as the negative control. It is labelled and removed by its label. It runs in ci-local, in the CI job `caddy-check` in the `ci` gate, and under Dependabot (`/scripts/caddy-check`).
+
+**The quick start (handoff §4.H): ten steps** in README, each naming its command. The order is S8-3's (gate `policy new`, gate `install`, helper `policy new`, helper `install`):
+1. secrets with `init`, with the approver rule: a terminal, or `approver add` later;
+2. download and `verify-release.sh` from the tag;
+3. the binaries;
+4. the gate's `policy new`;
+5. `install` (`usermod -L`; README's last `passwd -l` is gone);
+6. write roots, by hand;
+7. the helper's `policy new` and `install` with the review and `--accept`;
+8. `init compose` in both forms (`secrets` for docker compose, `bind` for stack editors) and the proxy of deploy/caddy;
+9. `up -d` and `doctor` through `docker compose exec` or the editor's exec, then the log-line check;
+10. a client.
+
+README's Installation, Verifying a release, Upgrading, Troubleshooting and documentation table follow it. A stale ARCHITECTURE anchor (`version-1`) is fixed. TARGET-SETUP is the reference part: every step kept, each hand step naming its command (§2 verify-release.sh, §3 and §6 stay manual, §10 doctor), plus §12.6 and §12.7. CLIENTS §1 and §7 and `deploy/README.md` point at doctor and deploy/caddy. `go run ./scripts/doccheck` checks every relative link, GitHub anchor and `DOC §N` reference in the live documents, in ci-local and CI. Its first run also found one ambiguous reference in PRIVILEGED (a "§4.0" after a semicolon meaning ARCHITECTURE's), now named.
+
+**Test evidence (failing first, each red run against a stub).**
+- **doctor, unit:** 4513758 (stub) → a1c215d. 17 tests failed against the stub; `TestUsageListsDoctor` and `TestDoctorUsage` passed by design (the stub keeps the usage line and flags).
+- **doctor, container (setup-check):** ebcb20b, run against the stub's binaries from a worktree of the branch with the stub's `doctor.go` and `helperprobe.go` restored: 193 passed, 3 failed, the three new doctor checks (both forms, and the gateway). Green on the implementation (below).
+- **verify-release.sh:** 636b98d (stub) → d9eece8. 47 of 54 self-test checks failed against the stub; the 7 that passed are absence guards. The release-workflow check is exercised by the PR's release dry run (below).
+- **deploy/caddy:** 64b766a (stub) → 96b3bfd. 9 of 12 checks failed; the 3 that passed do so by design (an empty Caddyfile validates, the broken one is refused, a stub has no `trusted_proxies`). Green: 14 of 14.
+- **doccheck:** 589f68c (stub) → b8827d3. 4 of 5 tests failed; `TestCheckGood` passes by design.
+- **e2e-host:** 68054c7 (`TestDoctorOnRunner`), runner VM only; its red run against the stub is not shown.
+
+**Fuzz targets, 60 s each:**
+- `FuzzParseRoute` and `FuzzParseIPv6Route` (cmd/shell-mcp): no finding, about 10 million executions each.
+- `FuzzRefs`: found that a list continuing another document's reference inherited the skipped name, and that the capital test read a byte instead of a rune. Both fixed, and the input kept as a seed and a `TestRefs` case; then no finding.
+- `FuzzSlug` (scripts/doccheck): no finding.
+
+**The local gate.** `bash scripts/ci-local.sh` passed every step:
+- gofmt, `go vet`, and golangci-lint with and without the test build tags;
+- exposure and its self-test;
+- caddy-check (14 of 14);
+- `go test -race` in all five builds;
+- the e2e guards, and govulncheck with no vulnerability;
+- both cross-builds, and the twice-built release snapshot;
+- the release scripts', verify-release's (54 of 54), deps-current's (all 13 modules current), release-binary-check's and ci-local's self-tests;
+- doccheck.
+
+setup-check was the exception. Its first run reported 194 passed and 2 failed: the harness's own pattern for doctor's secret rows used unescaped parentheses in an ERE, while doctor's rows were right. With the pattern fixed, setup-check alone gave 196 passed, 0 failed, the three doctor checks included. The e2e-host bind-form row is NOT RUN (runner VM only).
+
+**Departures from CLAUDE.md's container rule, reported.**
+- **The scratchpad mount.** One ad-hoc smoke run of `verify-release-check.sh` against the self-test's fakes mounted the session's scratch directory read-only into the Go container, a host path other than the repository. It held only that scratch script. Later runs piped scripts over stdin instead.
+- **The stub run's mount.** The stub setup-check run mounted a git worktree of this branch, which is the repository.
+
+**Deferred.** None of this session's beyond the handoff's: `keys list`/`revoke`, uninstall, and an automated live-proxy test. shellcheck is not run on the new scripts: it is in neither CI nor ci-local, and adding it would be a new tool. The self-test runs `verify-release.sh` under dash instead.
+
+**Versions (D-013):** Go 1.27.3 (go.mod; deps-current in ci-local). `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing. Direct modules: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6, x/crypto v0.58.0, x/sys v0.49.0. Tools: golangci-lint v2.15.0, govulncheck v1.9.0. New test-only image: `caddy:2.11.7@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e` (the newest stable 2.x, tracked by Dependabot). No dependency added.
