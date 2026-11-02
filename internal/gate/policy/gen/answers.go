@@ -147,10 +147,7 @@ type Packages struct {
 
 // UsesBroad reports whether the privileged policy from these answers uses
 // the broad unit (PRIVILEGED §2: packages, power, or a unit: broad command).
-// UsesBroad is a stub.
-func (a *Answers) UsesBroad() bool { return false }
-
-func (a *Answers) usesBroadImpl() bool {
+func (a *Answers) UsesBroad() bool {
 	if a.Root == nil {
 		return false
 	}
@@ -291,10 +288,7 @@ var (
 // presets' rules (POLICY §9.2) and reads the carried comments (§9.3).
 // Every value the policies need is checked by their own loaders later;
 // Decode checks only what the answers file itself means.
-// Decode is a stub (S8-3 failing-first commit): it accepts everything.
-func Decode(data []byte) (*Answers, error) { return &Answers{}, nil }
-
-func decodeImpl(data []byte) (*Answers, error) {
+func Decode(data []byte) (*Answers, error) {
 	if len(data) > MaxAnswersBytes {
 		return nil, &Error{"", fmt.Sprintf("the file is larger than %d bytes", MaxAnswersBytes)}
 	}
@@ -484,10 +478,7 @@ func CommentLines(text string) []string {
 // UTF-8, no control character (CR and LF only as line breaks), none of
 // U+0085, U+2028, U+2029 and U+FEFF, at most maxCommentLines lines of at
 // most maxCommentLineSize bytes.
-// CheckComment is a stub.
-func CheckComment(text string) error { return nil }
-
-func checkCommentImpl(text string) error {
+func CheckComment(text string) error {
 	lines := CommentLines(text)
 	if len(lines) > maxCommentLines {
 		return fmt.Errorf("has more than %d lines", maxCommentLines)
@@ -522,10 +513,7 @@ func checkText(s string) error {
 
 // Validate applies the presets' rules (POLICY §9.2) and the answers file's
 // own (account, landlock, the socket group, text values).
-// Validate is a stub.
-func (a *Answers) Validate() error { return nil }
-
-func (a *Answers) validateImpl() error {
+func (a *Answers) Validate() error {
 	switch a.Preset {
 	case PresetReadOnly, PresetOperator, PresetAdmin:
 	default:

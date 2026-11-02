@@ -110,10 +110,7 @@ type runner struct {
 }
 
 // Run is `policy new` (POLICY §9.4). It returns the exit code.
-// Run is a stub: it prints nothing and exits 0.
-func Run(o *Options, s *Spec, h setupx.Host, stdout, stderr io.Writer, a *setupx.Auditor) int { return 0 }
-
-func runImpl(o *Options, s *Spec, h setupx.Host, stdout, stderr io.Writer, a *setupx.Auditor) int {
+func Run(o *Options, s *Spec, h setupx.Host, stdout, stderr io.Writer, a *setupx.Auditor) int {
 	report := stdout
 	if o.Out == "-" {
 		report = stderr // stdout carries the policy
@@ -349,10 +346,7 @@ func (run *runner) rollback(j *setupx.Journal) {
 // <msg>") to name the answers key the field came from, through table
 // (policy field prefix → answers key prefix; the first match wins). A field
 // no entry matches is the preset's.
-// LoaderField is a stub.
-func LoaderField(line, prefix string, table [][2]string, preset string) string { return line }
-
-func loaderFieldImpl(line, prefix string, table [][2]string, preset string) string {
+func LoaderField(line, prefix string, table [][2]string, preset string) string {
 	rest, ok := strings.CutPrefix(line, prefix+": ")
 	if !ok {
 		return line

@@ -19,10 +19,7 @@ var gateFields = [][2]string{
 
 // GateField rewrites one line of the gate loader's error to name its
 // answers key, and the rule a protected-path refusal applies.
-// GateField is a stub.
-func GateField(line, preset string) string { return line }
-
-func gateFieldImpl(line, preset string) string {
+func GateField(line, preset string) string {
 	l := LoaderField(line, "policy", gateFields, preset)
 	if strings.Contains(l, "protected path") && !strings.Contains(l, "POLICY §3") {
 		l += " (the gate's built-in protected set, POLICY §3)"

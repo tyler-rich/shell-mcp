@@ -66,10 +66,7 @@ func isComment(l string) bool { return strings.HasPrefix(strings.TrimLeft(l, " "
 // ParseTemplate reads an example policy as a template. The examples are
 // this repository's own files, so anything outside the shape they have is
 // an error, not something to guess at.
-// ParseTemplate is a stub.
-func ParseTemplate(src []byte) (*Template, error) { return &Template{}, nil }
-
-func parseTemplateImpl(src []byte) (*Template, error) {
+func ParseTemplate(src []byte) (*Template, error) {
 	s := string(src)
 	if !strings.HasSuffix(s, "\n") || strings.Contains(s, "\r") || strings.Contains(s, "\t") {
 		return nil, errors.New("template: must end with a newline and hold no CR or tab")
@@ -361,10 +358,7 @@ func lineComment(l string) (col int, comment string) {
 // CheckValues decodes rendered and requires it to hold exactly want: the
 // rendering is checked against the values it was meant to write, so no
 // comment, quoting or layout can add, drop or change one.
-// CheckValues is a stub.
-func CheckValues(rendered []byte, want map[string]any) error { return nil }
-
-func checkValuesImpl(rendered []byte, want map[string]any) error {
+func CheckValues(rendered []byte, want map[string]any) error {
 	var got map[string]any
 	if err := yaml.Unmarshal(rendered, &got); err != nil {
 		return fmt.Errorf("the rendered policy does not parse: %w", err)

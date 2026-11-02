@@ -23,10 +23,7 @@ func Preset(name string) ([]byte, error) {
 // RenderGate renders the gate policy for a (POLICY §9.3) from its preset,
 // and checks that the result holds exactly the answers' values and the
 // preset's.
-// RenderGate is a stub.
-func RenderGate(a *Answers) ([]byte, error) { return nil, nil }
-
-func renderGateImpl(a *Answers) ([]byte, error) {
+func RenderGate(a *Answers) ([]byte, error) {
 	if err := a.Validate(); err != nil {
 		return nil, err
 	}

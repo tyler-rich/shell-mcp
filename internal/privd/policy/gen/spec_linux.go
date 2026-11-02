@@ -20,10 +20,7 @@ var fields = [][2]string{
 
 // Field rewrites one line of the privileged loader's error to name its
 // answers key.
-// Field is a stub.
-func Field(line, preset string) string { return line }
-
-func fieldImpl(line, preset string) string {
+func Field(line, preset string) string {
 	return ggen.LoaderField(line, "privileged policy", fields, preset)
 }
 
@@ -55,9 +52,7 @@ func Spec(h setupx.Host, load func(data []byte, path string) (*policy.Policy, er
 // socketGroup requires the answers' socket group on this host with the
 // answers' gid: the privileged loader needs the group, which
 // shell-mcp-gate install creates (POLICY §9).
-func socketGroup(h setupx.Host, a *ggen.Answers, r *setupx.Report) bool { return true }
-
-func socketGroupImpl(h setupx.Host, a *ggen.Answers, r *setupx.Report) bool {
+func socketGroup(h setupx.Host, a *ggen.Answers, r *setupx.Report) bool {
 	if a.Root == nil {
 		r.Fail("answers root: is absent: these answers enable no root actions, so there is no privileged policy to write")
 		return false

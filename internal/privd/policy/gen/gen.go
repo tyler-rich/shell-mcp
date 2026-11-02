@@ -23,10 +23,7 @@ func Preset() []byte { return append([]byte(nil), preset...) }
 
 // Render renders the privileged policy for a's root: section (POLICY §9.3)
 // and checks that it holds exactly the answers' values and the preset's.
-// Render is a stub.
-func Render(a *ggen.Answers) ([]byte, error) { return nil, nil }
-
-func renderImpl(a *ggen.Answers) ([]byte, error) {
+func Render(a *ggen.Answers) ([]byte, error) {
 	if err := a.Validate(); err != nil {
 		return nil, err
 	}
