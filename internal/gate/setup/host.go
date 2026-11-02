@@ -44,6 +44,9 @@ type Host interface {
 	// OwnerScan walks the local filesystems (or only paths, when given)
 	// for an entry owned by one of uids or gids.
 	OwnerScan(uids, gids []uint32, paths []string) (ScanResult, error)
+	// CredentialSupported says whether this binary can run check-policy as
+	// the account (execx.CredentialSupported): not in a build with cgo.
+	CredentialSupported() error
 	// RunAs runs the installed gate binary with args as the account cred
 	// (execx's credential option), with RLIMIT_DATA memoryMB.
 	RunAs(cred *execx.Credential, memoryMB int, args ...string) (setupx.Output, error)
@@ -66,6 +69,8 @@ func (h *host) LoadPolicy(path, home string) (*policy.Policy, error) {
 	exe, _ := h.Executable()
 	return policy.Load(path, &policy.LoadOptions{Trust: policy.RootTrust(), GateExecutable: exe, ServiceHome: home})
 }
+
+func (h *host) CredentialSupported() error { return execx.CredentialSupported() }
 
 func (h *host) CheckSandbox(p *policy.Policy) (int, error) {
 	abi := sandbox.KernelABI()

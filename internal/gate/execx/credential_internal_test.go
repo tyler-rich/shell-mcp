@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -365,5 +366,82 @@ func TestUserTasksHighUID(t *testing.T) {
 	}
 	if !slices.Contains(l, childLimit{Resource: unix.RLIMIT_NPROC, Max: 3 + ChildExtraTasks}) {
 		t.Fatalf("limits %+v, want RLIMIT_NPROC %d", l, 3+ChildExtraTasks)
+	}
+}
+
+// sysStub is an AllThreadsSyscall stand-in that records each call and
+// answers fail for the trap in failOn (0: none).
+type sysStub struct {
+	calls  [][4]uintptr
+	failOn uintptr
+	fail   syscall.Errno
+}
+
+func (s *sysStub) call(trap, a1, a2, a3 uintptr) (uintptr, uintptr, syscall.Errno) {
+	s.calls = append(s.calls, [4]uintptr{trap, a1, a2, a3})
+	if trap == s.failOn || s.failOn == ^uintptr(0) {
+		return 0, 0, s.fail
+	}
+	return 0, 0, 0
+}
+
+// TestSetIDsPattern: the three calls in order with the ids widened, and for
+// no groups setgroups(0, NULL), exactly as syscall.Setgroups passes it
+// (Go 1.27.3, syscall_linux.go: AllThreadsSyscall(_SYS_setgroups, 0, 0, 0)).
+func TestSetIDsPattern(t *testing.T) {
+	s := &sysStub{}
+	if step, err := setIDsWith(&Credential{UID: 4200006, GID: 4200007, Groups: []uint32{4200008}}, s.call); err != nil {
+		t.Fatalf("%s: %v", step, err)
+	}
+	if len(s.calls) != 3 || s.calls[0][0] != syscall.SYS_SETGROUPS || s.calls[0][1] != 1 || s.calls[0][2] == 0 ||
+		s.calls[1] != [4]uintptr{syscall.SYS_SETGID, 4200007, 0, 0} || s.calls[2] != [4]uintptr{syscall.SYS_SETUID, 4200006, 0, 0} {
+		t.Fatalf("calls %v", s.calls)
+	}
+	s = &sysStub{}
+	if _, err := setIDsWith(&Credential{UID: 4200006, GID: 4200007}, s.call); err != nil || s.calls[0] != [4]uintptr{syscall.SYS_SETGROUPS, 0, 0, 0} {
+		t.Fatalf("no groups: calls %v %v", s.calls, err)
+	}
+}
+
+// TestSetIDsNotSupported: AllThreadsSyscall's ENOTSUP (a binary with cgo)
+// stops the switch at setgroups, before any id changes, and is returned.
+func TestSetIDsNotSupported(t *testing.T) {
+	s := &sysStub{failOn: syscall.SYS_SETGROUPS, fail: syscall.ENOTSUP}
+	step, err := setIDsWith(validCredential(), s.call)
+	if step != "setgroups" || !errors.Is(err, syscall.ENOTSUP) || len(s.calls) != 1 {
+		t.Fatalf("%s %v, calls %v", step, err, s.calls)
+	}
+}
+
+// TestCredentialSupported: support is probed through AllThreadsSyscall, and
+// its ENOTSUP is a refusal naming cgo and the remedy.
+func TestCredentialSupported(t *testing.T) {
+	if err := credentialSupportedWith((&sysStub{}).call); err != nil {
+		t.Fatalf("supported: %v", err)
+	}
+	err := credentialSupportedWith((&sysStub{failOn: ^uintptr(0), fail: syscall.ENOTSUP}).call)
+	if err == nil || !strings.Contains(err.Error(), "cgo") || !strings.Contains(err.Error(), "CGO_ENABLED=0") || !errors.Is(err, syscall.ENOTSUP) {
+		t.Fatalf("ENOTSUP: %v", err)
+	}
+	// Run refuses the option in such a binary before anything starts.
+	var ce *CredentialError
+	if err := checkCredentialWith(validCredential(), (&sysStub{failOn: ^uintptr(0), fail: syscall.ENOTSUP}).call); !errors.As(err, &ce) || !strings.Contains(ce.Reason, "cgo") {
+		t.Fatalf("checkCredential: %v", err)
+	}
+}
+
+// TestBecomeAccountReportsErrno: the trampoline answers Run with the switch's
+// own errno (ENOTSUP here, a binary with cgo), not a generic EPERM, and no id
+// changed. Root only: becomeAccount refuses everyone else first.
+func TestBecomeAccountReportsErrno(t *testing.T) {
+	if os.Getuid() != 0 || os.Geteuid() != 0 {
+		if os.Getenv("SHELL_MCP_REQUIRE_ROOT_TESTS") == "1" {
+			t.Fatal("SHELL_MCP_REQUIRE_ROOT_TESTS=1 but the test process is not root")
+		}
+		t.Skip("needs a root test process")
+	}
+	why, errno := becomeAccountWith(validCredential(), os.Getppid(), (&sysStub{failOn: syscall.SYS_SETGROUPS, fail: syscall.ENOTSUP}).call)
+	if errno != syscall.ENOTSUP || !strings.Contains(why, "setgroups") || os.Getuid() != 0 {
+		t.Fatalf("%q %v, uid %d", why, errno, os.Getuid())
 	}
 }

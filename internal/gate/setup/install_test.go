@@ -56,6 +56,7 @@ type host struct {
 	pol        *policy.Policy
 	polErr     error
 	sandboxErr error
+	credErr    error
 	mem        uint64
 	scan       setup.ScanResult
 	scanned    [][]uint32
@@ -78,6 +79,8 @@ func (h *host) LoadPolicy(_, _ string) (*policy.Policy, error) {
 }
 
 func (h *host) CheckSandbox(*policy.Policy) (int, error) { return 6, h.sandboxErr }
+
+func (h *host) CredentialSupported() error { return h.credErr }
 
 func (h *host) MemTotal() (uint64, error) { return h.mem, nil }
 
@@ -824,5 +827,21 @@ func TestInstallNoPrivsepDir(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestInstallCredentialUnsupported: a gate binary that cannot make the
+// credential switch (a build with cgo: AllThreadsSyscall's ENOTSUP) is
+// refused before anything is written, naming the cause, not found out at
+// step 4 as a bare start error.
+func TestInstallCredentialUnsupported(t *testing.T) {
+	h, _ := newHost(t)
+	h.credErr = errors.New("this binary links cgo, so syscall.AllThreadsSyscall cannot reach every thread (ENOTSUP); the credential option needs a CGO_ENABLED=0 build")
+	r := install(t, h)
+	if r.code != 1 || !strings.Contains(r.out, "cannot run check-policy as the account") || !strings.Contains(r.out, "CGO_ENABLED=0") {
+		t.Fatalf("exit %d:\n%s", r.code, r.out)
+	}
+	if !reflect.DeepEqual(h.Snapshot(), r.before) || slices.ContainsFunc(h.order, func(o string) bool { return strings.HasPrefix(o, "groupadd") || strings.HasPrefix(o, "write") }) {
+		t.Fatalf("a refused run changed something: %v", h.order)
 	}
 }

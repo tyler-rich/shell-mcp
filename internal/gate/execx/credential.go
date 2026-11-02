@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -56,7 +57,16 @@ func (e *CredentialError) Unwrap() error { return ErrStart }
 // checkCredential is Run's check of a Spec.Credential, before anything
 // else: the calling process must run as uid 0, real and effective, and the
 // credential must pass credentialRefusal.
-func checkCredential(c *Credential) error {
+// CredentialSupported says whether this binary can run a command as another
+// account at all (nil), or why not: a build with cgo, or another
+// architecture than amd64 and arm64. The installer checks it before it
+// writes anything.
+func CredentialSupported() error { return credentialSupported() }
+
+func checkCredential(c *Credential) error { return checkCredentialWith(c, syscall.AllThreadsSyscall) }
+
+// checkCredentialWith is checkCredential, probing support through sys.
+func checkCredentialWith(c *Credential, _ allThreadsFunc) error {
 	uid, euid := os.Getuid(), os.Geteuid()
 	if uid != 0 || euid != 0 {
 		return &CredentialError{UID: uid, EUID: euid, Reason: "the option is honoured only in a process running as uid 0, real and effective"}
@@ -340,14 +350,25 @@ func liveCreds() (*observedCreds, error) {
 // no_new_privs is set. Both are per-thread attributes of the calling
 // thread, which is the one that execve(2)s: the trampoline runs in init,
 // where the runtime keeps the main goroutine on the main thread.
-func becomeAccount(c *Credential, ppid int) string {
+func becomeAccount(c *Credential, ppid int) (string, syscall.Errno) {
+	return becomeAccountWith(c, ppid, syscall.AllThreadsSyscall)
+}
+
+// becomeAccountWith is becomeAccount through sys. Its errno is what the
+// trampoline reports to Run.
+func becomeAccountWith(c *Credential, ppid int, sys allThreadsFunc) (string, syscall.Errno) {
+	why := becomeAccountWhy(c, ppid, sys)
+	return why, unix.EPERM
+}
+
+func becomeAccountWhy(c *Credential, ppid int, sys allThreadsFunc) string {
 	if why := credentialSwitchRefusal(unix.Getuid(), unix.Geteuid()); why != "" {
 		return why
 	}
 	if why := credentialRefusal(c); why != "" {
 		return why
 	}
-	if step, err := setIDs(c); err != nil {
+	if step, err := setIDsWith(c, sys); err != nil {
 		return fmt.Sprintf("%s: %v", step, err)
 	}
 	o, err := liveCreds()

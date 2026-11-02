@@ -427,9 +427,9 @@ func trampoline() int {
 	// lowered and the descriptors set; now the switch to the account, which
 	// becomeAccount verifies before anything of the command runs.
 	if c.Cred != nil {
-		if why := becomeAccount(c.Cred, env.ppid); why != "" {
+		if why, errno := becomeAccount(c.Cred, env.ppid); why != "" {
 			_, _ = fmt.Fprintf(os.Stderr, "%s: refusing to run the internal exec trampoline: %s\n", os.Args[0], why)
-			return fail(unix.EPERM)
+			return fail(errno)
 		}
 	}
 	return fail(syscall.Exec(c.Path, c.Argv, c.Env)) //nolint:gosec // G204: the command Run sent over the checked control socket: a path resolved and ownership-checked at policy load, an argv matched to a policy template; no shell
