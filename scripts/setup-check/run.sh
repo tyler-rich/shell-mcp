@@ -12,6 +12,11 @@
 #     labelled network: the gate's hello, no shell without a command, no PTY,
 #     shell-mcp check verifying the printed pin and refusing a wrong one;
 #   - every refusal a container can build, each leaving no temp file;
+#   - policy new (POLICY §9) from the admin example's answers: --out -, the
+#     dry run, the write and a second run unchanged, the helper's refusal
+#     before install creates the socket group, install, the helper's policy,
+#     privd install with its --gate-policy cross-check, check-policy ok on
+#     both, the read-only preset, and its refusals, each writing nothing;
 #   - shell-mcp-privd install --no-start: the review stop (exit 3), the units
 #     byte-identical to units --out, a second run unchanged, the dry run;
 # and, as the Go image's root, execx's credential tests
@@ -115,14 +120,23 @@ done
 docker network create --label "$label" "$net" >/dev/null
 
 # --- Helpers ---------------------------------------------------------------------
-# new <image>: a fresh container, the binaries copied in and installed.
+# new <image> [<prepare>]: a fresh container, the binaries copied in and
+# installed (prepare-bare: without the test policies).
 new() {
 	local c
 	c="$(docker run -d --label "$label" --network "$net" --security-opt no-new-privileges:true \
 		-v "$repo:/src:ro" "shell-mcp-setup-check:$1" sleep infinity)"
 	docker cp - "$c:/opt" <"$bins_tar"
-	docker exec "$c" bash /src/scripts/setup-check/target.sh prepare >&2
+	docker exec "$c" bash /src/scripts/setup-check/target.sh "${2:-prepare}" >&2
 	echo "$c"
+}
+new_bare() { new "$1" prepare-bare; }
+# pn <container> <command…>: a policy new run; sets out (stdout) and code.
+pn() {
+	local c="$1"
+	shift
+	code=0
+	out="$(docker exec "$c" "$@" 2>/dev/null)" || code=$?
 }
 ip() { docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$1"; }
 ex() { docker exec "$@"; }
@@ -293,7 +307,119 @@ for i in "${images[@]}"; do
 	rc=0
 	r="$(docker exec "$x" /usr/local/libexec/shell-mcp-privd install --policy /etc/shell-mcp/privileged.yaml --no-start --accept "$hash" 2>/dev/null)" || rc=$?
 	[[ "$rc" == 1 ]] && grep -q 'it must be root:root with no group or other bits' <<<"$r" && ok "$i: privd refused: a policy file 0644" || bad "$i: privd policy 0644: exit $rc"
-	docker rm -f "$t" "$c" "$h" "$p" "$q" "$x" >/dev/null
+
+	# policy new (handoff §4.D, POLICY §9): the admin example's answers, the
+	# gate's policy new, install, the helper's policy new (after install,
+	# which creates the socket group its loader needs), privd install with
+	# the --gate-policy cross-check, and both check-policy runs.
+	d="$(new_bare "$i")"
+	docker cp "$c:/root/ssh_key.pub" - | docker cp - "$d:/root"
+	abi="$(ex "$d" /usr/local/bin/shell-mcp-gate check-policy --policy /nonexistent 2>/dev/null | sed -n 's/.*kernel Landlock ABI \([0-9]*\);.*/\1/p' || true)"
+	landlock=required
+	[[ "${abi:-0}" -ge 4 ]] || landlock=best-effort
+	echo "     $i: kernel Landlock ABI ${abi:-unknown}: landlock $landlock"
+	ex "$d" bash /src/scripts/setup-check/target.sh app
+	for preset in admin read-only; do ex "$d" bash /src/scripts/setup-check/target.sh answers "$preset" "$landlock"; done
+	gpn=(/usr/local/bin/shell-mcp-gate policy new --answers /root/admin.yaml)
+	ppn=(/usr/local/libexec/shell-mcp-privd policy new --answers /root/admin.yaml)
+	before="$(ex "$d" bash /src/scripts/setup-check/target.sh snapshot)"
+	pn "$d" "${gpn[@]}" --out -
+	after="$(ex "$d" bash /src/scripts/setup-check/target.sh snapshot)"
+	if [[ "$code" == 0 && "$before" == "$after" ]] && grep -q '^max_tier: destructive$' <<<"$out"; then
+		ok "$i: gate policy new --out -: prints, writes nothing"
+	else
+		bad "$i: gate policy new --out -: exit $code"
+		docker exec "$d" "${gpn[@]}" --out - 2>&1 >/dev/null | tail -n 10 || true
+	fi
+	pn "$d" "${gpn[@]}" --out /etc/shell-mcp/admin.yaml --dry-run
+	after="$(ex "$d" bash /src/scripts/setup-check/target.sh snapshot)"
+	[[ "$code" == 0 && "$before" == "$after" ]] && ok "$i: gate policy new --dry-run: exit 0, filesystem identical" || bad "$i: gate policy new --dry-run: exit $code"
+	pn "$d" "${gpn[@]}" --out /etc/shell-mcp/admin.yaml
+	if [[ "$code" == 0 ]] && grep -q '^ok: serve would accept this install and policy' <<<"$out" &&
+		ex "$d" sh -c 'test "$(stat -c "%U:%G %a" /etc/shell-mcp /etc/shell-mcp/admin.yaml | tr "\n" " ")" = "root:root 755 root:root 644 "'; then
+		ok "$i: gate policy new: written root:root 0644 in a new root:root 0755 /etc/shell-mcp; check-policy ok"
+	else
+		bad "$i: gate policy new: exit $code"
+		echo "$out" | grep -E 'FAIL|WARN' | head -n 10 || true
+	fi
+	pn "$d" "${gpn[@]}" --out /etc/shell-mcp/admin.yaml
+	[[ "$code" == 0 ]] && grep -q 'nothing to do: /etc/shell-mcp/admin.yaml unchanged' <<<"$out" && ok "$i: gate policy new again: unchanged" || bad "$i: gate policy new again: exit $code"
+	pn "$d" "${ppn[@]}" --out /etc/shell-mcp/privileged.yaml
+	if [[ "$code" == 1 ]] && grep -q 'does not exist on this host yet; run shell-mcp-gate install' <<<"$out" && ex "$d" sh -c '! test -e /etc/shell-mcp/privileged.yaml'; then
+		ok "$i: privd policy new before install: refused (no socket group yet), nothing written"
+	else
+		bad "$i: privd policy new before install: exit $code"
+	fi
+	install "$d" --policy /etc/shell-mcp/admin.yaml --principal admin --from "$cip" --key /root/ssh_key.pub --uid 60123 --gid 60123 \
+		--socket-group svc-shell-priv --socket-gid 60124 --no-reload
+	if [[ "$code" == 0 ]] && grep -q 'check-policy as svc-shell: serve would accept' <<<"$out"; then
+		ok "$i: install on the generated gate policy; check-policy as the account ok"
+	else
+		bad "$i: install on the generated policy: exit $code"
+		echo "$out" | grep -E 'FAIL' | head || true
+	fi
+	pn "$d" "${ppn[@]}" --out /etc/shell-mcp/privileged.yaml
+	if [[ "$code" == 0 ]] && grep -q '^OK: the helper would serve this policy' <<<"$out" &&
+		ex "$d" sh -c 'test "$(stat -c "%U:%G %a" /etc/shell-mcp/privileged.yaml)" = "root:root 600"'; then
+		ok "$i: privd policy new: written root:root 0600; check-policy ok"
+	else
+		bad "$i: privd policy new: exit $code"
+		echo "$out" | grep -E 'FAIL|WARN' | head -n 10 || true
+	fi
+	pn "$d" "${ppn[@]}" --out /etc/shell-mcp/privileged.yaml
+	[[ "$code" == 0 ]] && grep -q 'nothing to do: /etc/shell-mcp/privileged.yaml unchanged' <<<"$out" && ok "$i: privd policy new again: unchanged" || bad "$i: privd policy new again: exit $code"
+	pi=(docker exec "$d" /usr/local/libexec/shell-mcp-privd install --policy /etc/shell-mcp/privileged.yaml --gate-policy /etc/shell-mcp/admin.yaml --no-start)
+	rc=0
+	r="$("${pi[@]}" 2>/dev/null)" || rc=$?
+	dhash="$(sed -n 's/^REVIEW policy \/etc\/shell-mcp\/privileged.yaml: sha256 //p' <<<"$r")"
+	rc=0
+	r="$("${pi[@]}" --accept "$dhash" 2>/dev/null)" || rc=$?
+	if [[ "$rc" == 0 && -n "$dhash" ]] && grep -q '^ok   --gate-policy /etc/shell-mcp/admin.yaml forwards to /run/shell-mcp/privd.sock and /run/shell-mcp/privd-broad.sock' <<<"$r" &&
+		grep -q '^ok   client_uid 60123 is svc-shell, a member of svc-shell-priv' <<<"$r"; then
+		ok "$i: privd install on the generated policies: the --gate-policy cross-check passes"
+	else
+		bad "$i: privd install on the generated policies: exit $rc"
+		echo "$r" | grep -E 'FAIL|gate-policy|client_uid' | head -n 10 || true
+	fi
+	rc=0
+	ex "$d" /usr/local/bin/shell-mcp-gate check-policy --policy /etc/shell-mcp/admin.yaml >/dev/null 2>&1 || rc=$?
+	rc2=0
+	ex "$d" /usr/local/libexec/shell-mcp-privd check-policy --policy /etc/shell-mcp/privileged.yaml >/dev/null 2>&1 || rc2=$?
+	[[ "$rc" == 0 && "$rc2" == 0 ]] && ok "$i: check-policy ok on both generated policies (landlock $landlock)" || bad "$i: check-policy on the generated policies: gate $rc, privd $rc2"
+	pn "$d" /usr/local/bin/shell-mcp-gate policy new --answers /root/read-only.yaml --out /etc/shell-mcp/read-only.yaml
+	if [[ "$code" == 0 ]] && grep -q '^ok: serve would accept this install and policy' <<<"$out"; then
+		ok "$i: gate policy new, read-only preset: written; check-policy ok"
+	else
+		bad "$i: gate policy new, read-only: exit $code"
+		echo "$out" | grep -E 'FAIL' | head || true
+	fi
+	# Refusals: nothing is written, nothing changes.
+	for case in "gate-protected|/usr/local/bin/shell-mcp-gate|answers write[0]: /etc/ssh is, or is inside, a protected path" \
+		"root-never|/usr/local/libexec/shell-mcp-privd|answers root.write[0]: /etc/ssh is, or is inside, a path on the never list (PRIVILEGED §5.3 list A)" \
+		"root-no-acknowledge|/usr/local/libexec/shell-mcp-privd|answers root.power.acknowledge: is required"; do
+		IFS='|' read -r name path want <<<"$case"
+		ex "$d" bash /src/scripts/setup-check/target.sh bad-answers "$name"
+		before="$(ex "$d" bash /src/scripts/setup-check/target.sh snapshot)"
+		pn "$d" "$path" policy new --answers "/root/bad-$name.yaml" --out /etc/shell-mcp/refused.yaml
+		after="$(ex "$d" bash /src/scripts/setup-check/target.sh snapshot)"
+		if [[ "$code" == 1 && "$before" == "$after" ]] && grep -qF -- "$want" <<<"$out"; then
+			ok "$i: policy new refused: $name; nothing written"
+		else
+			bad "$i: policy new $name: exit $code"
+			echo "$out" | grep FAIL | head -n 5 || true
+		fi
+	done
+	ex "$d" sh -c 'echo "# an edit by hand" >>/etc/shell-mcp/admin.yaml'
+	before="$(ex "$d" bash /src/scripts/setup-check/target.sh snapshot)"
+	pn "$d" "${gpn[@]}" --out /etc/shell-mcp/admin.yaml
+	after="$(ex "$d" bash /src/scripts/setup-check/target.sh snapshot)"
+	if [[ "$code" == 1 && "$before" == "$after" ]] && grep -q '^     | -# an edit by hand' <<<"$out"; then
+		ok "$i: policy new refuses a policy edited by hand, with a diff"
+	else
+		bad "$i: policy new over an edited policy: exit $code"
+	fi
+	no_temps "$d" "$i: policy new"
+	docker rm -f "$t" "$c" "$h" "$p" "$q" "$x" "$d" >/dev/null
 done
 
 # --- shell-mcp init and init compose (handoff §4.C) -------------------------------

@@ -1,0 +1,26 @@
+# Admin answers whose privileged policy uses the core unit only, so the
+# gate's forwarding has no broad_socket. Every value is invented.
+
+preset: admin
+account: { user: svc-shell, uid: 60123 }
+read: [/srv/app]
+deny: ["/srv/app/secrets/**"]
+git: { repos: [{ path: /srv/app/deploy, remote: "https://git.example.test/org/deploy.git" }] }
+# Privileged policy for the invented host target-a.example.test (fixture).
+root:
+  socket_group: { name: svc-shell-priv, gid: 60124 }
+  read: [/etc/example-app]
+  write: [/etc/example-app/conf.d]
+  owners: { users: [root], groups: [root] }
+  commands:
+    # Lists block devices as root.
+    - id: block-devices
+      path: /usr/bin/lsblk
+      tier: read
+      templates: [["--json"]]
+    - id: signal-app
+      path: /usr/bin/kill
+      tier: operator
+      description: "Ask the application to reload its configuration"
+      capabilities: [CAP_KILL]
+      templates: [["-HUP", "{int:2-4194304}"]]

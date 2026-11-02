@@ -32,6 +32,10 @@ func TestLineGolden(t *testing.T) {
 			`{"event":"install","component":"gate","action":"refuse","object":"key","reason":"from_too_wide","detail":"192.0.2.0/16"}`},
 		{setupx.Record{Component: "gate", Action: "run", Object: "owner_scan", OwnerScan: "narrowed", Paths: []string{"/srv", "/var/lib"}},
 			`{"event":"install","component":"gate","action":"run","object":"owner_scan","owner_scan":"narrowed","paths":["/srv","/var/lib"]}`},
+		{setupx.Record{Component: "gate", Action: "create", Object: "policy", Path: "/etc/shell-mcp/operator.yaml", SHA256: strings.Repeat("cd", 32),
+			Mode: "0644", Owner: "root:root", Preset: "operator"},
+			`{"event":"install","component":"gate","action":"create","object":"policy","path":"/etc/shell-mcp/operator.yaml",` +
+				`"sha256":"` + strings.Repeat("cd", 32) + `","mode":"0644","owner":"root:root","preset":"operator"}`},
 	} {
 		if got := setupx.Line(&c.r); got != c.want {
 			t.Errorf("line\n%s\nwant\n%s", got, c.want)

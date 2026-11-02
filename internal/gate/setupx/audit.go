@@ -70,6 +70,7 @@ type Record struct {
 	Reason       string   `json:"reason,omitzero"`
 	Detail       string   `json:"detail,omitzero"`
 	OwnerScan    string   `json:"owner_scan,omitzero"`
+	Preset       string   `json:"preset,omitzero"`
 	Paths        []string `json:"paths,omitzero"`
 }
 
@@ -107,7 +108,7 @@ func Line(r *Record) string {
 	c := *r
 	c.Event = Event
 	for _, p := range []*string{&c.Component, &c.Action, &c.Object, &c.Path, &c.SHA256, &c.Mode, &c.Owner, &c.User, &c.Group, &c.ID,
-		&c.Fingerprint, &c.Principal, &c.Policy, &c.PolicySHA256, &c.Unit, &c.Reason, &c.Detail, &c.OwnerScan} {
+		&c.Fingerprint, &c.Principal, &c.Policy, &c.PolicySHA256, &c.Unit, &c.Reason, &c.Detail, &c.OwnerScan, &c.Preset} {
 		*p = truncate(*p)
 	}
 	c.Command = truncateAll(c.Command)
