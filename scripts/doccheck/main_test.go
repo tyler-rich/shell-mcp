@@ -39,6 +39,7 @@ func TestRefs(t *testing.T) {
 		"handoff §6 and plan §2":                             {{"plan", "2"}},
 		"ARCHIVE §14":                                        {{"ARCHIVE", "14"}},
 		"no reference here":                                  nil,
+		"](§)§0,§0":                                          nil, // FuzzRefs's finding: a list continuing another document's reference
 	} {
 		if got := refs(line); !slices.Equal(got, want) {
 			t.Errorf("refs(%q) = %v, want %v", line, got, want)
@@ -98,10 +99,10 @@ func TestCheckMissingDocument(t *testing.T) {
 	}
 }
 
-var sectionRE = regexp.MustCompile(`^[0-9]+[a-z]?(\.[0-9]+)*$`)
+var sectionRE = regexp.MustCompile(`^\d+[a-z]?(\.\d+)*$`)
 
 func FuzzRefs(f *testing.F) {
-	for _, s := range []string{"POLICY §3 and §7", "(§12.1)", "[a](b.md) §2", "§", "§§1.", "TOOLS §4a.1.2, §x"} {
+	for _, s := range []string{"POLICY §3 and §7", "(§12.1)", "[a](b.md) §2", "§", "§§1.", "TOOLS §4a.1.2, §x", "](§)§0,§0"} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, line string) {
