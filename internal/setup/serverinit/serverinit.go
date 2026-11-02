@@ -78,29 +78,29 @@ kept, never overwritten. Run it as root on the host, or as --uid in the image.
 // ParseFlags parses init's flags. Every error is a usage error.
 func ParseFlags(args []string) (*Options, error) {
 	o := &Options{UID: DefaultID, GID: DefaultID}
-	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	fs.StringVar(&o.Dir, "dir", "", "")
+	set := flag.NewFlagSet("init", flag.ContinueOnError)
+	set.SetOutput(io.Discard)
+	set.StringVar(&o.Dir, "dir", "", "")
 	id := func(dst *uint32) func(string) error {
 		return func(s string) error {
 			n, err := strconv.ParseUint(s, 10, 32)
 			if err != nil {
 				return errors.New("must be a decimal id")
 			}
-			*dst = uint32(n) //nolint:gosec // G115: ParseUint with bitSize 32
+			*dst = uint32(n)
 			return nil
 		}
 	}
-	fs.Func("uid", "", id(&o.UID))
-	fs.Func("gid", "", id(&o.GID))
-	fs.StringVar(&o.Approver, "approver", "", "")
-	fs.BoolVar(&o.DryRun, "dry-run", false, "")
-	if err := fs.Parse(args); err != nil {
+	set.Func("uid", "", id(&o.UID))
+	set.Func("gid", "", id(&o.GID))
+	set.StringVar(&o.Approver, "approver", "", "")
+	set.BoolVar(&o.DryRun, "dry-run", false, "")
+	if err := set.Parse(args); err != nil {
 		return nil, err
 	}
 	switch {
-	case fs.NArg() != 0:
-		return nil, fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	case set.NArg() != 0:
+		return nil, fmt.Errorf("unexpected argument %q", set.Arg(0))
 	case o.Dir == "":
 		return nil, errors.New("missing --dir")
 	case o.Approver != "" && !approvers.ValidName(o.Approver):
@@ -405,31 +405,21 @@ func (ru *run) generate(enrol bool) (uri, code string, err error) {
 	rnd := ru.env.Rand
 	if f := ru.files[TokenFile]; f.create {
 		b := make([]byte, tokenBytes)
-		if _, err := io.ReadFull(rnd, b); err != nil {
+		if _, rerr := io.ReadFull(rnd, b); rerr != nil {
 			return "", "", errors.New("cannot read random bytes for the token")
 		}
 		f.data = []byte(base64.RawURLEncoding.EncodeToString(b))
 	}
 	if f := ru.files[KeyFile]; f.create {
-		pub, priv, err := ed25519.GenerateKey(rnd)
-		if err != nil {
-			return "", "", errors.New("cannot generate the key")
+		if kerr := ru.newKey(f); kerr != nil {
+			return "", "", kerr
 		}
-		blk, err := ssh.MarshalPrivateKey(priv, keyComment)
-		if err != nil {
-			return "", "", errors.New("cannot encode the key")
-		}
-		f.data = pem.EncodeToMemory(blk)
-		if ru.pub, err = ssh.NewPublicKey(pub); err != nil {
-			return "", "", errors.New("cannot encode the public key")
-		}
-		ru.files[PubFile].data = publicLine(ru.pub)
 	}
 	if !enrol {
 		return "", "", nil
 	}
 	seed := make([]byte, approvers.MinSeedBytes)
-	if _, err := io.ReadFull(rnd, seed); err != nil {
+	if _, rerr := io.ReadFull(rnd, seed); rerr != nil {
 		return "", "", errors.New("cannot read random bytes for the seed")
 	}
 	f := ru.files[ApproversFile]
@@ -443,6 +433,25 @@ func (ru *run) generate(enrol bool) (uri, code string, err error) {
 		return "", "", errors.New("cannot encode the QR code")
 	}
 	return uri, q.Terminal(), nil
+}
+
+// newKey generates the Ed25519 key into f, and its public line into the
+// .pub file's data.
+func (ru *run) newKey(f *file) error {
+	pub, priv, err := ed25519.GenerateKey(ru.env.Rand)
+	if err != nil {
+		return errors.New("cannot generate the key")
+	}
+	blk, err := ssh.MarshalPrivateKey(priv, keyComment)
+	if err != nil {
+		return errors.New("cannot encode the key")
+	}
+	f.data = pem.EncodeToMemory(blk)
+	if ru.pub, err = ssh.NewPublicKey(pub); err != nil {
+		return errors.New("cannot encode the public key")
+	}
+	ru.files[PubFile].data = publicLine(ru.pub)
+	return nil
 }
 
 func publicLine(k ssh.PublicKey) []byte {

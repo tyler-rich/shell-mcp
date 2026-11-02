@@ -335,7 +335,7 @@ else
 fi
 rc=0
 "${initt[@]}" init --dir /secrets --approver alice >/dev/null 2>&1 || rc=$?
-modes="$("${hostc[@]}" stat -c '%n %a %u:%g' /secrets /secrets/mcp_token /secrets/ssh_key /secrets/ssh_key.pub /secrets/approvers 2>&1 | tr '\n' ' ')"
+modes="$("${hostc[@]}" stat -c '%n %a %u:%g' /secrets /secrets/mcp_token /secrets/ssh_key /secrets/ssh_key.pub /secrets/approvers 2>&1 | tr '\n' ' ')" || true
 want="/secrets 700 65532:65532 /secrets/mcp_token 600 65532:65532 /secrets/ssh_key 600 65532:65532 /secrets/ssh_key.pub 644 65532:65532 /secrets/approvers 600 65532:65532 "
 if [[ "$rc" == 0 && "$modes" == "$want" ]]; then
 	ok "init in the image after the one host command: every file 65532:65532, 0600 (.pub 0644), the directory 0700"
@@ -373,7 +373,7 @@ fi
 # joins each form's compose network at a fixed address.
 sub="10.$((200 + RANDOM % 50)).$((RANDOM % 256))"
 t="$(new "${images[0]}")"
-"${hostc[@]}" cat /secrets/ssh_key.pub | docker exec -i "$t" sh -c 'cat >/root/ssh_key.pub'
+"${hostc[@]}" cat /secrets/ssh_key.pub | docker exec -i "$t" sh -c 'cat >/root/ssh_key.pub' || true
 install "$t" --policy /etc/shell-mcp/read-only.yaml --principal readonly --from "$sub.10" --key /root/ssh_key.pub --uid 60123 --gid 60123 --no-reload
 pin="$(sed -n 's/^SHELL_MCP_TARGET_HOST_KEYS=//p' <<<"$out")"
 if [[ "$code" == 0 && -n "$pin" ]]; then ok "the target installs init's ssh_key.pub"; else
@@ -429,7 +429,7 @@ for form in secrets bind; do
 		bad "$form form: docker compose up exit $rc"
 		"${dc[@]}" logs --no-color 2>&1 | tail -n 20 || true
 	fi
-	docker network connect --ip "$sub.20" "${proj}_front" "$t"
+	docker network connect --ip "$sub.20" "${proj}_front" "$t" || true
 	rc=0
 	r="$("${dc[@]}" exec -T shell-mcp /shell-mcp check 2>&1)" || rc=$?
 	if [[ "$rc" == 0 ]] && grep "host_key_verified" <<<"$r" | grep -qF -- "$pin"; then

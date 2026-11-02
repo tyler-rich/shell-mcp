@@ -295,8 +295,8 @@ const (
 	headerPrinted = "# Printed by `shell-mcp init compose` from deploy/docker-compose.yml with this deployment's values.\n"
 	imageStart    = "    # The 0.2.0 image index"
 	imageEnd      = "    restart:"
-	secretsLine   = "    secrets: [mcp_token, ssh_key]\n"
-	secretsBlock  = "secrets:\n  mcp_token: { file: ./secrets/mcp_token }\n  ssh_key: { file: ./secrets/ssh_key }\n"
+	mountLine     = "    secrets: [mcp_token, ssh_key]\n"
+	mountBlock    = "secrets:\n  mcp_token: { file: ./secrets/mcp_token }\n  ssh_key: { file: ./secrets/ssh_key }\n"
 	proxyLine     = "      SHELL_MCP_TRUSTED_PROXIES: "
 )
 
@@ -356,11 +356,11 @@ func Render(v *Values) ([]byte, error) {
 	if !v.equal(&ref) {
 		r.one(headerRef, headerPrinted)
 	}
-	if i, j := strings.Index(r.s, imageStart), strings.Index(r.s, imageEnd); i < 0 || j < i {
+	i, j := strings.Index(r.s, imageStart), strings.Index(r.s, imageEnd)
+	if i < 0 || j < i {
 		return nil, errors.New("template: the image block is not where the renderer expects it")
-	} else {
-		r.one(r.s[i:j], imageBlock(img, v.Image))
 	}
+	r.one(r.s[i:j], imageBlock(img, v.Image))
 	r.one("    # 172.30.80.5 and is the only service", "    # "+v.ProxyAddr+" and is the only service")
 	r.one(proxyLine+"172.30.80.5 #", proxyLine+v.ProxyAddr+" #")
 	r.one("ipv4_address: 172.30.80.10\n", "ipv4_address: "+v.ServerAddr+"\n")
@@ -374,23 +374,23 @@ func Render(v *Values) ([]byte, error) {
 	if r.err != nil {
 		return nil, r.err
 	}
-	secrets := "[mcp_token, ssh_key]"
+	mounted := "[mcp_token, ssh_key]"
 	if v.ApproveHost != "" {
-		i := strings.Index(r.s, proxyLine)
-		end := i + strings.Index(r.s[i:], "\n") + 1
+		at := strings.Index(r.s, proxyLine)
+		end := at + strings.Index(r.s[at:], "\n") + 1
 		r.s = r.s[:end] +
 			"      SHELL_MCP_APPROVAL_METHOD: web\n" +
 			"      SHELL_MCP_APPROVAL_PUBLIC_URL: " + scalar("https://"+v.ApproveHost) + "\n" +
 			"      SHELL_MCP_APPROVERS_FILE: /run/secrets/approvers\n" +
 			"      SHELL_MCP_APPROVAL_BIND: 0.0.0.0  # inside the container; the proxy forwards the approval host to port 8081 on `front`\n" +
 			r.s[end:]
-		secrets = "[mcp_token, ssh_key, approvers]"
+		mounted = "[mcp_token, ssh_key, approvers]"
 	}
 	if v.Form == FormBind {
-		r.one(secretsLine, "    volumes:\n      - "+scalar(v.Dir+":/run/secrets:ro")+" # init's directory: 0700, owned by the server's uid\n")
-		r.one(secretsBlock, "")
+		r.one(mountLine, "    volumes:\n      - "+scalar(v.Dir+":/run/secrets:ro")+" # init's directory: 0700, owned by the server's uid\n")
+		r.one(mountBlock, "")
 	} else {
-		r.one(secretsLine, "    secrets: "+secrets+"\n")
+		r.one(mountLine, "    secrets: "+mounted+"\n")
 		if v.ApproveHost != "" {
 			r.one("  ssh_key: { file: ./secrets/ssh_key }\n", "  ssh_key: { file: ./secrets/ssh_key }\n  approvers: { file: ./secrets/approvers }\n")
 		}

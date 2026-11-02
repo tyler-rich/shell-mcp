@@ -53,7 +53,7 @@ func FuzzRender(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if _, err := v.Check(); err != nil {
+		if _, cerr := v.Check(); cerr != nil {
 			return
 		}
 		out, err := compose.Render(v)

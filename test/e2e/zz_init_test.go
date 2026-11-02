@@ -61,8 +61,8 @@ func TestInitBindFormFromHostDirectory(t *testing.T) {
 		if nets, _ := exec.CommandContext(ctx, "docker", "network", "ls", "-q", "--filter", "label="+label).Output(); len(bytes.TrimSpace(nets)) > 0 { //nolint:gosec // G204: fixed test command
 			_ = exec.CommandContext(ctx, "docker", append([]string{"network", "rm"}, strings.Fields(string(nets))...)...).Run() //nolint:gosec // G204: networks this test created
 		}
-		if err := os.RemoveAll(parent); err != nil {
-			t.Errorf("cleanup: %v", err)
+		if rerr := os.RemoveAll(parent); rerr != nil {
+			t.Errorf("cleanup: %v", rerr)
 		}
 		if exists(parent) {
 			t.Errorf("cleanup: %s remains", parent)
@@ -75,19 +75,19 @@ func TestInitBindFormFromHostDirectory(t *testing.T) {
 	})
 
 	// The documented host command, then init in the image.
-	if out, code := runCode(t, "install", "-d", "-o", "65532", "-g", "65532", "-m", "0700", dir); code != 0 {
+	if out, icode := runCode(t, "install", "-d", "-o", "65532", "-g", "65532", "-m", "0700", dir); icode != 0 {
 		t.Fatalf("install -d: %s", out)
 	}
 	hardened := []string{"run", "--rm", "--label", label, "--network", "none", "--read-only", "--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges:true"}
-	if out, code := runCode(t, "docker", append(hardened, "-v", dir+":/secrets", image, "init", "--dir", "/secrets")...); code != 0 {
-		t.Fatalf("init in the image: exit %d\n%s", code, out)
+	if out, icode := runCode(t, "docker", append(hardened, "-v", dir+":/secrets", image, "init", "--dir", "/secrets")...); icode != 0 {
+		t.Fatalf("init in the image: exit %d\n%s", icode, out)
 	}
 	for name, mode := range map[string]fs.FileMode{"": fs.ModeDir | 0o700, "mcp_token": 0o600, "ssh_key": 0o600, "ssh_key.pub": 0o644} {
 		p := filepath.Join(dir, name)
-		fi, err := os.Lstat(p)
-		if err != nil {
-			t.Fatal(err)
+		fi, lerr := os.Lstat(p)
+		if lerr != nil {
+			t.Fatal(lerr)
 		}
 		st := fi.Sys().(*syscall.Stat_t)
 		if fi.Mode() != mode || st.Uid != 65532 || st.Gid != 65532 {
@@ -112,12 +112,12 @@ func TestInitBindFormFromHostDirectory(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("init compose: exit %d", code)
 	}
-	if err := os.WriteFile(compose, printed, 0o600); err != nil {
+	if err = os.WriteFile(compose, printed, 0o600); err != nil { //nolint:gosec // G703: a file in the directory os.MkdirTemp made
 		t.Fatal(err)
 	}
 	k, v, _ := strings.Cut(label, "=")
 	ov := fmt.Sprintf("services:\n  shell-mcp:\n    image: %s\n    labels: { %q: %q }\nnetworks:\n  front:\n    labels: { %q: %q }\n", image, k, v, k, v)
-	if err := os.WriteFile(override, []byte(ov), 0o600); err != nil {
+	if err = os.WriteFile(override, []byte(ov), 0o600); err != nil { //nolint:gosec // G703: a file in the directory os.MkdirTemp made
 		t.Fatal(err)
 	}
 	merged, code := runCode(t, "docker", append(dc, "config")...)
@@ -125,9 +125,9 @@ func TestInitBindFormFromHostDirectory(t *testing.T) {
 		t.Fatalf("the merged compose file does not bind-mount %s on /run/secrets (exit %d):\n%s", dir, code, merged)
 	}
 
-	if out, code := runCode(t, "docker", append(dc, "up", "-d", "--wait", "--wait-timeout", "120")...); code != 0 {
+	if out, ucode := runCode(t, "docker", append(dc, "up", "-d", "--wait", "--wait-timeout", "120")...); ucode != 0 {
 		logs, _ := runCode(t, "docker", append(dc, "logs", "--no-color")...)
-		t.Fatalf("the server does not start from the host directory: exit %d\n%s\n%s", code, out, logs)
+		t.Fatalf("the server does not start from the host directory: exit %d\n%s\n%s", ucode, out, logs)
 	}
 	report, _ := runStdout(t, "docker", append(dc, "exec", "-T", "shell-mcp", "/shell-mcp", "check")...)
 	var r struct {
@@ -158,16 +158,16 @@ func TestInitBindFormFromHostDirectory(t *testing.T) {
 }
 
 // runStdout runs a command and returns its stdout alone and its exit code.
-func runStdout(t *testing.T, name string, args ...string) ([]byte, int) {
+func runStdout(t *testing.T, name string, args ...string) (stdout []byte, exitCode int) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	var stdout, stderr bytes.Buffer
+	var out, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec // G204: fixed test commands
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	cmd.Stdout, cmd.Stderr = &out, &stderr
 	var ee *exec.ExitError
 	if err := cmd.Run(); err != nil && !errors.As(err, &ee) {
 		t.Fatalf("%s %v: %v\n%s", name, args, err, stderr.Bytes())
 	}
-	return stdout.Bytes(), cmd.ProcessState.ExitCode()
+	return out.Bytes(), cmd.ProcessState.ExitCode()
 }

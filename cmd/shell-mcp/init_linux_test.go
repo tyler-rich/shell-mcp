@@ -13,10 +13,10 @@ import (
 
 func TestInitDispatch(t *testing.T) {
 	parent := filepath.Join(t.TempDir(), "srv")
-	if err := os.Mkdir(parent, 0o755); err != nil {
+	if err := os.Mkdir(parent, 0o755); err != nil { //nolint:gosec // G301: a parent only its owner can write to, as init requires
 		t.Fatal(err)
 	}
-	if err := os.Chmod(parent, 0o755); err != nil {
+	if err := os.Chmod(parent, 0o755); err != nil { //nolint:gosec // G302: as above
 		t.Fatal(err)
 	}
 	dir := filepath.Join(parent, "secrets")

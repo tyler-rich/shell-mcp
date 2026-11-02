@@ -76,10 +76,10 @@ func runReal(t *testing.T, env *serverinit.Env, args ...string) result {
 func newDir(t *testing.T) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "srv")
-	if err := os.Mkdir(p, 0o755); err != nil {
+	if err := os.Mkdir(p, 0o755); err != nil { //nolint:gosec // G301: a parent only its owner can write to, as init requires
 		t.Fatal(err)
 	}
-	if err := os.Chmod(p, 0o755); err != nil {
+	if err := os.Chmod(p, 0o755); err != nil { //nolint:gosec // G302: as above
 		t.Fatal(err)
 	}
 	return filepath.Join(p, "secrets")
@@ -147,7 +147,7 @@ func noTemps(t *testing.T, dir string) {
 	})
 }
 
-func stat(t *testing.T, p string) (fs.FileMode, uint32, uint32) {
+func stat(t *testing.T, p string) (mode fs.FileMode, uid, gid uint32) {
 	t.Helper()
 	fi, err := os.Lstat(p)
 	if err != nil {
@@ -227,7 +227,7 @@ func TestServerLoadsTheSecrets(t *testing.T) {
 	if r := runReal(t, realEnv(true), idArgs(dir, "--approver", "alice")...); r.code != 0 {
 		t.Fatalf("exit %d\n%s%s", r.code, r.stdout, r.stderr)
 	}
-	env := map[string]string{
+	env := map[string]string{ //nolint:gosec // G101: test file paths and an invented pin, no credential
 		"SHELL_MCP_TOKEN_FILE":          filepath.Join(dir, serverinit.TokenFile),
 		"SHELL_MCP_SSH_KEY_FILE":        filepath.Join(dir, serverinit.KeyFile),
 		"SHELL_MCP_TARGET_NAME":         "app-host",
@@ -249,8 +249,8 @@ func TestServerLoadsTheSecrets(t *testing.T) {
 	if len(cfg.Approvers) != 1 || cfg.Approvers[0].Name != "alice" {
 		t.Errorf("approvers %v", cfg.Approvers)
 	}
-	if _, err := approvers.Load(env["SHELL_MCP_APPROVERS_FILE"], approvers.MaxApprovers); err != nil {
-		t.Errorf("approvers.Load: %v", err)
+	if _, lerr := approvers.Load(env["SHELL_MCP_APPROVERS_FILE"], approvers.MaxApprovers); lerr != nil {
+		t.Errorf("approvers.Load: %v", lerr)
 	}
 	pool, err := sshx.NewPool(cfg, sshx.Options{})
 	if err != nil {
@@ -271,18 +271,18 @@ func TestServerLoadsTheSecrets(t *testing.T) {
 		return nil, errors.New("not authorised")
 	}}
 	sc.AddHostKey(hostSigner)
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = ln.Close() }()
 	go func() {
-		a, err := ln.Accept()
-		if err != nil {
+		a, aerr := ln.Accept()
+		if aerr != nil {
 			return
 		}
 		_ = a.SetDeadline(time.Now().Add(10 * time.Second))
-		if conn, chans, reqs, err := ssh.NewServerConn(a, sc); err == nil {
+		if conn, chans, reqs, serr := ssh.NewServerConn(a, sc); serr == nil {
 			go ssh.DiscardRequests(reqs)
 			go func() {
 				for ch := range chans {
@@ -293,7 +293,7 @@ func TestServerLoadsTheSecrets(t *testing.T) {
 		}
 		_ = a.Close()
 	}()
-	b, err := net.DialTimeout("tcp", ln.Addr().String(), 5*time.Second)
+	b, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(t.Context(), "tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -589,7 +589,7 @@ func TestRefusalsReal(t *testing.T) {
 		terminal bool
 		want     string
 	}{
-		{"parent missing", func(t *testing.T, dir string) (string, []string) {
+		{"parent missing", func(_ *testing.T, dir string) (string, []string) {
 			return filepath.Join(dir, "a", "b"), nil
 		}, true, "does not exist"},
 		{"dir is a file", func(t *testing.T, dir string) (string, []string) {
@@ -696,7 +696,7 @@ func TestRefusalsReal(t *testing.T) {
 			mustWrite(t, filepath.Join(dir, serverinit.ApproversFile), approver, 0o600)
 			return dir, []string{"--approver", "bob"}
 		}, true, "approver add --allow-multiple"},
-		{"approver without a terminal", func(t *testing.T, dir string) (string, []string) {
+		{"approver without a terminal", func(_ *testing.T, dir string) (string, []string) {
 			return dir, []string{"--approver", "alice"}
 		}, false, "terminal"},
 	}

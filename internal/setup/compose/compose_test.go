@@ -26,7 +26,7 @@ import (
 // by an independent string-replacement script, not by this package.
 const (
 	digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	pin1   = "ssh-ed25519 SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	pin1   = "ssh-ed25519 SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" //nolint:gosec // G101: an invented host-key pin, not a credential
 	pin2   = "ecdsa-sha2-nistp256 SHA256:EBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBA"
 	image3 = "ghcr.io/tyler-rich/shell-mcp:0.3.0@sha256:" + digest
 )
@@ -57,9 +57,9 @@ func TestReferenceReproducesDeployFile(t *testing.T) {
 	}
 }
 
-func base(extra ...string) []string {
-	return append([]string{"--image", image3, "--host-key", pin1, "--target-name", "app-host", "--target-host", "target-a.example.test",
-		"--mcp-host", "mcp.example.test", "--subnet", "192.0.2.0/24", "--server-addr", "192.0.2.10", "--proxy-addr", "192.0.2.5"}, extra...)
+func base() []string {
+	return []string{"--image", image3, "--host-key", pin1, "--target-name", "app-host", "--target-host", "target-a.example.test",
+		"--mcp-host", "mcp.example.test", "--subnet", "192.0.2.0/24", "--server-addr", "192.0.2.10", "--proxy-addr", "192.0.2.5"}
 }
 
 type goldenCase struct {
@@ -86,8 +86,8 @@ func render(t testing.TB, args []string) []byte {
 	if err != nil {
 		t.Fatalf("ParseFlags(%q): %v", args, err)
 	}
-	if _, err := v.Check(); err != nil {
-		t.Fatalf("Check(%q): %v", args, err)
+	if _, cerr := v.Check(); cerr != nil {
+		t.Fatalf("Check(%q): %v", args, cerr)
 	}
 	out, err := compose.Render(v)
 	if err != nil {
@@ -386,8 +386,8 @@ func TestNotes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := v.Check(); err == nil || !strings.Contains(err.Error(), "destructive and privileged") {
-		t.Errorf("admin without --approve-host: %v", err)
+	if _, cerr := v.Check(); cerr == nil || !strings.Contains(cerr.Error(), "destructive and privileged") {
+		t.Errorf("admin without --approve-host: %v", cerr)
 	}
 	v, err = compose.ParseFlags(base())
 	if err != nil {
