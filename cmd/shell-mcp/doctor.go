@@ -122,6 +122,15 @@ func runDoctor(ctx context.Context, args []string, lookup config.LookupFunc, std
 	jsonOut := fs.Bool("json", false, "print the result as one JSON object")
 	mcpURL := fs.String("mcp-url", "", "the MCP endpoint's public URL, https://<name>/mcp: checked without a token")
 	caFile := fs.String("ca-file", "", "PEM file of the CA that signs the proxy's certificates (default: the system's roots)")
+	fs.Usage = func() {
+		_, _ = io.WriteString(stderr, `usage: shell-mcp doctor [--json] [--mcp-url https://<name>/mcp] [--ca-file <file>]
+
+Runs check, then checks the secret files, the privileged helper's sockets, the
+trusted proxies, the approval page and the MCP endpoint (without a token), and
+names the step that fixes each failure. Run it in the server's container:
+docker compose exec shell-mcp /shell-mcp doctor. Exit 1 on any FAIL.
+`)
+	}
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return 2
 	}

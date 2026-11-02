@@ -34,6 +34,8 @@ Measured with Docker Desktop 29 (on Windows; a Linux host's networking can diffe
 
 **Set the value from what the server logs, never from a guess.** Start the server with `SHELL_MCP_TRUSTED_PROXIES` empty, send one request without a token through the proxy (`curl -s -X POST https://mcp.example.test/mcp`), and read the `client` field of the server's `authentication failed` WARN line (`docker logs shell-mcp 2>&1 | grep 'authentication failed'`, which shows for example `"client":"172.30.80.5/32","reason":"missing"`; a request without a token does not count toward the lockout). That address is the one to list. Then repeat: the line should now show the address of the machine you sent it from (the proxy must append `X-Forwarded-For`; most do when told to). An IPv6 peer is logged as its /64, which is how it is counted, not as one address; give the proxy a fixed IPv4 address on the network instead. The same list applies to the approval listener (§3.2).
 
+`shell-mcp doctor`, run inside the server's container, checks the list statically (`docs/TARGET-SETUP.md` §12.6): an entry that is or holds one of the container's gateways is a FAIL, a prefix or an address on no network the container is attached to a WARN. Whether the server sees each client's own address is still the log-line check above, which it cannot run. What any proxy must do for this to hold, for Caddy, nginx or Traefik, with an example Caddyfile: [`deploy/caddy/README.md`](../deploy/caddy/README.md).
+
 Quick check from the client's machine (a `200` with a JSON-RPC result means the token, the host name and the path are right):
 
 ```bash
@@ -200,4 +202,4 @@ From the maintainer's live test (2026-10-16) and S4b-scope's research at the sou
 | `approval_unavailable` | `SHELL_MCP_APPROVAL_METHOD=none`, or five approvals already pending for this principal. |
 | `approval_invalid` | The id is unknown, expired or used, or the target, arguments or a policy changed since the approval. Request a new one. |
 | `tier_denied`, `policy_denied`, `path_denied` | The target's policy refused it; `shell_get_policy` shows what it allows. |
-| `host_key_mismatch`, `target_unreachable`, `gate_unavailable` | The server could not reach the gate: run `shell-mcp check` on the server (`docs/TARGET-SETUP.md` §10). |
+| `host_key_mismatch`, `target_unreachable`, `gate_unavailable` | The server could not reach the gate: run `shell-mcp doctor` in the server's container, which names the failing step (`docs/TARGET-SETUP.md` §12.6), or `shell-mcp check` (TARGET-SETUP §10). |

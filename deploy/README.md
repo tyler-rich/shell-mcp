@@ -67,9 +67,12 @@ docker run -d --name shell-mcp \
 
 ```sh
 docker compose up -d
+docker compose exec shell-mcp /shell-mcp doctor --mcp-url https://mcp.example.test/mcp
 ```
 
-Attach the proxy in its own compose file or service, for example:
+`doctor` checks the running deployment from inside the server's container: the configuration and secret files, each target, the privileged helper's sockets, the trusted proxy, the approval page and the MCP endpoint, naming the step that fixes each failure ([`../docs/TARGET-SETUP.md`](../docs/TARGET-SETUP.md) §12.6). Run it with `exec`: `docker compose run` would start a second container on the server's fixed address, which Docker refuses while the server runs. Compose names the container `<project>-shell-mcp-1`; no command here assumes a container name.
+
+What any reverse proxy must do, for Caddy, nginx or Traefik, with an example Caddyfile, is in [`caddy/README.md`](caddy/README.md). Attach the proxy in its own compose file or service, for example:
 
 ```yaml
     networks:
