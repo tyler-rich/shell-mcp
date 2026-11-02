@@ -6,7 +6,7 @@ Every name below is a placeholder: the service account `svc-shell` (uid/gid 6012
 
 **How each step was checked.** Every command marked *(container)* was run as written, as root, in throwaway containers of `debian:trixie` (Debian 13), `ubuntu:24.04` and `ubuntu:26.04`, against the binaries of the commit this guide was released with (ARCHIVE §14, 2026-10-25 S5b). Commands marked *(real host)* need something a container does not have: a running systemd and polkit, journald, a kernel with the Landlock ABI the gate needs, or the published release. The end-to-end tests (`e2e-host` in CI) run the gate and the helper on a real Ubuntu 26.04 machine.
 
-**The install commands.** Steps 4, 7 and 8 are done by `shell-mcp-gate install`, and steps 9.2 to 9.4 by `shell-mcp-privd install` (§12). They write exactly the files those steps write, byte for byte, with the same owners and modes, and refuse the mistakes the steps warn about: a key line without `restrict`, a `from=` wider than /24, an account in a privileged group, a uid that already owns files, units left on an old policy hash. Each step below says which command does it; the hand steps stay as the reference and as the manual path.
+**The install commands.** Steps 4, 7 and 8 are done by `shell-mcp-gate install`, and steps 9.2 to 9.4 by `shell-mcp-privd install` (§12). They write exactly the files those steps write, byte for byte, with the same owners and modes, and refuse the mistakes the steps warn about: a key line without `restrict`, a `from=` wider than /24, an account in a privileged group, a uid that already owns files, units left on an old policy hash. Each step below says which command does it; the hand steps stay as the reference and as the manual path. The two policies (steps 5 and 9.1) can be generated from one answers file by `shell-mcp-gate policy new` and `shell-mcp-privd policy new` (POLICY §9); the gate's comes before `install`, the privileged one after it, because `install` creates the socket group the privileged policy names.
 
 ## 0. Requirements
 
@@ -136,7 +136,16 @@ Choose the value from the requests you expect at once times `limits.max_memory_m
 
 ## 5. Write the gate policy *(container)*
 
-One policy per SSH key, so each server instance gets its own ceiling. Start from the example closest to what you need (`read-only.yaml`, `operator.yaml`, `admin.yaml`), edit every placeholder, and write it for the worst case: what would you accept a fully compromised MCP server doing with this key? (POLICY §1.)
+One policy per SSH key, so each server instance gets its own ceiling. Write it for the worst case: what would you accept a fully compromised MCP server doing with this key? (POLICY §1.)
+
+**Generated** (`shell-mcp-gate policy new`, POLICY §9): write an answers file (`setup.yaml`: the preset, your roots, deny patterns, units, repositories and commands; `examples/policies/*.answers.yaml` show the format), look at the result, then write it. It renders the preset's example with its comments, loads it strictly before anything is written, writes it `root:root 0644` (creating `/etc/shell-mcp` `0755` when absent) and runs `check-policy` as root:
+
+```bash
+shell-mcp-gate policy new --answers setup.yaml --out -
+shell-mcp-gate policy new --answers setup.yaml --out /etc/shell-mcp/read-only.yaml
+```
+
+**By hand:** start from the example closest to what you need (`read-only.yaml`, `operator.yaml`, `admin.yaml`) and edit every placeholder.
 
 ```bash
 install -o root -g root -m 0755 -d /etc/shell-mcp
@@ -291,7 +300,14 @@ The helper runs one root process per request, socket-activated, inside a generat
 
 ### 9.1 Its policy *(container)*
 
-Start from `examples/privileged/privileged.yaml`. Set `client_uid` to the service account's uid (`id -u svc-shell`) and `socket_group` to the group from step 4.
+**Generated** (`shell-mcp-privd policy new`, POLICY §9): from the same answers file as step 5, with a `root:` section (preset `admin`), after step 4 (or `shell-mcp-gate install`) has created the socket group, which the privileged loader requires. `client_uid`, `socket_group` and the deny list come from the same answers as the gate's policy, so they agree. It writes the policy `root:root 0600` and runs `check-policy`:
+
+```bash
+shell-mcp-privd policy new --answers setup.yaml --out -
+shell-mcp-privd policy new --answers setup.yaml --out /etc/shell-mcp/privileged.yaml
+```
+
+**By hand:** start from `examples/privileged/privileged.yaml`. Set `client_uid` to the service account's uid (`id -u svc-shell`) and `socket_group` to the group from step 4.
 
 ```bash
 install -o root -g root -m 0600 shell-mcp_0.2.0/examples/privileged/privileged.yaml /etc/shell-mcp/privileged.yaml
@@ -335,7 +351,7 @@ CI rates the core unit of the example policy and every end-to-end policy offline
 
 ### 9.5 Let the gate forward to it *(container)*
 
-In the gate policy of each key that may use root actions (only an admin server's key, normally), enable forwarding and give the broad socket when the broad pair is installed:
+A gate policy generated with a `root:` section (step 5, POLICY §9) has this section already, with `broad_socket` exactly when the privileged policy uses the broad unit. By hand: in the gate policy of each key that may use root actions (only an admin server's key, normally), enable forwarding and give the broad socket when the broad pair is installed:
 
 ```yaml
 privileged:
@@ -496,3 +512,7 @@ A unit file is replaced only when it carries the `# Generated by shell-mcp-privd
 - **Rollback.** When a check after a write fails, every file the run changed is restored to its previous bytes (or removed if the run created it), and the run says so and exits 1.
 - **Output and exit codes.** `ok`, `WARN`, `FAIL`, `REVIEW` and `NOTE` lines on stdout, then a one-line result. Exit 0 done or nothing to do, 1 refused or failed, 2 usage, 3 stopped for review.
 - **Audit.** One JSON line per change and per refusal on stderr and to syslog (`/dev/log`, facility authpriv, tag `shell-mcp-gate` or `shell-mcp-privd`, notice for a change, warning for a refusal; a dry run writes none, since it changes nothing): paths, names, ids, modes, SHA-256s and key fingerprints only, never a key, a policy's content or a file's content. `journalctl -t shell-mcp-gate` shows them.
+
+### 12.5 `shell-mcp-gate policy new` and `shell-mcp-privd policy new` *(container)*
+
+They write steps 5 and 9.1 (and 9.5's section) from one answers file and a preset (POLICY §9), with the rules of 12.4: root only and never a forced command (except `--out -`, which only prints), the same temp files, read-back, `--dry-run`, rollback when `check-policy` fails after the write, and audit lines (with the preset). The written file is an owned file: an existing one with other content is refused with a diff, never overwritten. Run the gate's before `shell-mcp-gate install` and the helper's after it.

@@ -9,6 +9,11 @@
 #
 #   prepare            install the binaries copied to /opt/setup-check and
 #                      the test policies (TARGET-SETUP §3, §5)
+#   prepare-bare       the binaries only (policy new writes the policies)
+#   app                the examples' example-app account and directories
+#   answers <preset> <landlock>
+#                      the example answers at /root/<preset>.yaml
+#   bad-answers <case> answers policy new must refuse, at /root/bad-<case>.yaml
 #   snapshot           a hash of every path's type, mode, owner, size and
 #                      mtime, for the dry-run comparison
 #   temps              every install temp file left anywhere
@@ -88,6 +93,44 @@ prepare)
 	# sshd -t and sshd -D need the privilege separation directory.
 	install -o root -g root -m 0755 -d /run/sshd
 	;;
+prepare-bare)
+	# TARGET-SETUP §3 only: no /etc/shell-mcp and no policy, which policy
+	# new writes (POLICY §9).
+	install -o root -g root -m 0755 "$bin/shell-mcp-gate" /usr/local/bin/shell-mcp-gate
+	install -o root -g root -m 0755 -d /usr/local/libexec
+	install -o root -g root -m 0755 "$bin/shell-mcp-privd" /usr/local/libexec/shell-mcp-privd
+	install -o root -g root -m 0755 "$bin/shell-mcp" /usr/local/bin/shell-mcp
+	chmod go-w /usr/local /usr/local/bin
+	install -o root -g root -m 0755 -d /run/sshd
+	;;
+app)
+	# The examples' application account and directories (placeholders), which
+	# the admin answers' owners and roots name.
+	groupadd --gid 1001 example-app
+	useradd --uid 1001 --gid example-app --no-create-home --shell /usr/sbin/nologin example-app
+	install -o root -g root -m 0755 -d /srv/app /srv/app/config /srv/app/deploy /srv/app/cache /etc/example-app /etc/example-app/conf.d \
+		/var/log/example-app /etc/systemd/system/example-app.service.d
+	;;
+answers)
+	# /root/<preset>.yaml: examples/policies/<preset>.answers.yaml, with
+	# landlock: best-effort added when $3 says so (a kernel without ABI 4).
+	cp "/src/examples/policies/${2:?preset}.answers.yaml" "/root/$2.yaml"
+	if [ "${3:?landlock}" = best-effort ]; then printf 'landlock: best-effort\n' >>"/root/$2.yaml"; fi
+	chmod 0600 "/root/$2.yaml"
+	;;
+bad-answers)
+	# /root/bad-<case>.yaml: answers each command must refuse before writing.
+	case "${2:?case}" in
+	gate-protected) printf 'preset: operator\naccount: { user: svc-shell, uid: 60123 }\nwrite: [/etc/ssh]\n' ;;
+	root-never) printf 'preset: admin\naccount: { user: svc-shell, uid: 60123 }\nroot:\n  socket_group: { name: svc-shell-priv, gid: 60124 }\n  write: [/etc/ssh]\n' ;;
+	root-no-acknowledge) printf 'preset: admin\naccount: { user: svc-shell, uid: 60123 }\nroot:\n  socket_group: { name: svc-shell-priv, gid: 60124 }\n  power: { allowed: [reboot] }\n' ;;
+	*)
+		echo "target.sh: unknown case $2" >&2
+		exit 2
+		;;
+	esac >"/root/bad-$2.yaml"
+	chmod 0600 "/root/bad-$2.yaml"
+	;;
 snapshot)
 	find / -xdev \( -path /proc -o -path /sys -o -path /dev -o -path /run/sshd.pid \) -prune -o -printf '%p|%y|%m|%U|%G|%s|%T@\n' |
 		LC_ALL=C sort | sha256sum | cut -d' ' -f1
@@ -165,7 +208,7 @@ break)
 	esac
 	;;
 *)
-	echo "usage: target.sh prepare|snapshot|temps|hand <from> <key>|hand-units|break <case>" >&2
+	echo "usage: target.sh prepare|prepare-bare|app|answers <preset> <landlock>|bad-answers <case>|snapshot|temps|hand <from> <key>|hand-units|break <case>" >&2
 	exit 2
 	;;
 esac

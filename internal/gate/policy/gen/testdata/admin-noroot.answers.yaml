@@ -1,0 +1,5 @@
+preset: admin
+account: { user: svc-shell, uid: 60123 }
+read: [/srv/app]
+write: [/srv/app/cache]
+services: { status: ["example-*.service"], control: { units: [example-app.service], verbs: [stop, start] } }

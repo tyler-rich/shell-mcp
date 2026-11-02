@@ -22,11 +22,13 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
+	ggen "github.com/tyler-rich/shell-mcp/internal/gate/policy/gen"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/gate/setupx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/setupx/system"
 	"github.com/tyler-rich/shell-mcp/internal/privd/ops"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
+	pgen "github.com/tyler-rich/shell-mcp/internal/privd/policy/gen"
 	privdsetup "github.com/tyler-rich/shell-mcp/internal/privd/setup"
 	"github.com/tyler-rich/shell-mcp/internal/privd/units"
 )
@@ -49,6 +51,9 @@ commands:
                 and the broad unit pair when the policy uses it
   install --policy <file> [--accept <sha256>] [--gate-policy <file>]… [--dry-run] [--no-start]
                 as root: review, write, verify and enable the units (docs/TARGET-SETUP.md §12.3)
+  policy new --answers <file> --out <file>|- [--dry-run]
+                as root: write the privileged policy from an answers file's root: section
+                (docs/POLICY.md §9; --out - prints it and writes nothing)
   version       print version information
 `
 
@@ -108,6 +113,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return serve(args[1:], stderr)
 	case "install":
 		return installWith(args[1:], stdout, stderr, productionEnv)
+	case "policy":
+		return policyWith(args[1:], stdout, stderr, productionEnv, func() (setupx.Host, error) { return system.NewSystem() })
 	case "check-policy", "units":
 		env, err := productionEnv()
 		if err != nil {
@@ -545,3 +552,43 @@ func installWith(args []string, stdout, stderr io.Writer, mkEnv func() (*loadEnv
 	a := &setupx.Auditor{Stderr: stderr, Syslog: "/dev/log", Tag: "shell-mcp-privd", Component: "privd", DryRun: o.DryRun}
 	return privdsetup.Install(o, &installHost{System: sys, env: env}, stdout, a)
 }
+
+// parse validates policy bytes as load validates a file, for policy new's
+// strict load before anything is written.
+func (e *loadEnv) parse(data []byte, file string) (*policy.Policy, error) {
+	lo := &policy.LoadOptions{Trust: e.trust, HelperExecutable: e.executable, SystemBinDirs: e.systemBinDirs}
+	e.lookups(lo)
+	return policy.Parse(data, file, lo)
+}
+
+// policyWith is shell-mcp-privd policy new (POLICY §9) with the load
+// environment and host the constructors return; production passes
+// productionEnv and system.NewSystem.
+func policyWith(args []string, stdout, stderr io.Writer, mkEnv func() (*loadEnv, error), newHost func() (setupx.Host, error)) int {
+	if len(args) == 0 || args[0] != "new" {
+		_, _ = io.WriteString(stderr, policyUsage)
+		return 2
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "/"
+	}
+	o, err := ggen.ParseFlags(args[1:], cwd)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-privd policy new: %v\n%s", err, policyUsage)
+		return 2
+	}
+	env, err := mkEnv()
+	if err == nil {
+		var h setupx.Host
+		if h, err = newHost(); err == nil {
+			a := &setupx.Auditor{Stderr: stderr, Syslog: "/dev/log", Tag: "shell-mcp-privd", Component: "privd", DryRun: o.DryRun || o.Out == "-"}
+			check := func(p string, w io.Writer) int { return checkPolicyWith([]string{"--policy", p}, w, stderr, env) }
+			return ggen.Run(o, pgen.Spec(h, env.parse, check), h, stdout, stderr, a)
+		}
+	}
+	_, _ = fmt.Fprintf(stderr, "shell-mcp-privd policy new: %v\n", err)
+	return 1
+}
+
+const policyUsage = "usage: shell-mcp-privd policy new --answers <file> --out <file>|- [--dry-run]\n"

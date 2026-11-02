@@ -476,3 +476,116 @@ commands:
     tier: read
     templates: [["list", "--upgradable"]]
 ```
+
+## 9. Generating a policy: `policy new` and the answers file
+
+`shell-mcp-gate policy new` and `shell-mcp-privd policy new` write a first policy from a small **answers file** (`setup.yaml`) and a **preset**, instead of an example copied and edited by hand. The answers file is an **input format of these two commands, not a policy schema**: nothing in §1–§8 or in PRIVILEGED §4 changes, the gate and the helper never read it, and a written policy is an ordinary policy, edited by hand afterwards (followed by `check-policy` and, for the privileged policy, `shell-mcp-privd install`). The answers file is the reviewable record of why a policy is what it is; keep it.
+
+```bash
+shell-mcp-gate policy new --answers setup.yaml --out -                                 # print, write nothing
+shell-mcp-gate policy new --answers setup.yaml --out /etc/shell-mcp/operator.yaml
+shell-mcp-gate install --policy /etc/shell-mcp/operator.yaml …                         # creates the account and the socket group
+shell-mcp-privd policy new --answers setup.yaml --out /etc/shell-mcp/privileged.yaml   # only with root:
+shell-mcp-privd install --policy /etc/shell-mcp/privileged.yaml …
+```
+
+**Order.** The privileged loader refuses a `socket_group` that does not exist on the host (PRIVILEGED §4), and `shell-mcp-gate install` creates it (TARGET-SETUP §12.1). So the gate's policy comes first, then `install`, then the privileged policy, then `shell-mcp-privd install`. Each binary writes only its own schema: the gate binary (the forced command) never links the privileged loader. Both read the same answers file, so the values the two policies share (the deny list, the service account's uid as `client_uid`, the socket group, the socket paths) are equal by construction, and `shell-mcp-privd install --gate-policy` confirms it afterwards.
+
+### 9.1 The answers file
+
+Strict: unknown keys, wrong types, duplicate keys and more than one YAML document are errors, and it may be at most 256 KiB. An empty list counts as absent.
+
+```yaml
+# Optional: the opening comment, up to the first blank line, becomes the top
+# of the gate policy's header (9.3).
+
+preset: operator                # read-only | operator | admin (required)
+account: { user: svc-shell, uid: 60123 }   # required; uid is never 0
+landlock: required              # optional: required (default) | best-effort
+read:  [/srv/app, /var/log/example-app]
+write: [/srv/app/config]
+deny:  ["/srv/app/secrets/**", "**/*.key"]
+services: { status: [example-app.service], control: { units: [example-app.service], verbs: [restart] } }
+journal: { units: [example-app.service] }
+git: { repos: [{ path: /srv/app/deploy, remote: https://git.example.test/org/deploy.git }] }
+commands:                       # the gate's, run as the service account (§4)
+  # A comment directly above an entry is carried into the policy (9.3).
+  - { id: app-health, path: /usr/local/bin/example-health, tier: read, description: "Application health", templates: [["--json"]] }
+# A comment directly above root: is the top of the privileged policy's header.
+root:                           # only with preset admin; becomes the privileged policy
+  socket_group: { name: svc-shell-priv, gid: 60124 }
+  read:  [/etc/example-app]
+  write: [/etc/example-app/conf.d]
+  persistence: [{ path: /etc/systemd/system/example-app.service.d, acknowledge: "drop-ins for example-app only" }]
+  owners: { users: [root, example-app], groups: [root, example-app] }
+  commands:
+    - { id: nginx-test, path: /usr/sbin/nginx, tier: read, templates: [["-t"]] }
+  power: { allowed: [reboot], acknowledge: "planned maintenance windows only" }
+  packages: { install: [htop, jq], remove: [htop], allow_update_index: true }
+```
+
+| Answers key | Becomes | Notes |
+|---|---|---|
+| `preset` | the template, and every value marked "preset" in 9.2 | required |
+| `account.user` | nothing in either policy | `^[a-z_][a-z0-9_-]{0,31}$`; its home directory (from the user database, else `/var/lib/<user>`, `install`'s default) joins the protected set when the gate's policy is loaded |
+| `account.uid` | privileged `client_uid` | 1 to 4294967294 |
+| `landlock` | `sandbox.landlock` of both policies | absent: the preset's `required`; `best-effort` gets a WARN |
+| `read`, `write`, `deny` | gate `paths.read`, `paths.write`, `paths.deny`; `deny` also privileged `paths.deny` | `write` refused under `read-only` |
+| `services.status`, `services.control` | gate `services` | `control` refused under `read-only` |
+| `journal.units` | gate `journal.units` | `journal.max_lines` is the preset's |
+| `git.repos` | gate `git.repos` | `path`, `remote` |
+| `commands` | gate `commands` | `id`, `path`, `tier`, `description`, `root_equivalent`, `reads_private_keys`, `templates` (§4) |
+| `root` | the privileged policy, and the gate's `privileged` section | refused under anything but `admin` |
+| `root.socket_group` | privileged `socket_group` (its `name`) | `gid` is the record for `install --socket-gid`; `shell-mcp-privd policy new` refuses when the local group does not exist yet or has another gid |
+| `root.read`, `root.write`, `root.persistence` | privileged `paths.read`, `paths.write`, `paths.persistence` | each persistence entry's `acknowledge` is the operator's own words |
+| `root.owners` | privileged `owners` | `users`, `groups` |
+| `root.commands` | privileged `commands` | as `commands`, plus `unit`, `capabilities` and `acknowledge` |
+| `root.power` | privileged `power` | `allowed`, `acknowledge` |
+| `root.packages` | privileged `packages`, with `enabled: true` and the preset's `manager` | `install`, `remove`, `allow_update_index`, `allow_upgrade`, `allow_recover` (absent: `false`); a section that allows nothing is refused |
+
+With `root`, the gate's `privileged` section is the preset's (`enabled: true`, the core socket, `max_tier`), with `broad_socket` exactly when the privileged policy uses the broad unit (`root.packages`, `root.power`, or a command with `unit: broad`). The socket paths are the units' (PRIVILEGED §2); nothing in the answers file names a socket.
+
+### 9.2 Presets
+
+Each preset is an example file, embedded in the binary as a byte copy that a test holds equal to `examples/`: `read-only` is `examples/policies/read-only.yaml`, `operator` is `operator.yaml`, and `admin` is `admin.yaml` plus, with `root`, `examples/privileged/privileged.yaml`. The preset supplies everything the answers file does not: `version`, `max_tier`, the sandbox's directories and TCP ports, every limit, the redaction pattern, `journal.max_lines`, the privileged forwarding section and its ceiling, and on the privileged side `max_tier`, `limits`, `modes` and `backups`. Every limit stays at the example's value; changing one is an edit afterwards.
+
+| Preset | Gate `max_tier` | Allows | Refuses |
+|---|---|---|---|
+| `read-only` | `read` | `read`, `deny`, `services.status`, `journal`, `git` (status, log and diff are read-tier), `commands` | `write`, `services.control`, `root` |
+| `operator` | `operator` | the above, `write`, `services.control` | `root` |
+| `admin` | `destructive` | the above and `root` (forwarding capped at `operator`; the privileged policy's own ceiling `destructive`) | — |
+
+A policy is never more permissive than the answers plus the preset: every value it holds is in the answers file or in the preset's example, and no built-in protection is dropped. The built-in deny list, the protected set and the never and acknowledge lists belong to the loaders and are not copied. A test compares every value of every generated policy with that union.
+
+`examples/policies/<preset>.answers.yaml` are the answers files that reproduce the examples byte for byte (`admin.answers.yaml` reproduces both `admin.yaml` and `examples/privileged/privileged.yaml`), and a test keeps them so.
+
+### 9.3 What the output looks like
+
+The policy is rendered from the preset's example as a template, so it reads like the example: the same order, the same quoting, and every section's comment and the worst-case sentence verbatim. A section the answers do not use is left out with its comment.
+
+Two kinds of comment come from the answers file instead, because in the examples they describe the example itself:
+- **The header.** The answers file's opening comment (up to the first blank line) is the top of the gate policy's header, and the comment directly above `root:` the top of the privileged policy's. The preset's last header paragraph (the worst-case sentence) follows. Without either, the header is that paragraph alone.
+- **Command entries.** The comment directly above an entry of `commands` or `root.commands` is written above that command.
+
+Nothing else in the answers file is carried: a comment on another key, a line comment, or a comment inside an entry.
+
+An answers comment is untrusted text in a root-owned security file, so it is rendered only as comment lines. Every line gets its own `# ` prefix (CR, LF and CRLF are line breaks). Control characters, `U+0085`, `U+2028`, `U+2029`, `U+FEFF` and invalid UTF-8 are refused, and a comment has at most 64 lines of at most 256 bytes each. No comment can produce a key, a value or a document marker: a test and a fuzz target compare the values of a policy rendered with any comment against the same answers without it.
+
+### 9.4 What the commands do
+
+1. **Refuse** when `SSH_ORIGINAL_COMMAND` is set, and, except with `--out -`, unless the effective uid is 0.
+2. **Read and decode** the answers file (9.1) and apply the preset's rules (9.2). A WARN when the answers file is not root's or is writable by group or other: whoever can write it chooses what root writes into `/etc/shell-mcp`. `shell-mcp-privd policy new` refuses answers without `root`.
+3. **Render** (9.3), and check the rendered values against the answers and the preset.
+4. **Load strictly**, with the binary's own loader exactly as a policy file is validated (the gate's rules, §1–§7; the privileged loader with the local user and group databases), before anything is written or printed. A policy that does not load is never written. Each loader error is shown under the answers key it came from (`answers write[0]: …`, `answers root.commands[nft-list].acknowledge: …`). So a root in the protected set (§3) or the never list (PRIVILEGED §5.3 list A) is refused naming that rule, and a list B command, script or package tool without its `acknowledge` is refused naming the key to add, which the operator then writes in their own words. Neither command copies the never or acknowledge lists.
+5. **`--out -`** prints the policy on stdout (the report goes to stderr) and writes nothing.
+6. **Write** `--out` through the install commands' write helper (TARGET-SETUP §12.4: a temp file `.<name>.shell-mcp-<12 random>`, owner and mode on the descriptor, rename, read-back by SHA-256), then run **`check-policy`** on the written file and show its output. The gate's runs as root and prints its `NOTE`; `shell-mcp-gate install` runs it again as the service account. A `FAIL` rolls the write back (the file removed or restored to its previous bytes, and `/etc/shell-mcp` removed if the run created it) and exits 1.
+
+| Path | Owner, mode | Class |
+|---|---|---|
+| `/etc/shell-mcp/` | `root:root 0755` | owned directory: created when absent, refused if it is anything else |
+| `/etc/shell-mcp/<name>.yaml` (gate) | `root:root 0644` | owned |
+| `/etc/shell-mcp/<name>.yaml` (privileged; `privileged.yaml` by convention) | `root:root 0600` | owned |
+
+`--out` must be `-` or `/etc/shell-mcp/<name>.yaml`, `<name>` of the characters `A-Z a-z 0-9 . _ -` (the forced command and the units point there; another path is still possible by hand). **Owned** means: absent, written; identical (bytes, owner and mode), `unchanged`, so a second run with the same answers changes nothing; anything else is refused with a unified diff and never overwritten, and no flag overwrites it. The generator is a starting point, not a configuration manager: after the first write, edits are by hand.
+
+**`--dry-run`** prints every check, the file with its owner, mode and content (or the diff), and its class (`create`, `unchanged`, `refuse`), writes nothing, and exits 0 only when the real run would write or find the file unchanged. **Audit:** one JSON line per change and per refusal (TARGET-SETUP §12.4's record and sinks, tags `shell-mcp-gate` and `shell-mcp-privd`): the path, its SHA-256, owner and mode, and the preset; never the policy's content. **Exit codes:** 0 written or unchanged, 1 refused or failed, 2 usage.

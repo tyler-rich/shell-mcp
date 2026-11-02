@@ -6,6 +6,10 @@
 # needs a human approval on the server's approval page (D-006).
 # Root actions are not done here: they are forwarded to the privileged
 # helper, which applies its own policy (docs/PRIVILEGED.md).
+#
+# Run `shell-mcp-gate check-policy --policy <this file>` after every edit.
+# Write it for the worst case: "what would I accept a fully compromised MCP
+# server doing with this key?"
 
 version: 1
 
@@ -25,7 +29,7 @@ limits:
 paths:
   read: [/srv/app, /etc/example-app, /var/log/example-app]
   write: [/srv/app/config, /srv/app/deploy, /srv/app/cache]
-  deny: ["/srv/app/secrets/**", "**/*.key"]
+  deny: ["/srv/app/secrets/**", "**/*.key", "/etc/example-app/secrets/**"]
 
 services:
   status: ["example-*.service"]
@@ -34,7 +38,9 @@ services:
     verbs: [start, stop, restart, reload]
 
 journal:
-  units: ["*"]      # every unit; the account still needs systemd-journal
+  # Units whose journal is readable ("*" for every unit); the service
+  # account needs the systemd-journal group for other units' messages.
+  units: ["*"]
   max_lines: 5000
 
 git:
