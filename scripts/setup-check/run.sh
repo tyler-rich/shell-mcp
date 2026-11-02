@@ -584,8 +584,8 @@ for form in secrets bind; do
 	rc=0
 	r="$("${dc[@]}" exec -T shell-mcp /shell-mcp doctor --mcp-url http://127.0.0.1:8080/mcp 2>&1)" || rc=$?
 	miss=""
-	for want in "^ok   secret SHELL_MCP_TOKEN_FILE: /run/secrets/mcp_token: mode 0600, owner uid 65532 (this process)" \
-		"^ok   secret SHELL_MCP_SSH_KEY_FILE: /run/secrets/ssh_key: mode 0600, owner uid 65532 (this process)" \
+	for want in "^ok   secret SHELL_MCP_TOKEN_FILE: /run/secrets/mcp_token: mode 0600, owner uid 65532 \(this process\)" \
+		"^ok   secret SHELL_MCP_SSH_KEY_FILE: /run/secrets/ssh_key: mode 0600, owner uid 65532 \(this process\)" \
 		"^ok   secret SHELL_MCP_APPROVERS_FILE: " "^ok   trusted proxy $sub.5: " "^NOTE helper app-host: privileged forwarding is off" \
 		"^ok   mcp endpoint: POST http://127.0.0.1:8080/mcp without a token answered 401 with the server's challenge" \
 		"^FAIL approval page: unreachable: " "^doctor: 1 FAIL"; do
