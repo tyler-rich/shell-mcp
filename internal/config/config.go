@@ -724,6 +724,16 @@ func (l *loader) buildTarget(ft *fileTarget, sharedKey *PrivateKey) (Target, err
 	}, nil
 }
 
+// ValidTargetName reports whether name is a target name the loader accepts.
+func ValidTargetName(name string) bool { return targetNameRE.MatchString(name) }
+
+// ValidUser reports whether user is a target user the loader accepts.
+func ValidUser(user string) bool { return userRE.MatchString(user) }
+
+// ValidHost reports whether h is a target host the loader accepts: an IP
+// address or a DNS name.
+func ValidHost(h string) bool { return validHost(h) }
+
 func validHost(h string) bool {
 	if _, err := netip.ParseAddr(h); err == nil {
 		return true

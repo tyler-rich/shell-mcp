@@ -181,6 +181,27 @@ exposure_weakened_fails() {
 }
 step "exposure (offline, systemd 255/257/259)" "" bash scripts/exposure/run.sh
 step "exposure self-test (weakened unit)" "" exposure_weakened_fails
+# The setup check (handoff §3.8): install, host-key and privd install on
+# Debian 13, Ubuntu 24.04 and 26.04 containers run as their own root,
+# unprivileged (handoff §7 Q2; the only containers of this run that are not
+# a non-root user), and execx's credential tests as the Go image's root.
+# Labelled like every other container here. Its own assertions need real
+# containers, so the ci-local self-test (a fake docker) leaves it out.
+if [[ -z "${CI_LOCAL_UNDER_TEST:-}" ]]; then
+	step "setup-check (Debian 13, Ubuntu 24.04, 26.04)" "" bash scripts/setup-check/run.sh
+fi
+# deploy/caddy/Caddyfile against the reference compose, and caddy validate in
+# a test-only pinned image (no network, read-only, no capabilities, non-root;
+# handoff §4.G). Real containers, so the self-test (a fake docker) leaves it out.
+if [[ -z "${CI_LOCAL_UNDER_TEST:-}" ]]; then
+	step "caddy-check (deploy/caddy)" "" bash scripts/caddy-check/run.sh
+fi
+# shell-mcp init's bind form from a real host directory runs on e2e-host only
+# (test/e2e/zz_init_test.go, the disposable runner VM): reported as not run
+# here, never as passed.
+names+=("e2e-host: init bind form, host dir")
+results+=("NOT RUN")
+notes+=("runner VM only (the e2e-host job)")
 step "go test -race" "" in_go go test -race -timeout 20m -count=1 ./...
 # The Landlock forced-psx test build, which CI's psx entry runs, for the
 # packages that apply the sandbox (the helper's unit tests stub it). This
@@ -214,6 +235,8 @@ release_snapshot() {
 }
 step "release snapshot build (twice)" "" release_snapshot
 step "release scripts self-test" "" in_go bash scripts/release/release_test.sh
+step "verify-release self-test" "" in_go bash scripts/verify-release_test.sh
+step "doc links and section references" "" in_go go run ./scripts/doccheck
 step "deps-current" "run go get -u ./... && go mod tidy, or bump go.mod's go line" in_go bash scripts/deps-current.sh
 step "deps-current self-test" "" in_go bash scripts/deps-current_test.sh
 step "release-binary-check self-test" "" in_go bash scripts/release-binary-check_test.sh

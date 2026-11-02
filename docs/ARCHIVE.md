@@ -4567,3 +4567,322 @@ Options rejected: running the step outside execx (against Q11), and in-process i
 A factual slip in the handoff was corrected: the helper already imports gate packages (`execx`, `fsx`, `policy`, `sandbox`); only the gate-to-privd direction is absent.
 
 **Versions (D-013):** Go 1.27.3 (go.mod; the newest stable Go with a published `golang:1.27.3-trixie` image, deps-current). The session's refresh found `go.yaml.in/yaml/v3` v3.0.5 → v3.0.6, committed first as `chore(deps): refresh to latest` (`go get -u ./... && go get -u -t ./... && go mod tidy` in the pinned Go image); nothing else moved. Direct modules: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6, x/crypto v0.58.0, x/sys v0.49.0. Tools unchanged (golangci-lint v2.15.0, govulncheck v1.9.0, Trivy v0.76.1, Grype v0.121.0, gitleaks v8.30.1, cosign v3.1.4, syft v1.55.0). No dependency added; none is needed by the proposal.
+
+### 2026-11-01 — `shell-mcp-gate install` and `host-key`, `shell-mcp-privd install`, execx's credential option, the setup container harness (S8-1: handoff items A and B) (branch feat/s8-1-install-commands)
+**Scope (the session prompt, handoff §6 S8-1):** the commands that replace TARGET-SETUP's account, sshd, key-line and unit steps, writing exactly what the hand steps write, idempotently, with `--dry-run`, refusing the known-bad states; execx's credential option first, in its own commit (Q13); the shared rules of handoff §3; `scripts/setup-check/` with its ci-local step and CI job (F-13); e2e-host cases. No security property changed: the gate and the helper check everything they checked before. Out of scope and untouched: `init` (S8-2), `policy new` (S8-3), `doctor`, the verification script, `deploy/caddy/`, the quick start (S8-4), `keys list`/`revoke`, uninstall.
+
+**Decided with the maintainer this session:**
+- **No header comment** in the slice drop-in and `60-shell-mcp.conf`: TARGET-SETUP's bytes win over the handoff table's "after a header comment", so a host set up by hand (the 0.2.0 deployment's) reports every item `unchanged` instead of being refused as different. The handoff table is corrected.
+- **The `from=` wording** in TARGET-SETUP §7 and SECURITY §7: a single address (`/32`, `/128`) recommended, the server container's fixed `ipv4_address` when it runs on the target, a prefix `/24` (`/64`) or narrower, and install refusing anything wider. SECURITY §7's sentence ("names the Docker network's subnet") is changed because, being normative, it must not contradict install; Q1 had decided the floor.
+- **`PR_SET_PDEATHSIG` re-armed** after the credential switch (beyond Q13's written conditions, so asked): the kernel clears the parent-death signal when the effective or filesystem ids change (`PR_SET_PDEATHSIG(2const)`), so without it the account's command would not be killed with the installer, unlike every other execx command. The trampoline sets it again and refuses if the parent is no longer the one that started it.
+
+**What the commands write (TARGET-SETUP §12).** `shell-mcp-gate install`: `groupadd --gid`, `useradd --uid --gid --home-dir --create-home --shell /bin/sh`, `usermod -L` (never `passwd -l`: `/usr/bin/passwd` is setuid, F-1), `usermod -aG` for `systemd-journal` (journal section only) and the socket group (`privileged.enabled` only); `/etc/systemd/system/user-<uid>.slice.d/50-shell-mcp.conf` (`MemoryMax` 4 × `limits.max_memory_mb`, `4G` at the default; WARN above `MemTotal`; `none` omits it with a WARN); `check-policy` run as the account; `/etc/polkit-1/rules.d/60-shell-mcp.rules` (`polkit.Rule`, only with `services.control`); `/etc/ssh/sshd_config.d/60-shell-mcp.conf`; `/etc/ssh/authorized_keys.d/` and the key line, last; then `sshd -t`, `sshd -T -C` for the account and for a name that is not an account, the reload, and the pin. `shell-mcp-gate host-key`: the pin lines alone. `shell-mcp-privd install`: the four generated units (as `units --out`), `/var/lib/shell-mcp` and `/var/lib/shell-mcp/backups` `root:root 0700`; `systemd-analyze verify --man=no`, `daemon-reload`, `enable --now`, a restart of a socket whose own unit changed, `disable --now` and removal of an unused broad pair, the sockets' modes, the exposure score. Temp files `.<target>.shell-mcp-<12 base32>` in the target's directory (Q10).
+
+**Refusals** (each a failing-first table case; container cases where buildable): root and never a forced command (`SSH_ORIGINAL_COMMAND`); the running binary not the installed path, or any binary or program failing the chain rule; `from=` empty, `*`/`?`/`!`, a host name, a zone, the unspecified address, a duplicate, more than 8, IPv4 shorter than /24, IPv6 shorter than /64, IPv4-mapped judged as IPv4 (so `::ffff:0:0/96` and `::/64` are refused, `/120` is the mapped floor) — no flag, variable or file lowers the floor (a test lists the flag set); a WARN for anything wider than one address; the key not one `ssh-ed25519` line, with options, a private key (nothing of it printed) or the host's own key; every existing keys-file line checked (`restrict`, one `from=` within the floor, `command=` exactly the forced command with a safe policy path and label, only the `no-*` options besides, an Ed25519 key), refused by line number, the same key with other options refused unless `--replace-key`; ids 0, 65534, below 1000, 61184–65519, the overflow id; a uid or gid in use by another name; an existing account whose uid, gid, home or shell (`/bin/sh`) differ; a home that exists for a new account; D-020's privileged groups and any supplementary group but the socket group and `systemd-journal` (journal section only), named, never removed; the socket group's flags for a policy without `privileged.enabled` or missing for one with it, its gid in use or the group with another gid; the owner scan's hit; `--owner-scan-paths` empty, `none`, relative, repeated, more than 32 (usage, exit 2), not a directory, or given when nothing is created; `strictmodes no`; `/etc/ssh`, `sshd_config.d`, the keys directory or file not root's or writable by others; the drop-in for another account; any owned file with other content (a unified diff is printed); `--policy`/`--principal` outside their character sets (F-8); the policy not loading or its sandbox refused; `check-policy` as the account FAILing; `sshd -t` failing or the block not in force, or reaching another account (rollback); neither `ssh.service` nor `ssh.socket` active (unless `--no-reload`). Privd: the binary not `units.HelperPath`; the policy not `root:root` without group/other bits; any `check-policy` FAIL; `--accept` missing or another hash (exit 3, on every run, Q4); the `client_uid` account not exactly one local account or not in the socket group; a `--gate-policy` that disagrees; the backup store's owner or mode; a unit without the generated marker; verify failing (rollback); systemd not PID 1 without `--no-start`; the sockets after activation.
+
+**The credential option (Q13; commits 866b2e9 red, c35f436).** `execx.Spec.Credential{UID, GID, Groups}`, nil by default; `Run` returns a `CredentialError` (wrapping `ErrStart`) before the socketpair and the fork unless the caller's real and effective uid are 0, and for uid or gid 0, the overflow id, group 0, a duplicate or more than 64 groups. The command is SMX3 (the credential between the descriptor count and the limits); without a credential it is SMX2, byte for byte as before (a test compares it with an independent encoder). The trampoline runs all its checks as root first, lowers its limits and sets the descriptors as before, then `becomeAccount`: its own root check; `syscall.Setgroups`, `syscall.Setgid`, `syscall.Setuid`; a read-back of `getresuid`, `getresgid`, `getgroups`, `capget` and every thread's `/proc/self/task/<tid>/status` (four uids and gids, the groups, `CapPrm`, `CapEff`, `CapAmb`), refusing on any difference; `PR_SET_PDEATHSIG` again and the parent checked; `PR_SET_NO_NEW_PRIVS`; `execve`. `RLIMIT_NPROC` counts the account's tasks. The only caller is `internal/gate/setup`'s `RunAs` (step 4); a call-site test parses every non-test file of the module and requires exactly that one setting. **Verified at the source:** `setuid(2)` and `setgid(2)` (man7.org): with `CAP_SETUID`/`CAP_SETGID` the real and saved ids are set too; `capabilities(7)`: when all of the real, effective and saved uids become non-zero from at least one 0, the permitted, effective and ambient sets are cleared (unless `SECBIT_KEEP_CAPS`, which the read-back would catch); Go 1.27.3's `syscall.Setgroups`, `Setgid` and `Setuid` call `AllThreadsSyscall` without cgo, and `runtime.syscall_runtime_doAllThreadsSyscall` reaches every M in `allm` with `allocmLock` held, threads created later cloning from one that changed; **x/sys v0.49.0's `unix.Setgroups` is a single-thread raw syscall** (its `Setuid`/`Setgid` call `syscall`'s), so the switch uses package `syscall`. The per-thread read-back is beyond the handoff's `getresuid`/`getgroups` and catches any thread that kept root's ids.
+
+**Other choices, and why:**
+- **The other-account sshd check** compares the other name's whole `sshd -T -C` output with the same output taken before the drop-in was written, plus its `authorizedkeysfile`, instead of requiring that `permittty` and `x11forwarding` differ from the block's: a hardened host with `X11Forwarding no` globally would have failed the literal check although the block reached no one. Recorded in the handoff.
+- **`--no-reload`** also skips `daemon-reload` and the `systemctl show` slice check (printing both), so the container harness and hosts without systemd can run install.
+- **Rollback** covers every failure after the first write, `check-policy` as the account included (handoff §3.4 named `sshd -T`); a daemon-reload follows when the slice was reloaded.
+- **check-policy shared (§3.7):** `shell-mcp-privd`'s `checkPolicyWith` became `checkPolicyReport` (load once, print) plus the verdict lines; output and exit codes unchanged (its tests pass untouched); `install` gets the policy object from it, so the hash accepted and the units' hash are of the bytes read once (a test swaps the file afterwards).
+- **V-2 verified** (handoff §2): systemd 255, 257 and 259 `service_set_socket_fd()` links an `Accept=yes` instance to its socket only by `After=`/`TriggeredBy=` (255: `Before=`/`Triggers=` from the socket), and in `unit-dependency-atom.c` (257) those map to `UNIT_ATOM_AFTER`/`BEFORE`/`TRIGGERS`/`TRIGGERED_BY` alone, with no stop atom: restarting a socket does not end requests in flight. `install` restarts only a socket whose own `.socket` file changed.
+- **The review stop is audited** with action `review` (notice), not `refuse`; a dry run writes no audit line (TARGET-SETUP §12.4 says so).
+- **Under `--no-start`** an unused broad pair is left in place with a NOTE (removing it without `disable` would leave a dangling enable link).
+
+**Idempotency.** Owned files: absent → written, identical → `unchanged`, different → refused with a diff. Generated units: replaced only with the marker. The keys file is line-keyed by fingerprint. Accounts and groups: created when absent, `unchanged` when they match, refused when they differ; not removed by a rollback. A second run with the same flags reports only `unchanged` (unit tests and all three images).
+
+**Test evidence.** Failing-first commits, each followed by its implementation: 866b2e9 → c35f436 (execx; the parser test's red run against a temporary stub pasted in the PR), f216ecb → 8749453 (setupx), c86957c → 1a801e4 (gate install), 38551ec → 0fdea07 (privd install); the harness (8f970bb) was run against c86957c's binaries and failed there. gitleaks flagged c86957c's invented public-key constant (generic-api-key); its exact fingerprint is in `.gitleaksignore` and a later commit builds the key from a fixed seed at run time, as earlier fixtures. Guards that pass on a stub by design: the nil encoding, the call sites, the nil credential as root, the forced command reaching only `serve`, and four fuzz properties. Fuzz targets (60 s each, no finding): `FuzzDecodeConfigCredential`, `FuzzParseThreadStatus` (execx), `FuzzParsePasswd`, `FuzzParseGroup` (setupx), `FuzzParseFrom`, `FuzzParseKeyLine`, `FuzzParseSshdT`, `FuzzParseSize`, `FuzzParseMountinfo` (setup). `scripts/setup-check/` on Debian 13, Ubuntu 24.04 and Ubuntu 26.04: 126 checks passed, 0 failed (40 per image, and the six root credential tests in the Go image). The credential tests as root: in the Go image's root (setup-check) and on e2e-host. `bash scripts/ci-local.sh`: every step PASS (gofmt, vet, lint with and without the test build tags, exposure and its self-test, setup-check, `go test -race` in all five builds, the e2e guards, govulncheck, both cross-builds, the twice-built release snapshot, deps-current, every self-test).
+
+**Not covered, and why:** the polkit rule on e2e-host (setup.sh already installs `60-shell-mcp.rules` for the e2e account, so install for `svc-install` would rightly refuse the different file; the rule is `polkit.Rule`'s output, unit-tested and container-tested by the hand-steps case); the full (not narrowed) owner scan on the runner VM (it walks the runner's tool cache; the containers run it). Observed, not changed: `sshd -t` needs `/run/sshd`, which a socket-activated Ubuntu sshd creates only on its first connection, so TARGET-SETUP §7's `sshd -t` (and install's) can fail before then; README's quick start still says `passwd -l` (S8-4 rewrites it).
+
+**Versions (D-013):** Go 1.27.3 (go.mod; newest stable with a published `golang:1.27.3-trixie`, deps-current); `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing. Direct modules: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6, x/crypto v0.58.0, x/sys v0.49.0. Tools: golangci-lint v2.15.0, govulncheck v1.9.0. No dependency added (x/crypto/ssh was already a module dependency; the gate binary now links it for the key and host-key parsing).
+
+**Follow-up (maintainer, 2026-11-01, on CI of 0a810d0).**
+- **CodeQL alert 7, `go/incorrect-integer-conversion`, `internal/gate/execx/execx.go:205`** (`uid = int(spec.Credential.UID)`: a uint32 from `strconv.ParseUint` converted to `int` without a bound). Verdict, checked at the source: not exploitable. The value is the uid install reads from the target's own `/etc/passwd` as root (`setupx.ParsePasswd`, `ParseUint(s, 10, 32)`). `int` is 64-bit on amd64 and arm64 (D-018), so the conversion was lossless. It fed only the `RLIMIT_NPROC` task count, while the switch took its ids from the uint32 in the SMX3 command and the trampoline verified the result. Fixed anyway, with no suppression or dismissal (486bd12):
+  - the uid stays a uint32 through `run`, `childLimits`, `userTasks` and `userTasksIn` (`strconv.FormatUint`); the process's own uid is converted with a bound (`uidOf`);
+  - the switch passes uid, gid and groups to `setgroups(2)`, `setgid(2)` and `setuid(2)` through `syscall.AllThreadsSyscall`, widened to `uintptr`, which is what `syscall.Setgroups`, `Setgid` and `Setuid` do without cgo (every thread). That file is built for amd64 and arm64 only, and other architectures refuse the option;
+  - the read-back compares as uint64.
+
+  The overflow id 4294967295 was already refused for the uid, the gid and every group before anything starts (`credentialRefusal`, since c35f436). `TestCredentialRefusedValuesAsRoot` now covers it at the process level, and `TestUserTasksHighUID` counts a uid above 2147483647 through the procDir seam. Neither could fail first on amd64 or arm64, where the old code was correct, and a 32-bit build (where it was not) does not compile in this repository (`install.ID`); the CodeQL result before and after is the evidence.
+- **e2e-host on 0a810d0** failed in the step "e2e tests (as root; nothing may skip)", for two reasons in this PR, not the runner (the runner's `ssh.service` was active and was reloaded):
+  - `TestInstallGateOnRunnerSSHD`: the second run with the same flags was refused: "--owner-scan-paths: the account and its groups exist already, so there is nothing to scan for". That contradicted the handoff's own same-flags idempotency. **Decided:** idempotency wins; with nothing created the flag gets a NOTE.
+  - `TestPrivdInstallOnRunner`: "/run/shell-mcp/privd-broad.sock left in place". systemd keeps a stopped socket's node, because `RemoveOnStop=` defaults to off (systemd.socket(5)). **Decided:** check that nothing listens (the unit inactive and disabled, a connection refused), and leave the node with a NOTE. Removing it would touch a path §4.B's table marks "checked only", and `RemoveOnStop=` would change the generated units.
+
+  Also: install's `systemd-analyze security` gave no exposure level on the runner, though the same command works in the e2e test. On the next run (c9d9e98) its WARN showed exit 0 and the table, so the output was there but the line did not match: systemd wraps the level in escape sequences when it rates the live unit, while the same command with an empty environment and `--offline` prints it plain. The level is now read with escape sequences removed, a miss shows the output's last lines (where the level is), red first in 8acdde2; e2e requires a score line. On 3982202 the runner then printed "ok   systemd-analyze security shell-mcp-privd@.service: 1.3 (expected 1.3)", which confirms the cause, but the e2e assertion still failed: its own pattern had lost its backslashes (it read `d.d` where the digits pattern belongs), fixed in a78dbcc. If neither `ssh.service` nor `ssh.socket` is active on the runner, the gate test starts `ssh.service`, and stops it again in a cleanup that runs even on failure and checks the runner is back as found (approved under Q3).
+- **`/run/sshd`, verified at the source** (the three images' packages):
+  - Debian 13 (systemd 257.13) and Ubuntu 26.04 (systemd 259.9) ship `/usr/lib/tmpfiles.d/20-systemd-ssh-generator.conf` in the `systemd` package, with `d /run/sshd 0755`.
+  - Ubuntu 24.04 (systemd 255.4) has no tmpfiles entry. Only `ssh.service`'s `RuntimeDirectory=sshd` creates the directory, and with the default `ssh.socket` (`Accept=no`) that happens at the first connection.
+  - Without it, `sshd -t` and `sshd -T` exit 255 ("Missing privilege separation directory: /run/sshd").
+  - install now refuses before anything is written, naming the host's remedy (`systemd-tmpfiles --create <that file>`, else `systemctl start ssh.service`), and never creates the directory. There are unit tests and a setup-check case on every image, red first in 29c1dea. TARGET-SETUP §7 carries the same note for the hand step.
+- **`--no-reload`** now WARNs that `daemon-reload` and the slice check were skipped and that the memory limit is not active until systemd is reloaded, and records it as an audit line (`"action":"warn","object":"slice","reason":"no_reload"`). Tested, red first in 29c1dea.
+- setup-check after these changes: 129 passed, 0 failed (Debian 13, Ubuntu 24.04, Ubuntu 26.04).
+
+**Follow-up 2 (maintainer, 2026-11-01): the switch's raw `AllThreadsSyscall` calls, checked against Go's own wrapper.**
+- **setgroups.** Go 1.27.3's `syscall.Setgroups` (`src/syscall/syscall_linux.go:419`):
+  - with no groups it calls `AllThreadsSyscall(_SYS_setgroups, 0, 0, 0)`;
+  - otherwise it calls `AllThreadsSyscall(_SYS_setgroups, n, uintptr(unsafe.Pointer(&a[0])), 0)` on a fresh `[]_Gid_t` (`_Gid_t` is `uint32` on amd64 and arm64, and `_SYS_setgroups` is `SYS_SETGROUPS`), with no `runtime.KeepAlive`.
+
+  `AllThreadsSyscall` is declared `//go:uintptrescapes` (`syscall_linux.go:1122`). Per `cmd/compile/doc.go`, uintptr arguments converted from pointers in the argument list "must be on the heap and kept alive for the duration of the call". `unsafe.Pointer` rule (4) requires that conversion to appear in the call expression itself. The switch already converted inline, but for no groups it passed a pointer to a sentinel element where the wrapper passes NULL. `setIDsWith` now matches the wrapper exactly. Red first: `TestSetIDsPattern` in 3a2f736.
+- **cgo builds.** Every build of the gate sets `CGO_ENABLED=0`:
+  - the release (`scripts/release/build.sh:51`, run by `release-build.yml:85` and checked by `release-binary-check.sh` at `release-build.yml:198` and `:246`);
+  - CI's cross-build (`ci.yml:201`), e2e-host (`ci.yml:358`), ci-local (`ci-local.sh:152`) and setup-check (`run.sh:79`).
+
+  There is no Makefile or goreleaser configuration. In a cgo build the ENOTSUP was never ignored: the switch refused. But the trampoline answered `EPERM` and `Run` drops the trampoline's stderr on a start error, so install reported only "process could not be started: EPERM", at step 4, after its first writes (then rolled back). Now:
+  - the trampoline passes the switch's own errno back;
+  - install probes its own binary (`AllThreadsSyscall(SYS_GETPID)`), which in production is the trampoline, before anything is written, and refuses naming cgo and `CGO_ENABLED=0`;
+  - `Run` does not probe, because a caller may name another trampoline, as the tests do: the `go test` binary links cgo while the trampoline it starts does not.
+
+  Red first in 3a2f736: `TestCredentialSupported`, `TestBecomeAccountReportsErrno` (root), `TestInstallCredentialUnsupported`; `TestSetIDsNotSupported` passed before too. Also checked with a real `CGO_ENABLED=1` build of `shell-mcp-gate` in the Debian 13 setup image: `install --dry-run` refused before anything was written with "this binary links cgo, so syscall.AllThreadsSyscall cannot reach every thread (operation not supported); the credential option needs a CGO_ENABLED=0 build".
+
+### 2026-11-01 — `shell-mcp init` and `init compose` (S8-2: handoff item C) (branch feat/s8-2-server-init)
+**Scope (the session prompt, handoff §6 S8-2):** move `deploy/README.md`'s "Secrets" and CLIENTS §3.2's enrolment into one command, and print the reference compose with a deployment's values, in two forms. The work covered: V-1 verified first; the failing-first tests against a stub; the in-image path tested as 65532 with no network and no capabilities; the server started from init's output in both forms; `deploy/docker-compose.yml` unchanged. Out of scope and untouched: `policy new` (S8-3), `doctor`, the verification script, `deploy/caddy/` and the quick-start restructure (S8-4), the S8-1 commands' behaviour.
+
+**V-1, verified at the source: false as stated.**
+- **Compose v5.6.1** (`pkg/compose/create.go`, `buildContainerSecretMounts`): a `file:` secret is a read-only bind mount whose source is passed to the daemon as a string. A file missing where Compose runs only logs a warning.
+- **compose-go v2.16.1** (`paths/resolve.go`, `paths/unix.go`): a relative `file:` path, like a relative bind source, is joined onto the project directory as a string.
+- **So** an editor running Compose in its own container fails on a *relative* path in either form, and an absolute path works in either.
+- **Consequence.** The handoff foresaw this case: the bind form stays, because it names `init`'s directory once, by its absolute host path, instead of once per file. Nothing else changed. `deploy/README.md` says why in these terms, and the handoff records the result under V-1.
+
+**What `init` writes** (`internal/setup/serverinit`; `deploy/README.md`, "`shell-mcp init`"). Under `--dir`, owned by `--uid:--gid` (default 65532:65532, the image's user):
+- the directory itself, `0700`, created when absent (its parent must exist);
+- `mcp_token`, `0600`: 32 bytes from `crypto/rand`, base64url, 43 characters, no newline, as the README's pipeline;
+- `ssh_key`, `0600`: an unencrypted OpenSSH Ed25519 key, comment `shell-mcp`;
+- `ssh_key.pub`, `0644`: written again from the key when absent;
+- `approvers`, `0600`, only with `--approver`: content from `approvers.Append`, the QR code and URI shown once, on a terminal.
+
+How it writes, and what it prints:
+- **Writes** go through setupx's helper: a temp file `.<name>.shell-mcp-<12 base32>` in `--dir`, `O_EXCL|O_NOFOLLOW` `0600`, owner and mode set on the descriptor, rename, read-back by SHA-256. A failed write rolls back everything the run created, the directory included, and leaves no temp file. A killed run's temp file is removed by the next run, with a WARN.
+- **When it runs.** As root on the host, or as `--uid` in the image after the one documented host command (`install -d -o 65532 -g 65532 -m 0700 <dir>`), which fixes F-9. Every check runs before anything is generated or written, and it starts no process.
+- **Output.** stdout gets the report, `ssh_key.pub` and its fingerprint, and (once) the approver's QR code. stderr gets one JSON audit line per file: `secret created` or `secret kept`, with the name, owner, mode, the key's fingerprint and the approver's name. The token is never shown; the handoff has no "show it once" step, so it stays only in the file.
+
+**Refusals.**
+- **Who and where:**
+  - an effective uid neither 0 nor `--uid`;
+  - `--uid` or `--gid` 0;
+  - as `--uid`, a gid that is not the process's;
+  - a `--dir` that is not absolute and clean, or is `/`;
+  - an ancestor of `--dir` that is a symbolic link, is missing, is not a directory, or is writable by group or other. A sticky one is accepted when its entry on the path belongs to root, `--uid` or the running uid, and `--dir` is never created directly in one;
+  - `--dir` itself a link or not a directory, with group or other access, owned by anyone but `--uid` (in the image), or by anyone but root or `--uid` (on the host). A root-owned directory gets a NOTE that the bind form needs it owned by `--uid`.
+- **Existing files**, each refused with the command that fixes it, never repaired:
+  - not a regular file, the wrong owner, or the wrong mode;
+  - a token shorter than 43 characters or with a line break inside (read as the server reads it);
+  - an encrypted key, one that is not Ed25519, or one that does not parse;
+  - a `.pub` without its key, of another key, with options, or holding more than one key;
+  - an approvers file the server would not load;
+  - a second approver: `init` enrols only the first, and the refusal points at `approver add --allow-multiple`;
+  - `--approver` for a new name when stdout is not a terminal, in a dry run too (below).
+- **`init compose`:**
+  - an image without `@sha256:` and 64 lower-case hex digits, or with a placeholder digest (one repeated digit);
+  - a pin the server's `ParseHostKeyPin` refuses, a duplicate pin, or more than 8;
+  - a target name, host or user the server's own rules refuse (`config.ValidTargetName`, `ValidHost`, `ValidUser`, now exported);
+  - an MCP or approval host that is not a DNS name;
+  - a subnet that is not a canonical IPv4 prefix from /16 to /28;
+  - an address that is outside the subnet, equal to the other, or is the subnet's network address, broadcast address or first host (Docker's gateway: CLIENTS §1);
+  - `--profile` outside the three, and `admin` without `--approve-host`;
+  - `--form bind` without an absolute, clean `--dir` of `[A-Za-z0-9._/-]`.
+  - Usage errors (exit 2): missing flags, unknown flags or arguments, an unknown `--form`, and `--dir` with the secrets form.
+
+**The two output forms, and why.** `init compose` prints `deploy/docker-compose.yml`, through an embedded byte copy (`internal/setup/compose/docker-compose.yml`) that a test holds equal to it. It fills in the values: the image, the pins, the target, the MCP host in `SHELL_MCP_ALLOWED_HOSTS`, the subnet, the two fixed addresses (also in the comments that name them), the profile, and the approval variables of CLIENTS §3.2. The reference values reproduce the file byte for byte, and the header says the file was printed.
+- **The secrets form**, for `docker compose` on the host, keeps `secrets: file: ./secrets/<name>`, with `approvers` added when there is an approval page.
+- **The bind form**, for stack editors, replaces the secrets with one read-only bind mount `<dir>:/run/secrets:ro`, so the `*_FILE` paths are the same in both.
+- **What is never generated:** an environment-store form (handoff §5), and the hardening flags, which are not parameters.
+- **Quoting.** A value YAML would read as something other than the string given is printed double-quoted (`00000000`, `true`, `null`, below).
+
+**Decided this session (the maintainer, 2026-11-01).**
+- **setupx's real host gets its own package.** `System` moves to `internal/gate/setupx/system`, with `Disk` and `Files` left in setupx. `execx`'s `init()` makes any binary that links it the exec trampoline, so the server must never link it (D-003). `TestServerNeverLinksExecx` walks `cmd/shell-mcp`'s imports for Linux and refuses `internal/gate/execx`, the system package and `internal/privd/...`. It was red in ecbcf21 and green after fc397a0. The install commands' tests pass unchanged.
+- **The approvers file goes through the shared helper.** `approvers.Add` was split into `Append` (validation and new content, called by `Add` and by `init`), so the file gets §3.2's temp name, its owner on the descriptor and the read-back. The format and `approver add` are unchanged.
+- **The template** is the embedded copy plus the equality test. `go:embed` cannot name a path with `..` (checked in Go 1.27.3's `go doc embed`), and the image build excludes `deploy/`.
+- **`--profile read-only|operator|admin`**, default `read-only`. `admin` without `--approve-host` is refused, and `operator` without it gets a NOTE about `SHELL_MCP_APPROVAL_TIERS`. Both were tested failing first.
+- **Container tests.** In ci-local and setup-check they use a labelled named volume and a test-only override: the image, the label, and the secrets' source. On e2e-host, the bind form also runs from a real host directory.
+
+**Decided by the maintainer on 2026-11-02, after review.** These confirm what the session had applied from S8-1's precedent and the rules cited. The handoff §4.C records them under "Decided 2026-11-02 in S8-2".
+- **Same-flags idempotency over "a name already enrolled".** `--approver alice` a second time reports `kept`, needs no terminal and shows nothing.
+- **Refusals beyond §4.C's list**, each from a rule already written down:
+  - `--uid` and `--gid` 0;
+  - an ancestor of `--dir` writable by group or other, with the sticky exception;
+  - a subnet outside /16 to /28;
+  - the subnet's network, broadcast and gateway addresses.
+- **`--approver` off a terminal.** The seed, URI and QR code are written to a terminal only. When stdout is not a terminal, `--approver` for a new name is refused before anything is generated or written. The message says to run `init` interactively, or to run it without `--approver` and enrol later with `shell-mcp approver add`. A `--dry-run` refuses the same way, so that it predicts the real run.
+  - **Before this change**, a non-terminal real run was already refused before anything was written. Its message named neither way on, and a dry run reported "would enrol".
+  - **Red in 42c9abb**, green in the commit after it.
+
+**Applied in this session and reported.**
+- **The package is `internal/setup/serverinit`**, not the handoff's `internal/setup/secrets`. A permission rule in the maintainer's environment denies writes under paths named `secrets`. A stub file had already been written there through the shell before the rule surfaced; the maintainer removed it.
+- **`--dir` with `--form secrets`** is a usage error, since that form never reads it.
+
+**Found and fixed during the session.**
+- **YAML ambiguity (FuzzRender).** A target name of `00000000`, which the server's name rule accepts, rendered as a plain scalar that YAML, and so Compose, reads as the integer 0. The same is true of `true`, `null` and numbers in a host or user name. Every rendered value is now read back through the YAML decoder and quoted when it does not round-trip. The seed and a unit test were red in 817a06e, fixed in 91f631f.
+- **A test deadlock.** The SSH test used `net.Pipe`, where both ends write their version banner first, so it deadlocked. It now uses a loopback listener.
+- **README variable rows.** The README-table test read only the first name of a row such as `` `SHELL_MCP_TOKEN` / `SHELL_MCP_TOKEN_FILE` ``. It now reads every name.
+- **The harness under `set -e`.** A diagnostic `stat` of files a broken init never wrote ended the run early. It is now non-fatal, so every case reports.
+
+**Test evidence.**
+- **Failing-first commits.** ecbcf21 (the stub, 130 FAIL lines across `cmd/shell-mcp`, `internal/setup/compose` and `internal/setup/serverinit`) → fc397a0 (the guard) and 1bc11f2 (green); 817a06e → 91f631f (the fuzz finding).
+- **The harness red against the stub.** Run on ecbcf21's tree on Debian 13: 48 passed, 8 failed. Every init and compose check failed except "no temp file left", which passes by design on a stub that writes nothing.
+- **Pass on the stub by design:** `TestTemplateIsDeployFile` (it is the copy) and `FuzzParseImage` (the stub accepts nothing).
+- **The e2e-host test** runs only on the runner VM; its red run against the stub is not shown. CI ran it on 7bb5e85: `TestInitBindFormFromHostDirectory` PASS (34.65 s), with every other CI check green, CodeQL included.
+- **Fuzz targets, 60 s each, no finding after the fix:** `FuzzParseImage`, `FuzzRender` (twice: the second run after the fix), `FuzzCheckToken`, `FuzzCheckPublicKey`.
+- **The unit tests also ran as the Go image's root** (`--uid 65532` with real chowns): pass.
+- **setup-check:** 145 passed, 0 failed (Debian 13, Ubuntu 24.04, Ubuntu 26.04, the credential tests as root, and 16 init and compose checks, the last added with the `--approver` terminal rule: the in-image run, both forms healthy, `shell-mcp check` passing in the running server).
+- **ci-local:** every step PASS (gofmt, vet and golangci-lint with and without the test build tags, exposure and its self-test, setup-check, `go test -race` in all five builds, the e2e guards, govulncheck with no vulnerability, both cross-builds, the twice-built release snapshot, deps-current, every self-test). The e2e-host bind run is reported NOT RUN there (runner VM only).
+
+**Deferred.** None of this session's. The quick-start rewrite around `init` is S8-4's (H); README's quick start and installation steps point at `init` meanwhile.
+
+**Versions (D-013):** Go 1.27.3 (go.mod; deps-current: the newest stable with a published `golang:1.27.3-trixie`). `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing. Direct modules: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6, x/crypto v0.58.0, x/sys v0.49.0. Tools: golangci-lint v2.15.0, govulncheck v1.9.0. No dependency added.
+
+### 2026-11-02 — `shell-mcp-gate policy new` and `shell-mcp-privd policy new` (S8-3: handoff item D) (branch feat/s8-3-policy-new)
+**Scope (the session prompt, handoff §6 S8-3):** write the two policies from one answers file and a preset, rendered from `examples/` with their comments, loaded strictly before anything is written, through the install commands' write helper, each binary writing only its own schema. The answers file is an input format of the two commands (POLICY §9), not a policy schema change: no schema, loader, never or acknowledge list, or `check-policy` behaviour changed. Out of scope and untouched: `doctor`, the verification script, `deploy/caddy/`, the quick-start restructure (S8-4), and the S8-1 and S8-2 commands' behaviour.
+
+**Decided with the maintainer (2026-11-02), on four disagreements the session found and stopped on before writing code** (the handoff §4.D records them under "Decided 2026-11-02 in S8-3"):
+- **Order.** The privileged loader refuses a `socket_group` that does not exist locally, and `shell-mcp-gate install` creates it, so the helper's `policy new` cannot pass its strict load before install. The order is the gate's `policy new`, install, the helper's `policy new`, privd install. No loader change. S8-4's quick start splits its step 4 accordingly.
+- **The examples' deny lists.** `admin.yaml` (`/srv/app/secrets/**`, `**/*.key`) and `privileged.yaml` (`/etc/example-app/secrets/**`) differed, which one answers file cannot produce. Both now carry the union, so neither lost a pattern.
+- **Comments.** "Kept verbatim" holds for every section comment and the worst-case sentence (the template's). The comments that describe the example itself come from the answers file: its opening comment (the gate policy's header), the comment above `root:` (the privileged policy's), and the comment above each command entry. The examples' comment text was rearranged to that split, and no value changed. The maintainer added a rule: answers comments are untrusted input to a security file, so each line is rendered with its own `# ` prefix, control characters are refused, CR and LF are line breaks only, a comment is bounded, and a failing-first test and a fuzz target show that no comment changes a parsed value.
+- **Presets.** `git` is allowed under `read-only` (status, log and diff are read-tier; the read-only example has a `git` section). There is an answers key `landlock` (`required` by default, `best-effort` with a WARN), for kernels without Landlock ABI 4.
+
+**The answers file** (POLICY §9.1): `preset`, `account` (`user`, `uid`), `landlock`, `read`, `write`, `deny`, `services` (`status`, `control`), `journal.units`, `git.repos`, `commands`, and `root` (`socket_group` `{name, gid}`, `read`, `write`, `persistence`, `owners`, `commands` with `unit`, `capabilities` and `acknowledge`, `power`, `packages`). Strict, as the loaders are: unknown keys, wrong types, duplicate keys and a second document are refused, the file is at most 256 KiB, and an empty list is absent. `deny` is both policies' `paths.deny`, `account.uid` the privileged `client_uid`, and the gate's `privileged.broad_socket` is emitted exactly when the privileged policy uses the broad unit (packages, power, or a `unit: broad` command). The socket paths are the preset's, which are the units'.
+
+**The presets and how they derive from `examples/`.** Each preset is its example file, embedded as a byte copy (`internal/gate/policy/gen/presets/`, `internal/privd/policy/gen/privileged.yaml`) that a test holds equal to `examples/`, as S8-2 did for the compose file (`go:embed` cannot name `..`). The renderer parses the example into its keys, with the blank and comment lines before each, and emits it again:
+- **Preset sections verbatim.** `version`, `max_tier`, `limits`, `redact`, the sandbox but for `landlock`, `journal.max_lines`, the forwarding section, and on the privileged side `max_tier`, `limits`, `modes` and `backups`.
+- **Answer sections.** Their values are replaced. A line comment keeps its column. A section or key the answers do not use is left out with its comment, and a template key the renderer does not know is an error.
+- **Byte for byte.** `examples/policies/<preset>.answers.yaml` reproduce the three gate examples, and `admin.answers.yaml` also reproduces `examples/privileged/privileged.yaml`.
+- **Checked twice.** The rendered bytes are decoded and must hold exactly the preset's values with the answers' sections in place (`CheckValues`). A separate test then checks every generated policy's values against the union of its answers file and its example, and requires the preset's sections to be the example's.
+
+**What the commands do** (POLICY §9.4, TARGET-SETUP §12.5):
+- **Refusals before reading anything.** `SSH_ORIGINAL_COMMAND` set; not root, except with `--out -`, which only prints.
+- **Then:** read and decode the answers, with a WARN when the file is not root's or is group- or world-writable; render; and strict-load with the binary's own loader (`policy.Parse` with root trust, the running binary and the account's home; the privileged `policy.Parse` with the local user and group databases), before anything is written or printed. Loader errors are shown under the answers key they came from (`answers write[0]: …`, `answers root.commands[<id>].acknowledge: …`), and a protected-set refusal names the rule.
+- **Writing.** `/etc/shell-mcp` (`root:root 0755`, created when absent) and the policy (`0644`, or `0600` for the privileged one) are written as owned files through setupx's helper: temp file, owner and mode on the descriptor, rename, read-back.
+- **check-policy** (in-process) runs on the written file. A FAIL rolls the run back (handoff §3.4).
+- **Also:** `--dry-run`, and an audit line per change and refusal, with a new `preset` field in setupx's record (omitted when empty, so existing lines are unchanged; golden-tested).
+
+**Refusals** (each a failing-first test; container cases on all three images):
+- **The answers file itself:** an unknown key, a wrong type, a duplicate key, two documents, an empty file, a file over the bound; a missing or unknown preset; a missing account, a bad user name, uid 0 or out of range; an unknown or empty landlock; `write` or `services.control` under `read-only`; `root` under anything but `admin`; `root` without a socket group, or with a bad group name or gid; a `packages` section that allows nothing (it would enable the root-equivalent broad unit for no operation); a control character, U+0085, U+2028, U+2029 or U+FEFF in a value or a carried comment; a comment over 64 lines or a line over 256 bytes.
+- **Where it writes:** `--out` other than `-` or `/etc/shell-mcp/<name>.yaml`; `/etc/shell-mcp` not a `root:root 0755` directory, or under a chain root does not own; an existing policy with other content, owner or mode (with a unified diff; no flag overwrites it).
+- **Through the loaders, before any write:** a write root in the gate's protected set, a forbidden root, a hard-denied gate command; a root on PRIVILEGED §5.3 list A, a persistence root on it, a protected write root outside `persistence`; a list-B item without its acknowledge (power, persistence, `find -delete`).
+- **The helper's half:** no `root:`; the socket group missing (the message names `shell-mcp-gate install` and its flags); the group with another gid.
+
+**Found during the session.** yaml.v3 itself reads U+2028 as a line break: in a raw answers file, `# a<U+2028>max_tier: destructive` makes `max_tier` a key, which the strict decoder then refuses as unknown. The renderer refuses the character in any comment it is given.
+
+**Test evidence.**
+- **Failing-first commits:** 1996fad (the stub) → c4e28fa (the implementation). Run one at a time against the stub, 43 of the 53 new tests failed. The ten that pass on the stub do so by design: TestDecodeAccepts (the stub accepts everything), TestPresetsAreTheExamples and TestPresetIsTheExample (the copies), TestParseFlags and both TestPolicyNewUsage (the stub keeps the flag parsing), TestGateNeverLinksPrivd (a guard), and FuzzLoaderField, FuzzField and FuzzParseFlags (properties that hold for an identity mapper).
+- **The harness against the stub** (1996fad's binaries, Debian 13): 14 of the 16 new checks failed (every write, the second runs, the refusals, the helper's order refusal, install and privd install on the generated policies, check-policy on both). The two that passed do so by design: the dry run (the stub writes nothing) and the "--out -" filesystem comparison. The run then stopped at the hand-edit step, because nothing had created /etc/shell-mcp; that step is now non-fatal (96b2c6c).
+- **setup-check:** 193 passed, 0 failed on Debian 13, Ubuntu 24.04 and Ubuntu 26.04 (16 new checks per image, after S8-2's 145). The kernel (Docker Desktop's) has Landlock ABI 3, so the harness gave the answers landlock: best-effort, as the handoff allows. On every image: --out - writes nothing, the dry run leaves the filesystem identical, the gate's policy is written root:root 0644 in a new root:root 0755 /etc/shell-mcp with check-policy ok, a second run is unchanged, the helper's policy new before install is refused, install on the generated policy passes check-policy as the account, the helper's policy is written root:root 0600 with check-policy ok, privd install's --gate-policy cross-check passes, the read-only preset is written, the refusals write nothing, a hand-edited policy is refused with a diff, and no temp file is left.
+- **Fuzz targets, 60 s each:** FuzzDecode, FuzzComment, FuzzParseTemplate, FuzzLoaderField, FuzzParseFlags (internal/gate/policy/gen), FuzzRootComments and FuzzField (internal/privd/policy/gen); no finding.
+- **ci-local:** every step PASS (gofmt, vet and golangci-lint with and without the test build tags, exposure and its self-test, setup-check, go test -race in all five builds, the e2e guards, govulncheck with no vulnerability, both cross-builds, the twice-built release snapshot, deps-current, every self-test); the e2e-host bind-form row NOT RUN (runner VM only).
+
+**Not covered, and why.** The gate's `policy new` does not check `root:` against list A: that needs the privileged loader, which the gate binary must not link (handoff §5). The helper's `policy new` refuses it, and until then forwarding to an absent helper fails closed. The quick start's order is S8-4's.
+
+**Versions (D-013):** Go 1.27.3 (go.mod; deps-current: the newest stable with a published `golang:1.27.3-trixie`). `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing. Direct modules: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6, x/crypto v0.58.0, x/sys v0.49.0. Tools: golangci-lint v2.15.0, govulncheck v1.9.0. No dependency added.
+
+### 2026-11-02 — `shell-mcp doctor`, `verify-release.sh`, `deploy/caddy/`, the ten-step quick start (S8-4: handoff items E, F, G and H) (branch feat/s8-4-doctor-verify-quickstart)
+**Scope (the session prompt, handoff §6 S8-4):** the last S8 session.
+- **What was built:** a diagnostic command beside `check`, a release verification script for users, an example reverse-proxy configuration with the properties every proxy needs, and the quick start with TARGET-SETUP as its reference part.
+- **Checked first:** V-3 and V-4, at the source.
+- **What did not change:** every check `check` already made, any route or helper op, `deploy/docker-compose.yml` and `deploy/`'s hardening flags, and the S8-1 to S8-3 commands, which are only documented.
+- **Out of scope:** `keys list`/`revoke`, uninstall, and the release itself.
+
+**V-3 and V-4, verified first** (handoff §2 records both):
+- **V-3, true.** Docker Compose v5.6.1 was given the reference network shape (a fixed `ipv4_address`, no `container_name`) with a stand-in image, labelled, unprivileged, and removed afterwards.
+  - It named the container `<project>-shell-mcp-1`.
+  - `docker compose run` of the running service failed with "Address already in use", while `docker compose exec` worked.
+  - README's Upgrading step, which ran `compose run … check` with the server up, is corrected.
+- **V-4, true, from Caddy v2.11.7's source** (`addForwardedHeaders`, `determineTrustedProxy`, `MatchRemoteIP`).
+  - Without `trusted_proxies`, `reverse_proxy` sets `X-Forwarded-For` to the peer, replacing a client's; with it, it appends the peer.
+  - `remote_ip` matches the direct connection.
+  - `caddy validate` passes with no network, a read-only root, no capabilities, `no-new-privileges` and uid 65532, and requests no certificate.
+  - One finding: the official binary's file capability (`cap_net_bind_service=ep`) cannot be exec'd under no capabilities (EPERM, capabilities(7)). The test-only image removes it, so no network and no root are needed, and nothing was stopped on.
+
+**Decided with the maintainer (2026-11-02), on three disagreements raised before building:**
+- **F in the release workflow.** Dry runs sign with the run's own ref, never a tag.
+  - A release's signed files must pass `verify-release.sh`, and every run must refuse each tampered case for its own reason.
+  - The maintainer's rule: a version `X.Y.Z-dryrun.<commit>` can never make the script exit 0, under any flags, `--sums` included. It only names the files. No identity override exists in any form.
+- **doctor's HTTP rows.** A 403 without the server's own headers is a WARN that says the proxy refused the container's address. A LAN/VPN-only proxy may do that, and healthy deployments must not exit 1 for it.
+- **The broad probe.** It keeps the handoff's two operations. The handoff's "this policy has no read operation on it" is false for package policies without the index update, whose previews are read operations, so the line now says which two operations doctor uses.
+
+**doctor (handoff §4.E; TARGET-SETUP §12.6).** `shell-mcp doctor [--json] [--mcp-url <url>] [--ca-file <file>]`, run inside the server's container (`docker compose exec shell-mcp /shell-mcp doctor`, or a stack editor's exec).
+- **Rows:** one row each, with status `ok`, `WARN`, `FAIL` or `NOTE`, the component, the detail and a fix naming the command and section. Exit 1 on any FAIL.
+- **`configuration`:** `config.Load` as `serve`. A refusal is a FAIL naming the variable, and nothing else runs.
+- **`secret <var>`:** for each `*_FILE` secret, any group or other bit, or not a regular file, is a FAIL; an owner other than the process's uid is a WARN.
+- **`target <name>`:** `tools.Probe`, unchanged, as `check`. The pin, gate, protocol, principal, policy hash, `max_tier`, sandbox and served tools are reported, and a sandbox not applied or `best-effort` is a WARN. Each code has its fix (host-key §12.2, the key line §12.1, the gate §3, …).
+- **`helper <name> core`:** `tools.ProbeHelper`, `priv_policy` at ceiling read. The helper block must come from the core unit with the summary's hash. `helper_unavailable`, `helper_refused`, `helper_policy_mismatch` and `protocol_mismatch` each have a remedy.
+- **`helper <name> broad`:** `tools.BroadProbeOp`, then `ProbeHelperBroad`.
+  - The probe is `priv_pkg_update_index_preview`, else `priv_power_preview` with the first allowed action.
+  - The helper block must come from the broad unit. The broad helper's own refusal (a lock, a blocker) still shows the socket works.
+  - When neither operation is allowed, a NOTE says so, with the `systemctl status` hint.
+- **`trusted proxy <entry>`:** a gateway from `/proc/net/route` or `/proc/net/ipv6_route` (every `RTF_GATEWAY` route) inside the entry is a FAIL. A prefix, or an address on no attached network (`net.InterfaceAddrs`), is a WARN. A NOTE says the dynamic check is CLIENTS §1's log-line procedure.
+- **`approval page`:** under `web`, a GET of the public URL with no proxy, no redirect followed, and the system roots or `--ca-file`.
+  - The page is told by its own CSP, `X-Frame-Options` and `Cache-Control` headers; the certificate's days are reported, and fewer than 14 is a WARN.
+  - A 403 with the page's headers is a FAIL that names `SHELL_MCP_TRUSTED_PROXIES`. A redirect, another service, a bad certificate or no answer is a FAIL.
+  - A NOTE says reachability from outside is not shown.
+- **`mcp endpoint`:** with `--mcp-url`, one POST without a token. A 401 with `Bearer realm="shell-mcp"` is ok; 421 names `SHELL_MCP_ALLOWED_HOSTS`; 2xx is a FAIL (not behind the token).
+- **What it never does:** write anything, or send the token. `shell_get_policy` builds its summary through the same extracted function (`privPolicyOf`), and its tests pass unchanged.
+
+**verify-release.sh (handoff §4.F; TARGET-SETUP §12.7, README "Verifying a release").** POSIX sh, any user, writes nothing, downloads nothing itself. It is in the repository and, through `scripts/release/build.sh`, in the examples archive.
+- **Always:** every file in `--dir` but the bundles and `SHA256SUMS` must be listed, with well-formed lines, and must match; every binary and the archive must be of the version.
+- **cosign:** `SHA256SUMS`, the binaries and the archive verify against their bundles, with `verify.sh`'s identity (`release-build.yml@refs/tags/v<version>`) and issuer. A self-test holds the two scripts' identity and issuer equal.
+- **gh:** a provenance attestation per listed file, at the tag.
+- **Both,** when both are installed.
+- **`--sums`** alone otherwise: a SHA256SUMS verified elsewhere, with a differing `SHA256SUMS` in `--dir` refused.
+- **Refused:** no tool and no `--sums`; an unlisted file; a mismatch; a missing bundle; another identity or issuer; another version's files; a dry-run version, always.
+- **In the release workflow:** `scripts/release/verify-release-check.sh` runs it after `verify.sh`. A release must pass with cosign and gh and with `--sums`. Every run must refuse a changed binary (its checksum and its bundle), a changed SHA256SUMS (the checksum and SHA256SUMS's bundle), a missing bundle, and another release's identity. A dry run's files must be refused, with the checks still run. `release.yml` now also runs on changes to `scripts/verify-release.sh`.
+
+**deploy/caddy/ (handoff §4.G).**
+- **`Caddyfile`:** the MCP and approval sites, each with a LAN/VPN `remote_ip` matcher, `reverse_proxy` to the reference compose's server inside `handle @private` and `respond 403` in a separate `handle {}`. There is no `trusted_proxies`, and comments cover TLS and the restart after an edit of a single-file mount.
+- **`README.md`:** the five properties in terms Caddy, nginx and Traefik users can follow, each linked to CLIENTS:
+  - the server's network at a fixed address;
+  - the address the proxy saw, never a client's;
+  - that address alone in `SHELL_MCP_TRUSTED_PROXIES`, never the gateway;
+  - the approval page from the LAN or VPN only;
+  - restart, not reload.
+
+  The nginx (`$proxy_add_x_forwarded_for`, `proxy_set_header Host`) and Traefik (`ipAllowList` `sourceRange`, 403 by default, remote address by default; `forwardedHeaders.insecure`) settings were checked against their documentation. The README ends with the log-line check.
+- **No compose file or image in `deploy/`;** `deploy/docker-compose.yml` is unchanged.
+- **`scripts/caddy-check/`** checks drift (upstreams against the compose's server address and ports, the README's addresses), the shape, no `trusted_proxies`, and `caddy validate` in the test-only image pinned by digest, with a broken Caddyfile as the negative control. It is labelled and removed by its label. It runs in ci-local, in the CI job `caddy-check` in the `ci` gate, and under Dependabot (`/scripts/caddy-check`).
+
+**The quick start (handoff §4.H): ten steps** in README, each naming its command. The order is S8-3's (gate `policy new`, gate `install`, helper `policy new`, helper `install`):
+1. secrets with `init`, with the approver rule: a terminal, or `approver add` later;
+2. download and `verify-release.sh` from the tag;
+3. the binaries;
+4. the gate's `policy new`;
+5. `install` (`usermod -L`; README's last `passwd -l` is gone);
+6. write roots, by hand;
+7. the helper's `policy new` and `install` with the review and `--accept`;
+8. `init compose` in both forms (`secrets` for docker compose, `bind` for stack editors) and the proxy of deploy/caddy;
+9. `up -d` and `doctor` through `docker compose exec` or the editor's exec, then the log-line check;
+10. a client.
+
+README's Installation, Verifying a release, Upgrading, Troubleshooting and documentation table follow it. A stale ARCHITECTURE anchor (`version-1`) is fixed. TARGET-SETUP is the reference part: every step kept, each hand step naming its command (§2 verify-release.sh, §3 and §6 stay manual, §10 doctor), plus §12.6 and §12.7. CLIENTS §1 and §7 and `deploy/README.md` point at doctor and deploy/caddy. `go run ./scripts/doccheck` checks every relative link, GitHub anchor and `DOC §N` reference in the live documents, in ci-local and CI. Its first run also found one ambiguous reference in PRIVILEGED (a "§4.0" after a semicolon meaning ARCHITECTURE's), now named.
+
+**Test evidence (failing first, each red run against a stub).**
+- **doctor, unit:** 4513758 (stub) → a1c215d. 17 tests failed against the stub; `TestUsageListsDoctor` and `TestDoctorUsage` passed by design (the stub keeps the usage line and flags).
+- **doctor, container (setup-check):** ebcb20b, run against the stub's binaries from a worktree of the branch with the stub's `doctor.go` and `helperprobe.go` restored: 193 passed, 3 failed, the three new doctor checks (both forms, and the gateway). Green on the implementation (below).
+- **verify-release.sh:** 636b98d (stub) → d9eece8. 47 of 54 self-test checks failed against the stub; the 7 that passed are absence guards. The release-workflow check is exercised by the PR's release dry run (below).
+- **deploy/caddy:** 64b766a (stub) → 96b3bfd. 9 of 12 checks failed; the 3 that passed do so by design (an empty Caddyfile validates, the broken one is refused, a stub has no `trusted_proxies`). Green: 14 of 14.
+- **doccheck:** 589f68c (stub) → b8827d3. 4 of 5 tests failed; `TestCheckGood` passes by design.
+- **e2e-host:** 68054c7 (`TestDoctorOnRunner`), runner VM only; its red run against the stub is not shown.
+
+**Fuzz targets, 60 s each:**
+- `FuzzParseRoute` and `FuzzParseIPv6Route` (cmd/shell-mcp): no finding, about 10 million executions each.
+- `FuzzRefs`: found that a list continuing another document's reference inherited the skipped name, and that the capital test read a byte instead of a rune. Both fixed, and the input kept as a seed and a `TestRefs` case; then no finding.
+- `FuzzSlug` (scripts/doccheck): no finding.
+
+**The local gate.** `bash scripts/ci-local.sh` passed every step:
+- gofmt, `go vet`, and golangci-lint with and without the test build tags;
+- exposure and its self-test;
+- caddy-check (14 of 14);
+- `go test -race` in all five builds;
+- the e2e guards, and govulncheck with no vulnerability;
+- both cross-builds, and the twice-built release snapshot;
+- the release scripts', verify-release's (54 of 54), deps-current's (all 13 modules current), release-binary-check's and ci-local's self-tests;
+- doccheck.
+
+setup-check was the exception. Its first run reported 194 passed and 2 failed: the harness's own pattern for doctor's secret rows used unescaped parentheses in an ERE, while doctor's rows were right. With the pattern fixed, setup-check alone gave 196 passed, 0 failed, the three doctor checks included. The e2e-host bind-form row is NOT RUN (runner VM only).
+
+**Departures from CLAUDE.md's container rule, reported.**
+- **The scratchpad mount.** One ad-hoc smoke run of `verify-release-check.sh` against the self-test's fakes mounted the session's scratch directory read-only into the Go container, a host path other than the repository. It held only that scratch script. Later runs piped scripts over stdin instead.
+- **The stub run's mount.** The stub setup-check run mounted a git worktree of this branch, which is the repository.
+
+**Deferred.** None of this session's beyond the handoff's: `keys list`/`revoke`, uninstall, and an automated live-proxy test. shellcheck is not run on the new scripts: it is in neither CI nor ci-local, and adding it would be a new tool. The self-test runs `verify-release.sh` under dash instead.
+
+**Versions (D-013):** Go 1.27.3 (go.mod; deps-current in ci-local). `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing. Direct modules: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6, x/crypto v0.58.0, x/sys v0.49.0. Tools: golangci-lint v2.15.0, govulncheck v1.9.0. New test-only image: `caddy:2.11.7@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e` (the newest stable 2.x, tracked by Dependabot). No dependency added.

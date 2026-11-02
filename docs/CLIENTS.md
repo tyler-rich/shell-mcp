@@ -34,6 +34,8 @@ Measured with Docker Desktop 29 (on Windows; a Linux host's networking can diffe
 
 **Set the value from what the server logs, never from a guess.** Start the server with `SHELL_MCP_TRUSTED_PROXIES` empty, send one request without a token through the proxy (`curl -s -X POST https://mcp.example.test/mcp`), and read the `client` field of the server's `authentication failed` WARN line (`docker logs shell-mcp 2>&1 | grep 'authentication failed'`, which shows for example `"client":"172.30.80.5/32","reason":"missing"`; a request without a token does not count toward the lockout). That address is the one to list. Then repeat: the line should now show the address of the machine you sent it from (the proxy must append `X-Forwarded-For`; most do when told to). An IPv6 peer is logged as its /64, which is how it is counted, not as one address; give the proxy a fixed IPv4 address on the network instead. The same list applies to the approval listener (§3.2).
 
+`shell-mcp doctor`, run inside the server's container, checks the list statically (`docs/TARGET-SETUP.md` §12.6): an entry that is or holds one of the container's gateways is a FAIL, a prefix or an address on no network the container is attached to a WARN. Whether the server sees each client's own address is still the log-line check above, which it cannot run. What any proxy must do for this to hold, for Caddy, nginx or Traefik, with an example Caddyfile: [`deploy/caddy/README.md`](../deploy/caddy/README.md).
+
 Quick check from the client's machine (a `200` with a JSON-RPC result means the token, the host name and the path are right):
 
 ```bash
@@ -75,14 +77,24 @@ Records expire after `SHELL_MCP_APPROVAL_TTL` (default 300 s) and are lost when 
 
 ### 3.2 Setting it up
 
-Enrol the approver **on the server host**, never on the machine where the agent runs. The seed is shown once, as a QR code and an `otpauth://` URI, and stdout must be a terminal (hence `-it`):
+Enrol the approver **on the server host**, never on the machine where the agent runs. The seed is shown once, as a QR code and an `otpauth://` URI, and stdout must be a terminal (hence `-it`). `shell-mcp init --approver` does it while it creates the other secrets, in a directory it makes `0700` and owned by the server's uid 65532, and writes `secrets/approvers` `0600`, owned by 65532 (`deploy/README.md`, "Secrets" and [`shell-mcp init`](../deploy/README.md#shell-mcp-init)):
+
+```bash
+install -d -o 65532 -g 65532 -m 0700 secrets
+docker run --rm -it --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  -v "$PWD/secrets:/secrets" ghcr.io/tyler-rich/shell-mcp:<version>@sha256:<digest> init --dir /secrets --approver alice
+```
+
+`<version>` is a release that has `init` (any after 0.2.0). Running `init` again with the same name keeps the file and shows nothing.
+
+By hand, with `approver add` (which every release has), the container runs as uid 65532, so `secrets/` must be writable by it while you enrol:
 
 ```bash
 docker run --rm -it -v "$PWD/secrets:/run/secrets" ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:323149155f5be042949ec5291812104351f365a693dbdfb8cd2171b95ee30e6a \
   approver add --name alice --file /run/secrets/approvers
 ```
 
-The container runs as uid 65532, so `secrets/` must be writable by it while you enrol; afterwards `secrets/approvers` must be `0600` and owned by 65532, like the other secrets (`deploy/README.md`). The server refuses to start if the file is group- or world-accessible. One approver is allowed by default; more need `--allow-multiple` and `SHELL_MCP_APPROVAL_MAX_APPROVERS`. `approver list` and `approver remove` manage the file; restart the server after a change.
+Either way, `secrets/approvers` must stay `0600` and owned by 65532, like the other secrets. The server refuses to start if the file is group- or world-accessible. One approver is allowed by default; more need `approver add --allow-multiple` and `SHELL_MCP_APPROVAL_MAX_APPROVERS`. `approver list` and `approver remove` manage the file; restart the server after a change.
 
 Add to the server's environment:
 
@@ -94,7 +106,7 @@ SHELL_MCP_APPROVAL_BIND: 0.0.0.0          # inside the container; publish the po
 SHELL_MCP_TRUSTED_PROXIES: 172.30.80.5    # the proxy's fixed address on the shared network (§1); required for a non-loopback bind without native TLS
 ```
 
-with the approvers file in `secrets:`. Publish no port for it: the proxy forwards `approve.example.test` to the server's port 8081 on the shared network, as it forwards `mcp.example.test` to 8080.
+with the approvers file in `secrets:` (`shell-mcp init compose --approve-host approve.example.test` prints the reference compose with all of this in place, [`deploy/README.md`](../deploy/README.md#shell-mcp-init-compose)). Publish no port for it: the proxy forwards `approve.example.test` to the server's port 8081 on the shared network, as it forwards `mcp.example.test` to 8080.
 
 - The approval listener (default `127.0.0.1:8081`) is separate from `/mcp`, never accepts the bearer token, and answers only for the origin of `SHELL_MCP_APPROVAL_PUBLIC_URL` (any other `Host` is `421`). A non-loopback bind needs native TLS (`SHELL_MCP_APPROVAL_TLS_CERT_FILE`/`_KEY_FILE`) or `SHELL_MCP_TRUSTED_PROXIES`, and then serves only those proxies.
 - `SHELL_MCP_APPROVAL_NOTIFY_URL` (an ntfy topic URL) with `SHELL_MCP_APPROVAL_NOTIFY_TOKEN_FILE` pushes each request and every lockout to the approver's phone, with a link to the page; the push never carries an approve or decline action.
@@ -190,4 +202,4 @@ From the maintainer's live test (2026-10-16) and S4b-scope's research at the sou
 | `approval_unavailable` | `SHELL_MCP_APPROVAL_METHOD=none`, or five approvals already pending for this principal. |
 | `approval_invalid` | The id is unknown, expired or used, or the target, arguments or a policy changed since the approval. Request a new one. |
 | `tier_denied`, `policy_denied`, `path_denied` | The target's policy refused it; `shell_get_policy` shows what it allows. |
-| `host_key_mismatch`, `target_unreachable`, `gate_unavailable` | The server could not reach the gate: run `shell-mcp check` on the server (`docs/TARGET-SETUP.md` §10). |
+| `host_key_mismatch`, `target_unreachable`, `gate_unavailable` | The server could not reach the gate: run `shell-mcp doctor` in the server's container, which names the failing step (`docs/TARGET-SETUP.md` §12.6), or `shell-mcp check` (TARGET-SETUP §10). |

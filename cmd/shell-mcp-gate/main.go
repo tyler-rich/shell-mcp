@@ -24,8 +24,12 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/install"
 	"github.com/tyler-rich/shell-mcp/internal/gate/ops"
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
+	"github.com/tyler-rich/shell-mcp/internal/gate/policy/gen"
 	"github.com/tyler-rich/shell-mcp/internal/gate/polkit"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
+	"github.com/tyler-rich/shell-mcp/internal/gate/setup"
+	"github.com/tyler-rich/shell-mcp/internal/gate/setupx"
+	"github.com/tyler-rich/shell-mcp/internal/gate/setupx/system"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
 	"github.com/tyler-rich/shell-mcp/internal/template"
 )
@@ -45,6 +49,13 @@ commands:
                 check the install, the policy and the sandbox on this host
   polkit --policy <file> --user <name>
                 print the polkit rule for the policy's services.control
+  install --policy <file> --principal <label> --from <addr>[,<addr>…] --key <file.pub> --uid <n> --gid <n> […]
+                as root: the service account, the slice, the polkit rule, sshd and the key line
+                (docs/TARGET-SETUP.md §12.1; --dry-run changes nothing)
+  policy new --answers <file> --out <file>|- [--dry-run]
+                as root: write the gate policy from an answers file and a preset
+                (docs/POLICY.md §9; --out - prints it and writes nothing)
+  host-key      print this host's host-key pin for SHELL_MCP_TARGET_HOST_KEYS
   version       print version information
 `
 
@@ -71,6 +82,12 @@ func runWith(args []string, stdin io.Reader, stdout, stderr io.Writer, mk option
 		return checkPolicy(args[1:], stdout, stderr)
 	case "polkit":
 		return polkitWith(args[1:], stdout, stderr, policy.RootTrust())
+	case "install":
+		return installWith(args[1:], stdout, stderr, setup.NewHost)
+	case "policy":
+		return policyWith(args[1:], stdout, stderr, func() (setupx.Host, error) { return system.NewSystem() })
+	case "host-key":
+		return hostKey(args[1:], stdout, stderr)
 	case "version":
 		_, _ = fmt.Fprintf(stdout, "shell-mcp-gate %s (commit %s, %s)\n", version, commit, runtime.Version())
 		return 0
@@ -409,3 +426,72 @@ func rlimitDataWarning(param string) string {
 	}
 	return ""
 }
+
+// installWith is shell-mcp-gate install (TARGET-SETUP §12.1) on the host
+// newHost returns; production passes setup.NewHost, and no flag or
+// variable chooses another.
+func installWith(args []string, stdout, stderr io.Writer, newHost func() (setup.Host, error)) int {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "/"
+	}
+	o, err := setup.ParseFlags(args, cwd)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-gate install: %v\n%s", err, setup.Usage)
+		return 2
+	}
+	h, err := newHost()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-gate install: %v\n", err)
+		return 1
+	}
+	a := &setupx.Auditor{Stderr: stderr, Syslog: "/dev/log", Tag: "shell-mcp-gate", Component: "gate", DryRun: o.DryRun}
+	return setup.Install(o, h, stdout, a)
+}
+
+// hostKey is shell-mcp-gate host-key (TARGET-SETUP §12.2): this host's pin
+// lines, from its own host-key files, as any user.
+func hostKey(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 0 {
+		_, _ = io.WriteString(stderr, "usage: shell-mcp-gate host-key\n")
+		return 2
+	}
+	h, err := system.NewSystem()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-gate host-key: %v\n", err)
+		return 1
+	}
+	return setup.HostKey(h, stdout)
+}
+
+// policyWith is shell-mcp-gate policy new (POLICY §9) on the host newHost
+// returns; production passes system.NewSystem, and no flag or variable
+// chooses another.
+func policyWith(args []string, stdout, stderr io.Writer, newHost func() (setupx.Host, error)) int {
+	if len(args) == 0 || args[0] != "new" {
+		_, _ = io.WriteString(stderr, policyUsage)
+		return 2
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "/"
+	}
+	o, err := gen.ParseFlags(args[1:], cwd)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-gate policy new: %v\n%s", err, policyUsage)
+		return 2
+	}
+	h, err := newHost()
+	if err == nil {
+		var exe string
+		if exe, err = h.Executable(); err == nil {
+			a := &setupx.Auditor{Stderr: stderr, Syslog: "/dev/log", Tag: "shell-mcp-gate", Component: "gate", DryRun: o.DryRun || o.Out == "-"}
+			check := func(p string, w io.Writer) int { return checkPolicy([]string{"--policy", p}, w, stderr) }
+			return gen.Run(o, gen.GateSpec(h, exe, check), h, stdout, stderr, a)
+		}
+	}
+	_, _ = fmt.Fprintf(stderr, "shell-mcp-gate policy new: %v\n", err)
+	return 1
+}
+
+const policyUsage = "usage: shell-mcp-gate policy new --answers <file> --out <file>|- [--dry-run]\n"

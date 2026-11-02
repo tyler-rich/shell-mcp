@@ -22,9 +22,14 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
 	"github.com/tyler-rich/shell-mcp/internal/gate/fsx"
 	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
+	ggen "github.com/tyler-rich/shell-mcp/internal/gate/policy/gen"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
+	"github.com/tyler-rich/shell-mcp/internal/gate/setupx"
+	"github.com/tyler-rich/shell-mcp/internal/gate/setupx/system"
 	"github.com/tyler-rich/shell-mcp/internal/privd/ops"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
+	pgen "github.com/tyler-rich/shell-mcp/internal/privd/policy/gen"
+	privdsetup "github.com/tyler-rich/shell-mcp/internal/privd/setup"
 	"github.com/tyler-rich/shell-mcp/internal/privd/units"
 )
 
@@ -44,6 +49,11 @@ commands:
   units --policy <file> [--out <dir>]
                 write shell-mcp-privd.socket and shell-mcp-privd@.service for the policy,
                 and the broad unit pair when the policy uses it
+  install --policy <file> [--accept <sha256>] [--gate-policy <file>]… [--dry-run] [--no-start]
+                as root: review, write, verify and enable the units (docs/TARGET-SETUP.md §12.3)
+  policy new --answers <file> --out <file>|- [--dry-run]
+                as root: write the privileged policy from an answers file's root: section
+                (docs/POLICY.md §9; --out - prints it and writes nothing)
   version       print version information
 `
 
@@ -101,6 +111,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "serve":
 		return serve(args[1:], stderr)
+	case "install":
+		return installWith(args[1:], stdout, stderr, productionEnv)
+	case "policy":
+		return policyWith(args[1:], stdout, stderr, productionEnv, func() (setupx.Host, error) { return system.NewSystem() })
 	case "check-policy", "units":
 		env, err := productionEnv()
 		if err != nil {
@@ -222,14 +236,18 @@ func unitsWith(args []string, stdout, stderr io.Writer, env *loadEnv) int {
 	if p.UsesBroad() {
 		pr("NOTE the broad unit (%s, %s) is root-equivalent by design: network and full root capabilities, for %s", units.BroadSocketUnit, units.BroadServiceUnit, strings.Join(broadUsers(p), ", "))
 	} else {
-		pr("no broad unit: the policy uses no packages, unit: broad command or power (remove %s and %s if installed)", units.BroadSocketUnit, units.BroadServiceUnit)
+		pr("no broad unit: the policy uses no packages, unit: broad command or power (install disables and removes %s and %s if they are installed)", units.BroadSocketUnit, units.BroadServiceUnit)
 	}
-	pr("next, as root: install the files in /etc/systemd/system (root:root 0644); create %s (root:root 0700);", units.BackupDir)
-	pr("  systemctl daemon-reload; systemd-analyze verify /etc/systemd/system/%s /etc/systemd/system/%s;", units.SocketUnit, units.ServiceUnit)
-	pr("  systemd-analyze security %s; systemctl enable --now %s", units.ServiceUnit, units.SocketUnit)
+	pr("next, as root: shell-mcp-privd install --policy %s does all of it (TARGET-SETUP §12.3): the review, these units", *policyPath)
+	pr("  written by temp file and rename and verified, the backup store, daemon-reload, the sockets, systemd-analyze security.")
+	pr("by hand instead (TARGET-SETUP §9.2 to §9.4): install the files in /etc/systemd/system (root:root 0644);")
+	pr("  install -o root -g root -m 0700 -d %s %s;", filepath.Dir(units.BackupDir), units.BackupDir)
+	pr("  systemd-analyze verify --man=no /etc/systemd/system/%s /etc/systemd/system/%s;", units.SocketUnit, units.ServiceUnit)
 	if p.UsesBroad() {
-		pr("  systemd-analyze verify /etc/systemd/system/%s /etc/systemd/system/%s; systemctl enable --now %s", units.BroadSocketUnit, units.BroadServiceUnit, units.BroadSocketUnit)
+		pr("  systemd-analyze verify --man=no /etc/systemd/system/%s /etc/systemd/system/%s;", units.BroadSocketUnit, units.BroadServiceUnit)
 	}
+	pr("  systemctl daemon-reload; systemctl enable --now %s%s; systemd-analyze security %s",
+		units.SocketUnit, map[bool]string{true: " " + units.BroadSocketUnit, false: ""}[p.UsesBroad()], units.ServiceUnit)
 	return 0
 }
 
@@ -274,8 +292,27 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 		return 2
 	}
 	pr := func(format string, a ...any) { _, _ = fmt.Fprintf(stdout, format+"\n", a...) }
-	pr("shell-mcp-privd %s check-policy %s", version, *policyPath)
-	failures := 0
+	p, failures := checkPolicyReport(*policyPath, stdout, env)
+	if p == nil {
+		pr("serve would refuse this policy")
+		return 1
+	}
+	if failures > 0 {
+		pr("%d problem(s): serve would refuse", failures)
+		return 1
+	}
+	pr("OK: the helper would serve this policy once its units are generated from it (shell-mcp-privd units --policy %s)", *policyPath)
+	return 0
+}
+
+// checkPolicyReport loads the policy at path once, exactly as serve would,
+// and prints check-policy's report for it. It returns the policy (nil when
+// it does not load) and the number of FAIL lines. check-policy and install
+// both call it, so their checks cannot drift (handoff §3.7), and install
+// generates its units from the very policy reported here.
+func checkPolicyReport(path string, stdout io.Writer, env *loadEnv) (p *policy.Policy, failures int) {
+	pr := func(format string, a ...any) { _, _ = fmt.Fprintf(stdout, format+"\n", a...) }
+	pr("shell-mcp-privd %s check-policy %s", version, path)
 	if builtWithCGO() {
 		failures++
 		pr("FAIL binary: built with cgo; serve refuses (rebuild with CGO_ENABLED=0)")
@@ -284,7 +321,7 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 		failures++
 		pr("FAIL binary: this is the end-to-end test build, with the helper's own checks bypassed; never deploy it")
 	}
-	p, err := env.load(*policyPath)
+	p, err := env.load(path)
 	if err != nil {
 		for _, line := range strings.Split(err.Error(), "\n") {
 			pr("FAIL %s", line)
@@ -293,14 +330,13 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 		if errors.As(err, &oe) {
 			pr("     the policy, its directories and command binaries must be owned by root and not group/other-writable")
 		}
-		pr("serve would refuse this policy")
-		return 1
+		return nil, failures + 1
 	}
 	if err := env.checkVarRun(); err != nil {
 		failures++
 		pr("FAIL host: %v", err)
 	}
-	if fi, err := os.Stat(*policyPath); err == nil && fi.Mode().Perm()&0o077 != 0 {
+	if fi, err := os.Stat(path); err == nil && fi.Mode().Perm()&0o077 != 0 {
 		pr("WARN the policy file is mode %04o; make it root:root 0600 (only root reads it, PRIVILEGED §2)", fi.Mode().Perm())
 	}
 	pr("policy sha256: %s", p.SHA256)
@@ -474,10 +510,85 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 		failures++
 		pr("FAIL sandbox: %v", perr)
 	}
-	if failures > 0 {
-		pr("%d problem(s): serve would refuse", failures)
-		return 1
-	}
-	pr("OK: the helper would serve this policy once its units are generated from it (shell-mcp-privd units --policy %s)", *policyPath)
-	return 0
+	return p, failures
 }
+
+// installHost is the real host for shell-mcp-privd install: setupx's
+// system, this command's check-policy (the same function check-policy
+// runs), and the gate's own policy loader for --gate-policy.
+type installHost struct {
+	*system.System
+	env *loadEnv
+}
+
+// CheckPolicy implements privdsetup.Host.
+func (h *installHost) CheckPolicy(path string, out io.Writer) (p *policy.Policy, fails int) {
+	return checkPolicyReport(path, out, h.env)
+}
+
+// LoadGatePolicy implements privdsetup.Host.
+func (h *installHost) LoadGatePolicy(path, home string) (*gpolicy.Policy, error) {
+	return gpolicy.Load(path, &gpolicy.LoadOptions{Trust: h.env.trust, GateExecutable: privdsetup.GatePath, ServiceHome: home})
+}
+
+// installWith is shell-mcp-privd install (TARGET-SETUP §12.3); production
+// passes productionEnv, and no flag or variable chooses another host.
+func installWith(args []string, stdout, stderr io.Writer, mkEnv func() (*loadEnv, error)) int {
+	o, err := privdsetup.ParseFlags(args)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-privd install: %v\n%s", err, privdsetup.Usage)
+		return privdsetup.ExitUsage
+	}
+	env, err := mkEnv()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-privd install: %v\n", err)
+		return privdsetup.ExitFail
+	}
+	sys, err := system.NewSystem()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-privd install: %v\n", err)
+		return privdsetup.ExitFail
+	}
+	a := &setupx.Auditor{Stderr: stderr, Syslog: "/dev/log", Tag: "shell-mcp-privd", Component: "privd", DryRun: o.DryRun}
+	return privdsetup.Install(o, &installHost{System: sys, env: env}, stdout, a)
+}
+
+// parse validates policy bytes as load validates a file, for policy new's
+// strict load before anything is written.
+func (e *loadEnv) parse(data []byte, file string) (*policy.Policy, error) {
+	lo := &policy.LoadOptions{Trust: e.trust, HelperExecutable: e.executable, SystemBinDirs: e.systemBinDirs}
+	e.lookups(lo)
+	return policy.Parse(data, file, lo)
+}
+
+// policyWith is shell-mcp-privd policy new (POLICY §9) with the load
+// environment and host the constructors return; production passes
+// productionEnv and system.NewSystem.
+func policyWith(args []string, stdout, stderr io.Writer, mkEnv func() (*loadEnv, error), newHost func() (setupx.Host, error)) int {
+	if len(args) == 0 || args[0] != "new" {
+		_, _ = io.WriteString(stderr, policyUsage)
+		return 2
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "/"
+	}
+	o, err := ggen.ParseFlags(args[1:], cwd)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-privd policy new: %v\n%s", err, policyUsage)
+		return 2
+	}
+	env, err := mkEnv()
+	if err == nil {
+		var h setupx.Host
+		if h, err = newHost(); err == nil {
+			a := &setupx.Auditor{Stderr: stderr, Syslog: "/dev/log", Tag: "shell-mcp-privd", Component: "privd", DryRun: o.DryRun || o.Out == "-"}
+			check := func(p string, w io.Writer) int { return checkPolicyWith([]string{"--policy", p}, w, stderr, env) }
+			return ggen.Run(o, pgen.Spec(h, env.parse, check), h, stdout, stderr, a)
+		}
+	}
+	_, _ = fmt.Fprintf(stderr, "shell-mcp-privd policy new: %v\n", err)
+	return 1
+}
+
+const policyUsage = "usage: shell-mcp-privd policy new --answers <file> --out <file>|- [--dry-run]\n"

@@ -1,0 +1,31 @@
+# Run `shell-mcp-gate check-policy --policy <this file>` after every edit.
+# Write it for the worst case: "what would I accept a fully compromised MCP
+# server doing with this key?"
+
+version: 1
+
+# destructive = delete paths, discard git working-tree changes, and
+# destructive policy commands.
+max_tier: destructive
+
+sandbox:
+  landlock: required
+  system_read_exec: []
+  tcp_connect_ports: [443]
+
+limits:
+  max_timeout_s: 600
+  max_delete_entries: 1000
+
+paths:
+  read: [/srv/app]
+  write: [/srv/app/cache]
+
+services:
+  status: ["example-*.service"]
+  control:
+    units: ["example-app.service"]
+    verbs: [stop, start]
+
+redact:
+  patterns: ['(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*\S+']

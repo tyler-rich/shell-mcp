@@ -6,6 +6,10 @@
 # the write roots with ACLs (setfacl), and install the polkit rule from
 #   shell-mcp-gate polkit --policy /etc/shell-mcp/operator.yaml --user svc-shell
 # as /etc/polkit-1/rules.d/60-shell-mcp.rules. There is no sudo anywhere.
+#
+# Run `shell-mcp-gate check-policy --policy <this file>` after every edit.
+# Write it for the worst case: "what would I accept a fully compromised MCP
+# server doing with this key?"
 
 version: 1
 
@@ -61,14 +65,14 @@ commands:
     description: "Packages with available upgrades"
     templates:
       - ["list", "--upgradable"]
+  # {path:read} is resolved under a read root and checked against the
+  # deny list; the resolved path is what findmnt receives. (On Ubuntu
+  # 26.04, coreutils commands such as du resolve to the uutils multi-call
+  # binary and are judged as the utility they run as; check-policy says
+  # so. POLICY §5.)
   - id: app-filesystem
     path: /usr/bin/findmnt
     tier: read
     description: "Filesystem and free space holding an application directory"
     templates:
-      # {path:read} is resolved under a read root and checked against the
-      # deny list; the resolved path is what findmnt receives. (On Ubuntu
-      # 26.04, coreutils commands such as du resolve to the uutils multi-call
-      # binary and are judged as the utility they run as; check-policy says
-      # so. POLICY §5.)
       - ["--noheadings", "--output", "SOURCE,FSTYPE,SIZE,USED,AVAIL", "--target", "{path:read}"]

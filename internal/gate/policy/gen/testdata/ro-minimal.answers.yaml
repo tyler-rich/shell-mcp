@@ -1,0 +1,12 @@
+# Gate policy for the invented host target-a.example.test (fixture).
+#
+# Read-only key for the server at 192.0.2.10.
+
+# A minimal read-only answers file: no services, git or commands, and
+# best-effort Landlock. Every value is invented.
+preset: read-only
+account: { user: svc-shell, uid: 60123 }
+landlock: best-effort
+read: [/srv/app, /var/log/example-app]
+deny: ["**/*.key"]
+journal: { units: [example-app.service] }

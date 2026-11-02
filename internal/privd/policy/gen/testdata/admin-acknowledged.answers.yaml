@@ -1,0 +1,19 @@
+# Admin answers with an acknowledged list-B command, power off, a package
+# section that only upgrades, and best-effort Landlock. Every value is
+# invented.
+
+preset: admin
+account: { user: svc-shell, uid: 60124 }
+landlock: best-effort
+deny: ["**/*.key"]
+root:
+  socket_group: { name: svc-shell-priv, gid: 60125 }
+  read: [/etc/example-app]
+  commands:
+    - id: firewall-list
+      path: /usr/sbin/nft
+      tier: read
+      acknowledge: "firewall rules are listed, never changed"
+      templates: [["list", "ruleset"]]
+  power: { allowed: [poweroff], acknowledge: "lab host, any time" }
+  packages: { allow_upgrade: true }

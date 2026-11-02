@@ -164,6 +164,12 @@ func main() {
 				}
 			}
 		}
+	case "creds":
+		// This process's ids (real, effective, saved, filesystem), its
+		// supplementary groups, its capability sets and NoNewPrivs.
+		for _, k := range []string{"Uid", "Gid", "Groups", "CapPrm", "CapEff", "CapAmb", "NoNewPrivs"} {
+			fmt.Println(statusField(k))
+		}
 	case "read-environ":
 		// Another process's environment: reports only its size and whether
 		// the e2e canary is in it, never the content.

@@ -27,6 +27,8 @@ updates:
       - /scripts/probe
       - /scripts/release
       - /scripts/exposure
+      - /scripts/setup-check
+      - /scripts/caddy-check
     target-branch: dev
     schedule:
       interval: daily
