@@ -190,6 +190,12 @@ step "exposure self-test (weakened unit)" "" exposure_weakened_fails
 if [[ -z "${CI_LOCAL_UNDER_TEST:-}" ]]; then
 	step "setup-check (Debian 13, Ubuntu 24.04, 26.04)" "" bash scripts/setup-check/run.sh
 fi
+# deploy/caddy/Caddyfile against the reference compose, and caddy validate in
+# a test-only pinned image (no network, read-only, no capabilities, non-root;
+# handoff §4.G). Real containers, so the self-test (a fake docker) leaves it out.
+if [[ -z "${CI_LOCAL_UNDER_TEST:-}" ]]; then
+	step "caddy-check (deploy/caddy)" "" bash scripts/caddy-check/run.sh
+fi
 # shell-mcp init's bind form from a real host directory runs on e2e-host only
 # (test/e2e/zz_init_test.go, the disposable runner VM): reported as not run
 # here, never as passed.
@@ -229,6 +235,8 @@ release_snapshot() {
 }
 step "release snapshot build (twice)" "" release_snapshot
 step "release scripts self-test" "" in_go bash scripts/release/release_test.sh
+step "verify-release self-test" "" in_go bash scripts/verify-release_test.sh
+step "doc links and section references" "" in_go go run ./scripts/doccheck
 step "deps-current" "run go get -u ./... && go mod tidy, or bump go.mod's go line" in_go bash scripts/deps-current.sh
 step "deps-current self-test" "" in_go bash scripts/deps-current_test.sh
 step "release-binary-check self-test" "" in_go bash scripts/release-binary-check_test.sh

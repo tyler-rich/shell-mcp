@@ -77,8 +77,12 @@ Checked this session by reading the code named and, for F-1, F-7 and the sshd fa
 Facts this proposal relies on that are **not verified here** and that the named session verifies first, at the source, before building on them:
 - **V-1 (S8-2).** That a stack editor running Compose in its own container cannot resolve `secrets: file:` to a host path while it can pass an absolute bind-mount source to the daemon (the session prompt's statement). Verify in Compose's source or documentation, or by running Compose without a Docker socket mount where possible; if it is false, C's second form is still useful (one mount instead of one entry per file) and nothing else changes. *Verified in S8-2, 2026-11-01: false as stated.* In Compose v5.6.1 (`pkg/compose/create.go`, `buildContainerSecretMounts`), a `file:` secret is a read-only bind mount whose source is passed to the daemon as a string, and a file missing where Compose runs only logs a warning. compose-go v2.16.1 (`paths/resolve.go`, `paths/unix.go`) joins a relative `file:` path, like a relative bind source, onto the project directory as a string. So an editor running Compose in its own container fails on a *relative* path in either form, and an absolute path works in either. C keeps both forms, as this item says: the bind form names the directory once, by its absolute host path.
 - **V-2 (S8-1).** Whether stopping or restarting an `Accept=yes` socket ends instances that are serving a connection at that moment (`systemd.socket(5)`, `systemd.unit(5)` for 255, 257 and 259). B restarts a socket only when its own unit text changed (§4.B), and must not end a request in flight if that can be avoided.
-- **V-3 (S8-4).** That `docker compose run` of the reference service fails while the server runs, because the service has a fixed `ipv4_address`. That is why `doctor` runs inside the running container with `docker compose exec shell-mcp /shell-mcp doctor`, or `docker exec <container> …` where a stack editor named the container. The reference compose sets no `container_name`, so Compose names it `<project>-shell-mcp-1`, and no doc may assume a fixed container name.
-- **V-4 (S8-4).** Caddy's `reverse_proxy` header behaviour (that it replaces a client's `X-Forwarded-For` unless `trusted_proxies` is set, and appends the peer otherwise) and the matcher syntax, from the Caddy documentation of the version in the test's pinned image. Also verify that `caddy validate` runs with `--network none` for the example's site names: it must not try to obtain a certificate. If it cannot run without the network, STOP and ask; do not give the test container a network.
+- **V-3 (S8-4).** That `docker compose run` of the reference service fails while the server runs, because the service has a fixed `ipv4_address`. That is why `doctor` runs inside the running container with `docker compose exec shell-mcp /shell-mcp doctor`, or `docker exec <container> …` where a stack editor named the container. The reference compose sets no `container_name`, so Compose names it `<project>-shell-mcp-1`, and no doc may assume a fixed container name. *Verified in S8-4, 2026-11-02: true.* With Docker Compose v5.6.1, a service on the reference network shape was started with a fixed `ipv4_address` and no `container_name`. A stand-in image was used, labelled and unprivileged, and removed afterwards. Compose named the container `<project>-shell-mcp-1`. `docker compose run` of the same service while it ran failed: "failed to set up container networking: Address already in use". `docker compose exec` ran in it. README's Upgrading step, which ran `docker compose run --rm shell-mcp check` with the server up, is corrected (H).
+- **V-4 (S8-4).** Caddy's `reverse_proxy` header behaviour (that it replaces a client's `X-Forwarded-For` unless `trusted_proxies` is set, and appends the peer otherwise) and the matcher syntax, from the Caddy documentation of the version in the test's pinned image. Also verify that `caddy validate` runs with `--network none` for the example's site names: it must not try to obtain a certificate. If it cannot run without the network, STOP and ask; do not give the test container a network. *Verified in S8-4, 2026-11-02, in Caddy v2.11.7's source and image* (`caddy:2.11.7@sha256:36c24ad9…`, the newest stable):
+- **X-Forwarded-For.** `modules/caddyhttp/reverseproxy/reverseproxy.go`, `addForwardedHeaders`: with the peer untrusted (no `trusted_proxies` in `reverse_proxy` and none at the server level, `determineTrustedProxy` in `server.go`), Caddy *sets* `X-Forwarded-For` to the peer's address, replacing a client's. With the peer trusted, it appends the peer to the prior value.
+- **The matcher.** `remote_ip` matches `r.RemoteAddr`, the direct connection (`ip_matchers.go`); `client_ip` is the one that honours trusted proxies. `caddy adapt` shows the two `handle` blocks in one mutually exclusive group.
+- **`caddy validate` offline.** It runs with `--network none`, a read-only root with tmpfs for `/data` and `/config`, `--cap-drop ALL`, `no-new-privileges` and uid 65532, and requests no certificate for the `.test` names.
+- **One finding.** The official binary carries the file capability `cap_net_bind_service=ep`, and with no capabilities and `no-new-privileges` the kernel refuses to exec it (EPERM; capabilities(7), a file whose effective bit is set and whose permitted set cannot all be granted). The test-only image therefore removes the capability (`setcap -r`): validate binds nothing, and it needs neither the network nor root.
 
 ## 3. Rules every subcommand follows
 
@@ -445,6 +449,17 @@ root:                       # only with preset admin; becomes the privileged pol
 
 **Supersedes.** TARGET-SETUP §10's `shell-mcp check` (doctor first; `check` stays for scripts), and the static half of CLIENTS §1's "Set the value from what the server logs".
 
+*Decided 2026-11-02 in S8-4 (the maintainer, on the disagreements the session raised before building):*
+- **A 403 without the server's own headers is a WARN.** It applies to the approval page and to `--mcp-url`. A proxy limited to the LAN or VPN (deploy/caddy's example) may refuse the container's own address, so that the page itself is not reached. The row says so and says to check from a LAN or VPN machine. A 403 *with* the page's headers is the page refusing an untrusted peer: a FAIL naming `SHELL_MCP_TRUSTED_PROXIES`.
+- **The broad probe keeps its two operations.** The "not probed" line was corrected, because the package previews are read operations too: "not probed: doctor uses only the index-update or power preview on it, and this policy allows neither", plus the `systemctl status` hint.
+
+*As built (S8-4):*
+- **Rows, components and failures.** One row per check, with `status`, `component`, `detail` and `fix`; `fix` names the command and the TARGET-SETUP section. A refused configuration is a FAIL, and nothing else runs.
+- **Secrets.** Every `*_FILE` secret is checked: a FAIL for any group or other bit, not only read. A startup warning about a file that doctor does not stat itself (a targets file's `key_file`) is a FAIL too.
+- **Gateways.** They are read from both routing tables: every route with `RTF_GATEWAY`, not only the default. An unreadable IPv4 table is a FAIL, since the gateway is then unknown.
+- **The container test.** It runs in `scripts/setup-check/`, in both init compose forms, through `docker compose exec` as the quick start documents it. Then the bind form restarts with the network's gateway trusted, and doctor runs by container id.
+- **e2e-host.** The runner's server, gate and helper healthy, then each component broken in turn (`test/e2e/zz_doctor_test.go`).
+
 ### F. `verify-release.sh`
 
 **What it does.** `scripts/verify-release.sh <version> [--dir <dir>] [--sums <file>]`, POSIX `sh`, also in the examples archive, run as any user (never root needed, never `sudo`), downloading nothing itself unless asked: it verifies the files present in `--dir`.
@@ -456,6 +471,12 @@ root:                       # only with preset admin; becomes the privileged pol
 **Files.** Reads the files in `--dir`; writes nothing. **Refusals:** a missing tool and no `--sums`; a file present but not listed; any check failing (exit 1, naming the file). **Audit:** none (a user tool). **Tests** (stub first): a `sh` test (`scripts/verify-release_test.sh`, like `scripts/release/release_test.sh`) with fake `cosign` and `gh` on `PATH` in a temp directory that record their argv and fail on demand: the identity is the tag's, never a branch's; a tampered file fails `sha256sum`; an unlisted file fails; no tool and no `--sums` refuses; shellcheck clean. The real verification runs in the release workflow after signing (`verify.sh` already does; the job gains one run of `verify-release.sh` against the files just signed).
 
 **Supersedes.** TARGET-SETUP §2's commands (kept in the reference part and in README "Verifying a release", which stays the root of trust).
+
+*Decided 2026-11-02 in S8-4 (the maintainer):* the release workflow's dry runs sign with the run's own ref, never a tag, so the script cannot pass on their files, and no identity override exists in any form.
+- **Release and dry run.** A release's files must pass. On every run, a changed binary, a changed `SHA256SUMS`, a missing bundle and another release's identity must each be refused for its own reason (`scripts/release/verify-release-check.sh`).
+- **The dry run's version.** `X.Y.Z-dryrun.<commit>` only names the files: it never makes the script exit 0, under any flags, `--sums` included. The self-test proves it in every mode, with fakes that accept everything.
+- **The wrong issuer** cannot be produced with real signatures. The self-test covers it, with a fake cosign that checks the identity and issuer it is given against what a fixture signed.
+- **shellcheck.** It is in neither CI nor ci-local, and adding it would be a new tool, so the script is not shellchecked. Instead, the self-test runs it with `/bin/sh` (dash on Debian and Ubuntu), so POSIX sh is what is tested.
 
 ### G. `deploy/caddy/`
 
@@ -488,6 +509,11 @@ Decided (§7 Q7). G is two example files: **no compose file, and no image added 
 
 **Supersedes:** nothing; CLIENTS §1 and `deploy/README.md`'s "Attach the proxy" paragraph point at the README.
 
+*As built in S8-4 (the session prompt's revision of Q7):*
+- **The Caddyfile's shape.** Both sites, not only the approval site, have the LAN/VPN `remote_ip` matcher, with `reverse_proxy` inside `handle @private` and `respond 403` in a separate `handle {}`.
+- **The README's properties.** It lists five: the user's prompt adds restarting, not reloading, after an atomic replace of a single-file mount. For each, it names the Caddy, nginx and Traefik settings, checked against their documentation.
+- **The test.** `scripts/caddy-check/` checks drift against `deploy/docker-compose.yml` and the README, the shape, and `caddy validate` with a negative control. The test-only image removes the binary's file capability (V-4). The check runs in ci-local, in a CI job in the `ci` gate, and under Dependabot's docker ecosystem.
+
 ### H. The quick start
 
 TARGET-SETUP becomes two parts: **Quick start** (below, about ten steps) and **Reference** (today's §0–§11, unchanged in substance, each step marked "done by `install`" where it is). README's quick start points at it. Draft, for the implementing session to finish once A–G exist:
@@ -506,6 +532,11 @@ TARGET-SETUP becomes two parts: **Quick start** (below, about ten steps) and **R
 Inherent and left as steps: the two policies' content (4), the key's transfer (1→5), write roots (6), the privileged review (7), the proxy and its addresses (8), the client (10).
 
 **Tests:** every command in the quick start runs as written in `scripts/setup-check/` (marked *(container)*) or e2e-host (marked *(real host)*), as S5b marked TARGET-SETUP; a docs check that every `§` reference and relative link resolves (the S5b read-through, scripted).
+
+*As built in S8-4 (the session prompt):*
+- **Where the quick start is.** It is README's, ten numbered steps. TARGET-SETUP is the reference part: every step it had, each hand step naming its command, plus §12.6 (`doctor`) and §12.7 (`verify-release.sh`).
+- **The privileged half.** It is one step (7), after the gate's `install`, as S8-3 decided: the gate's `policy new` (4), `install` (5), then the helper's `policy new` and `install` (7).
+- **The docs check.** `go run ./scripts/doccheck` checks the live documents (README, deploy, docs/ but ARCHIVE and the handoffs) in ci-local and CI.
 
 ## 5. Pushback and what is not proposed
 

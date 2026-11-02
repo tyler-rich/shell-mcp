@@ -1,0 +1,47 @@
+# An example Caddyfile for shell-mcp: one way to meet the properties every
+# reverse proxy in front of it needs (deploy/caddy/README.md). Placeholders
+# only: mcp.example.test and approve.example.test, a LAN 192.0.2.0/24 and a
+# VPN 198.51.100.0/24 (documentation ranges: put your own), and the server at
+# 172.30.80.10 on the `front` network of deploy/docker-compose.yml. Caddy
+# itself joins `front` at 172.30.80.5, the only entry in
+# SHELL_MCP_TRUSTED_PROXIES.
+#
+# X-Forwarded-For: there is no trusted_proxies here, neither in the global
+# options nor in reverse_proxy, so Caddy replaces any X-Forwarded-For a
+# client sends with the address that connected to it, and the server, which
+# believes only 172.30.80.5, sees each client's own address.
+#
+# TLS is your choice. Caddy's automatic certificates need a public DNS name
+# that it can prove it serves (these .test names get none); `tls internal`
+# needs every client's and approver's device to trust Caddy's local root; or
+# terminate TLS in front of Caddy, or run over a VPN.
+#
+# Reloading: a Caddyfile mounted into Caddy's container as a single file needs
+# a container restart after an edit, not `caddy reload`. An editor that saves
+# by writing a new file and renaming it over the old one leaves the
+# container's mount on the old file, so a reload reads the old content. Mount
+# the directory that holds the Caddyfile instead, and a reload sees the edit.
+
+# The MCP endpoint (the server's SHELL_MCP_PORT, 8080), from the LAN and the
+# VPN only. Everything else gets 403.
+mcp.example.test {
+	@private remote_ip 192.0.2.0/24 198.51.100.0/24
+	handle @private {
+		reverse_proxy 172.30.80.10:8080
+	}
+	handle {
+		respond 403
+	}
+}
+
+# The approval page (the server's SHELL_MCP_APPROVAL_PORT, 8081), from the
+# LAN and the VPN only, never from the internet. Everything else gets 403.
+approve.example.test {
+	@private remote_ip 192.0.2.0/24 198.51.100.0/24
+	handle @private {
+		reverse_proxy 172.30.80.10:8081
+	}
+	handle {
+		respond 403
+	}
+}

@@ -3,7 +3,8 @@
 #   - shell-mcp, shell-mcp-gate and shell-mcp-privd for linux/amd64 and
 #     linux/arm64, named <binary>_<version>_linux_<arch>; each one must pass
 #     scripts/release-binary-check.sh;
-#   - shell-mcp_<version>_examples.tar.gz: examples/, deploy/, LICENSE and
+#   - shell-mcp_<version>_examples.tar.gz: examples/, deploy/,
+#     verify-release.sh (run with sh; scripts/verify-release.sh), LICENSE and
 #     NOTICE under shell-mcp_<version>/, reproducible (sorted names, the
 #     commit's time, owner 0:0);
 #   - LICENSE and NOTICE.
@@ -63,7 +64,7 @@ prefix="shell-mcp_${version}"
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 mkdir "$stage/$prefix"
-cp -R examples deploy LICENSE NOTICE "$stage/$prefix/"
+cp -R examples deploy LICENSE NOTICE scripts/verify-release.sh "$stage/$prefix/"
 find "$stage/$prefix" -type d -exec chmod 0755 {} +
 find "$stage/$prefix" -type f -exec chmod 0644 {} +
 tar --sort=name --mtime="@$epoch" --owner=0 --group=0 --numeric-owner \

@@ -44,6 +44,8 @@ type gateReply struct {
 	noID     bool
 	// noHelper answers a priv_* op without the helper block (an older gate).
 	noHelper bool
+	// unit is the helper block's unit (default core).
+	unit string
 	// silent reads the request and closes the session without an answer
 	// (the connection lost after the request was sent).
 	silent bool
@@ -97,7 +99,11 @@ func (g *recordingGate) exec(_ context.Context, s *sshtest.Session) uint32 {
 	gate := fmt.Sprintf(`{"version":"0.1.0","principal":"readonly-key","policy_sha256":%q,"max_tier":"operator","duration_ms":2}`, sha)
 	helper := ""
 	if strings.HasPrefix(req.Op, "priv_") && !r.noHelper {
-		helper = fmt.Sprintf(`,"helper":{"version":"0.1.0","principal":"shell-mcp-privd","policy_sha256":%q,"max_tier":"destructive","unit":"core","duration_ms":1}`, helperSHA)
+		unit := r.unit
+		if unit == "" {
+			unit = "core"
+		}
+		helper = fmt.Sprintf(`,"helper":{"version":"0.1.0","principal":"shell-mcp-privd","policy_sha256":%q,"max_tier":"destructive","unit":%q,"duration_ms":1}`, helperSHA, unit)
 	}
 	if r.code != "" {
 		// A gate's refusal carries its own block, as a success does.

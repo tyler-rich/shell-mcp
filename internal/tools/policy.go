@@ -392,10 +392,15 @@ func (d *Deps) privPolicy(ctx context.Context, target string) (summary *PrivPoli
 	if resp.Helper == nil || resp.Helper.PolicySHA256 == "" {
 		return nil, []string{what + "the answer carries no helper block"}
 	}
-	w := env.Data
-	if w.PolicySHA256 != resp.Helper.PolicySHA256 {
+	if env.Data.PolicySHA256 != resp.Helper.PolicySHA256 {
 		return nil, []string{what + "its policy hash is not the helper block's"}
 	}
+	return privPolicyOf(env.Data), env.Warnings
+}
+
+// privPolicyOf is the summary as tools report it, with D-006's approval
+// rule applied to each operation and command.
+func privPolicyOf(w *privPolicyWire) *PrivPolicy {
 	p := &PrivPolicy{
 		PolicySHA256: w.PolicySHA256, MaxTier: w.MaxTier, Limits: w.Limits, Roots: w.Roots, DenyPatterns: w.DenyPatterns,
 		Owners: w.Owners, ModesMax: w.ModesMax, BackupsKeep: w.BackupsKeep, BackupsMaxStoreBytes: w.BackupsMaxStoreBytes,
@@ -412,5 +417,5 @@ func (d *Deps) privPolicy(ctx context.Context, target string) (summary *PrivPoli
 	if p.Findings == nil {
 		p.Findings = []PrivFinding{}
 	}
-	return p, env.Warnings
+	return p
 }

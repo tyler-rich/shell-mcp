@@ -6,7 +6,9 @@ Every name below is a placeholder: the service account `svc-shell` (uid/gid 6012
 
 **How each step was checked.** Every command marked *(container)* was run as written, as root, in throwaway containers of `debian:trixie` (Debian 13), `ubuntu:24.04` and `ubuntu:26.04`, against the binaries of the commit this guide was released with (ARCHIVE §14, 2026-10-25 S5b). Commands marked *(real host)* need something a container does not have: a running systemd and polkit, journald, a kernel with the Landlock ABI the gate needs, or the published release. The end-to-end tests (`e2e-host` in CI) run the gate and the helper on a real Ubuntu 26.04 machine.
 
-**The install commands.** Steps 4, 7 and 8 are done by `shell-mcp-gate install`, and steps 9.2 to 9.4 by `shell-mcp-privd install` (§12). They write exactly the files those steps write, byte for byte, with the same owners and modes, and refuse the mistakes the steps warn about: a key line without `restrict`, a `from=` wider than /24, an account in a privileged group, a uid that already owns files, units left on an old policy hash. Each step below says which command does it; the hand steps stay as the reference and as the manual path. The two policies (steps 5 and 9.1) can be generated from one answers file by `shell-mcp-gate policy new` and `shell-mcp-privd policy new` (POLICY §9); the gate's comes before `install`, the privileged one after it, because `install` creates the socket group the privileged policy names.
+**The quick start and this reference.** The README's quick start sets up a target and the server in ten steps with the commands below; this guide is their reference. It keeps every step by hand, with its checks and per-OS notes, as the manual path and as what the commands write. Each step says which command does it.
+
+**The install commands.** Steps 4, 7 and 8 are done by `shell-mcp-gate install`, and steps 9.2 to 9.4 by `shell-mcp-privd install` (§12). Step 2 is `verify-release.sh` (§12.7) and step 10 `shell-mcp doctor` (§12.6). They write exactly the files those steps write, byte for byte, with the same owners and modes, and refuse the mistakes the steps warn about: a key line without `restrict`, a `from=` wider than /24, an account in a privileged group, a uid that already owns files, units left on an old policy hash. Each step below says which command does it; the hand steps stay as the reference and as the manual path. The two policies (steps 5 and 9.1) can be generated from one answers file by `shell-mcp-gate policy new` and `shell-mcp-privd policy new` (POLICY §9); the gate's comes before `install`, the privileged one after it, because `install` creates the socket group the privileged policy names.
 
 ## 0. Requirements
 
@@ -25,7 +27,7 @@ The helper's generated units were verified against systemd 257 and 259 (PRIVILEG
 cat /sys/kernel/security/lsm
 ```
 
-The list must contain `landlock`. Step 5's `check-policy` reports the kernel's Landlock ABI exactly (`kernel Landlock ABI N`), which is the check that counts.
+The list must contain `landlock`. Step 5's `check-policy` reports the kernel's Landlock ABI exactly (`kernel Landlock ABI N`), which is the check that counts. *`shell-mcp-gate install` (§12.1) checks Landlock against the policy's mode before it writes anything, and `shell-mcp doctor` (§12.6) reports each target's ABI as its gate applies it.*
 
 ```bash
 systemctl --version
@@ -36,6 +38,8 @@ systemctl --version
 ```
 
 ## 2. Download and verify the release *(real host: needs the published release)*
+
+*Done by `verify-release.sh` (§12.7) from every release after 0.2.0: the checks below, for every file in a directory, with cosign or gh.*
 
 Each release on GitHub carries, per architecture, `shell-mcp_X.Y.Z_linux_<arch>` (the server), `shell-mcp-gate_X.Y.Z_linux_<arch>` and `shell-mcp-privd_X.Y.Z_linux_<arch>`, plus `shell-mcp_X.Y.Z_examples.tar.gz` (the example policies and `deploy/`), `SHA256SUMS`, a Sigstore bundle `<file>.sigstore.json` for every binary, the archive and `SHA256SUMS`, and a CycloneDX SBOM per binary. The examples below use 0.2.0 on amd64.
 
@@ -70,6 +74,8 @@ gh attestation verify shell-mcp-gate_0.2.0_linux_amd64 --repo tyler-rich/shell-m
 These are the commands the release workflow's own `scripts/release/verify.sh` runs after signing, including the refusal of another ref; they cannot be run before the release exists. The release notes repeat them with the image digest.
 
 ## 3. Install the binaries *(container)*
+
+*A hand step in every setup (the README's quick start, step 3): no command installs the binaries.*
 
 ```bash
 install -o root -g root -m 0755 shell-mcp-gate_0.2.0_linux_amd64 /usr/local/bin/shell-mcp-gate
@@ -170,6 +176,8 @@ It prints `ok`, `WARN` and `FAIL` lines, then the effective policy, and exits no
 Run `check-policy` again after every edit; the gate re-reads the policy on every request, so there is nothing to restart.
 
 ## 6. Write roots, repositories and commands' paths *(container)*
+
+*A hand step in every setup: which directories the gate may change is the application's decision. `shell-mcp-gate install` prints the write roots that `check-policy` warned about.*
 
 `paths.write` roots must be writable by the service account. How you grant that decides what else works under them, because the gate's rules for commands' paths and for git repositories count a directory as open when an account other than root and the service account owns it, or when it is group- or world-writable (and for an ACL, the group bits are the ACL mask) or sticky (POLICY §4, "Commands' paths"; POLICY §7, "The repository is closed").
 
@@ -373,6 +381,14 @@ Then run `check-policy` on that policy again, as in step 5.
 
 ## 10. Confirm it works
 
+*Done by `shell-mcp doctor` (§12.6), which runs `check` and then checks the helper's sockets, the secrets, the trusted proxies, the approval page and the MCP endpoint, naming the step that fixes each failure. `check` stays, for scripts.*
+
+With the reference compose, inside the running server's container:
+
+```bash
+docker compose exec shell-mcp /shell-mcp doctor
+```
+
 From the server, with the target configured (`docs/CLIENTS.md`, `deploy/README.md`):
 
 ```bash
@@ -400,7 +416,7 @@ The gate writes one JSON line per request (authpriv), the helper one per connect
 
 ## 12. The install commands
 
-`shell-mcp-gate install` does steps 4, 7 and 8, `shell-mcp-gate host-key` prints step 7's pin, and `shell-mcp-privd install` does steps 9.2 to 9.4. They write the same files as the hand steps, byte for byte, with the same owners and modes, so a host set up by hand shows every item `unchanged`. They change no security property: the gate and the helper check everything they checked before, whoever wrote the files.
+`shell-mcp-gate install` does steps 4, 7 and 8, `shell-mcp-gate host-key` prints step 7's pin, and `shell-mcp-privd install` does steps 9.2 to 9.4. They write the same files as the hand steps, byte for byte, with the same owners and modes, so a host set up by hand shows every item `unchanged`. They change no security property: the gate and the helper check everything they checked before, whoever wrote the files. The policies come from `policy new` (§12.5). Two more commands frame the setup and install nothing: `shell-mcp doctor` checks a running deployment from the server's side (§12.6, step 10), and `verify-release.sh` verifies the downloaded release before anything is installed (§12.7, step 2).
 
 ### 12.1 `shell-mcp-gate install` *(container; the reload: real host)*
 
@@ -516,3 +532,98 @@ A unit file is replaced only when it carries the `# Generated by shell-mcp-privd
 ### 12.5 `shell-mcp-gate policy new` and `shell-mcp-privd policy new` *(container)*
 
 They write steps 5 and 9.1 (and 9.5's section) from one answers file and a preset (POLICY §9), with the rules of 12.4: root only and never a forced command (except `--out -`, which only prints), the same temp files, read-back, `--dry-run`, rollback when `check-policy` fails after the write, and audit lines (with the preset). The written file is an owned file: an existing one with other content is refused with a diff, never overwritten. Run the gate's before `shell-mcp-gate install` and the helper's after it.
+
+### 12.6 `shell-mcp doctor` *(container)*
+
+On the server host, inside the running server's container, so that it sees the server's own environment, secrets and networks:
+
+```bash
+docker compose exec shell-mcp /shell-mcp doctor --mcp-url https://mcp.example.test/mcp
+```
+
+The reference compose sets no `container_name`, so Compose names the container `<project>-shell-mcp-1`. A stack editor shows the name it gave: use the editor's console, or `docker exec <container> /shell-mcp doctor`. Never use `docker compose run`: the second container it starts asks for the server's fixed address, which Docker refuses while the server runs ("Address already in use").
+
+| Flag | Meaning |
+|---|---|
+| `--json` | The result as one JSON object: `ok`, and `rows`, each with `status`, `component`, `detail` and `fix`. |
+| `--mcp-url <url>` | The MCP endpoint as clients reach it, `https://<name>/mcp`: one `POST` without a token is sent there. Without it, the endpoint is not checked (a NOTE). |
+| `--ca-file <file>` | A PEM file of the CA that signs the proxy's certificates, for a private CA. Default: the system's roots. |
+
+It prints one `ok`, `WARN`, `FAIL` or `NOTE` line per check, each failure with a `fix:` line naming the command and the section that fixes it, then a one-line result. Exit 0 with no FAIL, 1 with one, 2 for usage. Every row comes from a probe; what it cannot see is a NOTE that says so. In order:
+
+- **`configuration`.** The variables, loaded exactly as `serve` loads them. A refusal is a FAIL that names the variable, and nothing else runs. Each startup warning is a WARN.
+- **`secret <variable>`.** Each file named by `SHELL_MCP_TOKEN_FILE`, `SHELL_MCP_SSH_KEY_FILE`, `SHELL_MCP_APPROVERS_FILE`, `SHELL_MCP_APPROVAL_TLS_KEY_FILE` or `SHELL_MCP_APPROVAL_NOTIFY_TOKEN_FILE`:
+  - group or other access is a FAIL (the server only warns at start), and so is anything but a regular file;
+  - an owner other than the container's own uid is a WARN.
+- **`target <name>`.** What `check` does: the pin verified, SSH authentication, and the gate's `hello`. The row reports the gate's version, protocol, principal, policy hash, `max_tier`, the sandbox's mode and Landlock ABI, and the profile's tools it can serve.
+  - A sandbox that is not applied, or `best-effort`, is a WARN.
+  - The failures and their fixes:
+
+    | Code | Fix |
+    |---|---|
+    | `host_key_mismatch` | the pin from `shell-mcp-gate host-key` (§12.2) |
+    | `auth_failed_ssh` | the key line, `--from` (§12.1) |
+    | `target_unreachable`, `timeout` | the network and sshd (§7) |
+    | `gate_unavailable`, the gate not installed | §3 |
+    | `install_insecure` | `check-policy` as the account (§5, §12.1) |
+    | `sandbox_unavailable` | Landlock (§0) |
+    | `protocol_mismatch` | upgrade (README, Upgrading) |
+- **`helper <name> core`**, when the gate forwards privileged operations. `priv_policy` through the core socket, at the read ceiling. The row reports the helper's version, the privileged policy's hash and its unit.
+  - `helper_unavailable` (the socket is not listening): `shell-mcp-privd install` (§12.3).
+  - `helper_refused` (the peer check): `client_uid` and the socket group (§12.3, §12.1).
+  - `helper_policy_mismatch`: `install --accept` with the new hash (§12.3).
+  - `protocol_mismatch`: upgrade.
+  - The helper's other self-check codes: PRIVILEGED §7 and the helper's journal.
+- **`helper <name> broad`**, through a read operation that changes nothing, chosen from the policy the core socket reported:
+  - `priv_pkg_update_index_preview` when the policy allows the index update;
+  - otherwise `priv_power_preview` for the first allowed power action.
+
+  The broad unit logs every request it serves at WARN, and the row says so. A preview the broad helper itself refuses (a dpkg lock held, a blocker) still shows the socket works, and the row reports the refusal. A policy whose only broad use is `unit: broad` commands, or packages without the index update, gets a NOTE that the socket is not probed. Its state then shows on the first broad call, and on the target in `systemctl status shell-mcp-privd-broad.socket`.
+- **`trusted proxy <entry>`**, for each entry of `SHELL_MCP_TRUSTED_PROXIES`, checked statically (CLIENTS §1):
+  - an entry that is, or holds, a gateway of the container's own routes (`/proc/net/route`, `/proc/net/ipv6_route`) is a FAIL;
+  - a prefix, or an address on no network the container is attached to, is a WARN.
+
+  A NOTE says that whether the server sees each client's own address is the log-line check, run once through the proxy (`deploy/caddy/README.md`). An empty list is a NOTE: `X-Forwarded-For` is then never believed.
+- **`approval page`**, under `SHELL_MCP_APPROVAL_METHOD=web`. A `GET` of `SHELL_MCP_APPROVAL_PUBLIC_URL`, with no proxy variables, no redirect followed, and the system's roots or `--ca-file`. The page is told from another service by its own headers: `Content-Security-Policy` with `frame-ancestors 'none'`, `X-Frame-Options: DENY` and `Cache-Control: no-store`.
+
+  | Answer | Row |
+  |---|---|
+  | 200 from the page | ok, with the certificate's end date (a WARN within 14 days) |
+  | 403 from the page | FAIL: it serves only the proxies in `SHELL_MCP_TRUSTED_PROXIES` |
+  | 403 without the page's headers | WARN: a proxy limited to the LAN or VPN refused the container's address, so check from a LAN or VPN machine |
+  | a redirect, another service, a certificate that does not verify, no answer | FAIL |
+
+  A NOTE says that doctor cannot show the page is unreachable from outside the LAN or VPN.
+- **`mcp endpoint`**, with `--mcp-url`. One `POST` without a token, which does not count toward the lockout (ARCHITECTURE §3).
+
+  | Answer | Row |
+  |---|---|
+  | 401 with `WWW-Authenticate: Bearer realm="shell-mcp"` | ok |
+  | 421 | FAIL: the name is missing from `SHELL_MCP_ALLOWED_HOSTS` |
+  | 403 without the server's headers | WARN, as for the approval page |
+  | 2xx | FAIL: the endpoint answered without a token |
+  | another answer, or none | FAIL |
+
+It writes nothing and never sends the token anywhere. The gate and the helper log its read requests on the target under the server key's principal, which is the evidence it ran there. `shell-mcp check` is unchanged: the target checks alone, as JSON for scripts.
+
+### 12.7 `verify-release.sh` *(real host: needs the published release)*
+
+Step 2's checks, for every file in a directory, from every release after 0.2.0. It is `scripts/verify-release.sh` in the repository and `verify-release.sh` in the examples archive. Run it with `sh`, as any user, from a checkout at the release's tag:
+
+```bash
+sh scripts/verify-release.sh <version> [--dir <dir>] [--sums <verified SHA256SUMS>]
+```
+
+`<version>` is `X.Y.Z`. `--dir` (default: the current directory) holds the downloaded files and nothing else: every file in it but `SHA256SUMS` and the `*.sigstore.json` bundles must be a release file.
+
+- **Always:** every file present must be listed in `SHA256SUMS` and match it, and every binary and the archive must be of `<version>`.
+- **With cosign:** `SHA256SUMS`, each binary and the archive must verify against their bundles. The certificate identity is `https://github.com/tyler-rich/shell-mcp/.github/workflows/release-build.yml@refs/tags/v<version>`, and the issuer is `https://token.actions.githubusercontent.com`. These are `scripts/release/verify.sh`'s identity and issuer, and a self-test holds the two scripts equal.
+- **With gh:** each listed file must have a provenance attestation from that workflow at `refs/tags/v<version>`.
+- **With both installed,** both run.
+- **With neither,** only `--sums <file>` is accepted: a `SHA256SUMS` verified with cosign on another machine and copied over. The files are checked against it, the script says that the signature was checked elsewhere, and a different `SHA256SUMS` in `--dir` is refused. Without cosign, gh or `--sums`, it refuses and says how to get one.
+
+It downloads nothing itself (cosign and gh fetch what their own verification needs). It never compares a hash with what a server returns: that would show only that GitHub served the same bytes twice. It writes nothing and needs no root. Exit 0 only when every check passed, 1 when one failed or it refused, 2 for usage.
+
+A dry run's version (`X.Y.Z-dryrun.<commit>`) only names the files: the checks run, then the script refuses, in every mode, `--sums` included. The release workflow runs the script after signing: a release's files must pass, and a changed binary, a changed `SHA256SUMS`, a missing bundle and another release's identity must each be refused.
+
+Read the script once. The copy in the examples archive cannot vouch for the archive it is in, so step 2's commands stay the root of trust.
