@@ -102,7 +102,7 @@ packages:
   allow_upgrade: false           # apt-get upgrade of everything installed
 ```
 
-`examples/privileged/privileged.yaml` is a complete, commented example with placeholders; a test loads it and generates both unit pairs from it.
+`examples/privileged/privileged.yaml` is a complete, commented example with placeholders; a test loads it and generates both unit pairs from it. `shell-mcp-privd policy new` writes a privileged policy from an answers file and that example (POLICY §9); the answers file is an input format, not a change to this schema.
 
 Rules:
 - Strict parsing, as the gate policy. Roots absolute and already clean; not `/`, `/proc`, `/sys`, `/dev`, `/run`. A root may appear under both `paths.read` and `paths.write` (write roots are readable anyway).
