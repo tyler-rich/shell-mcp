@@ -723,6 +723,51 @@ func TestRefusalsReal(t *testing.T) {
 	}
 }
 
+// TestApproverNeedsTerminal: the seed, its URI and QR code go to a terminal
+// only. Off one, --approver for a new name is refused before anything is
+// created, in a dry run too (which predicts the real run), with a message
+// naming both ways on: run init interactively, or enrol later with
+// shell-mcp approver add.
+func TestApproverNeedsTerminal(t *testing.T) {
+	uid, gid := ids()
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, dir string)
+		extra []string
+	}{
+		{"fresh directory", func(*testing.T, string) {}, nil},
+		{"fresh directory, dry run", func(*testing.T, string) {}, []string{"--dry-run"}},
+		{"token and key already there", func(t *testing.T, dir string) {
+			if r := runReal(t, realEnv(false), idArgs(dir)...); r.code != 0 {
+				t.Fatalf("init without --approver: exit %d\n%s%s", r.code, r.stdout, r.stderr)
+			}
+		}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := newDir(t)
+			c.setup(t, dir)
+			before := snapshot(t, dir)
+			r := runReal(t, realEnv(false), append([]string{"--dir", dir, "--uid", u(uid), "--gid", u(gid), "--approver", "alice"}, c.extra...)...)
+			if r.code != 1 {
+				t.Fatalf("exit %d, want 1\n%s%s", r.code, r.stdout, r.stderr)
+			}
+			for _, want := range []string{"not a terminal", "run init interactively", "shell-mcp approver add"} {
+				if !regexp.MustCompile(`(?m)^FAIL .*` + regexp.QuoteMeta(want)).MatchString(r.stdout) {
+					t.Errorf("no FAIL naming %q:\n%s", want, r.stdout)
+				}
+			}
+			if after := snapshot(t, dir); !sameSnapshot(before, after) {
+				t.Error("a refused run changed the filesystem")
+			}
+			noTemps(t, dir)
+			if out := r.stdout + r.stderr; strings.Contains(out, "otpauth://") || strings.Contains(out, "secret=") {
+				t.Errorf("a refused run showed a seed:\n%s", out)
+			}
+		})
+	}
+}
+
 // --- The fake host: other uids, root, failures --------------------------------------
 
 const fdir = "/srv/shell-mcp/secrets"
