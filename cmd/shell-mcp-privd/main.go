@@ -24,6 +24,7 @@ import (
 	gpolicy "github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/gate/setupx"
+	"github.com/tyler-rich/shell-mcp/internal/gate/setupx/system"
 	"github.com/tyler-rich/shell-mcp/internal/privd/ops"
 	"github.com/tyler-rich/shell-mcp/internal/privd/policy"
 	privdsetup "github.com/tyler-rich/shell-mcp/internal/privd/setup"
@@ -509,7 +510,7 @@ func checkPolicyReport(path string, stdout io.Writer, env *loadEnv) (p *policy.P
 // system, this command's check-policy (the same function check-policy
 // runs), and the gate's own policy loader for --gate-policy.
 type installHost struct {
-	*setupx.System
+	*system.System
 	env *loadEnv
 }
 
@@ -536,7 +537,7 @@ func installWith(args []string, stdout, stderr io.Writer, mkEnv func() (*loadEnv
 		_, _ = fmt.Fprintf(stderr, "shell-mcp-privd install: %v\n", err)
 		return privdsetup.ExitFail
 	}
-	sys, err := setupx.NewSystem()
+	sys, err := system.NewSystem()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "shell-mcp-privd install: %v\n", err)
 		return privdsetup.ExitFail
