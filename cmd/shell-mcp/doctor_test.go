@@ -36,7 +36,7 @@ const helloPriv = `{"gate_version":"0.1.0","protocol":2,"principal":"admin-key",
 
 // privSummary is a priv_policy answer; packages and power are the
 // policy's broad uses, and broadCommand adds a unit: broad command.
-func privSummary(sha string, updateIndex bool, power []string, broadCommand bool) string {
+func privSummary(updateIndex bool, power []string, broadCommand bool) string {
 	cmds := `{"id":"app-check","tier":"read","unit":"core","description":"Check the application","templates":[["--check"]],"root_equivalent":false,"capabilities":[],"reads_private_keys":false}`
 	if broadCommand {
 		cmds += `,{"id":"app-renew","tier":"operator","unit":"broad","description":"Renew","templates":[["--all"]],"root_equivalent":false,"capabilities":[],"reads_private_keys":false}`
@@ -45,7 +45,7 @@ func privSummary(sha string, updateIndex bool, power []string, broadCommand bool
 	if power == nil {
 		pw = []byte("[]")
 	}
-	return `{"policy_sha256":"` + sha + `","max_tier":"operator",` +
+	return `{"policy_sha256":"cafe","max_tier":"operator",` +
 		`"limits":{"max_read_bytes":1048576,"max_write_bytes":1048576,"max_output_bytes":1048576,"default_timeout_s":60,"max_timeout_s":900,"max_delete_entries":1000,"max_memory_mb":1024},` +
 		`"roots":{"read":["/etc/example-app"],"write":["/etc/example-app"],"persistence":[]},"deny_patterns":1,` +
 		`"owners":{"users":["root"],"groups":["root"]},"modes_max":"0755","backups_keep":10,"backups_max_store_bytes":1073741824,` +
@@ -187,7 +187,7 @@ func runDoctorJSON(t *testing.T, env map[string]string, de doctorEnv, args ...st
 	return code, rep, stdout.String() + stderr.String()
 }
 
-func doctorEnvWithGate(t *testing.T, g *doctorGate) (map[string]string, string) {
+func doctorEnvWithGate(t *testing.T, g *doctorGate) (env map[string]string, pin string) {
 	t.Helper()
 	env, hk := gateEnv(t, g.exec)
 	env["SHELL_MCP_TRUSTED_PROXIES"] = "172.30.80.5"
@@ -217,7 +217,7 @@ func TestUsageListsDoctor(t *testing.T) {
 // read request; the trusted proxy is a single connected address that is
 // not the gateway. Approvals off and no --mcp-url are notes, not failures.
 func TestDoctorHealthy(t *testing.T) {
-	g := &doctorGate{summary: privSummary("cafe", true, []string{"reboot"}, true)}
+	g := &doctorGate{summary: privSummary(true, []string{"reboot"}, true)}
 	env, pin := doctorEnvWithGate(t, g)
 	code, rep, out := runDoctorJSON(t, env, fixtureEnv(t))
 	if code != 0 || !rep.OK {
@@ -262,7 +262,7 @@ func TestDoctorHelperRemedies(t *testing.T) {
 		{protocol.CodeHelperPolicyMismatch, "--accept"},
 		{protocol.CodeProtocolMismatch, "README.md, Upgrading"},
 	} {
-		g := &doctorGate{summary: privSummary("cafe", true, nil, false), codes: map[string]string{protocol.OpPrivPolicy: c.code}}
+		g := &doctorGate{summary: privSummary(true, nil, false), codes: map[string]string{protocol.OpPrivPolicy: c.code}}
 		env, _ := doctorEnvWithGate(t, g)
 		code, rep, out := runDoctorJSON(t, env, fixtureEnv(t))
 		if code != 1 || rep.OK {
@@ -278,7 +278,7 @@ func TestDoctorHelperRemedies(t *testing.T) {
 // preview, else not probed, with what to run on the target; a helper code
 // on the broad socket fails with its remedy.
 func TestDoctorBroadProbes(t *testing.T) {
-	g := &doctorGate{summary: privSummary("cafe", false, []string{"poweroff"}, false)}
+	g := &doctorGate{summary: privSummary(false, []string{"poweroff"}, false)}
 	env, _ := doctorEnvWithGate(t, g)
 	code, rep, out := runDoctorJSON(t, env, fixtureEnv(t))
 	if code != 0 {
@@ -289,7 +289,7 @@ func TestDoctorBroadProbes(t *testing.T) {
 		t.Fatalf("last request %s %s", last.Op, last.Args)
 	}
 
-	g = &doctorGate{summary: privSummary("cafe", false, nil, true)}
+	g = &doctorGate{summary: privSummary(false, nil, true)}
 	env, _ = doctorEnvWithGate(t, g)
 	code, rep, out = runDoctorJSON(t, env, fixtureEnv(t))
 	if code != 0 {
@@ -300,14 +300,14 @@ func TestDoctorBroadProbes(t *testing.T) {
 		t.Fatalf("broad commands only: %d requests, want hello and priv_policy", n)
 	}
 
-	g = &doctorGate{summary: privSummary("cafe", false, nil, false)}
+	g = &doctorGate{summary: privSummary(false, nil, false)}
 	env, _ = doctorEnvWithGate(t, g)
 	if code, rep, out = runDoctorJSON(t, env, fixtureEnv(t)); code != 0 {
 		t.Fatalf("no broad unit: exit %d: %s", code, out)
 	}
 	wantRow(t, rep.row(t, "helper app-host broad"), "NOTE", "no broad unit")
 
-	g = &doctorGate{summary: privSummary("cafe", true, nil, false), codes: map[string]string{protocol.OpPrivPkgUpdateIndexPreview: protocol.CodeHelperUnavailable}}
+	g = &doctorGate{summary: privSummary(true, nil, false), codes: map[string]string{protocol.OpPrivPkgUpdateIndexPreview: protocol.CodeHelperUnavailable}}
 	env, _ = doctorEnvWithGate(t, g)
 	code, rep, out = runDoctorJSON(t, env, fixtureEnv(t))
 	if code != 1 {
@@ -334,7 +334,7 @@ func TestDoctorNoForwarding(t *testing.T) {
 // fixes it, for a wrong pin, a key the target does not accept, and a gate
 // that is not installed (the forced command exits without an answer).
 func TestDoctorTargetFailures(t *testing.T) {
-	g := &doctorGate{summary: privSummary("cafe", true, nil, false)}
+	g := &doctorGate{summary: privSummary(true, nil, false)}
 	env, _ := doctorEnvWithGate(t, g)
 	env["SHELL_MCP_TARGET_HOST_KEYS"] = sshtest.Pin(sshtest.Ed25519(t))
 	code, rep, out := runDoctorJSON(t, env, fixtureEnv(t))
@@ -381,7 +381,7 @@ func TestDoctorTrustedProxies(t *testing.T) {
 		{"fd00:30::1", map[string]string{"trusted proxy fd00:30::1": "FAIL"}, 1, "gateway"},
 		{"172.30.80.5,172.30.80.1", map[string]string{"trusted proxy 172.30.80.5": "ok", "trusted proxy 172.30.80.1": "FAIL"}, 1, "gateway"},
 	} {
-		g := &doctorGate{summary: privSummary("cafe", true, nil, false)}
+		g := &doctorGate{summary: privSummary(true, nil, false)}
 		env, _ := doctorEnvWithGate(t, g)
 		env["SHELL_MCP_TRUSTED_PROXIES"] = c.list
 		code, rep, out := runDoctorJSON(t, env, fixtureEnv(t))
@@ -397,7 +397,7 @@ func TestDoctorTrustedProxies(t *testing.T) {
 		}
 	}
 
-	env, _ := doctorEnvWithGate(t, &doctorGate{summary: privSummary("cafe", false, nil, false)})
+	env, _ := doctorEnvWithGate(t, &doctorGate{summary: privSummary(false, nil, false)})
 	delete(env, "SHELL_MCP_TRUSTED_PROXIES")
 	code, rep, out := runDoctorJSON(t, env, fixtureEnv(t))
 	if code != 0 {
@@ -409,7 +409,7 @@ func TestDoctorTrustedProxies(t *testing.T) {
 	// said, not guessed.
 	de := fixtureEnv(t)
 	de.routeFile = filepath.Join(t.TempDir(), "absent")
-	env, _ = doctorEnvWithGate(t, &doctorGate{summary: privSummary("cafe", false, nil, false)})
+	env, _ = doctorEnvWithGate(t, &doctorGate{summary: privSummary(false, nil, false)})
 	if code, rep, out = runDoctorJSON(t, env, de); code != 1 {
 		t.Fatalf("no routing table: exit %d: %s", code, out)
 	}
@@ -553,7 +553,10 @@ func TestDoctorApprovalPage(t *testing.T) {
 		status  string
 		detail  []string
 	}{
-		{"the page", func(w http.ResponseWriter, _ *http.Request) { pageHeaders(w.Header()); _, _ = io.WriteString(w, "page") }, false, "ok", []string{"certificate", "days"}},
+		{"the page", func(w http.ResponseWriter, _ *http.Request) {
+			pageHeaders(w.Header())
+			_, _ = io.WriteString(w, "page")
+		}, false, "ok", []string{"certificate", "days"}},
 		{"another service", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "hello") }, false, "FAIL", []string{"another service"}},
 		{"the proxy refuses this container", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) }, false, "WARN", []string{"refused this container", "LAN or VPN"}},
 		{"the page refuses the proxy", func(w http.ResponseWriter, _ *http.Request) {
@@ -665,7 +668,7 @@ func TestDoctorSecretFiles(t *testing.T) {
 	}
 	wantRow(t, rep.row(t, "secret SHELL_MCP_TOKEN_FILE"), "ok", "0600", fmt.Sprint(os.Geteuid()))
 
-	if err := os.Chmod(file, 0o644); err != nil {
+	if err := os.Chmod(file, 0o644); err != nil { //nolint:gosec // G302: the test gives the file group and other read on purpose
 		t.Fatal(err)
 	}
 	code, rep, out = runDoctorJSON(t, env, fixtureEnv(t))
