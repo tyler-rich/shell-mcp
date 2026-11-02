@@ -398,7 +398,7 @@ func TestNotes(t *testing.T) {
 func TestParseImage(t *testing.T) {
 	for ref, want := range map[string]compose.Image{
 		image3: {Repository: "ghcr.io/tyler-rich/shell-mcp", Tag: "0.3.0", Digest: digest},
-		"ghcr.io/tyler-rich/shell-mcp@sha256:" + digest:           {Repository: "ghcr.io/tyler-rich/shell-mcp", Digest: digest},
+		"ghcr.io/tyler-rich/shell-mcp@sha256:" + digest:             {Repository: "ghcr.io/tyler-rich/shell-mcp", Digest: digest},
 		"registry.example.test:5000/team/app:v1.2@sha256:" + digest: {Repository: "registry.example.test:5000/team/app", Tag: "v1.2", Digest: digest},
 	} {
 		got, err := compose.ParseImage(ref)
