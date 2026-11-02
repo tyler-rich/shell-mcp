@@ -16,6 +16,7 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/gate/setupx"
+	"github.com/tyler-rich/shell-mcp/internal/gate/setupx/system"
 )
 
 // ScanResult is the owner scan's outcome: the first entry owned by one of
@@ -53,12 +54,12 @@ type Host interface {
 }
 
 type host struct {
-	*setupx.System
+	*system.System
 }
 
 // NewHost is the real host.
 func NewHost() (Host, error) {
-	s, err := setupx.NewSystem()
+	s, err := system.NewSystem()
 	if err != nil {
 		return nil, err
 	}

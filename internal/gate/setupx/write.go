@@ -264,8 +264,8 @@ func Remove(path string) error {
 // name that is anything else is refused, and left for the operator.
 func RemoveLeftovers(target string) ([]string, error) { return removeLeftovers(target, 0) }
 
-// removeLeftovers is RemoveLeftovers for temp files owned by uid (tests use
-// their own).
+// removeLeftovers is RemoveLeftovers for temp files owned by uid (Disk's
+// TempOwner; tests use their own).
 func removeLeftovers(target string, uid uint32) ([]string, error) {
 	dir, base := filepath.Dir(target), filepath.Base(target)
 	ents, err := os.ReadDir(dir)
@@ -287,7 +287,7 @@ func removeLeftovers(target string, uid uint32) ([]string, error) {
 		}
 		st, ok := fi.Sys().(*syscall.Stat_t)
 		if !fi.Mode().IsRegular() || !ok || st.Uid != uid {
-			return removed, fmt.Errorf("%s looks like an install temp file but is not a regular root-owned file; remove it yourself", p)
+			return removed, fmt.Errorf("%s looks like an install temp file but is not a regular file owned by uid %d; remove it yourself", p, uid)
 		}
 		if err := Remove(p); err != nil {
 			return removed, err

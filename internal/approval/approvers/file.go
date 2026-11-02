@@ -20,11 +20,8 @@ import (
 // unless allowMultiple, more than MaxApprovers, and any file Load would
 // refuse for its mode or content.
 func Add(path, name string, seed []byte, allowMultiple bool) error {
-	if !ValidName(name) {
-		return errorf("approver name must match %s", namePattern)
-	}
-	if len(seed) < MinSeedBytes || len(seed) > MaxSeedBytes {
-		return errorf("seed must be %d to %d bits", MinSeedBytes*8, MaxSeedBytes*8)
+	if err := checkEntry(name, seed); err != nil {
+		return err
 	}
 	data, err := readChecked(path)
 	switch {
@@ -33,23 +30,49 @@ func Add(path, name string, seed []byte, allowMultiple bool) error {
 	case err != nil:
 		return err
 	}
+	content, err := Append(data, name, seed, allowMultiple)
+	if err != nil {
+		return err
+	}
+	return writeAtomic(path, string(content))
+}
+
+// Append returns data, the content of an approvers file (nil for none),
+// with name enrolled with seed, under Add's rules: a duplicate name, a
+// second approver unless allowMultiple, more than MaxApprovers and content
+// Load would refuse are refused. Add writes its result; shell-mcp init
+// writes it through the setup tools' write helper.
+func Append(data []byte, name string, seed []byte, allowMultiple bool) ([]byte, error) {
+	if err := checkEntry(name, seed); err != nil {
+		return nil, err
+	}
 	list, _, err := parse(data)
 	if err != nil {
-		return prefixed(err)
+		return nil, prefixed(err)
 	}
 	switch {
 	case slices.ContainsFunc(list, func(a Approver) bool { return a.Name == name }):
-		return ErrDuplicate
+		return nil, ErrDuplicate
 	case len(list) >= MaxApprovers:
-		return ErrFull
+		return nil, ErrFull
 	case len(list) > 0 && !allowMultiple:
-		return ErrMultiple
+		return nil, ErrMultiple
 	}
 	content := string(data)
 	if content != "" && !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
-	return writeAtomic(path, content+name+" "+EncodeSeed(seed)+"\n")
+	return []byte(content + name + " " + EncodeSeed(seed) + "\n"), nil
+}
+
+func checkEntry(name string, seed []byte) error {
+	if !ValidName(name) {
+		return errorf("approver name must match %s", namePattern)
+	}
+	if len(seed) < MinSeedBytes || len(seed) > MaxSeedBytes {
+		return errorf("seed must be %d to %d bits", MinSeedBytes*8, MaxSeedBytes*8)
+	}
+	return nil
 }
 
 // Remove removes name, keeping every other line as written.

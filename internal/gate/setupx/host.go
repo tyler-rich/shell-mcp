@@ -3,6 +3,7 @@
 package setupx
 
 import (
+	"errors"
 	"io/fs"
 	"slices"
 	"time"
@@ -41,6 +42,19 @@ func IsProgram(prog string) bool {
 	return ok
 }
 
+// ProgramTimeout is prog's timeout, if it is one of Programs.
+func ProgramTimeout(prog string) (time.Duration, bool) {
+	t, ok := programTimeouts[prog]
+	return t, ok
+}
+
+// ErrProgram is a program that is not on the list, or whose path or the
+// trampoline's fails the chain check.
+var ErrProgram = errors.New("program refused")
+
+// ErrOutputCut is a program whose output reached the cap.
+var ErrOutputCut = errors.New("the program's output was cut at its cap")
+
 // Output is a program's result. Exit is -1 when it ended by a signal or
 // timed out.
 type Output struct {
@@ -53,10 +67,24 @@ type Output struct {
 // OK reports exit status 0.
 func (o *Output) OK() bool { return o.Exit == 0 && o.Signal == "" && !o.TimedOut }
 
+// Files is what a run reads and changes on the filesystem, through the write
+// helper. Disk is the real one; tests use setuptest.Fake.
+type Files interface {
+	// State reads path without following a link (ReadState).
+	State(path string, limit int64) (FileState, error)
+	// WriteFile, Mkdir and Remove change the filesystem (the write helper).
+	WriteFile(path string, data []byte, mode fs.FileMode, owner Owner) error
+	Mkdir(path string, mode fs.FileMode, owner Owner) error
+	Remove(path string) error
+	// RemoveLeftovers removes a killed run's temp files for target.
+	RemoveLeftovers(target string) ([]string, error)
+}
+
 // Host is everything an installer reads and changes on the host. The only
-// production implementation is System; tests use setuptest.Fake. No flag or
-// variable chooses another.
+// production implementation is system.System; tests use setuptest.Fake. No
+// flag or variable chooses another.
 type Host interface {
+	Files
 	// Euid is the effective uid; LookupEnv reads the environment.
 	Euid() int
 	LookupEnv(name string) (string, bool)
@@ -66,16 +94,8 @@ type Host interface {
 	// root-owned and not group- or world-writable (policy.CheckChain with
 	// root-only trust).
 	CheckChain(path string) error
-	// State reads path without following a link (ReadState).
-	State(path string, limit int64) (FileState, error)
 	// ReadDir lists a directory's names.
 	ReadDir(path string) ([]string, error)
-	// WriteFile, Mkdir and Remove change the filesystem (the write helper).
-	WriteFile(path string, data []byte, mode fs.FileMode, owner Owner) error
-	Mkdir(path string, mode fs.FileMode, owner Owner) error
-	Remove(path string) error
-	// RemoveLeftovers removes a killed run's temp files for target.
-	RemoveLeftovers(target string) ([]string, error)
 	// Run runs one of Programs with exactly args and an empty environment.
 	Run(prog string, args ...string) (Output, error)
 	// Accounts reads /etc/passwd and /etc/group.

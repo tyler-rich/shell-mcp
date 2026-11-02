@@ -16,7 +16,7 @@ import (
 // previous bytes, owner and mode, and remove what it created
 // (TARGET-SETUP §12.4). Each change is audited.
 type Journal struct {
-	h       Host
+	h       Files
 	a       *Auditor
 	entries []entry
 }
@@ -27,8 +27,9 @@ type entry struct {
 	dir  bool // the run created this directory
 }
 
-// NewJournal returns an empty journal for h, auditing through a.
-func NewJournal(h Host, a *Auditor) *Journal { return &Journal{h: h, a: a} }
+// NewJournal returns an empty journal for h, auditing through a (nil
+// audits nothing).
+func NewJournal(h Files, a *Auditor) *Journal { return &Journal{h: h, a: a} }
 
 // Changed reports whether the run changed anything yet.
 func (j *Journal) Changed() bool { return len(j.entries) > 0 }

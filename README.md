@@ -204,6 +204,8 @@ The shortest path to a working read-only setup: one target, the server on your o
    chmod 600 secrets/*
    ```
 
+   From the first release after 0.2.0, `shell-mcp init` creates them instead, owned by the server's uid, and never overwrites or prints one ([`deploy/README.md`, "Secrets"](deploy/README.md#secrets)).
+
 2. **On the target, verify and install the gate** ([Verifying a release](#verifying-a-release) checks the signature too):
 
    ```bash
@@ -269,8 +271,8 @@ The shortest path to a working read-only setup: one target, the server on your o
 [`deploy/docker-compose.yml`](deploy/docker-compose.yml) is the reference deployment, with the normative hardening flags (non-root user, read-only root filesystem, no capabilities, `no-new-privileges`, limits). It is laid out for a reverse proxy: the server publishes no port and joins a user-defined network, `front` (`172.30.80.0/24`, an RFC 1918 example: pick a subnet that does not clash with your networks), where your proxy has the fixed address `172.30.80.5`, the only entry in `SHELL_MCP_TRUSTED_PROXIES`.
 
 1. Copy `deploy/` (also in the release's examples archive) and work in it: Compose reads `./secrets` relative to the compose file.
-2. Create `secrets/mcp_token` and `secrets/ssh_key` as in the [Quick start](#quick-start), and `chown 65532:65532` both.
-3. Edit the environment: the `image:` line (`ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:<digest>`), the target (`SHELL_MCP_TARGET_*`, or a targets file), `SHELL_MCP_ALLOWED_HOSTS` (the name clients use) and the profile. Every variable: [Configuration reference](#configuration-reference) and [`deploy/.env.example`](deploy/.env.example).
+2. Create `secrets/mcp_token` and `secrets/ssh_key` as in the [Quick start](#quick-start), and `chown 65532:65532` both, or let `shell-mcp init` do it ([`deploy/README.md`, "Secrets"](deploy/README.md#secrets)).
+3. Edit the environment, or print the file with your values in place with `shell-mcp init compose` ([`deploy/README.md`](deploy/README.md#shell-mcp-init-compose)): the `image:` line (`ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:<digest>`), the target (`SHELL_MCP_TARGET_*`, or a targets file), `SHELL_MCP_ALLOWED_HOSTS` (the name clients use) and the profile. Every variable: [Configuration reference](#configuration-reference) and [`deploy/.env.example`](deploy/.env.example).
 4. Attach your reverse proxy to `front` at `172.30.80.5`, forwarding your MCP name (`mcp.example.test`) to `http://172.30.80.10:8080` and appending `X-Forwarded-For`. Only the proxy publishes a port, on a LAN or VPN address. **Never** put the Docker network's gateway in `SHELL_MCP_TRUSTED_PROXIES`: a request through a published port often arrives from the gateway, and trusting it would let any local process set its own client address. Confirm the proxy's address from the server's `authentication failed` log line ([CLIENTS §1](docs/CLIENTS.md#1-two-transports)).
 5. Check, then start:
 
@@ -488,7 +490,7 @@ or in a project's `.mcp.json`, with the token taken from the environment:
 
 **Profiles.** `read-only` has 19 tools, `operator` 27, `admin` 52. Pair each with an SSH key whose gate policy has the matching `max_tier`, and run separate instances for separate ceilings.
 
-**Approvals and TOTP enrolment.** With `SHELL_MCP_APPROVAL_METHOD=web`, a gated call answers `approval_pending` with the approval page's URL; the approver opens the page **from a bookmark** of `SHELL_MCP_APPROVAL_PUBLIC_URL` (never from a chat link), checks the preview, and approves with the current code from their authenticator; the model then calls again with `approval_id`. Enrol the approver on the server host, never where the agent runs. The seed is shown once, and only on a terminal; `secrets/` must be writable by uid 65532 while you enrol, and the file it writes must stay `0600` and owned by 65532:
+**Approvals and TOTP enrolment.** With `SHELL_MCP_APPROVAL_METHOD=web`, a gated call answers `approval_pending` with the approval page's URL; the approver opens the page **from a bookmark** of `SHELL_MCP_APPROVAL_PUBLIC_URL` (never from a chat link), checks the preview, and approves with the current code from their authenticator; the model then calls again with `approval_id`. Enrol the approver on the server host, never where the agent runs. The seed is shown once, and only on a terminal. `shell-mcp init --approver alice` enrols the approver while it creates the other secrets ([`deploy/README.md`, "Secrets"](deploy/README.md#secrets)); by hand, `secrets/` must be writable by uid 65532 while you enrol, and the file it writes must stay `0600` and owned by 65532:
 
 ```bash
 docker run --rm -it -v "$PWD/secrets:/run/secrets" ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:<digest> \

@@ -366,6 +366,11 @@ jobs:
           go build -trimpath -ldflags "-X main.outside=/etc/example-other/secret.txt" -o "$out/example-probe" ./internal/gate/gatetest/testdata/probe
           go test -c -trimpath -tags e2e -o "$out/e2e.test" ./test/e2e
           chmod 0755 "$out"/*
+      - name: build the server image (init's bind form from a host directory)
+        # The image the e2e test runs shell-mcp init and init compose in, and
+        # starts with docker compose: labelled, built from this commit's
+        # Dockerfile. No sudo.
+        run: docker build --label shell-mcp.e2e=init -t shell-mcp-e2e:server .
       - name: runner facts
         run: |
           {
@@ -399,7 +404,7 @@ jobs:
       - name: e2e tests (as root; nothing may skip)
         run: |
           sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
-            E2E_BIN=/opt/e2e-bin E2E_REQUIRE_ALL=1 E2E_SECURITY_MAX="$E2E_SECURITY_MAX" \
+            E2E_BIN=/opt/e2e-bin E2E_REQUIRE_ALL=1 E2E_SECURITY_MAX="$E2E_SECURITY_MAX" E2E_SERVER_IMAGE=shell-mcp-e2e:server \
             /opt/e2e-bin/e2e.test -test.v -test.count=1 2>&1 | tee "$RUNNER_TEMP/e2e.log"
           test "${PIPESTATUS[0]}" -eq 0
       # execx's credential option needs a root test process (handoff §4.A,
@@ -488,7 +493,10 @@ jobs:
     # none added, no-new-privileges, no host mount but the checkout
     # (read-only) and the Go cache volume. The SSH round trip runs between
     # two of them on a labelled network; execx's credential tests run as the
-    # Go image's root. No sudo.
+    # Go image's root. Then shell-mcp init runs in the server image built from
+    # this commit (65532, no network, read-only, no capabilities) into a
+    # labelled volume, and the server starts from init compose's printed file
+    # in both forms and passes shell-mcp check against a target. No sudo.
     name: setup-check (Debian 13, Ubuntu 24.04, Ubuntu 26.04 containers)
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -498,7 +506,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: install, refusals, SSH round trip, privd install
+      - name: install, refusals, SSH round trip, privd install, init
         run: bash scripts/setup-check/run.sh | tee -a "$GITHUB_STEP_SUMMARY"
 
   ci:

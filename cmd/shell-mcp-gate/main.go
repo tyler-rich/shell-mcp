@@ -28,6 +28,7 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
 	"github.com/tyler-rich/shell-mcp/internal/gate/setup"
 	"github.com/tyler-rich/shell-mcp/internal/gate/setupx"
+	"github.com/tyler-rich/shell-mcp/internal/gate/setupx/system"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
 	"github.com/tyler-rich/shell-mcp/internal/template"
 )
@@ -449,7 +450,7 @@ func hostKey(args []string, stdout, stderr io.Writer) int {
 		_, _ = io.WriteString(stderr, "usage: shell-mcp-gate host-key\n")
 		return 2
 	}
-	h, err := setupx.NewSystem()
+	h, err := system.NewSystem()
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "shell-mcp-gate host-key: %v\n", err)
 		return 1

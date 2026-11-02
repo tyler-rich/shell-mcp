@@ -75,14 +75,24 @@ Records expire after `SHELL_MCP_APPROVAL_TTL` (default 300 s) and are lost when 
 
 ### 3.2 Setting it up
 
-Enrol the approver **on the server host**, never on the machine where the agent runs. The seed is shown once, as a QR code and an `otpauth://` URI, and stdout must be a terminal (hence `-it`):
+Enrol the approver **on the server host**, never on the machine where the agent runs. The seed is shown once, as a QR code and an `otpauth://` URI, and stdout must be a terminal (hence `-it`). `shell-mcp init --approver` does it while it creates the other secrets, in a directory it makes `0700` and owned by the server's uid 65532, and writes `secrets/approvers` `0600`, owned by 65532 (`deploy/README.md`, "Secrets" and [`shell-mcp init`](../deploy/README.md#shell-mcp-init)):
+
+```bash
+install -d -o 65532 -g 65532 -m 0700 secrets
+docker run --rm -it --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  -v "$PWD/secrets:/secrets" ghcr.io/tyler-rich/shell-mcp:<version>@sha256:<digest> init --dir /secrets --approver alice
+```
+
+`<version>` is a release that has `init` (any after 0.2.0). Running `init` again with the same name keeps the file and shows nothing.
+
+By hand, with `approver add` (which every release has), the container runs as uid 65532, so `secrets/` must be writable by it while you enrol:
 
 ```bash
 docker run --rm -it -v "$PWD/secrets:/run/secrets" ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:323149155f5be042949ec5291812104351f365a693dbdfb8cd2171b95ee30e6a \
   approver add --name alice --file /run/secrets/approvers
 ```
 
-The container runs as uid 65532, so `secrets/` must be writable by it while you enrol; afterwards `secrets/approvers` must be `0600` and owned by 65532, like the other secrets (`deploy/README.md`). The server refuses to start if the file is group- or world-accessible. One approver is allowed by default; more need `--allow-multiple` and `SHELL_MCP_APPROVAL_MAX_APPROVERS`. `approver list` and `approver remove` manage the file; restart the server after a change.
+Either way, `secrets/approvers` must stay `0600` and owned by 65532, like the other secrets. The server refuses to start if the file is group- or world-accessible. One approver is allowed by default; more need `approver add --allow-multiple` and `SHELL_MCP_APPROVAL_MAX_APPROVERS`. `approver list` and `approver remove` manage the file; restart the server after a change.
 
 Add to the server's environment:
 
@@ -94,7 +104,7 @@ SHELL_MCP_APPROVAL_BIND: 0.0.0.0          # inside the container; publish the po
 SHELL_MCP_TRUSTED_PROXIES: 172.30.80.5    # the proxy's fixed address on the shared network (§1); required for a non-loopback bind without native TLS
 ```
 
-with the approvers file in `secrets:`. Publish no port for it: the proxy forwards `approve.example.test` to the server's port 8081 on the shared network, as it forwards `mcp.example.test` to 8080.
+with the approvers file in `secrets:` (`shell-mcp init compose --approve-host approve.example.test` prints the reference compose with all of this in place, [`deploy/README.md`](../deploy/README.md#shell-mcp-init-compose)). Publish no port for it: the proxy forwards `approve.example.test` to the server's port 8081 on the shared network, as it forwards `mcp.example.test` to 8080.
 
 - The approval listener (default `127.0.0.1:8081`) is separate from `/mcp`, never accepts the bearer token, and answers only for the origin of `SHELL_MCP_APPROVAL_PUBLIC_URL` (any other `Host` is `421`). A non-loopback bind needs native TLS (`SHELL_MCP_APPROVAL_TLS_CERT_FILE`/`_KEY_FILE`) or `SHELL_MCP_TRUSTED_PROXIES`, and then serves only those proxies.
 - `SHELL_MCP_APPROVAL_NOTIFY_URL` (an ntfy topic URL) with `SHELL_MCP_APPROVAL_NOTIFY_TOKEN_FILE` pushes each request and every lockout to the approver's phone, with a link to the page; the push never carries an approve or decline action.

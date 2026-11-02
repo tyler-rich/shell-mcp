@@ -4635,3 +4635,99 @@ A factual slip in the handoff was corrected: the helper already imports gate pac
   - `Run` does not probe, because a caller may name another trampoline, as the tests do: the `go test` binary links cgo while the trampoline it starts does not.
 
   Red first in 3a2f736: `TestCredentialSupported`, `TestBecomeAccountReportsErrno` (root), `TestInstallCredentialUnsupported`; `TestSetIDsNotSupported` passed before too. Also checked with a real `CGO_ENABLED=1` build of `shell-mcp-gate` in the Debian 13 setup image: `install --dry-run` refused before anything was written with "this binary links cgo, so syscall.AllThreadsSyscall cannot reach every thread (operation not supported); the credential option needs a CGO_ENABLED=0 build".
+
+### 2026-11-01 — `shell-mcp init` and `init compose` (S8-2: handoff item C) (branch feat/s8-2-server-init)
+**Scope (the session prompt, handoff §6 S8-2):** move `deploy/README.md`'s "Secrets" and CLIENTS §3.2's enrolment into one command, and print the reference compose with a deployment's values, in two forms. The work covered: V-1 verified first; the failing-first tests against a stub; the in-image path tested as 65532 with no network and no capabilities; the server started from init's output in both forms; `deploy/docker-compose.yml` unchanged. Out of scope and untouched: `policy new` (S8-3), `doctor`, the verification script, `deploy/caddy/` and the quick-start restructure (S8-4), the S8-1 commands' behaviour.
+
+**V-1, verified at the source: false as stated.**
+- **Compose v5.6.1** (`pkg/compose/create.go`, `buildContainerSecretMounts`): a `file:` secret is a read-only bind mount whose source is passed to the daemon as a string. A file missing where Compose runs only logs a warning.
+- **compose-go v2.16.1** (`paths/resolve.go`, `paths/unix.go`): a relative `file:` path, like a relative bind source, is joined onto the project directory as a string.
+- **So** an editor running Compose in its own container fails on a *relative* path in either form, and an absolute path works in either.
+- **Consequence.** The handoff foresaw this case: the bind form stays, because it names `init`'s directory once, by its absolute host path, instead of once per file. Nothing else changed. `deploy/README.md` says why in these terms, and the handoff records the result under V-1.
+
+**What `init` writes** (`internal/setup/serverinit`; `deploy/README.md`, "`shell-mcp init`"). Under `--dir`, owned by `--uid:--gid` (default 65532:65532, the image's user):
+- the directory itself, `0700`, created when absent (its parent must exist);
+- `mcp_token`, `0600`: 32 bytes from `crypto/rand`, base64url, 43 characters, no newline, as the README's pipeline;
+- `ssh_key`, `0600`: an unencrypted OpenSSH Ed25519 key, comment `shell-mcp`;
+- `ssh_key.pub`, `0644`: written again from the key when absent;
+- `approvers`, `0600`, only with `--approver`: content from `approvers.Append`, the QR code and URI shown once, on a terminal.
+
+How it writes, and what it prints:
+- **Writes** go through setupx's helper: a temp file `.<name>.shell-mcp-<12 base32>` in `--dir`, `O_EXCL|O_NOFOLLOW` `0600`, owner and mode set on the descriptor, rename, read-back by SHA-256. A failed write rolls back everything the run created, the directory included, and leaves no temp file. A killed run's temp file is removed by the next run, with a WARN.
+- **When it runs.** As root on the host, or as `--uid` in the image after the one documented host command (`install -d -o 65532 -g 65532 -m 0700 <dir>`), which fixes F-9. Every check runs before anything is generated or written, and it starts no process.
+- **Output.** stdout gets the report, `ssh_key.pub` and its fingerprint, and (once) the approver's QR code. stderr gets one JSON audit line per file: `secret created` or `secret kept`, with the name, owner, mode, the key's fingerprint and the approver's name. The token is never shown; the handoff has no "show it once" step, so it stays only in the file.
+
+**Refusals.**
+- **Who and where:**
+  - an effective uid neither 0 nor `--uid`;
+  - `--uid` or `--gid` 0;
+  - as `--uid`, a gid that is not the process's;
+  - a `--dir` that is not absolute and clean, or is `/`;
+  - an ancestor of `--dir` that is a symbolic link, is missing, is not a directory, or is writable by group or other. A sticky one is accepted when its entry on the path belongs to root, `--uid` or the running uid, and `--dir` is never created directly in one;
+  - `--dir` itself a link or not a directory, with group or other access, owned by anyone but `--uid` (in the image), or by anyone but root or `--uid` (on the host). A root-owned directory gets a NOTE that the bind form needs it owned by `--uid`.
+- **Existing files**, each refused with the command that fixes it, never repaired:
+  - not a regular file, the wrong owner, or the wrong mode;
+  - a token shorter than 43 characters or with a line break inside (read as the server reads it);
+  - an encrypted key, one that is not Ed25519, or one that does not parse;
+  - a `.pub` without its key, of another key, with options, or holding more than one key;
+  - an approvers file the server would not load;
+  - a second approver: `init` enrols only the first, and the refusal points at `approver add --allow-multiple`;
+  - `--approver` for a new name when stdout is not a terminal, in a dry run too (below).
+- **`init compose`:**
+  - an image without `@sha256:` and 64 lower-case hex digits, or with a placeholder digest (one repeated digit);
+  - a pin the server's `ParseHostKeyPin` refuses, a duplicate pin, or more than 8;
+  - a target name, host or user the server's own rules refuse (`config.ValidTargetName`, `ValidHost`, `ValidUser`, now exported);
+  - an MCP or approval host that is not a DNS name;
+  - a subnet that is not a canonical IPv4 prefix from /16 to /28;
+  - an address that is outside the subnet, equal to the other, or is the subnet's network address, broadcast address or first host (Docker's gateway: CLIENTS §1);
+  - `--profile` outside the three, and `admin` without `--approve-host`;
+  - `--form bind` without an absolute, clean `--dir` of `[A-Za-z0-9._/-]`.
+  - Usage errors (exit 2): missing flags, unknown flags or arguments, an unknown `--form`, and `--dir` with the secrets form.
+
+**The two output forms, and why.** `init compose` prints `deploy/docker-compose.yml`, through an embedded byte copy (`internal/setup/compose/docker-compose.yml`) that a test holds equal to it. It fills in the values: the image, the pins, the target, the MCP host in `SHELL_MCP_ALLOWED_HOSTS`, the subnet, the two fixed addresses (also in the comments that name them), the profile, and the approval variables of CLIENTS §3.2. The reference values reproduce the file byte for byte, and the header says the file was printed.
+- **The secrets form**, for `docker compose` on the host, keeps `secrets: file: ./secrets/<name>`, with `approvers` added when there is an approval page.
+- **The bind form**, for stack editors, replaces the secrets with one read-only bind mount `<dir>:/run/secrets:ro`, so the `*_FILE` paths are the same in both.
+- **What is never generated:** an environment-store form (handoff §5), and the hardening flags, which are not parameters.
+- **Quoting.** A value YAML would read as something other than the string given is printed double-quoted (`00000000`, `true`, `null`, below).
+
+**Decided this session (the maintainer, 2026-11-01).**
+- **setupx's real host gets its own package.** `System` moves to `internal/gate/setupx/system`, with `Disk` and `Files` left in setupx. `execx`'s `init()` makes any binary that links it the exec trampoline, so the server must never link it (D-003). `TestServerNeverLinksExecx` walks `cmd/shell-mcp`'s imports for Linux and refuses `internal/gate/execx`, the system package and `internal/privd/...`. It was red in ecbcf21 and green after fc397a0. The install commands' tests pass unchanged.
+- **The approvers file goes through the shared helper.** `approvers.Add` was split into `Append` (validation and new content, called by `Add` and by `init`), so the file gets §3.2's temp name, its owner on the descriptor and the read-back. The format and `approver add` are unchanged.
+- **The template** is the embedded copy plus the equality test. `go:embed` cannot name a path with `..` (checked in Go 1.27.3's `go doc embed`), and the image build excludes `deploy/`.
+- **`--profile read-only|operator|admin`**, default `read-only`. `admin` without `--approve-host` is refused, and `operator` without it gets a NOTE about `SHELL_MCP_APPROVAL_TIERS`. Both were tested failing first.
+- **Container tests.** In ci-local and setup-check they use a labelled named volume and a test-only override: the image, the label, and the secrets' source. On e2e-host, the bind form also runs from a real host directory.
+
+**Decided by the maintainer on 2026-11-02, after review.** These confirm what the session had applied from S8-1's precedent and the rules cited. The handoff §4.C records them under "Decided 2026-11-02 in S8-2".
+- **Same-flags idempotency over "a name already enrolled".** `--approver alice` a second time reports `kept`, needs no terminal and shows nothing.
+- **Refusals beyond §4.C's list**, each from a rule already written down:
+  - `--uid` and `--gid` 0;
+  - an ancestor of `--dir` writable by group or other, with the sticky exception;
+  - a subnet outside /16 to /28;
+  - the subnet's network, broadcast and gateway addresses.
+- **`--approver` off a terminal.** The seed, URI and QR code are written to a terminal only. When stdout is not a terminal, `--approver` for a new name is refused before anything is generated or written. The message says to run `init` interactively, or to run it without `--approver` and enrol later with `shell-mcp approver add`. A `--dry-run` refuses the same way, so that it predicts the real run.
+  - **Before this change**, a non-terminal real run was already refused before anything was written. Its message named neither way on, and a dry run reported "would enrol".
+  - **Red in 42c9abb**, green in the commit after it.
+
+**Applied in this session and reported.**
+- **The package is `internal/setup/serverinit`**, not the handoff's `internal/setup/secrets`. A permission rule in the maintainer's environment denies writes under paths named `secrets`. A stub file had already been written there through the shell before the rule surfaced; the maintainer removed it.
+- **`--dir` with `--form secrets`** is a usage error, since that form never reads it.
+
+**Found and fixed during the session.**
+- **YAML ambiguity (FuzzRender).** A target name of `00000000`, which the server's name rule accepts, rendered as a plain scalar that YAML, and so Compose, reads as the integer 0. The same is true of `true`, `null` and numbers in a host or user name. Every rendered value is now read back through the YAML decoder and quoted when it does not round-trip. The seed and a unit test were red in 817a06e, fixed in 91f631f.
+- **A test deadlock.** The SSH test used `net.Pipe`, where both ends write their version banner first, so it deadlocked. It now uses a loopback listener.
+- **README variable rows.** The README-table test read only the first name of a row such as `` `SHELL_MCP_TOKEN` / `SHELL_MCP_TOKEN_FILE` ``. It now reads every name.
+- **The harness under `set -e`.** A diagnostic `stat` of files a broken init never wrote ended the run early. It is now non-fatal, so every case reports.
+
+**Test evidence.**
+- **Failing-first commits.** ecbcf21 (the stub, 130 FAIL lines across `cmd/shell-mcp`, `internal/setup/compose` and `internal/setup/serverinit`) → fc397a0 (the guard) and 1bc11f2 (green); 817a06e → 91f631f (the fuzz finding).
+- **The harness red against the stub.** Run on ecbcf21's tree on Debian 13: 48 passed, 8 failed. Every init and compose check failed except "no temp file left", which passes by design on a stub that writes nothing.
+- **Pass on the stub by design:** `TestTemplateIsDeployFile` (it is the copy) and `FuzzParseImage` (the stub accepts nothing).
+- **The e2e-host test** runs only on the runner VM; its red run against the stub is not shown. CI ran it on 7bb5e85: `TestInitBindFormFromHostDirectory` PASS (34.65 s), with every other CI check green, CodeQL included.
+- **Fuzz targets, 60 s each, no finding after the fix:** `FuzzParseImage`, `FuzzRender` (twice: the second run after the fix), `FuzzCheckToken`, `FuzzCheckPublicKey`.
+- **The unit tests also ran as the Go image's root** (`--uid 65532` with real chowns): pass.
+- **setup-check:** 145 passed, 0 failed (Debian 13, Ubuntu 24.04, Ubuntu 26.04, the credential tests as root, and 16 init and compose checks, the last added with the `--approver` terminal rule: the in-image run, both forms healthy, `shell-mcp check` passing in the running server).
+- **ci-local:** every step PASS (gofmt, vet and golangci-lint with and without the test build tags, exposure and its self-test, setup-check, `go test -race` in all five builds, the e2e guards, govulncheck with no vulnerability, both cross-builds, the twice-built release snapshot, deps-current, every self-test). The e2e-host bind run is reported NOT RUN there (runner VM only).
+
+**Deferred.** None of this session's. The quick-start rewrite around `init` is S8-4's (H); README's quick start and installation steps point at `init` meanwhile.
+
+**Versions (D-013):** Go 1.27.3 (go.mod; deps-current: the newest stable with a published `golang:1.27.3-trixie`). `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing. Direct modules: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6, x/crypto v0.58.0, x/sys v0.49.0. Tools: golangci-lint v2.15.0, govulncheck v1.9.0. No dependency added.
