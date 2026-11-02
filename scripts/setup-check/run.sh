@@ -27,7 +27,10 @@
 #     command: a dry run that changes nothing, the run, a second run that
 #     changes nothing, the owners and modes, no temp file, its refusals;
 #   - the server started with docker compose from init compose's printed
-#     file in both forms, and shell-mcp check passing against a target.
+#     file in both forms, and shell-mcp check passing against a target;
+#   - shell-mcp doctor in the running server (handoff §4.E): with docker
+#     compose exec in both forms, and by container id with the network's
+#     gateway in SHELL_MCP_TRUSTED_PROXIES, which must fail.
 #
 # The containers run as their own root (approved, handoff §7 Q2), and only
 # these: unprivileged, Docker's default capabilities with none added,
@@ -572,6 +575,44 @@ for form in secrets bind; do
 	else
 		bad "$form form: check exit $rc"
 		tail -n 15 <<<"$r" || true
+	fi
+	# doctor in the running server (handoff §4.E), with docker compose exec as
+	# the quick start runs it. No proxy runs here and approve.example.test
+	# resolves nowhere, so the approval page is a FAIL (the probe ran); the
+	# secrets, the target, the static proxy check and the MCP endpoint on
+	# loopback pass, and the target's gate forwards nothing (read-only).
+	rc=0
+	r="$("${dc[@]}" exec -T shell-mcp /shell-mcp doctor --mcp-url http://127.0.0.1:8080/mcp 2>&1)" || rc=$?
+	miss=""
+	for want in "^ok   secret SHELL_MCP_TOKEN_FILE: /run/secrets/mcp_token: mode 0600, owner uid 65532 (this process)" \
+		"^ok   secret SHELL_MCP_SSH_KEY_FILE: /run/secrets/ssh_key: mode 0600, owner uid 65532 (this process)" \
+		"^ok   secret SHELL_MCP_APPROVERS_FILE: " "^ok   trusted proxy $sub.5: " "^NOTE helper app-host: privileged forwarding is off" \
+		"^ok   mcp endpoint: POST http://127.0.0.1:8080/mcp without a token answered 401 with the server's challenge" \
+		"^FAIL approval page: unreachable: " "^doctor: 1 FAIL"; do
+		grep -qE -- "$want" <<<"$r" || miss="$miss [$want]"
+	done
+	grep -qF -- "target app-host: host key verified ($pin)" <<<"$r" || miss="$miss [target row]"
+	if [[ "$rc" == 1 && -z "$miss" ]]; then
+		ok "$form form: doctor (docker compose exec): secrets, target, trusted proxy and MCP endpoint ok; the approval page's absence found"
+	else
+		bad "$form form: doctor exit $rc, missing:$miss"
+		tail -n 30 <<<"$r" || true
+	fi
+	# The network's gateway trusted: a FAIL from the container's own routing
+	# table, with doctor run by container id, as a stack editor's exec does.
+	if [[ "$form" == bind ]]; then
+		printf 'services:\n  shell-mcp:\n    environment:\n      SHELL_MCP_TRUSTED_PROXIES: "%s"\n' "$sub.1" >"$d/gateway.yml"
+		rc=0
+		"${dc[@]}" -f "$dn/gateway.yml" up -d --wait --wait-timeout 120 >/dev/null 2>&1 || rc=$?
+		id="$("${dc[@]}" -f "$dn/gateway.yml" ps -q shell-mcp 2>/dev/null || true)"
+		r=""
+		[[ "$rc" == 0 && -n "$id" ]] && { r="$(docker exec "$id" /shell-mcp doctor 2>&1)" || rc=$?; }
+		if [[ "$rc" == 1 ]] && grep -qF -- "FAIL trusted proxy $sub.1: holds $sub.1, a gateway of this container's network" <<<"$r"; then
+			ok "bind form: doctor (docker exec by id) fails on the network's gateway in SHELL_MCP_TRUSTED_PROXIES"
+		else
+			bad "bind form: doctor with the gateway trusted: exit $rc"
+			grep -E 'trusted prox|^doctor' <<<"$r" || tail -n 15 <<<"$r" || true
+		fi
 	fi
 	docker network disconnect "${proj}_front" "$t" >/dev/null 2>&1 || true
 	"${dc[@]}" down >/dev/null 2>&1 || true
