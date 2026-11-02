@@ -229,6 +229,7 @@ release_snapshot() {
 }
 step "release snapshot build (twice)" "" release_snapshot
 step "release scripts self-test" "" in_go bash scripts/release/release_test.sh
+step "verify-release self-test" "" in_go bash scripts/verify-release_test.sh
 step "deps-current" "run go get -u ./... && go mod tidy, or bump go.mod's go line" in_go bash scripts/deps-current.sh
 step "deps-current self-test" "" in_go bash scripts/deps-current_test.sh
 step "release-binary-check self-test" "" in_go bash scripts/release-binary-check_test.sh

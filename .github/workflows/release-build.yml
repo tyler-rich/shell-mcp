@@ -17,7 +17,9 @@
 #            image index (SHA256SUMS itself is covered by its cosign
 #            signature, not an attestation), attests SBOMs for the binaries
 #            and platform images, and verifies all of it
-#            (scripts/release/verify.sh)
+#            (scripts/release/verify.sh), then runs the users' own
+#            scripts/verify-release.sh against the signed files
+#            (scripts/release/verify-release-check.sh)
 #   publish  a real release only: a draft GitHub Release with every file,
 #            then published
 #
@@ -431,6 +433,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/release/verify.sh dist "$VERSION" "$IMAGE_REPO@$INDEX" "$GITHUB_REPOSITORY" "$GITHUB_REF"
+      # The script users run (scripts/verify-release.sh, also in the examples
+      # archive) against the files just signed and tampered copies of them: a
+      # release must pass; a dry run's files, signed by the run's own ref, are
+      # refused in every mode (handoff §4.F, decided in S8-4).
+      - name: verify-release.sh against the signed files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/release/verify-release-check.sh dist "$VERSION" "$PUBLISH"
       - name: release notes
         env:
           NOTES_VERSION: ${{ inputs.notes-version }}

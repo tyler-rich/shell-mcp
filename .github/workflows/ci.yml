@@ -229,6 +229,10 @@ jobs:
       # section, the CI and CodeQL checks a release needs (offline).
       - name: release scripts self-test
         run: bash scripts/release/release_test.sh
+      # verify-release.sh against fake cosign and gh that verify only what a
+      # fixture signed: every tampered case and a dry run refused (offline).
+      - name: verify-release self-test
+        run: bash scripts/verify-release_test.sh
       # ci-local against a fake docker: it may label, list, stop and remove
       # only its own containers. No container is started here.
       - name: ci-local self-test
