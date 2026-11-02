@@ -54,19 +54,19 @@ func (e *CredentialError) Error() string {
 // Unwrap makes a refusal an ErrStart: the command never started.
 func (e *CredentialError) Unwrap() error { return ErrStart }
 
+// CredentialSupported says whether this binary can make the credential
+// switch (nil), or why not: a build with cgo (AllThreadsSyscall's ENOTSUP),
+// or another architecture than amd64 and arm64. The switch runs in the
+// trampoline, which in production is the running binary itself, so
+// shell-mcp-gate install asks this of its own binary before it writes
+// anything. (Run does not: a caller may name another trampoline, as the
+// tests do, and the trampoline reports the switch's own errno.)
+func CredentialSupported() error { return credentialSupported() }
+
 // checkCredential is Run's check of a Spec.Credential, before anything
 // else: the calling process must run as uid 0, real and effective, and the
 // credential must pass credentialRefusal.
-// CredentialSupported says whether this binary can run a command as another
-// account at all (nil), or why not: a build with cgo, or another
-// architecture than amd64 and arm64. The installer checks it before it
-// writes anything.
-func CredentialSupported() error { return credentialSupported() }
-
-func checkCredential(c *Credential) error { return checkCredentialWith(c, syscall.AllThreadsSyscall) }
-
-// checkCredentialWith is checkCredential, probing support through sys.
-func checkCredentialWith(c *Credential, _ allThreadsFunc) error {
+func checkCredential(c *Credential) error {
 	uid, euid := os.Getuid(), os.Geteuid()
 	if uid != 0 || euid != 0 {
 		return &CredentialError{UID: uid, EUID: euid, Reason: "the option is honoured only in a process running as uid 0, real and effective"}
@@ -357,20 +357,22 @@ func becomeAccount(c *Credential, ppid int) (string, syscall.Errno) {
 // becomeAccountWith is becomeAccount through sys. Its errno is what the
 // trampoline reports to Run.
 func becomeAccountWith(c *Credential, ppid int, sys allThreadsFunc) (string, syscall.Errno) {
-	why := becomeAccountWhy(c, ppid, sys)
-	return why, unix.EPERM
-}
-
-func becomeAccountWhy(c *Credential, ppid int, sys allThreadsFunc) string {
 	if why := credentialSwitchRefusal(unix.Getuid(), unix.Geteuid()); why != "" {
-		return why
+		return why, unix.EPERM
 	}
 	if why := credentialRefusal(c); why != "" {
-		return why
+		return why, unix.EPERM
 	}
 	if step, err := setIDsWith(c, sys); err != nil {
-		return fmt.Sprintf("%s: %v", step, err)
+		errno := unix.EPERM
+		_ = errors.As(err, &errno)
+		return fmt.Sprintf("%s: %v", step, err), errno
 	}
+	return becomeAccountRest(c, ppid), unix.EPERM
+}
+
+// becomeAccountRest is the switch's verification and what follows it.
+func becomeAccountRest(c *Credential, ppid int) string {
 	o, err := liveCreds()
 	if err != nil {
 		return fmt.Sprintf("cannot read the credentials back: %v", err)

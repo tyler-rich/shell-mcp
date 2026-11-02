@@ -11,10 +11,9 @@ type allThreadsFunc func(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err syscall.
 
 var errArch = errors.New("the credential option is built for amd64 and arm64 only")
 
-// setIDs refuses: the credential option is built for D-018's architectures,
-// amd64 and arm64, whose set*id system calls take the 32-bit ids directly.
-func setIDs(*Credential) (string, error) { return "setgroups", errArch }
-
+// setIDsWith refuses: the credential option is built for D-018's
+// architectures, amd64 and arm64, whose set*id system calls take the
+// 32-bit ids directly.
 func setIDsWith(*Credential, allThreadsFunc) (string, error) { return "setgroups", errArch }
 
 func credentialSupported() error { return errArch }

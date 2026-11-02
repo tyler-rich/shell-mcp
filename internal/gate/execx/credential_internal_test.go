@@ -377,7 +377,7 @@ type sysStub struct {
 	fail   syscall.Errno
 }
 
-func (s *sysStub) call(trap, a1, a2, a3 uintptr) (uintptr, uintptr, syscall.Errno) {
+func (s *sysStub) call(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err syscall.Errno) {
 	s.calls = append(s.calls, [4]uintptr{trap, a1, a2, a3})
 	if trap == s.failOn || s.failOn == ^uintptr(0) {
 		return 0, 0, s.fail
@@ -422,11 +422,6 @@ func TestCredentialSupported(t *testing.T) {
 	err := credentialSupportedWith((&sysStub{failOn: ^uintptr(0), fail: syscall.ENOTSUP}).call)
 	if err == nil || !strings.Contains(err.Error(), "cgo") || !strings.Contains(err.Error(), "CGO_ENABLED=0") || !errors.Is(err, syscall.ENOTSUP) {
 		t.Fatalf("ENOTSUP: %v", err)
-	}
-	// Run refuses the option in such a binary before anything starts.
-	var ce *CredentialError
-	if err := checkCredentialWith(validCredential(), (&sysStub{failOn: ^uintptr(0), fail: syscall.ENOTSUP}).call); !errors.As(err, &ce) || !strings.Contains(ce.Reason, "cgo") {
-		t.Fatalf("checkCredential: %v", err)
 	}
 }
 

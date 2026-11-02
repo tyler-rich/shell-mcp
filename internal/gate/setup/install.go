@@ -142,6 +142,9 @@ func (in *installer) checkBinaries() {
 	if err := in.h.CheckChain(GatePath); err != nil {
 		in.refuse("binary", "binary_insecure", "%s: %v (it and every directory above it must be root's and not group- or world-writable)", GatePath, err)
 	}
+	if err := in.h.CredentialSupported(); err != nil {
+		in.refuse("binary", "credential_unsupported", "%s cannot run check-policy as the account (step 4): %v", GatePath, err)
+	}
 	progs := []string{setupx.Groupadd, setupx.Useradd, setupx.Usermod, setupx.Sshd}
 	if !in.o.NoReload {
 		progs = append(progs, setupx.Systemctl)
