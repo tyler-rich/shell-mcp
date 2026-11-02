@@ -4725,7 +4725,7 @@ How it writes, and what it prints:
 - **The e2e-host test** runs only on the runner VM; its red run against the stub is not shown. CI ran it on 7bb5e85: `TestInitBindFormFromHostDirectory` PASS (34.65 s), with every other CI check green, CodeQL included.
 - **Fuzz targets, 60 s each, no finding after the fix:** `FuzzParseImage`, `FuzzRender` (twice: the second run after the fix), `FuzzCheckToken`, `FuzzCheckPublicKey`.
 - **The unit tests also ran as the Go image's root** (`--uid 65532` with real chowns): pass.
-- **setup-check:** 144 passed, 0 failed (Debian 13, Ubuntu 24.04, Ubuntu 26.04, the credential tests as root, and 15 init and compose checks: the in-image run, both forms healthy, `shell-mcp check` passing in the running server).
+- **setup-check:** 145 passed, 0 failed (Debian 13, Ubuntu 24.04, Ubuntu 26.04, the credential tests as root, and 16 init and compose checks, the last added with the `--approver` terminal rule: the in-image run, both forms healthy, `shell-mcp check` passing in the running server).
 - **ci-local:** every step PASS (gofmt, vet and golangci-lint with and without the test build tags, exposure and its self-test, setup-check, `go test -race` in all five builds, the e2e guards, govulncheck with no vulnerability, both cross-builds, the twice-built release snapshot, deps-current, every self-test). The e2e-host bind run is reported NOT RUN there (runner VM only).
 
 **Deferred.** None of this session's. The quick-start rewrite around `init` is S8-4's (H); README's quick start and installation steps point at `init` meanwhile.
