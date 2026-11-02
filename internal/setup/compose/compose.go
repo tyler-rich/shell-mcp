@@ -19,7 +19,10 @@ import (
 	"path"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+
+	"go.yaml.in/yaml/v3"
 
 	"github.com/tyler-rich/shell-mcp/internal/config"
 	"github.com/tyler-rich/shell-mcp/internal/tools"
@@ -313,17 +316,33 @@ func (r *renderer) one(old, repl string) {
 	r.s = strings.Replace(r.s, old, repl, 1)
 }
 
+// scalar is s as a YAML scalar: plain when YAML reads it back as exactly s,
+// as every reference value does, otherwise double-quoted (a name such as
+// 00000000, true or null that the server's rules accept would else reach
+// Compose as a number, a boolean or null). The values rendered hold no
+// quote, backslash or control character, so strconv.Quote is YAML's
+// double-quoted form.
+func scalar(s string) string {
+	var v map[string]any
+	if yaml.Unmarshal([]byte("v: "+s+"\n"), &v) == nil {
+		if got, ok := v["v"].(string); ok && got == s {
+			return s
+		}
+	}
+	return strconv.Quote(s)
+}
+
 func imageBlock(img Image, ref string) string {
 	if img.Tag == "" {
 		return "    # The image index, pinned by digest: the digest in its release notes.\n" +
 			"    # Verify it before you deploy it (README, \"Verifying a release\").\n" +
-			"    image: " + ref + "\n"
+			"    image: " + scalar(ref) + "\n"
 	}
 	return "    # The " + img.Tag + " image index, pinned by digest: the digest in its release notes,\n" +
 		"    # which is what this prints:\n" +
 		"    #   docker buildx imagetools inspect " + img.Repository + ":" + img.Tag + " --format '{{.Manifest.Digest}}'\n" +
 		"    # Verify it before you deploy it (README, \"Verifying a release\").\n" +
-		"    image: " + ref + "\n"
+		"    image: " + scalar(ref) + "\n"
 }
 
 // Render returns the compose file for v, which Check has accepted.
@@ -347,11 +366,11 @@ func Render(v *Values) ([]byte, error) {
 	r.one("ipv4_address: 172.30.80.10\n", "ipv4_address: "+v.ServerAddr+"\n")
 	r.one("- subnet: 172.30.80.0/24\n", "- subnet: "+v.Subnet+"\n")
 	r.one("SHELL_MCP_PROFILE: read-only\n", "SHELL_MCP_PROFILE: "+v.Profile+"\n")
-	r.one("SHELL_MCP_TARGET_NAME: app-host\n", "SHELL_MCP_TARGET_NAME: "+v.TargetName+"\n")
-	r.one("SHELL_MCP_TARGET_HOST: target-a.example.test\n", "SHELL_MCP_TARGET_HOST: "+v.TargetHost+"\n")
-	r.one("SHELL_MCP_TARGET_USER: svc-shell\n", "SHELL_MCP_TARGET_USER: "+v.TargetUser+"\n")
+	r.one("SHELL_MCP_TARGET_NAME: app-host\n", "SHELL_MCP_TARGET_NAME: "+scalar(v.TargetName)+"\n")
+	r.one("SHELL_MCP_TARGET_HOST: target-a.example.test\n", "SHELL_MCP_TARGET_HOST: "+scalar(v.TargetHost)+"\n")
+	r.one("SHELL_MCP_TARGET_USER: svc-shell\n", "SHELL_MCP_TARGET_USER: "+scalar(v.TargetUser)+"\n")
 	r.one(`SHELL_MCP_TARGET_HOST_KEYS: "ssh-ed25519 SHA256:placeholder"`+"\n", `SHELL_MCP_TARGET_HOST_KEYS: "`+strings.Join(v.HostKeys, ",")+`"`+"\n")
-	r.one("SHELL_MCP_ALLOWED_HOSTS: localhost,127.0.0.1,mcp.example.test\n", "SHELL_MCP_ALLOWED_HOSTS: localhost,127.0.0.1,"+v.MCPHost+"\n")
+	r.one("SHELL_MCP_ALLOWED_HOSTS: localhost,127.0.0.1,mcp.example.test\n", "SHELL_MCP_ALLOWED_HOSTS: "+scalar("localhost,127.0.0.1,"+v.MCPHost)+"\n")
 	if r.err != nil {
 		return nil, r.err
 	}
@@ -361,14 +380,14 @@ func Render(v *Values) ([]byte, error) {
 		end := i + strings.Index(r.s[i:], "\n") + 1
 		r.s = r.s[:end] +
 			"      SHELL_MCP_APPROVAL_METHOD: web\n" +
-			"      SHELL_MCP_APPROVAL_PUBLIC_URL: https://" + v.ApproveHost + "\n" +
+			"      SHELL_MCP_APPROVAL_PUBLIC_URL: " + scalar("https://"+v.ApproveHost) + "\n" +
 			"      SHELL_MCP_APPROVERS_FILE: /run/secrets/approvers\n" +
 			"      SHELL_MCP_APPROVAL_BIND: 0.0.0.0  # inside the container; the proxy forwards the approval host to port 8081 on `front`\n" +
 			r.s[end:]
 		secrets = "[mcp_token, ssh_key, approvers]"
 	}
 	if v.Form == FormBind {
-		r.one(secretsLine, "    volumes:\n      - "+v.Dir+":/run/secrets:ro # init's directory: 0700, owned by the server's uid\n")
+		r.one(secretsLine, "    volumes:\n      - "+scalar(v.Dir+":/run/secrets:ro")+" # init's directory: 0700, owned by the server's uid\n")
 		r.one(secretsBlock, "")
 	} else {
 		r.one(secretsLine, "    secrets: "+secrets+"\n")
