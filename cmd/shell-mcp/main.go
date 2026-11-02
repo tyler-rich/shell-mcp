@@ -81,6 +81,8 @@ func run(ctx context.Context, stdin io.Reader, args []string, lookup config.Look
 		return cmdTools(args[1:], lookup, stdout, stderr)
 	case "approver":
 		return cmdApprover(args[1:], stdout, stderr, processApproverEnv)
+	case "init":
+		return cmdInit(args[1:], stdout, stderr, processInitEnv)
 	case "healthcheck":
 		url, err := healthcheckURL(lookup)
 		if err != nil {
