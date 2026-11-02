@@ -409,7 +409,7 @@ for i in "${images[@]}"; do
 			echo "$out" | grep FAIL | head -n 5 || true
 		fi
 	done
-	ex "$d" sh -c 'echo "# an edit by hand" >>/etc/shell-mcp/admin.yaml'
+	ex "$d" sh -c 'echo "# an edit by hand" >>/etc/shell-mcp/admin.yaml' || true
 	before="$(ex "$d" bash /src/scripts/setup-check/target.sh snapshot)"
 	pn "$d" "${gpn[@]}" --out /etc/shell-mcp/admin.yaml
 	after="$(ex "$d" bash /src/scripts/setup-check/target.sh snapshot)"
