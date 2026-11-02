@@ -271,15 +271,33 @@ func TestServerLoadsTheSecrets(t *testing.T) {
 		return nil, errors.New("not authorised")
 	}}
 	sc.AddHostKey(hostSigner)
-	a, b := net.Pipe()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
 	go func() {
+		a, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		_ = a.SetDeadline(time.Now().Add(10 * time.Second))
 		if conn, chans, reqs, err := ssh.NewServerConn(a, sc); err == nil {
 			go ssh.DiscardRequests(reqs)
-			for range chans { //nolint:revive // drain
-			}
-			_ = conn.Close()
+			go func() {
+				for ch := range chans {
+					_ = ch.Reject(ssh.Prohibited, "no channels")
+				}
+			}()
+			_ = conn.Wait()
 		}
+		_ = a.Close()
 	}()
+	b, err := net.DialTimeout("tcp", ln.Addr().String(), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = b.SetDeadline(time.Now().Add(10 * time.Second))
 	signer, err := ssh.ParsePrivateKey(read(t, filepath.Join(dir, serverinit.KeyFile)))
 	if err != nil {
 		t.Fatal(err)

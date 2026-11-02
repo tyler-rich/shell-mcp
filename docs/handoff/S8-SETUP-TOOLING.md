@@ -354,7 +354,7 @@ The hardening flags (`user`, `read_only`, `cap_drop`, `security_opt`, limits, he
 - **Same-flags idempotency over "a name already enrolled".** As S8-1 decided for its owner scan, `--approver <name>` whose name is already enrolled is `kept` (nothing generated or shown), so a second run with the same flags reports only `kept`. The refusal applies to a *second* approver, which `init` leaves to `approver add --allow-multiple`.
 - **Refusals beyond §4.C's list, each from a rule already written down.**
   - `--uid` or `--gid` 0: the server runs non-root (SECURITY §2 and §7).
-  - A directory above `--dir` that is writable by group or other: §3.2's chain rule. The rule is applied without its root-owner half, so `init` still works in the deployer's own directory next to the compose file, as `deploy/README.md` does it.
+  - A directory above `--dir` that is writable by group or other: §3.2's chain rule. The rule is applied without its root-owner half, so `init` still works in the deployer's own directory next to the compose file, as `deploy/README.md` does it. A sticky directory (`/tmp`) is accepted when its entry on the path belongs to root, `--uid` or the running uid, since only that owner can rename it; `--dir` is never created directly in one.
   - In `init compose`, a `--subnet` outside /16–/28, and a `--server-addr` or `--proxy-addr` that is the subnet's network address, its broadcast address or its first host, which Docker gives the gateway: CLIENTS §1 says never to trust the gateway.
   - `--dir` with `--form secrets`: a usage error, since that form never reads it.
 

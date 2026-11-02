@@ -258,10 +258,13 @@ func TestVariablesInREADME(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := regexp.MustCompile("(?m)^\\| `(SHELL_MCP_[A-Z0-9_]+)` \\|").FindAllSubmatch(readme, -1)
+	// A row's first cell names one variable or several ("`A` / `A_FILE`").
+	cells := regexp.MustCompile("(?m)^\\| (`SHELL_MCP_[A-Z0-9_]+`(?: / `SHELL_MCP_[A-Z0-9_]+`)*) \\|").FindAllSubmatch(readme, -1)
 	table := map[string]bool{}
-	for _, r := range rows {
-		table[string(r[1])] = true
+	for _, c := range cells {
+		for _, n := range regexp.MustCompile("SHELL_MCP_[A-Z0-9_]+").FindAll(c[1], -1) {
+			table[string(n)] = true
+		}
 	}
 	for _, c := range goldenCases {
 		for k := range env(t, parse(t, render(t, c.args))) {
