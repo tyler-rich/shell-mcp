@@ -513,10 +513,28 @@ jobs:
       - name: install, refusals, SSH round trip, privd install, init
         run: bash scripts/setup-check/run.sh | tee -a "$GITHUB_STEP_SUMMARY"
 
+  caddy-check:
+    # deploy/caddy/Caddyfile, an example (handoff §4.G): its upstreams and the
+    # README's addresses against deploy/docker-compose.yml, the decided shape,
+    # and caddy validate in a test-only image pinned by digest
+    # (scripts/caddy-check/Dockerfile): no network, a read-only root, no
+    # capabilities, non-root. No Caddy runs as a proxy here. No sudo.
+    name: caddy-check (deploy/caddy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: drift, shape and caddy validate
+        run: bash scripts/caddy-check/run.sh | tee -a "$GITHUB_STEP_SUMMARY"
+
   ci:
     name: ci
     if: always()
-    needs: [go, deps-current, gitleaks, image, e2e-host, exposure, setup-check]
+    needs: [go, deps-current, gitleaks, image, e2e-host, exposure, setup-check, caddy-check]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
