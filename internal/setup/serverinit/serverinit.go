@@ -384,8 +384,11 @@ func (ru *run) checkFiles() {
 			"(and raise SHELL_MCP_APPROVAL_MAX_APPROVERS)", appr.path, ru.o.Approver)
 		return
 	}
-	if !ru.o.DryRun && !ru.env.IsTerminal(ru.r.W) {
-		r.Fail("--approver: stdout is not a terminal, and the seed is shown only on one (in a container, run init with docker run --rm -it)")
+	// The seed, its URI and QR code go to a terminal only. A dry run refuses
+	// too, so that it predicts the real run.
+	if !ru.env.IsTerminal(ru.r.W) {
+		r.Fail("--approver: stdout is not a terminal, and the approver's seed is shown only on one: run init interactively " +
+			"(in a container, docker run --rm -it), or run it without --approver and enrol later with shell-mcp approver add")
 	}
 }
 

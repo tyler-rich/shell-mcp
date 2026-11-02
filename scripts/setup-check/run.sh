@@ -325,7 +325,16 @@ snap() { "${hostc[@]}" sh -c 'cd /secrets && find . -printf "%p %y %m %U:%G %s %
 "${hostc[@]}" install -d -o 65532 -g 65532 -m 0700 /secrets
 before="$(snap)"
 rc=0
-out="$("${initc[@]}" init --dir /secrets --approver alice --dry-run 2>&1)" || rc=$?
+out="$("${initc[@]}" init --dir /secrets --approver alice 2>&1)" || rc=$?
+after="$(snap)"
+if [[ "$rc" == 1 && "$before" == "$after" ]] && grep -q 'shell-mcp approver add' <<<"$out" && ! grep -q 'otpauth://' <<<"$out"; then
+	ok "init --approver with stdout not a terminal: refused, naming approver add, nothing written or shown"
+else
+	bad "init --approver off a terminal: exit $rc"
+	tail -n 5 <<<"$out" || true
+fi
+rc=0
+out="$("${initt[@]}" init --dir /secrets --approver alice --dry-run 2>&1)" || rc=$?
 after="$(snap)"
 if [[ "$rc" == 0 && "$before" == "$after" ]] && grep -q '<43 random characters>' <<<"$out"; then
 	ok "init --dry-run in the image (65532, no network, read-only, no capabilities): nothing written"

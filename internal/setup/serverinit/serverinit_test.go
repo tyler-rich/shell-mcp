@@ -367,7 +367,9 @@ func TestMissingFileGenerated(t *testing.T) {
 func TestDryRunWritesNothing(t *testing.T) {
 	dir := newDir(t)
 	before := snapshot(t, dir)
-	r := runReal(t, realEnv(false), idArgs(dir, "--approver", "alice", "--dry-run")...)
+	// On a terminal: off one, a dry run with --approver is refused
+	// (TestApproverNeedsTerminal).
+	r := runReal(t, realEnv(true), idArgs(dir, "--approver", "alice", "--dry-run")...)
 	if r.code != 0 {
 		t.Fatalf("exit %d\n%s%s", r.code, r.stdout, r.stderr)
 	}
@@ -386,7 +388,7 @@ func TestDryRunWritesNothing(t *testing.T) {
 		t.Fatal(r.code)
 	}
 	before = snapshot(t, dir)
-	if r := runReal(t, realEnv(false), idArgs(dir, "--approver", "alice", "--dry-run")...); r.code != 0 {
+	if r := runReal(t, realEnv(true), idArgs(dir, "--approver", "alice", "--dry-run")...); r.code != 0 {
 		t.Fatalf("a dry run over an existing directory: exit %d\n%s", r.code, r.stdout)
 	}
 	if after := snapshot(t, dir); !sameSnapshot(before, after) {

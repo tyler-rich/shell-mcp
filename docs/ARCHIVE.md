@@ -4672,7 +4672,7 @@ How it writes, and what it prints:
   - a `.pub` without its key, of another key, with options, or holding more than one key;
   - an approvers file the server would not load;
   - a second approver: `init` enrols only the first, and the refusal points at `approver add --allow-multiple`;
-  - `--approver` for a new name when stdout is not a terminal.
+  - `--approver` for a new name when stdout is not a terminal, in a dry run too (below).
 - **`init compose`:**
   - an image without `@sha256:` and 64 lower-case hex digits, or with a placeholder digest (one repeated digit);
   - a pin the server's `ParseHostKeyPin` refuses, a duplicate pin, or more than 8;
@@ -4697,10 +4697,20 @@ How it writes, and what it prints:
 - **`--profile read-only|operator|admin`**, default `read-only`. `admin` without `--approve-host` is refused, and `operator` without it gets a NOTE about `SHELL_MCP_APPROVAL_TIERS`. Both were tested failing first.
 - **Container tests.** In ci-local and setup-check they use a labelled named volume and a test-only override: the image, the label, and the secrets' source. On e2e-host, the bind form also runs from a real host directory.
 
+**Decided by the maintainer on 2026-11-02, after review.** These confirm what the session had applied from S8-1's precedent and the rules cited. The handoff §4.C records them under "Decided 2026-11-02 in S8-2".
+- **Same-flags idempotency over "a name already enrolled".** `--approver alice` a second time reports `kept`, needs no terminal and shows nothing.
+- **Refusals beyond §4.C's list**, each from a rule already written down:
+  - `--uid` and `--gid` 0;
+  - an ancestor of `--dir` writable by group or other, with the sticky exception;
+  - a subnet outside /16 to /28;
+  - the subnet's network, broadcast and gateway addresses.
+- **`--approver` off a terminal.** The seed, URI and QR code are written to a terminal only. When stdout is not a terminal, `--approver` for a new name is refused before anything is generated or written. The message says to run `init` interactively, or to run it without `--approver` and enrol later with `shell-mcp approver add`. A `--dry-run` refuses the same way, so that it predicts the real run.
+  - **Before this change**, a non-terminal real run was already refused before anything was written. Its message named neither way on, and a dry run reported "would enrol".
+  - **Red in 42c9abb**, green in the commit after it.
+
 **Applied in this session and reported.**
-- **Same-flags idempotency over "a name already enrolled".** This follows S8-1's precedent: `--approver alice` a second time reports `kept`, needs no terminal and shows nothing.
 - **The package is `internal/setup/serverinit`**, not the handoff's `internal/setup/secrets`. A permission rule in the maintainer's environment denies writes under paths named `secrets`. A stub file had already been written there through the shell before the rule surfaced; the maintainer removed it.
-- **Refusals beyond §4.C's list**, each from a rule already written down (handoff §4.C, "Applied in S8-2"): `--uid`/`--gid` 0, the ancestor chain, the subnet range, and the gateway, network and broadcast addresses.
+- **`--dir` with `--form secrets`** is a usage error, since that form never reads it.
 
 **Found and fixed during the session.**
 - **YAML ambiguity (FuzzRender).** A target name of `00000000`, which the server's name rule accepts, rendered as a plain scalar that YAML, and so Compose, reads as the integer 0. The same is true of `true`, `null` and numbers in a host or user name. Every rendered value is now read back through the YAML decoder and quoted when it does not round-trip. The seed and a unit test were red in 817a06e, fixed in 91f631f.
@@ -4712,7 +4722,7 @@ How it writes, and what it prints:
 - **Failing-first commits.** ecbcf21 (the stub, 130 FAIL lines across `cmd/shell-mcp`, `internal/setup/compose` and `internal/setup/serverinit`) → fc397a0 (the guard) and 1bc11f2 (green); 817a06e → 91f631f (the fuzz finding).
 - **The harness red against the stub.** Run on ecbcf21's tree on Debian 13: 48 passed, 8 failed. Every init and compose check failed except "no temp file left", which passes by design on a stub that writes nothing.
 - **Pass on the stub by design:** `TestTemplateIsDeployFile` (it is the copy) and `FuzzParseImage` (the stub accepts nothing).
-- **The e2e-host test** runs only on the runner VM; its red run against the stub is not shown, and CI runs it on the final commit.
+- **The e2e-host test** runs only on the runner VM; its red run against the stub is not shown. CI ran it on 7bb5e85: `TestInitBindFormFromHostDirectory` PASS (34.65 s), with every other CI check green, CodeQL included.
 - **Fuzz targets, 60 s each, no finding after the fix:** `FuzzParseImage`, `FuzzRender` (twice: the second run after the fix), `FuzzCheckToken`, `FuzzCheckPublicKey`.
 - **The unit tests also ran as the Go image's root** (`--uid 65532` with real chowns): pass.
 - **setup-check:** 144 passed, 0 failed (Debian 13, Ubuntu 24.04, Ubuntu 26.04, the credential tests as root, and 15 init and compose checks: the in-image run, both forms healthy, `shell-mcp check` passing in the running server).

@@ -350,14 +350,17 @@ The hardening flags (`user`, `read_only`, `cap_drop`, `security_opt`, limits, he
 - **`--profile read-only|operator|admin`** (default `read-only`). `admin` without `--approve-host` is refused, because every destructive and privileged tool needs an approval. `operator` without it is accepted with a NOTE.
 - **The container tests.** CLAUDE.md allows no host mount but the repository, and a Windows host directory cannot hold uid 65532 or mode 0600. So in `scripts/setup-check/`, `init` runs in the image into a labelled named volume, and each form is started with `docker compose -f <printed file> -f <test override>`, where the override changes only the image (the tag built from the commit, which has no registry digest), the run label, and the secrets' source (the volume: for the bind form on the same `/run/secrets` target, for the secrets form `secrets: !reset []` plus the volume). The secrets form's own file mounts are covered by `docker compose config` and the golden and YAML tests. On e2e-host only (the disposable Linux runner), the bind form also starts from a real host directory, created by the documented host command and `init`, and removed in a cleanup that runs on failure too.
 
-*Applied in S8-2 from S8-1's precedent, and reported to the maintainer in the PR:*
-- **Same-flags idempotency over "a name already enrolled".** As S8-1 decided for its owner scan, `--approver <name>` whose name is already enrolled is `kept` (nothing generated or shown), so a second run with the same flags reports only `kept`. The refusal applies to a *second* approver, which `init` leaves to `approver add --allow-multiple`.
-- **The package is `internal/setup/serverinit`**, not §3.7's `internal/setup/secrets`: a permission rule in the maintainer's environment denies writes under paths named `secrets`.
+*Decided 2026-11-02 in S8-2 (the maintainer, confirming what the session had applied from S8-1's precedent and the rules cited):*
+- **Same-flags idempotency over "a name already enrolled".** As S8-1 decided for its owner scan, `--approver <name>` whose name is already enrolled is `kept` (nothing generated or shown, no terminal needed), so a second run with the same flags reports only `kept`. The refusal applies to a *second* approver, which `init` leaves to `approver add --allow-multiple`.
+- **`--approver` off a terminal.** The seed, its `otpauth` URI and QR code are written to a terminal and nowhere else. When stdout is not a terminal, `--approver` for a new name is refused before anything is generated or written, with a message saying to run `init` interactively or to run it without `--approver` and enrol later with `shell-mcp approver add`. A `--dry-run` refuses the same way, so that it predicts the real run.
 - **Refusals beyond §4.C's list, each from a rule already written down.**
   - `--uid` or `--gid` 0: the server runs non-root (SECURITY §2 and §7).
   - A directory above `--dir` that is writable by group or other: §3.2's chain rule. The rule is applied without its root-owner half, so `init` still works in the deployer's own directory next to the compose file, as `deploy/README.md` does it. A sticky directory (`/tmp`) is accepted when its entry on the path belongs to root, `--uid` or the running uid, since only that owner can rename it; `--dir` is never created directly in one.
   - In `init compose`, a `--subnet` outside /16–/28, and a `--server-addr` or `--proxy-addr` that is the subnet's network address, its broadcast address or its first host, which Docker gives the gateway: CLIENTS §1 says never to trust the gateway.
-  - `--dir` with `--form secrets`: a usage error, since that form never reads it.
+
+*Applied in S8-2 and reported to the maintainer in the PR:*
+- **The package is `internal/setup/serverinit`**, not §3.7's `internal/setup/secrets`: a permission rule in the maintainer's environment denies writes under paths named `secrets`.
+- **`--dir` with `--form secrets`** is a usage error, since that form never reads it.
 
 **Audit.** stderr JSON as `approver add`: `secret created|kept`, with the file name, owner and mode, the key's fingerprint, the approver's name; never the token, the key, the seed or the URI.
 
