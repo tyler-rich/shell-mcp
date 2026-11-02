@@ -15,7 +15,14 @@
 #   - shell-mcp-privd install --no-start: the review stop (exit 3), the units
 #     byte-identical to units --out, a second run unchanged, the dry run;
 # and, as the Go image's root, execx's credential tests
-# (SHELL_MCP_REQUIRE_ROOT_TESTS=1: they fail rather than skip).
+# (SHELL_MCP_REQUIRE_ROOT_TESTS=1: they fail rather than skip); then, with the
+# server image built from this commit's Dockerfile (handoff §4.C):
+#   - shell-mcp init in the image as 65532 with no network, a read-only root,
+#     no capabilities and no-new-privileges, after the documented host
+#     command: a dry run that changes nothing, the run, a second run that
+#     changes nothing, the owners and modes, no temp file, its refusals;
+#   - the server started with docker compose from init compose's printed
+#     file in both forms, and shell-mcp check passing against a target.
 #
 # The containers run as their own root (approved, handoff §7 Q2), and only
 # these: unprivileged, Docker's default capabilities with none added,
@@ -53,10 +60,15 @@ cleanup() {
 		# shellcheck disable=SC2086 # one container id per word
 		docker rm -f $ids >/dev/null 2>&1 || true
 	fi
-	if docker network ls -q --filter "label=$label" 2>/dev/null | grep -q .; then
-		docker network rm "$net" >/dev/null 2>&1 || true
-	fi
+	local n
+	for n in $(docker network ls -q --filter "label=$label" 2>/dev/null || true); do
+		docker network rm "$n" >/dev/null 2>&1 || true
+	done
+	for n in $(docker volume ls -q --filter "label=$label" 2>/dev/null || true); do
+		docker volume rm "$n" >/dev/null 2>&1 || true
+	done
 	rm -f "$bins_tar"
+	rm -rf "${compose_tmp:-}"
 }
 trap cleanup EXIT
 
@@ -283,6 +295,153 @@ for i in "${images[@]}"; do
 	[[ "$rc" == 1 ]] && grep -q 'it must be root:root with no group or other bits' <<<"$r" && ok "$i: privd refused: a policy file 0644" || bad "$i: privd policy 0644: exit $rc"
 	docker rm -f "$t" "$c" "$h" "$p" "$q" "$x" >/dev/null
 done
+
+# --- shell-mcp init and init compose (handoff §4.C) -------------------------------
+# init runs in the server image into a labelled named volume, not a host
+# directory: CLAUDE.md allows no host mount but the repository, and a Windows
+# host directory cannot hold uid 65532 or mode 0600. The documented host
+# command (install -d -o 65532 -g 65532 -m 0700) runs as root in a
+# target-image container that stands in for the host. Each form is started
+# with docker compose from init compose's printed file plus a test-only
+# override that changes three things only: the image (the tag built here: a
+# local build has no registry digest), the run's label, and the secrets'
+# source (the volume; for the bind form on the same /run/secrets target,
+# which Compose merges by target; for the secrets form `secrets: !reset []`).
+# Compose itself validates each printed file (docker compose config). The
+# bind form from a real host directory runs on e2e-host only
+# (test/e2e/zz_init_test.go).
+echo "=== init and init compose"
+srv="shell-mcp-setup-check:server"
+docker build -q --label "$label" -t "$srv" -f Dockerfile . >/dev/null
+vol="shell-mcp-setup-check-init-$run_id"
+docker volume create --label "$label" "$vol" >/dev/null
+hostc=(docker run --rm -i --label "$label" --network none --security-opt no-new-privileges:true -u 0:0 -v "$vol:/secrets" "shell-mcp-setup-check:${images[0]}")
+hardened=(--label "$label" --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true)
+initc=(docker run --rm "${hardened[@]}" -v "$vol:/secrets" "$srv")
+initt=(docker run --rm -t "${hardened[@]}" -v "$vol:/secrets" "$srv")
+# snap: every entry's kind, mode, owner, size, mtime and content hash, kept in
+# a variable and compared, never printed.
+snap() { "${hostc[@]}" sh -c 'cd /secrets && find . -printf "%p %y %m %U:%G %s %T@\n" | sort && find . -type f -exec sha256sum {} + | sort'; }
+"${hostc[@]}" install -d -o 65532 -g 65532 -m 0700 /secrets
+before="$(snap)"
+rc=0
+out="$("${initc[@]}" init --dir /secrets --approver alice --dry-run 2>&1)" || rc=$?
+after="$(snap)"
+if [[ "$rc" == 0 && "$before" == "$after" ]] && grep -q '<43 random characters>' <<<"$out"; then
+	ok "init --dry-run in the image (65532, no network, read-only, no capabilities): nothing written"
+else
+	bad "init --dry-run: exit $rc"
+	tail -n 5 <<<"$out" || true
+fi
+rc=0
+"${initt[@]}" init --dir /secrets --approver alice >/dev/null 2>&1 || rc=$?
+modes="$("${hostc[@]}" stat -c '%n %a %u:%g' /secrets /secrets/mcp_token /secrets/ssh_key /secrets/ssh_key.pub /secrets/approvers 2>&1 | tr '\n' ' ')"
+want="/secrets 700 65532:65532 /secrets/mcp_token 600 65532:65532 /secrets/ssh_key 600 65532:65532 /secrets/ssh_key.pub 644 65532:65532 /secrets/approvers 600 65532:65532 "
+if [[ "$rc" == 0 && "$modes" == "$want" ]]; then
+	ok "init in the image after the one host command: every file 65532:65532, 0600 (.pub 0644), the directory 0700"
+else
+	bad "init in the image: exit $rc, $modes"
+fi
+before="$(snap)"
+rc=0
+out="$("${initc[@]}" init --dir /secrets --approver alice 2>/dev/null)" || rc=$?
+after="$(snap)"
+if [[ "$rc" == 0 && "$before" == "$after" ]] && grep -q 'nothing to do: every file kept' <<<"$out" && ! grep -q 'otpauth://' <<<"$out"; then
+	ok "init second run with the same flags (no terminal): every file kept, no byte, mode or mtime changed"
+else
+	bad "init second run: exit $rc"
+	tail -n 5 <<<"$out" || true
+fi
+[[ -z "$("${hostc[@]}" find /secrets -name '.*.shell-mcp-*')" ]] && ok "init: no temp file left" || bad "init: temp files left"
+rc=0
+out="$(docker run --rm "${hardened[@]}" -u 1000:1000 -v "$vol:/secrets" "$srv" init --dir /secrets 2>/dev/null)" || rc=$?
+[[ "$rc" == 1 ]] && grep -q 'effective uid 1000 is neither 0 nor --uid 65532' <<<"$out" &&
+	ok "init refused: an effective uid neither 0 nor --uid" || bad "init as uid 1000: exit $rc"
+vol2="shell-mcp-setup-check-init-root-$run_id"
+docker volume create --label "$label" "$vol2" >/dev/null
+docker run --rm --label "$label" --network none --security-opt no-new-privileges:true -u 0:0 -v "$vol2:/secrets" "shell-mcp-setup-check:${images[0]}" chmod 0700 /secrets
+rc=0
+out="$(docker run --rm "${hardened[@]}" -v "$vol2:/secrets" "$srv" init --dir /secrets 2>/dev/null)" || rc=$?
+if [[ "$rc" == 1 ]] && grep -q 'is owned by 0, not --uid 65532' <<<"$out"; then
+	ok "init refused in the image: a directory owned by root"
+else
+	bad "init over a root-owned directory: exit $rc"
+	tail -n 3 <<<"$out" || true
+fi
+
+# A target with the gate installed for init's key, on the harness network; it
+# joins each form's compose network at a fixed address.
+sub="10.$((200 + RANDOM % 50)).$((RANDOM % 256))"
+t="$(new "${images[0]}")"
+"${hostc[@]}" cat /secrets/ssh_key.pub | docker exec -i "$t" sh -c 'cat >/root/ssh_key.pub'
+install "$t" --policy /etc/shell-mcp/read-only.yaml --principal readonly --from "$sub.10" --key /root/ssh_key.pub --uid 60123 --gid 60123 --no-reload
+pin="$(sed -n 's/^SHELL_MCP_TARGET_HOST_KEYS=//p' <<<"$out")"
+if [[ "$code" == 0 && -n "$pin" ]]; then ok "the target installs init's ssh_key.pub"; else
+	bad "install of init's key: exit $code"
+	grep FAIL <<<"$out" | head || true
+fi
+ex -d "$t" /usr/sbin/sshd -D -e
+compose_tmp="$(mktemp -d)"
+lkey="${label%%=*}"
+lval="${label#*=}"
+for form in secrets bind; do
+	d="$compose_tmp/$form"
+	mkdir -p "$d"
+	dn="$(cd "$d" && { pwd -W 2>/dev/null || pwd; })"
+	proj="shell-mcp-setup-check-$run_id-$form"
+	cargs=(init compose --image "ghcr.io/tyler-rich/shell-mcp:0.0.0-setup-check@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+		--host-key "$pin" --target-name app-host --target-host "$sub.20" --mcp-host mcp.example.test --subnet "$sub.0/24"
+		--server-addr "$sub.10" --proxy-addr "$sub.5" --profile operator --approve-host approve.example.test --form "$form")
+	[[ "$form" == bind ]] && cargs+=(--dir /srv/shell-mcp/secrets)
+	rc=0
+	docker run --rm "${hardened[@]}" "$srv" "${cargs[@]}" >"$d/docker-compose.yml" 2>"$d/notes" || rc=$?
+	{
+		echo "services:"
+		echo "  shell-mcp:"
+		echo "    image: $srv"
+		echo "    labels: { \"$lkey\": \"$lval\" }"
+		[[ "$form" == secrets ]] && echo "    secrets: !reset []"
+		echo "    volumes:"
+		echo "      - { type: volume, source: init-secrets, target: /run/secrets, read_only: true }"
+		echo "networks:"
+		echo "  front:"
+		echo "    labels: { \"$lkey\": \"$lval\" }"
+		echo "volumes:"
+		echo "  init-secrets: { external: true, name: $vol }"
+	} >"$d/override.yml"
+	dc=(docker compose -p "$proj" --project-directory "$dn" -f "$dn/docker-compose.yml" -f "$dn/override.yml")
+	if [[ "$rc" == 0 ]] && docker compose -p "$proj" --project-directory "$dn" -f "$dn/docker-compose.yml" config -q; then
+		ok "init compose --form $form: Compose accepts the printed file"
+	else
+		bad "init compose --form $form: exit $rc, or Compose refuses it"
+		cat "$d/notes" || true
+		continue
+	fi
+	merged="$("${dc[@]}" config 2>&1)" || true
+	if grep -q 'source: init-secrets' <<<"$merged" && ! grep -q '/srv/shell-mcp/secrets' <<<"$merged" && ! grep -qE 'cap_add|privileged: true' <<<"$merged"; then
+		ok "$form form: the override replaces only the image, the label and the secrets' source"
+	else
+		bad "$form form: the merged file is not what the override should give"
+	fi
+	rc=0
+	"${dc[@]}" up -d --wait --wait-timeout 120 >/dev/null 2>&1 || rc=$?
+	if [[ "$rc" == 0 ]]; then ok "$form form: the server starts from init's files and is healthy"; else
+		bad "$form form: docker compose up exit $rc"
+		"${dc[@]}" logs --no-color 2>&1 | tail -n 20 || true
+	fi
+	docker network connect --ip "$sub.20" "${proj}_front" "$t"
+	rc=0
+	r="$("${dc[@]}" exec -T shell-mcp /shell-mcp check 2>&1)" || rc=$?
+	if [[ "$rc" == 0 ]] && grep "host_key_verified" <<<"$r" | grep -qF -- "$pin"; then
+		ok "$form form: shell-mcp check in the running server verifies the target with init's key"
+	else
+		bad "$form form: check exit $rc"
+		tail -n 15 <<<"$r" || true
+	fi
+	docker network disconnect "${proj}_front" "$t" >/dev/null 2>&1 || true
+	"${dc[@]}" down >/dev/null 2>&1 || true
+done
+docker rm -f "$t" >/dev/null
 
 echo
 echo "setup-check: $pass passed, $fail failed"
