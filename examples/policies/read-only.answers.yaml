@@ -1,0 +1,34 @@
+# Example gate policy: read-only.
+#
+# Every name and path here is a placeholder (/srv/app, /etc/example-app,
+# example-app.service, git.example.test). Install as root:
+#   /etc/shell-mcp/read-only.yaml   root:root 0644
+# and select it from the SSH key's forced command:
+#   command="/usr/local/bin/shell-mcp-gate serve --policy /etc/shell-mcp/read-only.yaml --principal readonly"
+
+# Answers for `shell-mcp-gate policy new` (docs/POLICY.md §9). With these
+# answers it writes examples/policies/read-only.yaml byte for byte. Every
+# value is a placeholder. The opening comment above becomes the top of the
+# policy's header; this one is not carried.
+preset: read-only
+account: { user: svc-shell, uid: 60123 }
+read: [/srv/app, /etc/example-app, /var/log/example-app]
+deny: ["/srv/app/secrets/**", "**/*.key"]
+services:
+  status: ["example-app.service", "example-*.service"]
+journal:
+  units: ["example-app.service"]
+git:
+  repos:
+    - path: /srv/app/deploy
+      remote: https://git.example.test/org/deploy.git
+commands:
+  # check-policy prints a GTFOBins WARN for apt (it can run other programs in
+  # some modes); this exact template, with the gate's fixed PAGER=cat
+  # environment, has no such path.
+  - id: apt-upgradable
+    path: /usr/bin/apt
+    tier: read
+    description: "Packages with available upgrades"
+    templates:
+      - ["list", "--upgradable"]
