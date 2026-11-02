@@ -39,7 +39,7 @@ func FuzzParseImage(f *testing.F) {
 // key added by a value.
 func FuzzRender(f *testing.F) {
 	f.Add(image3, pin1, "app-host", "target-a.example.test", "svc-shell", "mcp.example.test", "192.0.2.0/24", "192.0.2.10", "192.0.2.5", "operator", "approve.example.test", "bind", "/srv/shell-mcp/secrets")
-	f.Add(image3, pin2, "a", "192.0.2.20", "u", "m", "10.1.0.0/16", "10.1.2.3", "10.1.2.4", "read-only", "", "secrets", "")
+	f.Add(image3, pin2, "a", "192.0.2.20", "u", "m", "172.16.0.0/16", "172.16.2.3", "172.16.2.4", "read-only", "", "secrets", "")
 	f.Fuzz(func(t *testing.T, img, pin, name, host, user, mcp, subnet, server, proxy, profile, approve, form, dir string) {
 		args := []string{"--image", img, "--host-key", pin, "--target-name", name, "--target-host", host, "--target-user", user,
 			"--mcp-host", mcp, "--subnet", subnet, "--server-addr", server, "--proxy-addr", proxy, "--profile", profile, "--form", form}
