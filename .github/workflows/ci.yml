@@ -402,6 +402,20 @@ jobs:
             E2E_BIN=/opt/e2e-bin E2E_REQUIRE_ALL=1 E2E_SECURITY_MAX="$E2E_SECURITY_MAX" \
             /opt/e2e-bin/e2e.test -test.v -test.count=1 2>&1 | tee "$RUNNER_TEMP/e2e.log"
           test "${PIPESTATUS[0]}" -eq 0
+      # execx's credential option needs a root test process (handoff §4.A,
+      # TARGET-SETUP §12.1 step 4); with SHELL_MCP_REQUIRE_ROOT_TESTS=1 a skip
+      # is a failure, and each test must be listed as passed.
+      - name: execx credential tests (as root; nothing may skip)
+        run: |
+          sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" PATH="$PATH" HOME=/root TMPDIR=/tmp \
+            GOCACHE="$RUNNER_TEMP/root-gocache" GOMODCACHE="$(go env GOMODCACHE)" GOFLAGS=-mod=readonly GOPROXY=off GOTOOLCHAIN=local \
+            SHELL_MCP_REQUIRE_ROOT_TESTS=1 go test -count=1 -v -run 'Credential|NilCredential' ./internal/gate/execx/ 2>&1 | tee "$RUNNER_TEMP/credential.log"
+          test "${PIPESTATUS[0]}" -eq 0
+          for t in TestCredentialSwitch TestCredentialNoGroups TestCredentialNPROC TestCredentialRefusedValuesAsRoot TestNilCredentialAsRoot TestCredentialCallSites; do
+            grep -q -- "^--- PASS: $t " "$RUNNER_TEMP/credential.log" || { echo "$t did not pass as root" >&2; exit 1; }
+          done
+          # The non-root refusal test is the one that skips as root (it runs in every non-root go test).
+          if grep -E -- '--- (SKIP|FAIL)' "$RUNNER_TEMP/credential.log" | grep -v -- '--- SKIP: TestCredentialRefusedWhenNotRoot '; then exit 1; fi
       - name: summary (every test must have run and passed)
         if: always()
         run: |
@@ -466,10 +480,31 @@ jobs:
           fi
           grep -h FAIL "$RUNNER_TEMP/weakened.out"
 
+  setup-check:
+    # The setup check (handoff §3.8, F-13): shell-mcp-gate install,
+    # host-key and shell-mcp-privd install --no-start on Debian 13, Ubuntu
+    # 24.04 and Ubuntu 26.04 containers, each run as its own root (approved,
+    # handoff §7 Q2) but unprivileged: Docker's default capabilities with
+    # none added, no-new-privileges, no host mount but the checkout
+    # (read-only) and the Go cache volume. The SSH round trip runs between
+    # two of them on a labelled network; execx's credential tests run as the
+    # Go image's root. No sudo.
+    name: setup-check (Debian 13, Ubuntu 24.04, Ubuntu 26.04 containers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: install, refusals, SSH round trip, privd install
+        run: bash scripts/setup-check/run.sh | tee -a "$GITHUB_STEP_SUMMARY"
+
   ci:
     name: ci
     if: always()
-    needs: [go, deps-current, gitleaks, image, e2e-host, exposure]
+    needs: [go, deps-current, gitleaks, image, e2e-host, exposure, setup-check]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

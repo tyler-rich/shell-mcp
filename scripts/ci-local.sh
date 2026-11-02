@@ -181,6 +181,15 @@ exposure_weakened_fails() {
 }
 step "exposure (offline, systemd 255/257/259)" "" bash scripts/exposure/run.sh
 step "exposure self-test (weakened unit)" "" exposure_weakened_fails
+# The setup check (handoff §3.8): install, host-key and privd install on
+# Debian 13, Ubuntu 24.04 and 26.04 containers run as their own root,
+# unprivileged (handoff §7 Q2; the only containers of this run that are not
+# a non-root user), and execx's credential tests as the Go image's root.
+# Labelled like every other container here. Its own assertions need real
+# containers, so the ci-local self-test (a fake docker) leaves it out.
+if [[ -z "${CI_LOCAL_UNDER_TEST:-}" ]]; then
+	step "setup-check (Debian 13, Ubuntu 24.04, 26.04)" "" bash scripts/setup-check/run.sh
+fi
 step "go test -race" "" in_go go test -race -timeout 20m -count=1 ./...
 # The Landlock forced-psx test build, which CI's psx entry runs, for the
 # packages that apply the sandbox (the helper's unit tests stub it). This

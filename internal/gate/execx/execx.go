@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -92,6 +93,16 @@ type Spec struct {
 	// refuses a signal once Run has waited for the process, so a reused pid
 	// is never signalled.
 	Started func(*os.Process)
+
+	// Credential, when set, runs the command as another account: exactly
+	// its uid, primary gid and supplementary groups. Run honours it only in
+	// a process running as uid 0, real and effective, and refuses it
+	// otherwise (CredentialError) before anything starts. The trampoline
+	// switches after all its own checks and verifies the result before the
+	// execve (trampoline.go). Nil, the default, is the behaviour without
+	// it, exactly. Its only caller is shell-mcp-gate install's check-policy
+	// step (TARGET-SETUP §12.1); a call-site test enforces that.
+	Credential *Credential
 }
 
 // Result reports what happened. Stdout and Stderr hold at most
@@ -185,8 +196,20 @@ type hooks struct {
 }
 
 func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
+	// A credential is checked before anything else, so that a refusal starts
+	// nothing: no socketpair, no fork.
+	uid := uidOf(os.Getuid())
+	if spec.Credential != nil {
+		if err := checkCredential(spec.Credential); err != nil {
+			return Result{}, err
+		}
+		uid = spec.Credential.UID
+	}
 	sc := *spec // defaults below must not change the caller's Spec
 	s := &sc
+	if s.Credential != nil {
+		s.Credential = &Credential{UID: s.Credential.UID, GID: s.Credential.GID, Groups: slices.Clone(s.Credential.Groups)}
+	}
 	if !filepath.IsAbs(s.Path) {
 		return Result{}, fmt.Errorf("%w: path is not absolute", ErrStart)
 	}
@@ -222,12 +245,12 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 	if env == nil {
 		env = []string{}
 	}
-	limits, err := childLimits(s.MaxMemoryMB, procDirOf(h))
+	limits, err := childLimits(s.MaxMemoryMB, procDirOf(h), uid)
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: %w", ErrStart, err)
 	}
 	cfg, err := encodeConfig(&trampolineConfig{Path: s.Path, Argv: append([]string{s.Path}, s.Args...), Env: env, Dir: dir,
-		Files: uint32(len(s.Files)), Limits: limits}) //nolint:gosec // G115: at most MaxFiles
+		Files: uint32(len(s.Files)), Limits: limits, Cred: s.Credential}) //nolint:gosec // G115: at most MaxFiles
 	if err != nil {
 		return Result{}, startError(err)
 	}
@@ -343,11 +366,13 @@ func run(ctx context.Context, spec *Spec, h *hooks) (Result, error) {
 // started without RLIMIT_NPROC (handoff N-30's audit), except for uid 0:
 // the kernel never applies RLIMIT_NPROC to root's processes (copy_process
 // exempts INIT_USER), and the helper's core unit may read only its own
-// /proc/<pid>, so it is not counted there.
-func childLimits(memoryMB int, procDir string) ([]childLimit, error) {
+// /proc/<pid>, so it is not counted there. uid is the uid the command will
+// run as: the caller's, or a Spec.Credential's, whose tasks are counted as
+// for any non-root command.
+func childLimits(memoryMB int, procDir string, uid uint32) ([]childLimit, error) {
 	l := []childLimit{{Resource: unix.RLIMIT_CORE, Max: 0}, {Resource: unix.RLIMIT_NOFILE, Max: ChildNofile},
 		{Resource: unix.RLIMIT_DATA, Max: uint64(memoryMB) << 20}} //nolint:gosec // G115: memoryMB is checked to be 1..MaxMemoryMB by run
-	if uid := os.Getuid(); uid != 0 {
+	if uid != 0 {
 		n, err := userTasksIn(procDir, uid)
 		if err != nil {
 			return nil, fmt.Errorf("cannot count the user's tasks for RLIMIT_NPROC: %w", err)
@@ -405,7 +430,7 @@ func procDirOf(h *hooks) string {
 }
 
 // userTasks counts uid's tasks under /proc (userTasksIn).
-func userTasks(uid int) uint64 {
+func userTasks(uid uint32) uint64 {
 	n, _ := userTasksIn("/proc", uid)
 	return n
 }
@@ -418,7 +443,7 @@ func userTasks(uid int) uint64 {
 // entries, and it reads procDir in chunks; a pid_max it cannot read, a
 // procDir it cannot list, or more entries than that bound is an error
 // naming the reason, never a count of 0.
-func userTasksIn(procDir string, uid int) (uint64, error) {
+func userTasksIn(procDir string, uid uint32) (uint64, error) {
 	b, err := os.ReadFile(procDir + "/sys/kernel/pid_max") //nolint:gosec // G304: /proc's own, or the tests' own directory
 	if err != nil {
 		return 0, fmt.Errorf("pid_max: %w", err)
@@ -433,7 +458,7 @@ func userTasksIn(procDir string, uid int) (uint64, error) {
 		return 0, err
 	}
 	defer func() { _ = d.Close() }()
-	want := strconv.Itoa(uid)
+	want := strconv.FormatUint(uint64(uid), 10)
 	var total, seen uint64
 	for {
 		names, rerr := d.Readdirnames(procReadChunk)
@@ -484,4 +509,13 @@ func taskCount(procDir, n, uid string) uint64 {
 		return 0
 	}
 	return threads
+}
+
+// uidOf is an id from the os package (an int) as the uint32 the kernel
+// uses; anything out of range is the overflow id, which no task has.
+func uidOf(v int) uint32 {
+	if v < 0 || uint64(v) > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(v)
 }
