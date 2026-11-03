@@ -673,7 +673,8 @@ jobs:
     # README's addresses against deploy/docker-compose.yml, the decided shape,
     # and caddy validate in a test-only image pinned by digest
     # (scripts/caddy-check/Dockerfile): no network, a read-only root, no
-    # capabilities, non-root. No Caddy runs as a proxy here. No sudo.
+    # capabilities, non-root. deploy/caddy/nginx.conf the same way, with nginx -t
+    # (scripts/nginx-check/). No proxy runs here. No sudo.
     name: caddy-check (deploy/caddy)
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -685,6 +686,8 @@ jobs:
           persist-credentials: false
       - name: drift, shape and caddy validate
         run: bash scripts/caddy-check/run.sh | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: nginx.conf drift, shape and nginx -t
+        run: bash scripts/nginx-check/run.sh | tee -a "$GITHUB_STEP_SUMMARY"
 
   ci:
     name: ci
