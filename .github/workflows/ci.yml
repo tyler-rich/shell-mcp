@@ -45,7 +45,10 @@ jobs:
     # than skip, and asserts which path it took. The forced entry's name says
     # "effective ABI": its kernel reports a higher ABI (display name only; the
     # job id and the ci aggregate's needs are unchanged).
-    name: go (fmt, vet, lint, test, vuln, build) — ${{ matrix.image }}, ${{ matrix.tags && format('Landlock {0} forced, effective ABI {1}', matrix.path, matrix.abi) || format('Landlock ABI {0} ({1})', matrix.abi, matrix.path) }}
+    # The main go test -race and the forced-psx step are this job; the
+    # static checks, the test-only builds and the builds are go-checks, a
+    # second required job on the same two runner images (P3, ARCHIVE §14).
+    name: go test -race — ${{ matrix.image }}, ${{ matrix.tags && format('Landlock {0} forced, effective ABI {1}', matrix.path, matrix.abi) || format('Landlock ABI {0} ({1})', matrix.abi, matrix.path) }}
     runs-on: ${{ matrix.image }}
     timeout-minutes: 20
     strategy:
@@ -67,6 +70,10 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # Its own cache key (setup-go hashes these files): the two go jobs of
+          # a runner image build different things (P3, ARCHIVE §14).
+          cache-dependency-path: |
+            go.sum
       # The gate refuses fixtures whose parent directories are group/other-
       # writable, and the default /tmp is world-writable: give the tests a
       # private TMPDIR under $HOME.
@@ -76,33 +83,6 @@ jobs:
           mkdir -p "$d" && chmod 0700 "$d"
           ls -ld / /home "$HOME" "$d"
           echo "TMPDIR=$d" >> "$GITHUB_ENV"
-      - name: gofmt
-        run: |
-          out="$(gofmt -l .)"
-          if [ -n "$out" ]; then echo "gofmt: files need formatting:"; echo "$out"; exit 1; fi
-      - name: go vet
-        run: |
-          go vet ./...
-          # Files built only with a tag: the e2e suite, the helper's e2e
-          # bypass build, the server's elicitation diagnostic build, the
-          # Landlock forced-psx test build, the gate's git-configuration
-          # hook build and fsx's read-confinement hook build (none ever
-          # released).
-          go vet -tags e2e ./test/e2e/
-          go vet -tags shellmcp_e2e_bypass ./internal/privd/... ./cmd/shell-mcp-privd/
-          go vet -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/
-          go vet -tags landlock_forcepsx ./...
-          go vet -tags shellmcp_gitconfig_hook ./internal/gate/... ./cmd/shell-mcp-gate/
-          go vet -tags shellmcp_confine_hook ./internal/gate/... ./internal/privd/... ./cmd/shell-mcp-gate/ ./cmd/shell-mcp-privd/
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: ${{ env.GOLANGCI_LINT_VERSION }}
-      - name: golangci-lint (e2e, bypass, diagnostic, forced-psx, git-configuration and read-confinement hook build tags)
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: ${{ env.GOLANGCI_LINT_VERSION }}
-          args: --build-tags=e2e,shellmcp_e2e_bypass,shellmcp_diag,landlock_forcepsx,shellmcp_gitconfig_hook,shellmcp_confine_hook
       # SHELL_MCP_REQUIRE_SECURE_TMP: tests fail (never skip) without a
       # trustworthy TMPDIR. SHELL_MCP_REQUIRE_LANDLOCK_ABI: each entry's
       # kernel ABI, so every sandbox test up to it (network rules from 4,
@@ -139,6 +119,94 @@ jobs:
           test "${PIPESTATUS[0]}" -eq 0
           grep -E 'LANDLOCK_PATH=psx kernel_abi=([89]|[1-9][0-9]) effective_abi=7' /tmp/go-test-forcepsx.log ||
             { echo "the forced-psx build did not run on a kernel at Landlock ABI 8 or above" >&2; exit 1; }
+      # Kernel-dependent tests, listed so that a skip is visible, with the
+      # all-thread Landlock path this entry exercised.
+      - name: sandbox tests that ran on this runner
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.image }}: kernel $(uname -r)"
+            echo "- build tags: ${{ matrix.tags || 'none (release build)' }}"
+            echo "- Landlock path exercised: $(grep -o 'LANDLOCK_PATH=[a-z]* kernel_abi=[0-9]* effective_abi=[0-9]*' /tmp/go-test.log | head -n1) (expected ${{ matrix.path }}, ABI ${{ matrix.abi }})"
+            echo '```'
+            grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|AddPath|LandlockThreadPath|ThreadPathDecision|Integration(Sandbox|Swap|ExecLimits|GitPull|ServiceOps|SystemOps)|RequiredRefused|BestEffort)' /tmp/go-test.log || true
+            echo '```'
+            if [ -f /tmp/go-test-forcepsx.log ]; then
+              echo "- landlock_forcepsx on this kernel: $(grep -o 'LANDLOCK_PATH=[a-z]* kernel_abi=[0-9]* effective_abi=[0-9]*' /tmp/go-test-forcepsx.log | head -n1) (expected psx, kernel ABI 8+, planned 7)"
+              echo '```'
+              grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|AddPath|LandlockThreadPath|ThreadPathDecision|IntegrationSandbox)' /tmp/go-test-forcepsx.log || true
+              echo '```'
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  go-checks:
+    # gofmt, vet and lint (with and without the test-only tags), the
+    # test-only builds' tests, the e2e runner-only guards, the diagnostic
+    # build, govulncheck and the release cross-builds, on the same two runner
+    # images as the go job (split from it for speed: P3, ARCHIVE §14).
+    name: go checks (fmt, vet, lint, test-only builds, vuln, build) — ${{ matrix.image }}, ${{ matrix.tags && format('Landlock {0} forced, effective ABI {1}', matrix.path, matrix.abi) || format('Landlock ABI {0} ({1})', matrix.abi, matrix.path) }}
+    runs-on: ${{ matrix.image }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu-24.04
+            abi: "7"
+            path: psx
+            tags: landlock_forcepsx
+          - image: ubuntu-26.04
+            abi: "8"
+            path: tsync
+            tags: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # Its own cache key (setup-go hashes these files): the two go jobs of
+          # a runner image build different things (P3, ARCHIVE §14).
+          cache-dependency-path: |
+            go.sum
+            .golangci.yml
+      # The gate refuses fixtures whose parent directories are group/other-
+      # writable, and the default /tmp is world-writable: give the tests a
+      # private TMPDIR under $HOME.
+      - name: private TMPDIR
+        run: |
+          d="$HOME/.shell-mcp-tmp"
+          mkdir -p "$d" && chmod 0700 "$d"
+          ls -ld / /home "$HOME" "$d"
+          echo "TMPDIR=$d" >> "$GITHUB_ENV"
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then echo "gofmt: files need formatting:"; echo "$out"; exit 1; fi
+      - name: go vet
+        run: |
+          go vet ./...
+          # Files built only with a tag: the e2e suite, the helper's e2e
+          # bypass build, the server's elicitation diagnostic build, the
+          # Landlock forced-psx test build, the gate's git-configuration
+          # hook build and fsx's read-confinement hook build (none ever
+          # released).
+          go vet -tags e2e ./test/e2e/
+          go vet -tags shellmcp_e2e_bypass ./internal/privd/... ./cmd/shell-mcp-privd/
+          go vet -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/
+          go vet -tags landlock_forcepsx ./...
+          go vet -tags shellmcp_gitconfig_hook ./internal/gate/... ./cmd/shell-mcp-gate/
+          go vet -tags shellmcp_confine_hook ./internal/gate/... ./internal/privd/... ./cmd/shell-mcp-gate/ ./cmd/shell-mcp-privd/
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+      - name: golangci-lint (e2e, bypass, diagnostic, forced-psx, git-configuration and read-confinement hook build tags)
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          args: --build-tags=e2e,shellmcp_e2e_bypass,shellmcp_diag,landlock_forcepsx,shellmcp_gitconfig_hook,shellmcp_confine_hook
       # The end-to-end test build skips fsx's forbidden-root check, so these
       # tests prove the built-in read deny list refuses on its own.
       - name: go test -race (test build, fsx)
@@ -178,25 +246,6 @@ jobs:
         run: |
           go test -race -timeout 20m -count=1 -v -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -tags shellmcp_diag -o /tmp/shell-mcp-diag.exe ./cmd/shell-mcp
-      # Kernel-dependent tests, listed so that a skip is visible, with the
-      # all-thread Landlock path this entry exercised.
-      - name: sandbox tests that ran on this runner
-        if: always()
-        run: |
-          {
-            echo "### ${{ matrix.image }}: kernel $(uname -r)"
-            echo "- build tags: ${{ matrix.tags || 'none (release build)' }}"
-            echo "- Landlock path exercised: $(grep -o 'LANDLOCK_PATH=[a-z]* kernel_abi=[0-9]* effective_abi=[0-9]*' /tmp/go-test.log | head -n1) (expected ${{ matrix.path }}, ABI ${{ matrix.abi }})"
-            echo '```'
-            grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|AddPath|LandlockThreadPath|ThreadPathDecision|Integration(Sandbox|Swap|ExecLimits|GitPull|ServiceOps|SystemOps)|RequiredRefused|BestEffort)' /tmp/go-test.log || true
-            echo '```'
-            if [ -f /tmp/go-test-forcepsx.log ]; then
-              echo "- landlock_forcepsx on this kernel: $(grep -o 'LANDLOCK_PATH=[a-z]* kernel_abi=[0-9]* effective_abi=[0-9]*' /tmp/go-test-forcepsx.log | head -n1) (expected psx, kernel ABI 8+, planned 7)"
-              echo '```'
-              grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|AddPath|LandlockThreadPath|ThreadPathDecision|IntegrationSandbox)' /tmp/go-test-forcepsx.log || true
-              echo '```'
-            fi
-          } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: govulncheck
         run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
       - name: cross-build (linux/amd64, linux/arm64)
@@ -553,7 +602,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [go, deps-current, gitleaks, image, e2e-host, exposure, setup-check, caddy-check]
+    needs: [go, go-checks, deps-current, gitleaks, image, e2e-host, exposure, setup-check, caddy-check]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
