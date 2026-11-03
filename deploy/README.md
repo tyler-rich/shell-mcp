@@ -131,7 +131,7 @@ shell-mcp init --dir <dir> [--uid <n>] [--gid <n>] [--approver <name>] [--dry-ru
 - **What it prints.** `ok`, `NOTE` and `FAIL` lines, the `ssh_key.pub` line and its fingerprint (for `shell-mcp-gate install --key`), then a one-line result. It never prints the token, the private key or a seed; the one exception is the approver's QR code and URI, shown once. Stderr gets one JSON audit line per file created or kept: the file name, owner, mode and, for the key, its fingerprint, never a value.
 - **`--dry-run`** prints every check and every file with its owner, mode and result (`create`, `kept`, `refuse`), with values shown as `<43 random characters>` and `<new Ed25519 key>`. It writes nothing and shows no seed.
 - **Writes and failures.** Each file is written the way the install commands write theirs ([`../docs/TARGET-SETUP.md`](../docs/TARGET-SETUP.md) §12.4): a temporary file `.<name>.shell-mcp-<12 random lowercase letters and digits>` in `--dir`, created `0600`, given its owner and mode on its descriptor, renamed over the target, and read back by SHA-256. A run that fails part-way removes the files it created (and the directory, if it created it) and leaves no temporary file. The next run removes any temporary file a killed run left.
-- **Exit codes.** 0 done or nothing to do, 1 refused or failed, 2 usage.
+- **Exit codes.** 0 done or nothing to do, 1 refused or failed, 2 usage (a missing required flag, an unknown one). `--help` prints the usage on stdout and exits 0.
 
 ### `shell-mcp init compose`
 
