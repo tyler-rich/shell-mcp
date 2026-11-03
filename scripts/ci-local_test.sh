@@ -144,5 +144,52 @@ else
 	fi
 fi
 
+# 3. The full gate (no flags) never calls itself quick.
+if grep -q -i 'quick' "$work/run.out"; then
+	bad "complete run: the full gate mentions quick mode" "$work/run.out"
+else
+	ok "complete run: the full gate does not mention quick mode"
+fi
+
+# 4. --quick: its steps only, every other step NOT RUN, and it says, at the
+#    start and in its last line, that it is not the full gate.
+log4="$work/quick.log"
+: >"$log4"
+code=0
+env "${common_env[@]}" FAKE_DOCKER_LOG="$log4" bash "$repo/scripts/ci-local.sh" --quick >"$work/quick.out" 2>&1 || code=$?
+if [[ "$code" -eq 0 ]]; then ok "quick run: exit 0 against the fake docker"; else bad "quick run: exit $code" "$work/quick.out"; fi
+check_log "quick run" "$log4"
+if grep -q '^run .*go test -race' "$log4" && grep -q '^run .*golangci-lint' "$log4" && grep -q '^run .*doccheck' "$log4"; then
+	ok "quick run: runs vet, lint, the race tests and doccheck"
+else
+	bad "quick run: a quick step did not run" "$log4"
+fi
+if grep -q -E '^run .*(govulncheck@|deps-current|scripts/exposure|release_test|go test -race .*-tags landlock_forcepsx)' "$log4"; then
+	bad "quick run: ran a step of the full gate only" "$log4"
+else
+	ok "quick run: no full-gate-only step ran"
+fi
+if grep -q -E '^\| govulncheck +\| NOT RUN' "$work/quick.out"; then
+	ok "quick run: the steps it skips are NOT RUN in the summary"
+else
+	bad "quick run: govulncheck is not NOT RUN in the summary" "$work/quick.out"
+fi
+if head -n 3 "$work/quick.out" | grep -q 'NOT the full gate' && tail -n 1 "$work/quick.out" | grep -q 'NOT the full gate'; then
+	ok "quick run: says it is NOT the full gate, first and last"
+else
+	bad "quick run: no NOT-the-full-gate notice at the start and the end" "$work/quick.out"
+fi
+
+# 5. An unknown argument is refused before anything runs.
+log5="$work/arg.log"
+: >"$log5"
+code=0
+env "${common_env[@]}" FAKE_DOCKER_LOG="$log5" bash "$repo/scripts/ci-local.sh" --fast >"$work/arg.out" 2>&1 || code=$?
+if [[ "$code" -ne 0 ]] && ! grep -q '^run ' "$log5"; then
+	ok "unknown argument: refused, nothing run"
+else
+	bad "unknown argument: exit $code" "$work/arg.out"
+fi
+
 echo "ci-local tests: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

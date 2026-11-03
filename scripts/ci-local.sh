@@ -4,9 +4,27 @@
 # tested on Linux even from a Windows workstation. Works from Git Bash on
 # Windows and from bash on Linux. Needs docker; nothing else on the host.
 #
-#   bash scripts/ci-local.sh          # everything
+#   bash scripts/ci-local.sh          # the full gate: run it before every push
+#   bash scripts/ci-local.sh --quick  # gofmt, vet, lint, go test -race and
+#                                     # doccheck only, for iterating: NOT the
+#                                     # full gate, never reported as ci-local passing
 #   CI_LOCAL_SKIP_PROBES=1 bash …     # skip the Landlock / systemd probes
 set -euo pipefail
+
+quick=""
+for arg in "$@"; do
+	case "$arg" in
+	--quick) quick=1 ;;
+	*)
+		echo "ci-local: unknown argument $arg (usage: ci-local.sh [--quick])" >&2
+		exit 2
+		;;
+	esac
+done
+quick_notice="QUICK MODE: this is NOT the full gate. Do not report it as ci-local passing; run bash scripts/ci-local.sh (no flags) before every push and PR."
+if [[ -n "$quick" ]]; then
+	echo "ci-local: $quick_notice"
+fi
 
 # Git Bash would rewrite /container/paths into C:/… paths; docker needs them raw.
 export MSYS_NO_PATHCONV=1
@@ -126,6 +144,23 @@ step() { # step <name> <note-on-failure> <command…>
 	fi
 }
 
+# not_run <name> <why>: a check this run does not run, never reported as passed.
+not_run() {
+	names+=("$1")
+	results+=("NOT RUN")
+	times+=("-")
+	notes+=("$2")
+}
+
+# full step|probe <name> …: a step of the full gate only; NOT RUN in quick mode.
+full() {
+	if [[ -n "$quick" ]]; then
+		not_run "$2" "quick mode: not the full gate"
+	else
+		"$@"
+	fi
+}
+
 probe() { # probe <name> <command…>: informational, never fails the run
 	local name="$1"
 	shift
@@ -167,7 +202,7 @@ step "go vet (test-only build tags)" "" in_go sh -c "go vet -tags e2e ./test/e2e
 step "golangci-lint" "" in_lint run ./...
 step "golangci-lint (test-only build tags)" "" in_lint run --build-tags=e2e,shellmcp_e2e_bypass,shellmcp_diag,landlock_forcepsx,shellmcp_gitconfig_hook,shellmcp_confine_hook ./...
 # The workflows (G2), as the deps-current job runs it (.github/actionlint.yaml).
-step "actionlint" "" in_go go run "github.com/rhysd/actionlint/cmd/actionlint@$actionlint_version"
+full step "actionlint" "" in_go go run "github.com/rhysd/actionlint/cmd/actionlint@$actionlint_version"
 # The offline exposure check (handoff N-28): the generated core units rated by
 # systemd-analyze security --offline in the systemd of Debian 13, Ubuntu 24.04
 # and 26.04, against scripts/exposure/scores.txt; and its negative control, a
@@ -185,8 +220,8 @@ exposure_weakened_fails() {
 	rm -f "$out"
 	echo "exposure: the weakened unit was refused, as it must be"
 }
-step "exposure (offline, systemd 255/257/259)" "" bash scripts/exposure/run.sh
-step "exposure self-test (weakened unit)" "" exposure_weakened_fails
+full step "exposure (offline, systemd 255/257/259)" "" bash scripts/exposure/run.sh
+full step "exposure self-test (weakened unit)" "" exposure_weakened_fails
 # The setup check (handoff §3.8): install, host-key and privd install on
 # Debian 13, Ubuntu 24.04 and 26.04 containers run as their own root,
 # unprivileged (handoff §7 Q2; the only containers of this run that are not
@@ -194,29 +229,29 @@ step "exposure self-test (weakened unit)" "" exposure_weakened_fails
 # Labelled like every other container here. Its own assertions need real
 # containers, so the ci-local self-test (a fake docker) leaves it out.
 if [[ -z "${CI_LOCAL_UNDER_TEST:-}" ]]; then
-	step "setup-check (Debian 13, Ubuntu 24.04, 26.04)" "" bash scripts/setup-check/run.sh
+	full step "setup-check (Debian 13, Ubuntu 24.04, 26.04)" "" bash scripts/setup-check/run.sh
 fi
 # deploy/caddy/Caddyfile against the reference compose, and caddy validate in
 # a test-only pinned image (no network, read-only, no capabilities, non-root;
 # handoff §4.G). Real containers, so the self-test (a fake docker) leaves it out.
 if [[ -z "${CI_LOCAL_UNDER_TEST:-}" ]]; then
-	step "caddy-check (deploy/caddy)" "" bash scripts/caddy-check/run.sh
+	full step "caddy-check (deploy/caddy)" "" bash scripts/caddy-check/run.sh
 fi
 step "go test -race" "" in_go go test -race -timeout 20m -count=1 ./...
 # The Landlock forced-psx test build, which CI's psx entry runs, for the
 # packages that apply the sandbox (the helper's unit tests stub it). This
 # kernel is below ABI 8 anyway; it proves the forced code enforces here.
-step "go test -race (forcepsx: gate)" "" in_go env SHELL_MCP_EXPECT_LANDLOCK_PATH=psx go test -race -timeout 20m -count=1 -tags landlock_forcepsx ./internal/gate/... ./cmd/shell-mcp-gate/
-step "go test -race (test build, fsx)" "" in_go go test -race -timeout 20m -count=1 -tags shellmcp_e2e_bypass ./internal/gate/fsx/
+full step "go test -race (forcepsx: gate)" "" in_go env SHELL_MCP_EXPECT_LANDLOCK_PATH=psx go test -race -timeout 20m -count=1 -tags landlock_forcepsx ./internal/gate/... ./cmd/shell-mcp-gate/
+full step "go test -race (test build, fsx)" "" in_go go test -race -timeout 20m -count=1 -tags shellmcp_e2e_bypass ./internal/gate/fsx/
 # The gate's git-configuration hook build (handoff N-20), as CI runs it.
-step "go test -race (git config hook build)" "" in_go go test -race -timeout 20m -count=1 -tags shellmcp_gitconfig_hook -run 'TestGitConfigChangedAfterCheck|TestProductionOptionsHaveNoGitConfigHook' ./internal/gate/ops/
+full step "go test -race (git config hook build)" "" in_go go test -race -timeout 20m -count=1 -tags shellmcp_gitconfig_hook -run 'TestGitConfigChangedAfterCheck|TestProductionOptionsHaveNoGitConfigHook' ./internal/gate/ops/
 # fsx's read-confinement hook build (handoff N-12), as CI runs it.
-step "go test -race (read-confinement hook build)" "" in_go go test -race -timeout 20m -count=1 -tags shellmcp_confine_hook -run 'TestConfineLayers' ./internal/gate/fsx/
-step "e2e runner-only guards" "" in_go sh -c "CGO_ENABLED=0 go test -c -trimpath -tags e2e -o /tmp/e2e.test ./test/e2e && E2E_TEST_BIN=/tmp/e2e.test bash test/e2e/guard_test.sh"
-step "go test -race (diagnostic build, server)" "" in_go sh -c "go test -race -timeout 20m -count=1 -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/ && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -tags shellmcp_diag -o /tmp/shell-mcp-diag.exe ./cmd/shell-mcp"
-step "govulncheck" "" in_go go run "golang.org/x/vuln/cmd/govulncheck@$govulncheck_version" ./...
-step "build linux/amd64" "" cross_build amd64
-step "build linux/arm64" "" cross_build arm64
+full step "go test -race (read-confinement hook build)" "" in_go go test -race -timeout 20m -count=1 -tags shellmcp_confine_hook -run 'TestConfineLayers' ./internal/gate/fsx/
+full step "e2e runner-only guards" "" in_go sh -c "CGO_ENABLED=0 go test -c -trimpath -tags e2e -o /tmp/e2e.test ./test/e2e && E2E_TEST_BIN=/tmp/e2e.test bash test/e2e/guard_test.sh"
+full step "go test -race (diagnostic build, server)" "" in_go sh -c "go test -race -timeout 20m -count=1 -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/ && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -tags shellmcp_diag -o /tmp/shell-mcp-diag.exe ./cmd/shell-mcp"
+full step "govulncheck" "" in_go go run "golang.org/x/vuln/cmd/govulncheck@$govulncheck_version" ./...
+full step "build linux/amd64" "" cross_build amd64
+full step "build linux/arm64" "" cross_build arm64
 # The release build (scripts/release/build.sh) as the release workflow runs
 # it, twice: every file must be byte-identical between the two (unsigned; the
 # workflow signs). The commit and its time are read here, on the host.
@@ -233,32 +268,26 @@ release_snapshot() {
 		cat /tmp/a.sums
 		echo "release snapshot: $(wc -l </tmp/a.sums) files, identical in two builds"' _ "$commit"
 }
-step "release snapshot build (twice)" "" release_snapshot
-step "release scripts self-test" "" in_go bash scripts/release/release_test.sh
-step "verify-release self-test" "" in_go bash scripts/verify-release_test.sh
+full step "release snapshot build (twice)" "" release_snapshot
+full step "release scripts self-test" "" in_go bash scripts/release/release_test.sh
+full step "verify-release self-test" "" in_go bash scripts/verify-release_test.sh
 step "doc links and section references" "" in_go go run ./scripts/doccheck
-step "deps-current" "run go get -u ./... && go mod tidy, or bump go.mod's go line" in_go bash scripts/deps-current.sh
-step "deps-current self-test" "" in_go bash scripts/deps-current_test.sh
-step "release-binary-check self-test" "" in_go bash scripts/release-binary-check_test.sh
-step "e2e shards self-test" "" in_go bash test/e2e/shards_test.sh
+full step "deps-current" "run go get -u ./... && go mod tidy, or bump go.mod's go line" in_go bash scripts/deps-current.sh
+full step "deps-current self-test" "" in_go bash scripts/deps-current_test.sh
+full step "release-binary-check self-test" "" in_go bash scripts/release-binary-check_test.sh
+full step "e2e shards self-test" "" in_go bash test/e2e/shards_test.sh
 # The ci-local test runs this script against a fake docker; not from itself.
 if [[ -z "${CI_LOCAL_UNDER_TEST:-}" ]]; then
-	step "ci-local self-test" "" in_go bash scripts/ci-local_test.sh
+	full step "ci-local self-test" "" in_go bash scripts/ci-local_test.sh
 fi
 
 if [[ -z "${CI_LOCAL_SKIP_PROBES:-}" ]]; then
-	probe "Landlock in test container" in_go go run ./scripts/probe/landlock
-	probe "systemd container (unprivileged)" bash scripts/probe/systemd.sh
+	full probe "Landlock in test container" in_go go run ./scripts/probe/landlock
+	full probe "systemd container (unprivileged)" bash scripts/probe/systemd.sh
 fi
 
 # --- What only CI runs ------------------------------------------------------------
 # Checks CI runs that this run cannot: reported as NOT RUN, never as passed.
-not_run() { # not_run <name> <why>
-	names+=("$1")
-	results+=("NOT RUN")
-	times+=("-")
-	notes+=("$2")
-}
 not_run "e2e-host (every e2e test)" "runner VM only: the e2e-host shards and e2e-host-coverage (init's bind form among them)"
 not_run "gitleaks" "CI only (the gitleaks job)"
 not_run "image build, Trivy, Grype" "CI only (the image job)"
@@ -268,11 +297,14 @@ not_run "Landlock tests above this ABI" "skip above this kernel's Landlock ABI; 
 
 # --- Summary ----------------------------------------------------------------------
 echo
-echo "=== Summary ($go_image)"
+echo "=== Summary ($go_image)${quick:+ — QUICK MODE, NOT the full gate}"
 printf '| %-34s | %-7s | %6s | %s\n' "Check" "Result" "Time" "Notes"
 printf '|%s|%s|%s|%s\n' "------------------------------------" "---------" "--------" "------"
 for i in "${!names[@]}"; do
 	printf '| %-34s | %-7s | %6s | %s\n' "${names[$i]}" "${results[$i]}" "${times[$i]}" "${notes[$i]}"
 done
 echo "wall time: $((SECONDS / 60))m$((SECONDS % 60))s"
+if [[ -n "$quick" ]]; then
+	echo "ci-local: $quick_notice"
+fi
 exit "$overall"
