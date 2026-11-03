@@ -58,7 +58,7 @@ One server instance has one profile, set by `SHELL_MCP_PROFILE` at start (D-005)
 | Profile | Tools | Adds | Approval |
 |---|---|---|---|
 | `read-only` (default) | 19 | System, disk, processes, services, journal, files, find, certificates, git status/log/diff, read-tier policy commands, delete and discard previews, `shell_get_policy`, `shell_list_targets` | Never needed |
-| `operator` | 27 | Service control, write, mkdir, copy, move, chmod, `git pull`, `shell_run_command` (read and operator commands) | Only if `SHELL_MCP_APPROVAL_TIERS=operator,destructive` |
+| `operator` | 27 | Service control, write, mkdir, copy, move, chmod, `git pull`, `shell_run_command` (read and operator commands) | Only if `SHELL_MCP_APPROVAL_TIERS=operator,destructive`, which `init compose --profile operator --approve-host` sets |
 | `admin` | 52 | Delete, git discard, destructive commands, and the 23 `shell_priv_*` tools (root, through the helper) | Always for destructive tools and for privileged tools of tier operator or above |
 
 `shell-mcp tools` prints the catalogue with each tool's tier, profiles, annotations and schema hashes; keep its output to diff against the next release (tool poisoning, SECURITY §2). `SHELL_MCP_DISABLE_TOOLS` removes individual tools; nothing adds a tool above the profile. The full catalogue is `docs/TOOLS.md`.
@@ -67,7 +67,7 @@ Run separate instances, with separate keys and policies, for separate ceilings: 
 
 ## 3. Approvals
 
-Destructive tools, privileged tools of tier operator or above, and the tiers in `SHELL_MCP_APPROVAL_TIERS` need a human's approval (D-006). `SHELL_MCP_APPROVAL_METHOD` decides how:
+Destructive tools, privileged tools of tier operator or above, and the tiers in `SHELL_MCP_APPROVAL_TIERS` need a human's approval (D-006). The tiers default to `destructive`; `shell-mcp init compose` sets `operator,destructive` when it is given both `--profile operator` and `--approve-host`, and leaves the default for `admin` (add `operator` by hand there if operator tools should need a code too). `SHELL_MCP_APPROVAL_METHOD` decides how:
 
 - **`none` (the default):** those tools refuse with `approval_unavailable`, and nothing is sent to the target.
 - **`web`:** the out-of-band approval page below. The model cannot approve.
@@ -105,7 +105,7 @@ Either way, `secrets/approvers` must stay `0600` and owned by 65532, like the ot
 **Turning approvals on for a running deployment**, in the deployment's directory on the server host:
 
 1. Enrol the approver, as above (`init --approver alice`, or `approver add`).
-2. Print the compose file again with `--approve-host approve.example.test` added to exactly the flags you used before (and `--profile admin` if that is the reason; see §2), and compare it with the old one before you replace it:
+2. Print the compose file again with `--approve-host approve.example.test` added to exactly the flags you used before (with `--profile operator` or `--profile admin`, whichever profile the approvals are for; see §2), and compare it with the old one before you replace it:
 
    ```bash
    docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true "$IMAGE" init compose \
@@ -114,7 +114,7 @@ Either way, `secrets/approvers` must stay `0600` and owned by 65532, like the ot
    mv docker-compose.new.yml docker-compose.yml
    ```
 
-   It adds `SHELL_MCP_APPROVAL_METHOD: web`, `SHELL_MCP_APPROVAL_PUBLIC_URL`, `SHELL_MCP_APPROVERS_FILE: /run/secrets/approvers`, `SHELL_MCP_APPROVAL_BIND: 0.0.0.0` (inside the container) and, in the `secrets` form, the `approvers` secret ([`deploy/README.md`](../deploy/README.md#shell-mcp-init-compose)). `SHELL_MCP_TRUSTED_PROXIES` is already the proxy's address, which the approval listener needs for its non-loopback bind.
+   It adds `SHELL_MCP_APPROVAL_METHOD: web`, `SHELL_MCP_APPROVAL_PUBLIC_URL`, `SHELL_MCP_APPROVERS_FILE: /run/secrets/approvers`, `SHELL_MCP_APPROVAL_BIND: 0.0.0.0` (inside the container), with `--profile operator` also `SHELL_MCP_APPROVAL_TIERS: operator,destructive`, and, in the `secrets` form, the `approvers` secret ([`deploy/README.md`](../deploy/README.md#shell-mcp-init-compose)). `SHELL_MCP_TRUSTED_PROXIES` is already the proxy's address, which the approval listener needs for its non-loopback bind.
 3. Have the proxy forward `approve.example.test` to the server's port 8081 on the shared network, as it forwards `mcp.example.test` to 8080, for the LAN or VPN only. Publish no port for it.
 4. Restart the server, which reads the approvers file only at start, and check:
 
@@ -123,7 +123,7 @@ Either way, `secrets/approvers` must stay `0600` and owned by 65532, like the ot
    docker compose exec shell-mcp /shell-mcp doctor --mcp-url https://mcp.example.test/mcp
    ```
 
-Under the `operator` profile, approvals gate the operator tools only with `SHELL_MCP_APPROVAL_TIERS: operator,destructive` in the environment as well, which `init compose` does not set: add it by hand.
+Under the `operator` profile, step 2's `--approve-host` is what puts the operator tools behind an approver's code (through `SHELL_MCP_APPROVAL_TIERS: operator,destructive`). Under `admin`, the tiers stay at the default: destructive and privileged operations need a code, and operator tools need one only if you add `SHELL_MCP_APPROVAL_TIERS: operator,destructive` to the environment by hand, as `init compose`'s NOTE says.
 
 - The approval listener (default `127.0.0.1:8081`) is separate from `/mcp`, never accepts the bearer token, and answers only for the origin of `SHELL_MCP_APPROVAL_PUBLIC_URL` (any other `Host` is `421`). A non-loopback bind needs native TLS (`SHELL_MCP_APPROVAL_TLS_CERT_FILE`/`_KEY_FILE`) or `SHELL_MCP_TRUSTED_PROXIES`, and then serves only those proxies.
 - `SHELL_MCP_APPROVAL_NOTIFY_URL` (an ntfy topic URL) with `SHELL_MCP_APPROVAL_NOTIFY_TOKEN_FILE` pushes each request and every lockout to the approver's phone, with a link to the page; the push never carries an approve or decline action.
