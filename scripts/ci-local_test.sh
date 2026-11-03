@@ -237,8 +237,9 @@ else
 	ok "lanes: no container of a lane runs as 65532"
 fi
 
-# 7. The lanes run at once: while the go lane's go test -race hangs, the
-#    network and containers lanes still run their steps; then the interrupt
+# 7. The containers lane runs beside the go lane, and the network lane after
+#    it: while the go lane's go test -race hangs, the containers lane still
+#    runs its steps and the network lane has not started; then the interrupt
 #    stops every lane and removes the labelled containers.
 lanes_hang() { # lanes_hang <log> <out> <env…>: start, wait for the hang
 	local log="$1" out="$2"
@@ -258,13 +259,18 @@ if [[ ! -e "$work/par.log.hanging" ]]; then
 	kill -KILL -- "-$hang_pid" 2>/dev/null || true
 else
 	for _ in $(seq 1 100); do
-		grep -q '^run .*deps-current_test\.sh' "$work/par.log" && grep -q '^run .*scripts/exposure/gen\.sh' "$work/par.log" && break
+		grep -q '^run .*scripts/exposure/gen\.sh' "$work/par.log" && break
 		sleep 0.1
 	done
-	if grep -q '^run .*deps-current_test\.sh' "$work/par.log" && grep -q '^run .*scripts/exposure/gen\.sh' "$work/par.log"; then
-		ok "parallel lanes: the network and containers lanes run while the go lane's tests run"
+	if grep -q '^run .*scripts/exposure/gen\.sh' "$work/par.log"; then
+		ok "parallel lanes: the containers lane runs while the go lane's tests run"
 	else
-		bad "parallel lanes: the other lanes waited for the go lane" "$work/par.log"
+		bad "parallel lanes: the containers lane waited for the go lane" "$work/par.log"
+	fi
+	if grep -q '^run .*deps-current' "$work/par.log"; then
+		bad "parallel lanes: the network lane ran beside the go lane's tests" "$work/par.log"
+	else
+		ok "parallel lanes: the network lane follows the go lane"
 	fi
 	kill -TERM -- "-$hang_pid"
 	wait "$hang_pid" || true

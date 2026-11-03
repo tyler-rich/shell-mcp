@@ -96,10 +96,13 @@ trap remove_own_containers EXIT
 trap 'echo "ci-local: interrupted" >&2; stop_lanes; exit 130' INT TERM
 
 # --- Lanes, their users and caches ---------------------------------------------
-# The steps run in three lanes at once: go (vet, lint, the tests, the
-# builds), network (the self-tests and checks that mostly wait on the
-# network) and containers (exposure, setup-check, caddy-check).
-# CI_LOCAL_SERIAL=1 runs them one after another, as before.
+# The steps run in three lanes: go (vet, lint, the tests, the builds),
+# network (the self-tests and checks that mostly wait on the network) and
+# containers (exposure, setup-check, caddy-check). Two groups run at once:
+# go and then network, beside containers. (All three at once showed a
+# failure of TestExecMemoryLimit on the first runs, so the go lane's tests
+# share the machine only with the containers lane: ARCHIVE §14.)
+# CI_LOCAL_SERIAL=1 runs the lanes one after another, as before.
 #
 # Never root. Each lane has its own uid, caches and TMPDIR: RLIMIT_NPROC
 # counts every task of a uid on the kernel, and the gate gives its
@@ -348,20 +351,22 @@ lane_containers() {
 }
 
 lanes=(go network containers)
+# The groups that run at once, each its lanes in order.
+groups=("go network" "containers")
 if [[ -n "$parallel" ]]; then
-	echo "ci-local: lanes ${lanes[*]} run at once (CI_LOCAL_SERIAL=1 for one at a time); each lane's output follows when it ends"
-	for l in "${lanes[@]}"; do
-		("lane_$l") >"$results_dir/$l.log" 2>&1 &
+	echo "ci-local: lanes go then network, beside containers (CI_LOCAL_SERIAL=1 for one at a time); each group's output follows when it ends"
+	for g in "${groups[@]}"; do
+		(for l in $g; do "lane_$l"; done) >"$results_dir/${g// /-}.log" 2>&1 &
 		lane_pids+=("$!")
 	done
 	for p in "${lane_pids[@]}"; do
 		wait "$p" || true # a lane's failures are its steps' rows
 	done
 	lane_pids=()
-	for l in "${lanes[@]}"; do
+	for g in "${groups[@]}"; do
 		echo
-		echo "##### lane $l"
-		cat "$results_dir/$l.log"
+		echo "##### lanes: $g"
+		cat "$results_dir/${g// /-}.log"
 	done
 else
 	for l in "${lanes[@]}"; do
