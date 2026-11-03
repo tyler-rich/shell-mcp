@@ -58,16 +58,17 @@ sha256sum --ignore-missing -c SHA256SUMS
 ```
 
 ```bash
-( set -e
-  for f in SHA256SUMS shell-mcp-gate_0.2.0_linux_amd64 shell-mcp-privd_0.2.0_linux_amd64 shell-mcp_0.2.0_examples.tar.gz; do
-    cosign verify-blob --bundle "$f.sigstore.json" \
-      --certificate-identity https://github.com/tyler-rich/shell-mcp/.github/workflows/release-build.yml@refs/tags/v0.2.0 \
-      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-      "$f"
-  done ) && echo "all verified"
+verified=yes
+for f in SHA256SUMS shell-mcp-gate_0.2.0_linux_amd64 shell-mcp-privd_0.2.0_linux_amd64 shell-mcp_0.2.0_examples.tar.gz; do
+  cosign verify-blob --bundle "$f.sigstore.json" \
+    --certificate-identity https://github.com/tyler-rich/shell-mcp/.github/workflows/release-build.yml@refs/tags/v0.2.0 \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    "$f" || { echo "FAILED: $f" >&2; verified=no; break; }
+done
+[ "$verified" = yes ] && echo "all verified"
 ```
 
-`set -e` in the subshell stops the loop at the first file that fails, and the whole command then fails without printing `all verified`: install nothing until it has. On arm64, use `linux_arm64` in the file names.
+The loop stops at the first file that fails, and the last line then fails without printing `all verified`: install nothing until it has. On arm64, use `linux_arm64` in the file names.
 
 The build provenance (SLSA) can be checked with the GitHub CLI as well:
 
@@ -614,7 +615,7 @@ On the server host, inside the running server's container, so that it sees the s
 docker compose exec shell-mcp /shell-mcp doctor --mcp-url https://mcp.example.test/mcp
 ```
 
-The reference compose sets no `container_name`, so Compose names the container `<project>-shell-mcp-1`. A stack editor shows the name it gave: use the editor's console, or `docker exec <container> /shell-mcp doctor`. Never use `docker compose run`: the second container it starts asks for the server's fixed address, which Docker refuses while the server runs ("Address already in use").
+The reference compose sets no `container_name`, so Compose names the container `<project>-shell-mcp-1`. A stack editor shows the name it gave. The image has no shell, so in the editor's console set the command to the binary itself, `/shell-mcp doctor --mcp-url https://mcp.example.test/mcp`; from the host, `docker exec <container> /shell-mcp doctor --mcp-url https://mcp.example.test/mcp` does the same. Never use `docker compose run`: the second container it starts asks for the server's fixed address, which Docker refuses while the server runs ("Address already in use").
 
 | Flag | Meaning |
 |---|---|
