@@ -398,8 +398,19 @@ func TestMemLimitStop(t *testing.T) {
 // newSpanSPMC stores sysAlloc's result in r.ring with no check between
 // (the Go 1.27.3 bug gcSpanQueueFault describes).
 func newSpanSPMCUnchecked(src string) (bool, error) {
-	return true, nil
+	i := strings.Index(src, "\nfunc newSpanSPMC(")
+	if i < 0 && !strings.HasPrefix(src, "func newSpanSPMC(") {
+		return false, fmt.Errorf("no newSpanSPMC")
+	}
+	body := src[i+1:]
+	if j := strings.Index(body, "\n}\n"); j >= 0 {
+		body = body[:j]
+	}
+	return spanSPMCUncheckedRE.MatchString(body), nil
 }
+
+// spanSPMCUncheckedRE: sysAlloc's result stored as the ring on the next line.
+var spanSPMCUncheckedRE = regexp.MustCompile(`(?m)^\tring := sysAlloc\([^\n]*\)\n\tatomic\.StorepNoWB\(unsafe\.Pointer\(&r\.ring\), ring\)$`)
 
 // TestNewSpanSPMCUnchecked: the source check, on invented excerpts shaped
 // as Go 1.27.3's newSpanSPMC and as a fixed one.
@@ -428,7 +439,7 @@ func TestNewSpanSPMCUnchecked(t *testing.T) {
 // still has the bug memLimitStop accepts the fault of; when it does not,
 // remove that acceptance (see gcSpanQueueFault).
 func TestGCSpanQueueBugInRuntime(t *testing.T) {
-	out, err := exec.Command("go", "env", "GOROOT", "GOVERSION").Output()
+	out, err := exec.CommandContext(t.Context(), "go", "env", "GOROOT", "GOVERSION").Output()
 	if err != nil {
 		t.Fatalf("go env: %v", err)
 	}
@@ -436,7 +447,7 @@ func TestGCSpanQueueBugInRuntime(t *testing.T) {
 	if len(f) != 2 || f[1] != runtime.Version() {
 		t.Fatalf("go env GOROOT GOVERSION %q, want this test's %s", out, runtime.Version())
 	}
-	src, err := os.ReadFile(filepath.Join(f[0], "src", "runtime", "mgcmark_greenteagc.go")) //nolint:gosec // G304: the toolchain's own runtime source
+	src, err := os.ReadFile(filepath.Join(f[0], "src", "runtime", "mgcmark_greenteagc.go"))
 	if err != nil {
 		t.Fatalf("the runtime's source: %v", err)
 	}
