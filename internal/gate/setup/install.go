@@ -973,7 +973,7 @@ func (in *installer) apply() int {
 	for _, w := range in.warnedRoots {
 		r.Warn("%s", w)
 	}
-	r.Note("keep this session open until a new login with the key has worked")
+	r.Note("keep your own session to this host open until a second SSH login of your own has worked: the sshd reload applies to every account")
 	if j.Changed() || len(in.accountRuns()) > 0 {
 		r.OK("installed: %d file(s) written, %d account change(s)", len(j.Paths()), len(in.accountRuns()))
 	} else {

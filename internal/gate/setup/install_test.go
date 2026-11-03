@@ -296,7 +296,7 @@ func TestInstallFresh(t *testing.T) {
 	if !reflect.DeepEqual(h.scanned, [][]uint32{{60123, 60123}}) {
 		t.Fatalf("owner scan for %v", h.scanned)
 	}
-	if !strings.Contains(r.out, "SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:") || !strings.Contains(r.out, "keep this session open") {
+	if !strings.Contains(r.out, "SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:") || !strings.Contains(r.out, "keep your own session") {
 		t.Fatalf("output:\n%s", r.out)
 	}
 	audit := strings.Join(r.audit, "\n")
