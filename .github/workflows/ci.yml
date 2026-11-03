@@ -21,6 +21,7 @@ env:
   GOVULNCHECK_VERSION: v1.9.0
   TRIVY_VERSION: v0.76.1
   GRYPE_VERSION: v0.121.1
+  ACTIONLINT_VERSION: v1.7.12
   GOTOOLCHAIN: local
 
 # An explicit shell makes every run step bash --noprofile --norc -eo pipefail:
@@ -294,6 +295,11 @@ jobs:
       # documents resolves (handoff §4.H).
       - name: doc links and section references
         run: go run ./scripts/doccheck
+      # The workflows themselves (G2): expressions, contexts, job and step
+      # keys, runner labels (.github/actionlint.yaml). Built from its module at
+      # the pinned version and verified by go.sum and the Go checksum database.
+      - name: actionlint
+        run: go run "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
       # The e2e-host shards: lists from the manifest, and the coverage check
       # refusing every incomplete, failed or overlapping set of results.
       - name: e2e shards self-test

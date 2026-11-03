@@ -7,7 +7,8 @@
 #   - a tool pinned in the workflows or scripts/ci-local.sh is older than its
 #     newest stable release, or the files that pin it disagree, or a pin is
 #     missing: golangci-lint and govulncheck (ci.yml, ci-local.sh and, for
-#     govulncheck, release-build.yml), Trivy and Grype (ci.yml and
+#     govulncheck, release-build.yml), actionlint (ci.yml and ci-local.sh),
+#     Trivy and Grype (ci.yml and
 #     release-build.yml), gitleaks (ci.yml), cosign and syft
 #     (release-build.yml);
 #   - the release workflow's loopback registry image
@@ -165,6 +166,10 @@ check_pins govulncheck "$(go list -m -f '{{.Version}}' golang.org/x/vuln@latest 
 	"$ci_yml=$(pin_of "$ci_yml" GOVULNCHECK_VERSION)" \
 	"$ci_local=$(sed -n 's/^govulncheck_version="\(v[0-9.]*\)"$/\1/p' "$ci_local" 2>/dev/null || true)" \
 	"$release_yml=$(pin_of "$release_yml" GOVULNCHECK_VERSION)"
+# actionlint (G2), the same way.
+check_pins actionlint "$(go list -m -f '{{.Version}}' github.com/rhysd/actionlint@latest 2>/dev/null || true)" \
+	"$ci_yml=$(pin_of "$ci_yml" ACTIONLINT_VERSION)" \
+	"$ci_local=$(sed -n 's/^actionlint_version="\(v[0-9.]*\)"$/\1/p' "$ci_local" 2>/dev/null || true)"
 
 check_pins Trivy "$(newest_tag aquasecurity/trivy)" \
 	"$ci_yml=$(pin_of "$ci_yml" TRIVY_VERSION)" "$release_yml=$(pin_of "$release_yml" TRIVY_VERSION)"

@@ -19,16 +19,17 @@ repo="$({ pwd -W 2>/dev/null || pwd; })"
 # The Go image is read from the Dockerfile's builder stage, so Dependabot's
 # docker updates move CI-local, CI and the image build together.
 go_image="$(awk 'toupper($1) == "FROM" { for (i = 2; i <= NF; i++) if ($i ~ /^golang:/) { print $i; exit } }' Dockerfile)"
-# golangci-lint and govulncheck run from their modules at pinned versions,
+# golangci-lint, govulncheck and actionlint run from their modules at pinned versions,
 # built by `go run` in the Go image above and verified by their go.sum and
 # the Go checksum database; keep them in step with GOLANGCI_LINT_VERSION and
-# GOVULNCHECK_VERSION in ci.yml. Building golangci-lint with the Go image means
+# GOVULNCHECK_VERSION (and ACTIONLINT_VERSION) in ci.yml. Building golangci-lint with the Go image means
 # the Go that loads this module for linting is always the Go the tests use: a
 # prebuilt golangci-lint image bundles its own Go, and with GOTOOLCHAIN=local
 # that Go cannot load the module once go.mod's go line moves past it.
-# deps-current checks both pins and that the lint step runs this way.
+# deps-current checks the pins and that the lint step runs this way.
 golangci_lint_version="v2.15.0"
 govulncheck_version="v1.9.0"
+actionlint_version="v1.7.12"
 
 if [[ "$go_image" != *@sha256:* ]]; then
 	echo "ci-local: the Dockerfile's golang builder image is not pinned by digest" >&2
@@ -162,6 +163,8 @@ step "go vet" "" in_go go vet ./...
 step "go vet (test-only build tags)" "" in_go sh -c "go vet -tags e2e ./test/e2e/ && go vet -tags shellmcp_e2e_bypass ./internal/privd/... ./cmd/shell-mcp-privd/ && go vet -tags shellmcp_diag ./cmd/shell-mcp/ ./internal/tools/ && go vet -tags landlock_forcepsx ./... && go vet -tags shellmcp_gitconfig_hook ./internal/gate/... ./cmd/shell-mcp-gate/ && go vet -tags shellmcp_confine_hook ./internal/gate/... ./internal/privd/... ./cmd/shell-mcp-gate/ ./cmd/shell-mcp-privd/"
 step "golangci-lint" "" in_lint run ./...
 step "golangci-lint (test-only build tags)" "" in_lint run --build-tags=e2e,shellmcp_e2e_bypass,shellmcp_diag,landlock_forcepsx,shellmcp_gitconfig_hook,shellmcp_confine_hook ./...
+# The workflows (G2), as the deps-current job runs it (.github/actionlint.yaml).
+step "actionlint" "" in_go go run "github.com/rhysd/actionlint/cmd/actionlint@$actionlint_version"
 # The offline exposure check (handoff N-28): the generated core units rated by
 # systemd-analyze security --offline in the systemd of Debian 13, Ubuntu 24.04
 # and 26.04, against scripts/exposure/scores.txt; and its negative control, a
