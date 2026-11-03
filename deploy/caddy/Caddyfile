@@ -3,8 +3,9 @@
 # only: mcp.example.test and approve.example.test, a LAN 192.0.2.0/24 and a
 # VPN 198.51.100.0/24 (documentation ranges: put your own), and the server at
 # 172.30.80.10 on the `front` network of deploy/docker-compose.yml. Caddy
-# itself joins `front` at 172.30.80.5, the only entry in
-# SHELL_MCP_TRUSTED_PROXIES.
+# itself runs as a container that joins `front` at 172.30.80.5, the only
+# entry in SHELL_MCP_TRUSTED_PROXIES; a Caddy installed on the host is not
+# supported by this layout (README.md, property 1).
 #
 # X-Forwarded-For: there is no trusted_proxies here, neither in the global
 # options nor in reverse_proxy, so Caddy replaces any X-Forwarded-For a
@@ -25,6 +26,13 @@
 # The MCP endpoint (the server's SHELL_MCP_PORT, 8080), from the LAN and the
 # VPN only. Everything else gets 403.
 mcp.example.test {
+	# Explicit LAN and VPN ranges only: never private_ranges, and never a
+	# range that holds a Docker network (172.16.0.0/12 holds Docker's default
+	# bridge networks, and this server's own subnet is one). A tunnel's
+	# connector (Cloudflare Tunnel, ngrok, Tailscale Funnel, …) in a container
+	# on such a network would pass, and the internet with it. Never put this
+	# server behind a tunnel or an internet-facing relay at all (README.md,
+	# property 4).
 	@private remote_ip 192.0.2.0/24 198.51.100.0/24
 	handle @private {
 		reverse_proxy 172.30.80.10:8080
@@ -37,6 +45,8 @@ mcp.example.test {
 # The approval page (the server's SHELL_MCP_APPROVAL_PORT, 8081), from the
 # LAN and the VPN only, never from the internet. Everything else gets 403.
 approve.example.test {
+	# The same explicit ranges, and the same rule: no Docker network, no
+	# tunnel or relay in front of this page.
 	@private remote_ip 192.0.2.0/24 198.51.100.0/24
 	handle @private {
 		reverse_proxy 172.30.80.10:8081

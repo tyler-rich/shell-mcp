@@ -188,23 +188,61 @@ The layers, from the network to the kernel:
 ## Requirements
 
 - **Targets:** Linux with systemd, amd64 or arm64, a kernel with Landlock ABI 4 or newer (Linux 6.7+) and `landlock` among its enabled LSMs, OpenSSH, and polkit for service control. Tested on **Debian 13**, **Ubuntu 24.04 LTS** and **Ubuntu 26.04 LTS**; the helper's sandbox runs end to end in CI on Ubuntu 26.04. Groups must be local (`/etc/group`): the gate cannot check a group known only through LDAP or SSSD, and refuses to run.
-- **Server:** Docker (or any OCI runtime) for the image, linux/amd64 or linux/arm64; or the static Linux binary.
+- **Server:** Docker (or any OCI runtime) for the image, linux/amd64 or linux/arm64; or the static Linux binary. cosign, or gh logged in (`gh auth login`), to verify the image before its first run (quick start step 1).
+- **Your workstation**, to download and verify the release before anything reaches a target (quick start step 3): gh, logged in with `gh auth login` (it downloads the release and checks attestations), cosign, and git. Verification needs no root; the verified files are then copied to the target.
 - **Clients:** any MCP client that speaks Streamable HTTP with a bearer header, on MCP 2026-07-28 or 2025-11-25, or stdio. Seen with Claude Code (CLI, the Claude Desktop app's Code tab, the VS Code extension) and Claude Desktop chat through mcp-remote 0.15.1 ([CLIENTS §5](docs/CLIENTS.md#5-what-clients-were-seen-doing-with-approvals)).
 
 ## Quick start
 
-From nothing to a client working with one target, in ten steps, with the commands that write every file for you. Each step names the exact command; the hand steps they replace, with every check, are [`docs/TARGET-SETUP.md`](docs/TARGET-SETUP.md).
+From nothing to a client working with one target, in eleven steps, with the commands that write every file for you. Each step names the exact command; the hand steps they replace, with every check, are [`docs/TARGET-SETUP.md`](docs/TARGET-SETUP.md).
 
-Every name is a placeholder: the target `target-a.example.test`, the server host `192.0.2.10` on your LAN (where the server's container runs), the names `mcp.example.test` (MCP) and `approve.example.test` (the approval page) served by your reverse proxy, the service account `svc-shell` (uid and gid 60123), the approver `alice`. Steps 1, 8 and 9 run on the server host, 2 to 7 on the target as root, 10 where your client runs. As in TARGET-SETUP, a step marked *(container)* was run as written in Debian 13, Ubuntu 24.04 and Ubuntu 26.04 containers (`scripts/setup-check/`), and one marked *(real host)* needs a running systemd and sshd, or the published release.
+Every name is a placeholder: the target `target-a.example.test`, the server host `192.0.2.10` on your LAN (where the server's container runs), the names `mcp.example.test` (MCP) and `approve.example.test` (the approval page) served by your reverse proxy, the service account `svc-shell` (uid and gid 60123), the approver `alice`. Steps 1, 2, 9 and 10 run on the server host, 3 on your workstation, 4 to 8 on the target as root, 11 where your client runs. As in TARGET-SETUP, a step marked *(container)* was run as written in Debian 13, Ubuntu 24.04 and Ubuntu 26.04 containers (`scripts/setup-check/`), and one marked *(real host)* needs a running systemd and sshd, or the published release.
 
-These commands are in every release after 0.2.0. Set `V` to the release you install and `IMAGE` to its image, both from its release notes:
+These commands are in every release after 0.2.0. Set `V` to the release you install, on each machine you run a step on:
 
 ```bash
 V=X.Y.Z
-IMAGE="ghcr.io/tyler-rich/shell-mcp:$V@sha256:<digest from the release notes>"
 ```
 
-1. **Server host: the secrets** *(container)*. In the deployment's directory (Compose reads `./secrets` next to its file), create the secrets directory owned by the image's user, then let `init` write the bearer token, the SSH key pair and the approver:
+**Server and target on the same host.** When the server's container runs on the target itself:
+
+- Choose the compose network now, before step 6: the subnet and the server's address (`--subnet 172.30.80.0/24 --server-addr 172.30.80.10` in step 9). The server's connections to sshd then come from that address, so step 6's `--from` is `172.30.80.10`, not the host's own address.
+- Step 9's `--target-host` is the host's LAN address (`192.0.2.10` here), never `localhost` or `127.0.0.1`, which inside the container are the container itself.
+- The host's firewall must let that address reach sshd *(real host)*. With ufw:
+
+  ```bash
+  ufw allow proto tcp from 172.30.80.10 to any port 22
+  ```
+
+  With nftables, in your ruleset's input chain (here the `inet filter` table of Debian's and Ubuntu's `/etc/nftables.conf`; keep the rule in that file so that it survives a reboot):
+
+  ```bash
+  nft add rule inet filter input ip saddr 172.30.80.10 tcp dport 22 accept
+  ```
+
+  The single address is enough; allowing the whole subnet (`172.30.80.0/24`) works too, but also admits the proxy.
+
+1. **Server host: verify the image** *(real host: needs the published release)*. Take the image's digest from the release notes and verify it before you run anything from it, with cosign or with gh (logged in), exactly as [Verifying a release](#verifying-a-release) does:
+
+   ```bash
+   DIGEST='sha256:<digest from the release notes>'
+   cosign verify "ghcr.io/tyler-rich/shell-mcp@$DIGEST" \
+     --certificate-identity "https://github.com/tyler-rich/shell-mcp/.github/workflows/release-build.yml@refs/tags/v$V" \
+     --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null && echo verified
+   ```
+
+   ```bash
+   gh attestation verify "oci://ghcr.io/tyler-rich/shell-mcp@$DIGEST" --repo tyler-rich/shell-mcp \
+     --signer-workflow tyler-rich/shell-mcp/.github/workflows/release-build.yml --source-ref "refs/tags/v$V"
+   ```
+
+   Only when one of them passes, set `IMAGE` to exactly that digest. Every later step runs `$IMAGE`, and the compose file pins it, so the host only ever runs the bytes you verified:
+
+   ```bash
+   IMAGE="ghcr.io/tyler-rich/shell-mcp:$V@$DIGEST"
+   ```
+
+2. **Server host: the secrets** *(container)*. In the deployment's directory (Compose reads `./secrets` next to its file), create the secrets directory owned by the image's user, then let `init` write the bearer token, the SSH key pair and the approver:
 
    ```bash
    install -d -o 65532 -g 65532 -m 0700 secrets
@@ -212,11 +250,11 @@ IMAGE="ghcr.io/tyler-rich/shell-mcp:$V@sha256:<digest from the release notes>"
      -v "$PWD/secrets:/secrets" "$IMAGE" init --dir /secrets --approver alice
    ```
 
-   - **The approver needs a terminal.** The seed is shown once, as a QR code and an `otpauth://` URI for the approver's authenticator app, and only on a terminal (hence `-it`). Without one, `init` refuses `--approver` before it writes anything. Leave `--approver` out to run without approvals, or to enrol later with `shell-mcp approver add` ([CLIENTS §3.2](docs/CLIENTS.md#32-setting-it-up)).
-   - **For a stack editor** (DockHand, Portainer, …), use an absolute host path such as `/srv/shell-mcp/secrets` in both commands, because step 8's bind form mounts the directory by that path.
-   - `init` prints `ssh_key.pub` and its fingerprint: copy that file to the target for step 5. It never prints the token or the private key, and a second run keeps every file ([`deploy/README.md`, "Secrets"](deploy/README.md#secrets)).
+   - **The approver needs a terminal.** The seed is shown once, as a QR code and an `otpauth://` URI for the approver's authenticator app, and only on a terminal (hence `-it`). Without one, `init` refuses `--approver` before it writes anything. Leave `--approver` out to run without approvals, or to enrol later ([CLIENTS §3.2](docs/CLIENTS.md#32-setting-it-up)).
+   - **For a stack editor** (DockHand, Portainer, …), use an absolute host path such as `/srv/shell-mcp/secrets` in both commands, because step 9's bind form mounts the directory by that path. The `install -d` command and `docker run` need root (or Docker access, which is root-equivalent) on the host once, whatever runs the stack afterwards.
+   - **The public key.** `init` prints the `ssh_key.pub` line and its fingerprint. Copy that line, which is public, into a file `ssh_key.pub` on the target for step 6. The file itself is in a `0700` directory owned by uid 65532, so on the host only root can read it. `init` never prints the token or the private key, and a second run keeps every file ([`deploy/README.md`, "Secrets"](deploy/README.md#secrets)).
 
-2. **Target: download and verify the release** *(real host)*. Into a directory of its own, then verify everything in it before you install anything:
+3. **Your workstation: download and verify the release, then copy it to the target** *(real host: needs the published release)*. Verify where your tools are, as yourself (verification needs no root), and copy only verified files to the target. This needs gh logged in (`gh auth login`), cosign or gh for the signatures, and git ([Requirements](#requirements)):
 
    ```bash
    gh release download "v$V" --repo tyler-rich/shell-mcp --dir release \
@@ -226,9 +264,21 @@ IMAGE="ghcr.io/tyler-rich/shell-mcp:$V@sha256:<digest from the release notes>"
    sh shell-mcp-src/scripts/verify-release.sh "$V" --dir release
    ```
 
-   `verify-release.sh` needs cosign or gh and exits 0 only when every file is listed in `SHA256SUMS`, matches it, and is signed by the release workflow at the tag `v$V`. Take it from the tag, as here, and read it once: the copy in the examples archive cannot vouch for the archive it is in. On a target without cosign or gh, verify `SHA256SUMS` on another machine, copy it over and pass `--sums <file>`. [Verifying a release](#verifying-a-release) has the commands it runs, to run by hand.
+   - **arm64 targets:** use `linux_arm64` in place of `linux_amd64` in the file names, here and in step 4.
+   - `verify-release.sh` exits 0 only when every file is listed in `SHA256SUMS`, matches it, and is signed by the release workflow at the tag `v$V`. Take it from the tag, as here, and read it once: the copy in the examples archive cannot vouch for the archive it is in. [Verifying a release](#verifying-a-release) has the commands it runs, to run by hand.
+   - **Copy the verified directory to the target** over SSH, as your own account, then confirm on the target that the copy matches the `SHA256SUMS` you verified:
 
-3. **Target: install the binaries** *(container)*:
+     ```bash
+     scp -r release target-a.example.test:
+     ```
+
+     ```bash
+     cd release && sha256sum --ignore-missing -c SHA256SUMS && cd ..
+     ```
+
+   - **To run `verify-release.sh` on the target instead**, with neither cosign nor gh there: verify `SHA256SUMS` on the workstation (the `cosign verify-blob` line of [Verifying a release](#verifying-a-release)), copy it, the downloaded files and `shell-mcp-src/scripts/verify-release.sh` to the target, keeping the verified `SHA256SUMS` outside the release directory, and run `sh verify-release.sh "$V" --dir release --sums verified/SHA256SUMS` there.
+
+4. **Target: install the binaries** *(container)*, as root, in the directory you copied `release` to:
 
    ```bash
    install -o root -g root -m 0755 "release/shell-mcp-gate_${V}_linux_amd64" /usr/local/bin/shell-mcp-gate
@@ -237,9 +287,9 @@ IMAGE="ghcr.io/tyler-rich/shell-mcp:$V@sha256:<digest from the release notes>"
    tar -xzf "release/shell-mcp_${V}_examples.tar.gz"
    ```
 
-   The helper (`shell-mcp-privd`) is needed only for root actions (step 7). Keep these paths: the forced command and the helper's units name them, and the gate refuses to run from a directory that is not root's.
+   The helper (`shell-mcp-privd`) is needed only for root actions (step 8). Keep these paths: the forced command and the helper's units name them, and the gate refuses to run from a directory that is not root's.
 
-4. **Target: the gate policy** *(container)*. Copy the example answers file closest to what you need, replace its placeholders (roots, units, repositories, commands), look at the result, then write it:
+5. **Target: the gate policy** *(container)*. Start from the narrowest example answers file that does the job, `read-only.answers.yaml` unless you need writes, and replace its placeholders (roots, units, repositories, commands). Look at the result, then write it:
 
    ```bash
    cp "shell-mcp_$V/examples/policies/read-only.answers.yaml" setup.yaml
@@ -247,20 +297,30 @@ IMAGE="ghcr.io/tyler-rich/shell-mcp:$V@sha256:<digest from the release notes>"
    shell-mcp-gate policy new --answers setup.yaml --out /etc/shell-mcp/read-only.yaml
    ```
 
-   `preset` in the file is `read-only`, `operator` or `admin`; `admin.answers.yaml` also holds the privileged policy's `root:` section (step 7), and its gate policy goes to `/etc/shell-mcp/admin.yaml`. The policy is loaded strictly before it is written, `root:root 0644` ([POLICY §9](docs/POLICY.md#9-generating-a-policy-policy-new-and-the-answers-file)).
+   - `preset` in the file is `read-only`, `operator` or `admin`. `admin.answers.yaml` also holds the privileged policy's `root:` section (step 8), and its gate policy goes to `/etc/shell-mcp/admin.yaml`. The policy is loaded strictly before it is written, `root:root 0644` ([POLICY §9](docs/POLICY.md#9-generating-a-policy-policy-new-and-the-answers-file)).
+   - **`admin.answers.yaml` is a catalogue, not a starting point.** Every item of its `root:` section is a root grant, and several are root-equivalent: delete each one you do not need before you write anything, above all `power` (reboot), `packages` (maintainer scripts run as root), `persistence` roots (what runs at the next boot) and any command with `unit: broad` or a broad template. What is left is what a compromised server could do as root.
+   - **The fields that must agree with the host and with step 6:**
 
-5. **Target: the service account, sshd and the server's key** *(container; the sshd reload: real host)*:
+     | Answers field | Must be |
+     |---|---|
+     | `account.user` | step 6's `--user` (default `svc-shell`) |
+     | `account.uid` | step 6's `--uid` (it becomes the privileged policy's `client_uid`) |
+     | `root.socket_group.name`, `.gid` | step 6's `--socket-group` and `--socket-gid`; the privileged policy is written after step 6 has created the group |
+     | `root.owners.users`, `.groups` | accounts and groups that exist on the target already (`getent passwd`, `getent group`) |
+     | `services`, `journal` units, `git.repos` paths, command `path`s | units, repositories and programs on this host |
+
+6. **Target: the service account, sshd and the server's key** *(container; the sshd reload: real host)*:
 
    ```bash
    shell-mcp-gate install --policy /etc/shell-mcp/read-only.yaml --principal readonly \
      --from 192.0.2.10 --key ssh_key.pub --uid 60123 --gid 60123
    ```
 
-   - `--from` is where the server's connections come from as the target sees them: the server host's address, or, when the server's container runs on the target itself, its fixed `ipv4_address` (step 8). Nothing wider than `/24` is accepted.
+   - `--from` is where the server's connections come from as the target sees them: the server host's address, or, with the server on the target itself, its compose address (above). Nothing wider than `/24` is accepted.
    - `--uid` and `--gid` are yours to choose and must be free: `install` refuses an id that owns any file on the host. For an `admin` policy, add `--socket-group svc-shell-priv --socket-gid 60124`, the helper's socket group.
-   - It creates the account (locked with `usermod -L`, never `passwd -l`), its memory slice, the polkit rule, the sshd drop-in and the key line, checks the policy as the account and `sshd -T`, reloads sshd, and prints the pin `SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:…` for step 8. Keep your session open until a new login has worked. Everything it does and refuses: [TARGET-SETUP §12.1](docs/TARGET-SETUP.md#121-shell-mcp-gate-install-container-the-reload-real-host).
+   - It creates the account (locked with `usermod -L`, never `passwd -l`), its memory slice, the polkit rule, the sshd drop-in and the key line, checks the policy as the account and `sshd -T`, reloads sshd, and prints the pin `SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:…` for step 9. The reload applies to every account: keep your own session to the target open until a second SSH login of your own has worked. Everything it does and refuses: [TARGET-SETUP §12.1](docs/TARGET-SETUP.md#121-shell-mcp-gate-install-container-the-reload-real-host).
 
-6. **Target: write roots and repositories** *(container)*, for `operator` and `admin` policies only. Which directories the gate may change is your application's decision, so this stays a hand step: give each write root and repository to the service account, for example
+7. **Target: write roots and repositories** *(container)*, for `operator` and `admin` policies only. Which directories the gate may change is your application's decision, so this stays a hand step: give each write root and repository to the service account, for example
 
    ```bash
    install -o svc-shell -g svc-shell -m 0755 -d /srv/app/config
@@ -268,46 +328,49 @@ IMAGE="ghcr.io/tyler-rich/shell-mcp:$V@sha256:<digest from the release notes>"
 
    `install` listed the write roots that `check-policy` warned about. [TARGET-SETUP §6](docs/TARGET-SETUP.md#6-write-roots-repositories-and-commands-paths-container) says why ownership and not an ACL.
 
-7. **Target, root actions only: the privileged policy and the helper** *(container; enabling the sockets: real host)*. After step 5, which created the socket group this policy names, from the same answers file (preset `admin`):
+8. **Target, root actions only: the privileged policy and the helper** *(container; enabling the sockets: real host)*. After step 6, which created the socket group this policy names, from the same answers file (preset `admin`):
 
    ```bash
    /usr/local/libexec/shell-mcp-privd policy new --answers setup.yaml --out /etc/shell-mcp/privileged.yaml
    /usr/local/libexec/shell-mcp-privd install --policy /etc/shell-mcp/privileged.yaml --gate-policy /etc/shell-mcp/admin.yaml
    ```
 
-   The first `install` prints the review (every `REVIEW` line and the policy's SHA-256) and stops with exit 3. Read it, then run the same command again with `--accept <that sha256>`: it writes and verifies the units, enables the sockets and prints the sandbox score ([TARGET-SETUP §12.3](docs/TARGET-SETUP.md#123-shell-mcp-privd-install-container-with---no-start-real-host)). After every edit of the privileged policy, run `install` again with the new hash.
+   The first `install` prints the review (every `REVIEW` line and the policy's SHA-256) and stops with exit 3. **Each `REVIEW` line is a root-equivalent grant you are about to accept**: a persistence root, a command that runs as root with network and full capabilities, a package operation, a power action. Read every one, remove from the answers file what you do not want and write the policy again, and only then run the same `install` with `--accept <that sha256>`: it writes and verifies the units, enables the sockets and prints the sandbox score ([TARGET-SETUP §12.3](docs/TARGET-SETUP.md#123-shell-mcp-privd-install-container-with---no-start-real-host)). After every edit of the privileged policy, run `install` again with the new hash.
 
-8. **Server host: the compose file and the proxy** *(container)*. Print the reference compose with your values, next to `secrets/`:
+9. **Server host: the compose file and the proxy** *(container)*. Print the reference compose with your values, next to `secrets/`:
 
    ```bash
    docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true "$IMAGE" init compose \
-     --image "$IMAGE" --host-key 'ssh-ed25519 SHA256:<the pin from step 5>' \
+     --image "$IMAGE" --host-key 'ssh-ed25519 SHA256:<the value after "=" from step 6>' \
      --target-name app-host --target-host target-a.example.test --mcp-host mcp.example.test \
-     --subnet 172.30.80.0/24 --server-addr 172.30.80.10 --proxy-addr 172.30.80.5 \
-     --approve-host approve.example.test > docker-compose.yml
+     --subnet 172.30.80.0/24 --server-addr 172.30.80.10 --proxy-addr 172.30.80.5 > docker-compose.yml
    ```
 
-   - **Plain `docker compose` on the host** uses this, the `secrets` form. **A stack editor** gets `--form bind --dir /srv/shell-mcp/secrets` added (step 1's absolute path): one read-only bind mount of the directory instead of the `secrets:` entries, whose relative paths an editor running Compose in its own container cannot resolve. Paste that output into the editor.
-   - Leave out `--approve-host` when step 1 enrolled no approver. `--profile operator` or `--profile admin` registers more tools (`admin` needs the approval page). Pick a subnet that clashes with none of your networks, and move both addresses with it.
-   - **The reverse proxy** joins the server's network at `172.30.80.5` and forwards `mcp.example.test` to `172.30.80.10:8080` and `approve.example.test` to `172.30.80.10:8081`, for your LAN or VPN only. [`deploy/caddy/README.md`](deploy/caddy/README.md) lists what any proxy needs (nginx, Traefik, Caddy, …); its `Caddyfile` is one example.
+   - **The pin.** `--host-key` is the value after `=` in the `SHELL_MCP_TARGET_HOST_KEYS=` line that step 6 printed (`shell-mcp-gate host-key` on the target prints it again), carried to the server host over a channel you trust, such as your own SSH session to the target. Never take it from what the network shows (`ssh-keyscan`, a first connection). `install` also lists the host's ECDSA and RSA keys as extra pins. The server offers only the pinned key types, so the Ed25519 pin alone is enough; give another type's pin, as one more `--host-key`, only when you rotate the host to that key ([`deploy/README.md`, "Rotating secrets"](deploy/README.md#rotating-secrets)).
+   - **Plain `docker compose` on the host** uses this, the `secrets` form. **A stack editor** gets `--form bind --dir /srv/shell-mcp/secrets` added (step 2's absolute path): one read-only bind mount of the directory instead of the `secrets:` entries, whose relative paths an editor running Compose in its own container cannot resolve. Paste that output into the editor.
+   - **Profiles and approvals.** The default profile, `read-only`, never needs an approval. `--profile admin` needs `--approve-host approve.example.test` (the approval page) and step 2's approver, and `init compose` refuses it without them. `--profile operator` runs its tools without approval unless you also add `SHELL_MCP_APPROVAL_TIERS: operator,destructive` to the compose's environment by hand (`init compose` does not set it); then it needs `--approve-host` too. Turning approvals on later: [CLIENTS §3.2](docs/CLIENTS.md#32-setting-it-up).
+   - Pick a subnet that clashes with none of your networks, and move both addresses with it.
+   - **The reverse proxy** is a container that joins the server's network at `172.30.80.5` and forwards `mcp.example.test` to `172.30.80.10:8080` and `approve.example.test` to `172.30.80.10:8081`, for your LAN or VPN only. A proxy installed on the host itself (nginx from the distribution's packages, for example) is not supported by this layout: it reaches the server from the network's gateway, which must never be trusted. Never put a tunnel or an internet-facing relay (Cloudflare Tunnel, ngrok, Tailscale Funnel or similar) in front of either name. [`deploy/caddy/README.md`](deploy/caddy/README.md) lists what any proxy needs and why, with an example `Caddyfile` and an example `nginx.conf`.
 
-9. **Server host: start it, then check everything** *(container; through your proxy: real host)*:
+10. **Server host: start it, then check everything** *(container; through your proxy: real host)*:
 
-   ```bash
-   docker compose up -d
-   docker compose exec shell-mcp /shell-mcp doctor --mcp-url https://mcp.example.test/mcp
-   ```
+    ```bash
+    docker compose up -d
+    docker compose exec shell-mcp /shell-mcp doctor --mcp-url https://mcp.example.test/mcp
+    ```
 
-   `doctor` runs inside the running container, with its environment and secrets. It reports the configuration and the secret files' modes, each target's pin, gate and sandbox, the privileged helper's sockets, the trusted proxy against the container's own routes, the approval page and the MCP endpoint without a token. Each failure names the step that fixes it ([TARGET-SETUP §12.6](docs/TARGET-SETUP.md#126-shell-mcp-doctor-container)). A stack editor names the container itself (Compose calls it `<project>-shell-mcp-1`): use the editor's console, or `docker exec <container> /shell-mcp doctor`. Then run the log-line check of [`deploy/caddy/README.md`](deploy/caddy/README.md#check-it-once-does-the-server-see-each-clients-own-address) once: it shows that the server sees each client's own address.
+    - `doctor` runs inside the running container, with its environment and secrets. It reports the configuration and the secret files' modes, each target's pin, gate and sandbox, the privileged helper's sockets, the trusted proxy against the container's own routes, the approval page and the MCP endpoint without a token. Each failure and warning names what fixes it ([TARGET-SETUP §12.6](docs/TARGET-SETUP.md#126-shell-mcp-doctor-container)).
+    - **A stack editor** names the container itself (Compose calls it `<project>-shell-mcp-1`). The image has no shell, so in the editor's console run the binary directly: set the command to `/shell-mcp doctor --mcp-url https://mcp.example.test/mcp`. From the host, `docker exec <container> /shell-mcp doctor --mcp-url https://mcp.example.test/mcp` does the same.
+    - Then confirm once that the server sees each client's own address: [`deploy/caddy/README.md`, "Check it once"](deploy/caddy/README.md#check-it-once-does-the-server-see-each-clients-own-address).
 
-10. **Your machine: connect a client**:
+11. **Your machine: connect a client**:
 
     ```bash
     claude mcp add --transport http shell-mcp https://mcp.example.test/mcp \
       --header "Authorization: Bearer $SHELL_MCP_TOKEN"
     ```
 
-    `SHELL_MCP_TOKEN` holds `secrets/mcp_token`, copied from the server host over a channel you trust. Ask the client to call `shell_get_policy` first: that is what the target allows. Other clients: [Connecting clients](#connecting-clients).
+    `SHELL_MCP_TOKEN` holds `secrets/mcp_token`, copied from the server host over a channel you trust (it is in the `0700` directory, so reading it on the host needs root). Ask the client to call `shell_get_policy` first: that is what the target allows. Other clients: [Connecting clients](#connecting-clients).
 
 ## Installation
 
@@ -317,9 +380,9 @@ The quick start's steps, component by component, with what each command does and
 
 [`deploy/docker-compose.yml`](deploy/docker-compose.yml) is the reference deployment, with the normative hardening flags (non-root user, read-only root filesystem, no capabilities, `no-new-privileges`, limits). It is laid out for a reverse proxy: the server publishes no port and joins a user-defined network, `front` (`172.30.80.0/24`, an RFC 1918 example: pick a subnet that does not clash with your networks), where your proxy has the fixed address `172.30.80.5`, the only entry in `SHELL_MCP_TRUSTED_PROXIES`.
 
-1. **Secrets:** `shell-mcp init` creates the token (43 characters), the Ed25519 key pair and, with `--approver`, the approvers file, owned by uid 65532 in a `0700` directory, and never overwrites or prints one (quick start step 1; [`deploy/README.md`, "Secrets"](deploy/README.md#secrets), which also has the commands by hand).
-2. **The compose file:** `shell-mcp init compose` prints this file with your image, target, pin, names, subnet and addresses in place, in the `secrets` form for `docker compose` or the `bind` form for stack editors. The hardening flags are not parameters (quick start step 8; [`deploy/README.md`](deploy/README.md#shell-mcp-init-compose)). Every variable: [Configuration reference](#configuration-reference) and [`deploy/.env.example`](deploy/.env.example).
-3. **The reverse proxy** joins `front` at `172.30.80.5`, forwards your MCP name (`mcp.example.test`) to `http://172.30.80.10:8080` and the approval name to `:8081`, passes on the address it saw in `X-Forwarded-For`, and serves your LAN or VPN only. **Never** put the Docker network's gateway in `SHELL_MCP_TRUSTED_PROXIES`: a request through a published port often arrives from the gateway, and trusting it would let any local process set its own client address. [`deploy/caddy/README.md`](deploy/caddy/README.md) has the properties for any proxy and an example Caddyfile; [CLIENTS §1](docs/CLIENTS.md#1-two-transports) the reasons.
+1. **Secrets:** `shell-mcp init` creates the token (43 characters), the Ed25519 key pair and, with `--approver`, the approvers file, owned by uid 65532 in a `0700` directory, and never overwrites or prints one (quick start step 2; [`deploy/README.md`, "Secrets"](deploy/README.md#secrets), which also has the commands by hand).
+2. **The compose file:** `shell-mcp init compose` prints this file with your image, target, pin, names, subnet and addresses in place, in the `secrets` form for `docker compose` or the `bind` form for stack editors. The hardening flags are not parameters (quick start step 9; [`deploy/README.md`](deploy/README.md#shell-mcp-init-compose)). Every variable: [Configuration reference](#configuration-reference) and [`deploy/.env.example`](deploy/.env.example).
+3. **The reverse proxy** is a container that joins `front` at `172.30.80.5` (a proxy installed on the host is not supported by this layout, and no tunnel or internet-facing relay may sit in front of it: [`deploy/caddy/README.md`](deploy/caddy/README.md), properties 1 and 4), forwards your MCP name (`mcp.example.test`) to `http://172.30.80.10:8080` and the approval name to `:8081`, passes on the address it saw in `X-Forwarded-For`, and serves your LAN or VPN only. **Never** put the Docker network's gateway in `SHELL_MCP_TRUSTED_PROXIES`: a request through a published port often arrives from the gateway, and trusting it would let any local process set its own client address. [`deploy/caddy/README.md`](deploy/caddy/README.md) has the properties for any proxy and an example Caddyfile; [CLIENTS §1](docs/CLIENTS.md#1-two-transports) the reasons.
 4. **Start and check:**
 
    ```bash
@@ -336,7 +399,7 @@ Stack editors (DockHand, Portainer), environment stores and plain `docker run`: 
 
 As root on each target. [`docs/TARGET-SETUP.md`](docs/TARGET-SETUP.md) is the reference: every step by hand with its checks and per-OS notes, each marked with the command that does it.
 
-1. **Verify and install** the gate, and the helper if you want root actions: `verify-release.sh`, then `install` the binaries to `/usr/local/bin/shell-mcp-gate` and `/usr/local/libexec/shell-mcp-privd` (quick start steps 2 and 3).
+1. **Verify and install** the gate, and the helper if you want root actions: `verify-release.sh`, then `install` the binaries to `/usr/local/bin/shell-mcp-gate` and `/usr/local/libexec/shell-mcp-privd` (quick start steps 3 and 4).
 2. **The gate policy**, one per SSH key, in `/etc/shell-mcp/` (`root:root 0644`): `shell-mcp-gate policy new` from an answers file and a preset, or an example from `examples/policies/` edited by hand ([POLICY §9](docs/POLICY.md#9-generating-a-policy-policy-new-and-the-answers-file)).
 3. **The account, sshd and the key:** `shell-mcp-gate install` creates the service account with an explicit uid and gid that nothing on the host owns, a real shell (sshd runs the forced command through it), a locked password and only the groups it needs (`systemd-journal` for journal reads, the helper's socket group for root actions; never `docker`, `sudo`, `adm` or similar); the slice that bounds its memory; the polkit rule when the policy has `services.control`; the `Match User svc-shell` block and the root-owned keys file with one `restrict,from=…,command=…` line per key. It checks the policy as the account, `StrictModes`, the keys file's ownership and the effective sshd configuration, reloads sshd and prints the host-key pin ([TARGET-SETUP §12.1](docs/TARGET-SETUP.md#121-shell-mcp-gate-install-container-the-reload-real-host)). `shell-mcp-gate host-key` prints the pin again.
 4. **Write roots and repositories** stay yours: give them to the service account. An ACL works for file operations, but makes command path placeholders and git refuse under that root ([TARGET-SETUP §6](docs/TARGET-SETUP.md#6-write-roots-repositories-and-commands-paths-container), [SECURITY §5](docs/SECURITY.md#5-target-hardening-normative-docstarget-setupmd-turns-this-into-steps)).
@@ -492,14 +555,14 @@ or in a project's `.mcp.json`, with the token taken from the environment:
 
 **Profiles.** `read-only` has 19 tools, `operator` 27, `admin` 52. Pair each with an SSH key whose gate policy has the matching `max_tier`, and run separate instances for separate ceilings.
 
-**Approvals and TOTP enrolment.** With `SHELL_MCP_APPROVAL_METHOD=web`, a gated call answers `approval_pending` with the approval page's URL; the approver opens the page **from a bookmark** of `SHELL_MCP_APPROVAL_PUBLIC_URL` (never from a chat link), checks the preview, and approves with the current code from their authenticator; the model then calls again with `approval_id`. Enrol the approver on the server host, never where the agent runs. The seed is shown once, and only on a terminal. `shell-mcp init --approver alice` enrols the approver while it creates the other secrets ([`deploy/README.md`, "Secrets"](deploy/README.md#secrets)); by hand, `secrets/` must be writable by uid 65532 while you enrol, and the file it writes must stay `0600` and owned by 65532:
+**Approvals and TOTP enrolment.** With `SHELL_MCP_APPROVAL_METHOD=web`, a gated call answers `approval_pending` with the approval page's URL; the approver opens the page **from a bookmark** of `SHELL_MCP_APPROVAL_PUBLIC_URL` (never from a chat link), checks the preview, and approves with the current code from their authenticator; the model then calls again with `approval_id`. Enrol the approver on the server host, never where the agent runs. The seed is shown once, and only on a terminal. `shell-mcp init --approver alice` enrols the approver while it creates the other secrets ([`deploy/README.md`, "Secrets"](deploy/README.md#secrets)); later, with `approver add` in the verified image (`$IMAGE`, quick start step 1), into the same directory, which `init` made `0700` and owned by uid 65532, the image's user:
 
 ```bash
-docker run --rm -it -v "$PWD/secrets:/run/secrets" ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:<digest> \
-  approver add --name alice --file /run/secrets/approvers
+docker run --rm -it --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  -v "$PWD/secrets:/run/secrets" "$IMAGE" approver add --name alice --file /run/secrets/approvers
 ```
 
-Then set `SHELL_MCP_APPROVAL_METHOD=web`, `SHELL_MCP_APPROVAL_PUBLIC_URL=https://approve.example.test`, `SHELL_MCP_APPROVERS_FILE=/run/secrets/approvers` and the approval listener's bind, and have the proxy forward the approval name to port 8081. stdio, MCP Inspector, the client matrix and safe use: [`docs/CLIENTS.md`](docs/CLIENTS.md).
+Then `shell-mcp init compose` with `--approve-host approve.example.test` and the flags you used before sets `SHELL_MCP_APPROVAL_METHOD=web`, the page's public URL, the approvers file and the listener's bind, and the proxy forwards the approval name to port 8081 ([CLIENTS §3.2](docs/CLIENTS.md#32-setting-it-up) has the steps). stdio, MCP Inspector, the client matrix and safe use: [`docs/CLIENTS.md`](docs/CLIENTS.md).
 
 ## Verifying a release
 
@@ -559,6 +622,25 @@ The release workflow runs it after signing: a release's files must pass, and a c
 4. **Then the server.** Set the new `image: …@sha256:<digest>`, run `docker compose up -d`, then `docker compose exec shell-mcp /shell-mcp doctor`. Run it with `exec`, inside the running server: `docker compose run` starts a second container on the same fixed address, which Docker refuses while the server runs. Approval records are in memory: pending approvals are lost on restart.
 
 The server, the gate and the helper check each other's protocol version and refuse a mismatch with an actionable error (`protocol_mismatch`, naming the side to upgrade; nothing runs), so upgrade all three within one window. From 0.1.0 to 0.2.0 the protocol version changes and the helper's units must be regenerated: follow the numbered steps in [`CHANGELOG.md`](CHANGELOG.md), "Upgrading from 0.1.0". Details: [TARGET-SETUP §11](docs/TARGET-SETUP.md#11-updating-and-removing).
+
+### Upgrading from 0.2.0
+
+0.2.0 had no setup commands: its hosts were set up by hand ([TARGET-SETUP](docs/TARGET-SETUP.md) as written) and its server's secrets and compose file too. The releases after it add `install`, `host-key`, `policy new`, `shell-mcp-privd install`, `init`, `init compose`, `doctor` and `verify-release.sh`. Adopting them changes no file that is already right; each item below says what it does on such a host. What was checked where: **(containers)** marks what `scripts/setup-check/` runs on Debian 13, Ubuntu 24.04 and 26.04 against hosts set up by hand as TARGET-SETUP describes, or what was run in a container for this section; **(not yet on a real 0.2.0 install)** marks what still needs one.
+
+1. **The release notes first**, as in the steps above: they say whether the protocol, a policy key or the helper's units change, and those steps come before anything here.
+2. **Targets: the binaries.** Verify and install them over the old ones (quick start steps 3 and 4). Both start per request; nothing restarts.
+3. **Targets: `shell-mcp-gate install` over the hand-made account and sshd setup**, with the flags that describe what you made by hand: the same policy, principal, `from=` list, key, user, uid, gid and (for an admin key) socket group and gid. A host set up exactly as TARGET-SETUP §4, §7 and §8 say reports every item `unchanged` and writes nothing **(containers)**. Any difference is refused with a diff, never overwritten: a key line with other options (`--replace-key` rewrites it), a drop-in or polkit rule edited by hand, an account in another group. Fix the difference or keep the hand-made file, and run it again. The memory slice drop-in is new in the commands: if you did not write it by hand, `install` creates it (or pass `--memory-max none`, with a WARN). Run `--dry-run` first: it shows each item and what would happen to it.
+4. **Targets: `shell-mcp-privd install`** over units generated by `shell-mcp-privd units`. The first run prints the review and stops with exit 3; read every `REVIEW` line (quick start step 8), then run it with `--accept <sha256>`. Over units that `units` generated from the same policy it writes nothing and reports `unchanged` **(containers)**; when the new release changes the units, it rewrites them, reloads systemd and restarts each socket whose `.socket` file changed. A unit file without the `# Generated by shell-mcp-privd units` header is refused, never replaced.
+5. **Targets: `policy new` is optional.** Your hand-written policies stay valid and keep working. `policy new` never overwrites a policy with other content: it refuses with a diff **(containers)**. To move to answers files, write one that reproduces your policy, compare with `policy new --answers setup.yaml --out -`, and replace the file yourself once the diff is what you expect.
+6. **The server: the secrets.** 0.2.0's "By hand" recipe left the directory and `ssh_key.pub` owned by you, which `init` refuses (it names the `chown`). Hand the directory to the image's user, as root, and `init` then keeps every file and changes nothing **(containers)**:
+
+   ```bash
+   chown -R 65532:65532 secrets
+   ```
+
+   You need `init` again only to add an approver, and the directory form only for the stack editors' `bind` form.
+7. **The server: `init compose`**, with your image, target, pin, names, subnet and addresses, replaces your compose file. Diff it against the old one before you use it: only the image, the values you gave and, with `--approve-host`, the approval settings should differ from the reference compose. `docker compose up -d`, then `docker compose exec shell-mcp /shell-mcp doctor --mcp-url https://mcp.example.test/mcp` **(not yet on a real 0.2.0 install)**.
+8. **Check** with `doctor` from the server, and on each target `journalctl -t shell-mcp-gate` for the install commands' own audit lines.
 
 ## Troubleshooting
 

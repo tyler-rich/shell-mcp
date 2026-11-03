@@ -4,9 +4,9 @@ This guide sets up one Linux host ("target") so that a shell-mcp server can reac
 
 Every name below is a placeholder: the service account `svc-shell` (uid/gid 60123), the helper's socket group `svc-shell-priv` (gid 60124), the application account `example-app`, the paths `/srv/app` and `/etc/example-app`, the unit `example-app.service`, the server's network `192.0.2.0/24`. Use your own.
 
-**How each step was checked.** Every command marked *(container)* was run as written, as root, in throwaway containers of `debian:trixie` (Debian 13), `ubuntu:24.04` and `ubuntu:26.04`, against the binaries of the commit this guide was released with (ARCHIVE §14, 2026-10-25 S5b). Commands marked *(real host)* need something a container does not have: a running systemd and polkit, journald, a kernel with the Landlock ABI the gate needs, or the published release. The end-to-end tests (`e2e-host` in CI) run the gate and the helper on a real Ubuntu 26.04 machine.
+**How each step was checked.** Every command marked *(container)* was run as written, as root, in throwaway containers of `debian:trixie` (Debian 13), `ubuntu:24.04` and `ubuntu:26.04`, against the binaries of the commit this guide was released with. Commands marked *(real host)* need something a container does not have: a running systemd and polkit, journald, a kernel with the Landlock ABI the gate needs, or the published release. The end-to-end tests (`e2e-host` in CI) run the gate and the helper on a real Ubuntu 26.04 machine.
 
-**The quick start and this reference.** The README's quick start sets up a target and the server in ten steps with the commands below; this guide is their reference. It keeps every step by hand, with its checks and per-OS notes, as the manual path and as what the commands write. Each step says which command does it.
+**The quick start and this reference.** The README's quick start sets up a target and the server in eleven steps with the commands below; this guide is their reference. It keeps every step by hand, with its checks and per-OS notes, as the manual path and as what the commands write. Each step says which command does it.
 
 **The install commands.** Steps 4, 7 and 8 are done by `shell-mcp-gate install`, and steps 9.2 to 9.4 by `shell-mcp-privd install` (§12). Step 2 is `verify-release.sh` (§12.7) and step 10 `shell-mcp doctor` (§12.6). They write exactly the files those steps write, byte for byte, with the same owners and modes, and refuse the mistakes the steps warn about: a key line without `restrict`, a `from=` wider than /24, an account in a privileged group, a uid that already owns files, units left on an old policy hash. Each step below says which command does it; the hand steps stay as the reference and as the manual path. The two policies (steps 5 and 9.1) can be generated from one answers file by `shell-mcp-gate policy new` and `shell-mcp-privd policy new` (POLICY §9); the gate's comes before `install`, the privileged one after it, because `install` creates the socket group the privileged policy names.
 
@@ -41,6 +41,8 @@ systemctl --version
 
 *Done by `verify-release.sh` (§12.7) from every release after 0.2.0: the checks below, for every file in a directory, with cosign or gh.*
 
+Do this on a workstation, not on the target: it needs gh (logged in with `gh auth login`), cosign and, for `verify-release.sh`, git, and none of it needs root. Then copy the verified files to the target over SSH and confirm the copy there with `sha256sum --ignore-missing -c SHA256SUMS` (the README's quick start, step 3, also says how to run `verify-release.sh --sums` on the target itself).
+
 Each release on GitHub carries, per architecture, `shell-mcp_X.Y.Z_linux_<arch>` (the server), `shell-mcp-gate_X.Y.Z_linux_<arch>` and `shell-mcp-privd_X.Y.Z_linux_<arch>`, plus `shell-mcp_X.Y.Z_examples.tar.gz` (the example policies and `deploy/`), `SHA256SUMS`, a Sigstore bundle `<file>.sigstore.json` for every binary, the archive and `SHA256SUMS`, and a CycloneDX SBOM per binary. The examples below use 0.2.0 on amd64.
 
 ```bash
@@ -56,13 +58,16 @@ sha256sum --ignore-missing -c SHA256SUMS
 ```
 
 ```bash
-for f in SHA256SUMS shell-mcp-gate_0.2.0_linux_amd64 shell-mcp-privd_0.2.0_linux_amd64 shell-mcp_0.2.0_examples.tar.gz; do
-  cosign verify-blob --bundle "$f.sigstore.json" \
-    --certificate-identity https://github.com/tyler-rich/shell-mcp/.github/workflows/release-build.yml@refs/tags/v0.2.0 \
-    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-    "$f" || echo "FAILED: $f"
-done
+( set -e
+  for f in SHA256SUMS shell-mcp-gate_0.2.0_linux_amd64 shell-mcp-privd_0.2.0_linux_amd64 shell-mcp_0.2.0_examples.tar.gz; do
+    cosign verify-blob --bundle "$f.sigstore.json" \
+      --certificate-identity https://github.com/tyler-rich/shell-mcp/.github/workflows/release-build.yml@refs/tags/v0.2.0 \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      "$f"
+  done ) && echo "all verified"
 ```
+
+`set -e` in the subshell stops the loop at the first file that fails, and the whole command then fails without printing `all verified`: install nothing until it has. On arm64, use `linux_arm64` in the file names.
 
 The build provenance (SLSA) can be checked with the GitHub CLI as well:
 
@@ -75,7 +80,7 @@ These are the commands the release workflow's own `scripts/release/verify.sh` ru
 
 ## 3. Install the binaries *(container)*
 
-*A hand step in every setup (the README's quick start, step 3): no command installs the binaries.*
+*A hand step in every setup (the README's quick start, step 4): no command installs the binaries.*
 
 ```bash
 install -o root -g root -m 0755 shell-mcp-gate_0.2.0_linux_amd64 /usr/local/bin/shell-mcp-gate
@@ -171,7 +176,7 @@ It prints `ok`, `WARN` and `FAIL` lines, then the effective policy, and exits no
 - `paths.write …: is group- or world-writable` — see step 6.
 - `could not probe RENAME_NOREPLACE … permission denied` — the service account cannot write that write root yet (step 6).
 - `repo has no .git directory` — the repository does not exist yet, or the path is wrong.
-- `sandbox: … kernel Landlock ABI 3 …, required needs 4` followed by `FAIL` — the kernel is too old (this is what a container on an older host kernel shows).
+- `sandbox: … kernel Landlock ABI 3 …, required needs 4` followed by `FAIL … upgrade the kernel first` — the kernel is too old (this is what a container on an older host kernel shows). Upgrade the kernel; `sandbox.landlock: best-effort` weakens the sandbox (POLICY §4a) and is only ever your explicit choice, never the fix.
 
 Run `check-policy` again after every edit; the gate re-reads the policy on every request, so there is nothing to restart.
 
@@ -265,7 +270,7 @@ stat -c '%U:%G %a %n' /etc/ssh /etc/ssh/authorized_keys.d /etc/ssh/authorized_ke
 
 The first must print `strictmodes yes` (the default; never set `StrictModes no`). The second must show `root:root` and no group or world write bit on all three (`755`, `755`, `644`). Both checks matter: on all three images `StrictModes` refused every login when the keys file or its directory was group- or world-writable, or owned by another account ("Authentication refused: bad ownership or modes for file …" in sshd's log), but **accepted a file or directory owned by the service account itself**, which could then rewrite its own `command=` and `restrict`. Only root ownership prevents that.
 
-Apply the configuration *(real host)*, keeping your current session open until a new login has worked:
+Apply the configuration *(real host)*. The reload applies to every account, so keep your own session to the host open until a second SSH login of your own has worked:
 
 ```bash
 /usr/sbin/sshd -t && systemctl reload ssh
@@ -408,11 +413,73 @@ The gate writes one JSON line per request (authpriv), the helper one per connect
 
 ## 11. Updating and removing
 
-- **A new release:** verify it (step 2) and `install` the new binaries over the old ones (step 3). The gate and the helper start per request, so nothing needs restarting. Read the release notes for policy changes and run both `check-policy` commands. When the notes change the helper's units (0.2.0 does), run `units` and `systemctl daemon-reload` (step 9.2) after any policy edit. Upgrading from 0.1.0: the numbered steps in `CHANGELOG.md`, "Upgrading from 0.1.0".
+- **A new release:** verify it (step 2) and `install` the new binaries over the old ones (step 3). The gate and the helper start per request, so nothing needs restarting. Read the release notes for policy changes and run both `check-policy` commands. When the release notes say the helper's units changed (0.2.0's did), regenerate them: `shell-mcp-privd install --accept <the policy's sha256>` (§12.3), or by hand `units` and `systemctl daemon-reload` (step 9.2). Upgrading from 0.1.0: the numbered steps in `CHANGELOG.md`, "Upgrading from 0.1.0"; from 0.2.0 to the setup commands: the README, "Upgrading from 0.2.0".
 - **A gate policy edit:** `check-policy` (step 5); regenerate the polkit rule if `services.control` changed (step 8).
 - **A privileged policy edit:** `check-policy`, `units`, `systemctl daemon-reload` (step 9.2), or `shell-mcp-privd install` again with the new hash (§12.3), which does all of it.
-- **Revoking a server:** remove its line from `/etc/ssh/authorized_keys.d/svc-shell`. sshd reads the file on every login.
-- **Removing everything:** `systemctl disable --now` both sockets, then remove the units, `/etc/polkit-1/rules.d/60-shell-mcp.rules`, `/etc/ssh/sshd_config.d/60-shell-mcp.conf`, `/etc/ssh/authorized_keys.d/svc-shell`, `/etc/shell-mcp`, the two binaries and the accounts. `/var/lib/shell-mcp/backups` holds previous versions of files the helper changed; keep it until you no longer need them.
+- **Revoking a server:** remove its line from `/etc/ssh/authorized_keys.d/svc-shell`. sshd reads the file on every login. Rotating the server's key, with an overlap: `deploy/README.md`, "Rotating secrets".
+
+### 11.1 Removing everything from a target
+
+As root, in this order: first nothing new can log in, then nothing runs, then the files go. The server side (its container, network, secrets and the clients' configuration) is `deploy/README.md`, "Removing the server".
+
+1. **No new logins:** remove the key file. sshd reads it at every login.
+
+   ```bash
+   rm -f /etc/ssh/authorized_keys.d/svc-shell
+   ```
+
+2. **The helper:** stop and disable its sockets (the broad one exists only when its pair was generated), then remove its units. Each request's instance ends with its request.
+
+   ```bash
+   systemctl disable --now shell-mcp-privd.socket
+   systemctl disable --now shell-mcp-privd-broad.socket
+   rm -f /etc/systemd/system/shell-mcp-privd.socket /etc/systemd/system/shell-mcp-privd@.service \
+     /etc/systemd/system/shell-mcp-privd-broad.socket /etc/systemd/system/shell-mcp-privd-broad@.service
+   rm -rf /run/shell-mcp
+   ```
+
+   `/run/shell-mcp` holds the sockets' file nodes, which systemd leaves after a stop; it is gone at the next boot anyway.
+3. **The slice drop-in**, then reload systemd:
+
+   ```bash
+   rm -f /etc/systemd/system/user-60123.slice.d/50-shell-mcp.conf
+   rmdir /etc/systemd/system/user-60123.slice.d
+   systemctl daemon-reload
+   ```
+
+4. **sshd:** remove the drop-in and the keys directory (`rmdir` leaves it when another file is in it), check, reload. The reload applies to every account: keep your own session to the host open until a second SSH login of your own has worked.
+
+   ```bash
+   rm -f /etc/ssh/sshd_config.d/60-shell-mcp.conf
+   rmdir /etc/ssh/authorized_keys.d
+   /usr/sbin/sshd -t && systemctl reload ssh
+   ```
+
+5. **The polkit rule**, if the policy had `services.control`:
+
+   ```bash
+   rm -f /etc/polkit-1/rules.d/60-shell-mcp.rules
+   ```
+
+6. **The account, its home and its groups.** `userdel` refuses while the account still runs a process; a request in flight ends within its timeout, or `loginctl terminate-user svc-shell` ends it now. `--remove` deletes the home directory (`/var/lib/svc-shell`). The primary group goes with the account where `USERGROUPS_ENAB` is `yes` (the default on Debian and Ubuntu); the two `groupdel` lines are for a group that is left, and for the helper's socket group.
+
+   ```bash
+   userdel --remove svc-shell
+   getent group svc-shell >/dev/null && groupdel svc-shell
+   getent group svc-shell-priv >/dev/null && groupdel svc-shell-priv
+   ```
+
+7. **The policies and the binaries:**
+
+   ```bash
+   rm -rf /etc/shell-mcp
+   rm -f /usr/local/bin/shell-mcp-gate /usr/local/libexec/shell-mcp-privd
+   ```
+
+8. **The helper's backups**, last: `/var/lib/shell-mcp/backups` holds the previous versions of every file the helper changed or deleted. Keep it until you no longer need them, then `rm -rf /var/lib/shell-mcp`.
+9. **The firewall rule**, when the server ran on this host (README, the quick start's "Server and target on the same host"): delete the rule that let its address reach port 22 (`ufw delete allow proto tcp from 172.30.80.10 to any port 22`, or the nftables rule from your ruleset).
+
+The journal keeps the gate's and the helper's audit lines (`journalctl -t shell-mcp-gate`, `-t shell-mcp-privd`) under the host's own retention.
 
 ## 12. The install commands
 
@@ -453,7 +520,7 @@ What it does, in this order; nothing sshd reads exists until everything before i
 6. **The sshd drop-in, the keys directory, and the key line** (step 7), the key line last.
 7. **`sshd -t`, then `sshd -T -C`** for the account (every value of the `Match` block must be in force) and for a name that is not an account (its effective configuration must be what it was before the drop-in was written: the block reaches no one else). Any difference rolls back every file the run changed.
 8. **The reload**, when the drop-in changed: `systemctl reload ssh.service` when it is active; nothing when only `ssh.socket` is (the next connection starts sshd with the new configuration). When neither is active the run refuses before anything is written (run with `--no-reload` and reload sshd yourself). A new key line needs no reload: sshd reads the keys file at every login.
-9. **The pin**: `SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:…` from `/etc/ssh/ssh_host_ed25519_key.pub`, read locally (never `ssh-keyscan`), the other host keys as extra pins, and the write roots `check-policy` warned about (step 6 stays yours). Keep your current session open until a new login has worked.
+9. **The pin**: `SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:…` from `/etc/ssh/ssh_host_ed25519_key.pub`, read locally (never `ssh-keyscan`), the other host keys as extra pins, and the write roots `check-policy` warned about (step 6 stays yours). Its last note: keep your own session to the host open until a second SSH login of your own has worked, since the reload applies to every account.
 
 | File | Owner, mode | Content |
 |---|---|---|
@@ -478,7 +545,13 @@ What it does, in this order; nothing sshd reads exists until everything before i
 
 ### 12.2 `shell-mcp-gate host-key` *(container)*
 
-Prints step 9's pin lines alone, as any user (the `.pub` files are world-readable), for pinning the host again without running `install`.
+Prints the pin lines of §12.1's item 9 alone (step 7's pin), as any user (the `.pub` files are world-readable), for pinning the host again without running `install`:
+
+```bash
+shell-mcp-gate host-key
+```
+
+The server's pin is the value after `=` in its first line. Carry it to the server host over a channel you trust, such as your own SSH session to this host, never from what the network shows. The `NOTE` line lists this host's other keys (ECDSA, RSA). The server offers only the pinned key types, so the Ed25519 pin alone is enough; add another type's pin only to rotate to that key (`deploy/README.md`, "Rotating secrets").
 
 ### 12.3 `shell-mcp-privd install` *(container with `--no-start`; real host)*
 
@@ -573,7 +646,18 @@ It prints one `ok`, `WARN`, `FAIL` or `NOTE` line per check, each failure with a
   - `helper_refused` (the peer check): `client_uid` and the socket group (§12.3, §12.1).
   - `helper_policy_mismatch`: `install --accept` with the new hash (§12.3).
   - `protocol_mismatch`: upgrade.
-  - The helper's other self-check codes: PRIVILEGED §7 and the helper's journal.
+  - The helper's other self-check codes. Each is a check the helper ran on itself before it read the request, so nothing ran. Its journal line (`journalctl -t shell-mcp-privd`) names the check:
+
+    | Code | What the helper found | What to do, as root on the target |
+    |---|---|---|
+    | `helper_install_insecure` | It is not running as root with `no_new_privs`, its binary or the privileged policy is not root's or is group- or world-writable, or its unit's environment is wrong | `stat` the binary and `/etc/shell-mcp/privileged.yaml` (`root:root`, no group or other write; the policy `0600`), then `shell-mcp-privd install --accept <sha256>` (§12.3) to rewrite the units |
+    | `helper_policy_invalid` | The privileged policy does not parse or validate | `shell-mcp-privd check-policy --policy /etc/shell-mcp/privileged.yaml` names the line (§9.1) |
+    | `helper_client_uid_mismatch` | The policy's `client_uid` is not the uid the units were generated for | `client_uid` must be the service account's uid (`id -u svc-shell`); fix it, then `install` again with the new hash |
+    | `helper_capabilities_broad` | The instance holds more capabilities than its unit declares | a drop-in or edit has changed the unit: `systemctl cat shell-mcp-privd@.service`, remove what is not generated, then `install --accept` again |
+    | `helper_sandbox_unavailable` | The core unit's Landlock sandbox cannot be applied | the kernel (§0); upgrade it. `sandbox.landlock: best-effort` in the privileged policy weakens the sandbox (POLICY §4a) and is only ever your explicit choice |
+    | `helper_wrong_unit` | An operation reached the other unit's socket | the gate policy's `socket` and `broad_socket` (§9.5), then `install --gate-policy` to cross-check them |
+
+    The order of the checks and what each logs: PRIVILEGED §7.
 - **`helper <name> broad`**, through a read operation that changes nothing, chosen from the policy the core socket reported:
   - `priv_pkg_update_index_preview` when the policy allows the index update;
   - otherwise `priv_power_preview` for the first allowed power action.
@@ -605,6 +689,21 @@ It prints one `ok`, `WARN`, `FAIL` or `NOTE` line per check, each failure with a
   | another answer, or none | FAIL |
 
 It writes nothing and never sends the token anywhere. The gate and the helper log its read requests on the target under the server key's principal, which is the evidence it ran there. `shell-mcp check` is unchanged: the target checks alone, as JSON for scripts.
+
+**What to do about each `WARN`.** A WARN does not stop the server, but each is something to fix or to accept knowingly:
+
+| Row | WARN | What to do |
+|---|---|---|
+| `configuration` | a startup warning (it names the variable) | change that variable in the compose file, then `docker compose up -d`; [`deploy/.env.example`](../deploy/.env.example) says what each one takes |
+| `secret <variable>` | owned by another uid than the container's | as root on the server host: `chown 65532:65532 <the file>` (the secrets directory too, for the `bind` form) |
+| `secret <variable>` | cannot be read | the file is missing or its directory is not readable by uid 65532: run `shell-mcp init` again with the same flags (it keeps what is valid and names what is not; `deploy/README.md`, "Secrets") |
+| `target <name>` | the sandbox is `best-effort`, or not applied | on the target, `check-policy` (§5) shows the kernel's Landlock ABI: upgrade the kernel (§0), and return the policy to `sandbox.landlock: required`. `best-effort` weakens the sandbox (POLICY §4a) and is only ever your explicit choice |
+| `trusted proxy <entry>` | a prefix, not a single address | set `SHELL_MCP_TRUSTED_PROXIES` to the proxy's one fixed address (`--proxy-addr` of `init compose`) |
+| `trusted proxy <entry>` | not on a network this container is attached to | the entry is not your proxy's address on the server's network: give the proxy its fixed address there (`deploy/caddy/README.md`, property 1) and list exactly that |
+| `trusted proxy <entry>` | this container's interfaces could not be read | nothing could be checked statically: run the log-line check of `deploy/caddy/README.md` once |
+| `approval page`, `mcp endpoint` | 200 or 401 as expected, but the certificate ends within 14 days | renew the proxy's certificate |
+| `approval page`, `mcp endpoint` | 403 without the server's headers | the proxy refused the container's own address, as a LAN/VPN-only proxy should: check the URL from a LAN or VPN machine instead (the `curl` of CLIENTS §1) |
+| `mcp endpoint` | 429 | the container's address is rate-limited or locked out after wrong tokens: wait 5 minutes and run `doctor` again (CLIENTS §7) |
 
 ### 12.7 `verify-release.sh` *(real host: needs the published release)*
 
