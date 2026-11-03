@@ -103,6 +103,7 @@ in_lint() { in_go go run "github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 # --- Steps ----------------------------------------------------------------------
 names=()
 results=()
+times=()
 notes=()
 overall=0
 
@@ -111,9 +112,10 @@ step() { # step <name> <note-on-failure> <command…>
 	shift 2
 	echo
 	echo "=== $name"
-	local code=0
+	local code=0 t0=$SECONDS
 	"$@" || code=$?
 	names+=("$name")
+	times+=("$((SECONDS - t0))s")
 	if [[ $code -eq 0 ]]; then
 		results+=("PASS")
 		notes+=("")
@@ -129,10 +131,11 @@ probe() { # probe <name> <command…>: informational, never fails the run
 	shift
 	echo
 	echo "=== $name"
-	local out code=0
+	local out code=0 t0=$SECONDS
 	out="$("$@" 2>&1)" || code=$?
 	echo "$out"
 	names+=("$name")
+	times+=("$((SECONDS - t0))s")
 	if [[ $code -eq 0 ]]; then results+=("YES"); else results+=("NO"); fi
 	notes+=("$(tail -n1 <<<"$out" | cut -c1-90)")
 }
@@ -204,6 +207,7 @@ fi
 # here, never as passed.
 names+=("e2e-host: init bind form, host dir")
 results+=("NOT RUN")
+times+=("-")
 notes+=("runner VM only (the e2e-host job)")
 step "go test -race" "" in_go go test -race -timeout 20m -count=1 ./...
 # The Landlock forced-psx test build, which CI's psx entry runs, for the
@@ -257,9 +261,10 @@ fi
 # --- Summary ----------------------------------------------------------------------
 echo
 echo "=== Summary ($go_image)"
-printf '| %-34s | %-6s | %s\n' "Check" "Result" "Notes"
-printf '|%s|%s|%s\n' "------------------------------------" "--------" "------"
+printf '| %-34s | %-7s | %6s | %s\n' "Check" "Result" "Time" "Notes"
+printf '|%s|%s|%s|%s\n' "------------------------------------" "---------" "--------" "------"
 for i in "${!names[@]}"; do
-	printf '| %-34s | %-6s | %s\n' "${names[$i]}" "${results[$i]}" "${notes[$i]}"
+	printf '| %-34s | %-7s | %6s | %s\n' "${names[$i]}" "${results[$i]}" "${times[$i]}" "${notes[$i]}"
 done
+echo "wall time: $((SECONDS / 60))m$((SECONDS % 60))s"
 exit "$overall"
