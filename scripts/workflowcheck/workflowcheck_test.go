@@ -7,6 +7,9 @@ import (
 	"testing"
 )
 
+// reportOnly are ci.yml's jobs that may never fail the ci aggregate.
+var reportOnly = []string{"probes"}
+
 // workflowDir is the repository's workflows; WORKFLOWCHECK_DIR points the
 // tests at another copy (used to show they fail on an older tree).
 func workflowDir() string {
@@ -37,6 +40,57 @@ func TestEveryWorkflowRunsWithPipefail(t *testing.T) {
 		if err := CheckPipefail(data); err != nil {
 			t.Errorf("%s: %v", filepath.Base(f), err)
 		}
+	}
+}
+
+func TestCIAggregateRequiresEveryJob(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(workflowDir(), "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckAggregate(data, "ci", reportOnly); err != nil {
+		t.Error(err)
+	}
+}
+
+const goodAggregate = `
+jobs:
+  a: {runs-on: x, steps: [{run: "true"}]}
+  b: {runs-on: x, steps: [{run: "true"}]}
+  probes: {runs-on: x, continue-on-error: true, steps: [{run: "true"}]}
+  ci:
+    if: always()
+    needs: [a, b]
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: exit 1
+`
+
+func TestCheckAggregate(t *testing.T) {
+	cases := []struct {
+		name, yaml, want string
+	}{
+		{"complete", goodAggregate, ""},
+		{"a job left out", strings.Replace(goodAggregate, "needs: [a, b]", "needs: [a]", 1), "job b is not in ci's needs"},
+		{"a single need", strings.Replace(goodAggregate, "needs: [a, b]", "needs: a", 1), "job b is not in ci's needs"},
+		{"a need that is no job", strings.Replace(goodAggregate, "needs: [a, b]", "needs: [a, b, c]", 1), "ci needs c, which is not a job"},
+		{"report-only required", strings.Replace(goodAggregate, "needs: [a, b]", "needs: [a, b, probes]", 1), "job probes is report-only but ci needs it"},
+		{"report-only that can fail", strings.Replace(goodAggregate, "continue-on-error: true, ", "", 1), "report-only job probes is not continue-on-error: true"},
+		{"not always", strings.Replace(goodAggregate, "if: always()", "if: success()", 1), `if is "success()", want always()`},
+		{"skipped not failing", strings.Replace(goodAggregate, " || contains(needs.*.result, 'skipped')", "", 1), "no step that exits 1"},
+		{"no exit", strings.Replace(goodAggregate, "run: exit 1", "run: echo", 1), "no step that exits 1"},
+		{"no aggregate", strings.Replace(goodAggregate, "  ci:\n", "  other:\n", 1), "no job ci"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := CheckAggregate([]byte(c.yaml), "ci", reportOnly)
+			switch {
+			case c.want == "" && err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			case c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)):
+				t.Fatalf("error %v, want one containing %q", err, c.want)
+			}
+		})
 	}
 }
 

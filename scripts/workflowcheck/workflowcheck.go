@@ -1,13 +1,16 @@
 // Package workflowcheck checks the structure of the GitHub workflows that
 // the repository's CI depends on, where nothing else would notice a
-// mistake: every workflow runs its steps with pipefail. Its tests run in
-// CI's go job and in ci-local's go test.
+// mistake: every workflow runs its steps with pipefail, and the ci
+// aggregate requires every job of ci.yml except the report-only ones. Its
+// tests run in CI's go job and in ci-local's go test.
 package workflowcheck
 
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
+	"strings"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -94,6 +97,60 @@ func CheckPipefail(data []byte) error {
 				errs = append(errs, fmt.Errorf("job %s step %d (%s): shell is %q, want bash or unset", id, i+1, s.Name, s.Shell))
 			}
 		}
+	}
+	return errors.Join(errs...)
+}
+
+// CheckAggregate reports whether the job named aggregate requires every
+// other job of the workflow except the report-only ones, which must be
+// continue-on-error, and fails unless each of them succeeded: it runs
+// always(), and a step fails it on any failure, cancelled or skipped result.
+func CheckAggregate(data []byte, aggregate string, reportOnly []string) error {
+	w, err := parse(data)
+	if err != nil {
+		return err
+	}
+	agg, ok := w.Jobs[aggregate]
+	if !ok {
+		return fmt.Errorf("no job %s", aggregate)
+	}
+	var errs []error
+	if strings.TrimSpace(agg.If) != "always()" {
+		errs = append(errs, fmt.Errorf("job %s: if is %q, want always()", aggregate, agg.If))
+	}
+	for _, id := range sortedKeys(w.Jobs) {
+		if id == aggregate {
+			continue
+		}
+		required := slices.Contains(agg.Needs, id)
+		switch {
+		case slices.Contains(reportOnly, id):
+			if required {
+				errs = append(errs, fmt.Errorf("job %s is report-only but %s needs it", id, aggregate))
+			}
+			if b, _ := w.Jobs[id].ContinueOnError.(bool); !b {
+				errs = append(errs, fmt.Errorf("report-only job %s is not continue-on-error: true", id))
+			}
+		case !required:
+			errs = append(errs, fmt.Errorf("job %s is not in %s's needs", id, aggregate))
+		}
+	}
+	for _, n := range agg.Needs {
+		if _, ok := w.Jobs[n]; !ok {
+			errs = append(errs, fmt.Errorf("%s needs %s, which is not a job", aggregate, n))
+		}
+	}
+	gate := false
+	for _, s := range agg.Steps {
+		if strings.Contains(s.If, "contains(needs.*.result, 'failure')") &&
+			strings.Contains(s.If, "contains(needs.*.result, 'cancelled')") &&
+			strings.Contains(s.If, "contains(needs.*.result, 'skipped')") &&
+			strings.Contains(s.Run, "exit 1") {
+			gate = true
+		}
+	}
+	if !gate {
+		errs = append(errs, fmt.Errorf("job %s has no step that exits 1 on a failure, cancelled or skipped result", aggregate))
 	}
 	return errors.Join(errs...)
 }
