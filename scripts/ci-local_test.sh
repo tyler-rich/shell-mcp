@@ -191,5 +191,97 @@ else
 	bad "unknown argument: exit $code" "$work/arg.out"
 fi
 
+# 6. The lanes with their own uids (as on Windows; CI_LOCAL_FIXED_UIDS=1
+#    asks for them on Linux): each lane's containers run as its uid, with
+#    its own caches and TMPDIR, and none as 65532, the server image's uid
+#    (setup-check runs it beside the tests, and RLIMIT_NPROC counts per uid).
+log6="$work/lanes.log"
+: >"$log6"
+code=0
+env "${common_env[@]}" FAKE_DOCKER_LOG="$log6" CI_LOCAL_FIXED_UIDS=1 bash "$repo/scripts/ci-local.sh" >"$work/lanes.out" 2>&1 || code=$?
+if [[ "$code" -eq 0 ]]; then ok "lanes: exit 0 against the fake docker"; else bad "lanes: exit $code" "$work/lanes.out"; fi
+check_log "lanes" "$log6"
+lane_ok() { # lane_ok <what> <pattern of its run line> <uid> <cache> <tmp lane>
+	local l
+	l="$(grep -E -- "^run .*$2" "$log6" | head -n 1)"
+	if [[ -n "$l" && "$l" == *" -u $3:$3 "* && "$l" == *"GOCACHE=$4/build "* && "$l" == *"TMPDIR=/cache/tmp/"*"/$5 "* ]]; then
+		ok "lanes: $1 runs as $3 with its own cache and TMPDIR"
+	else
+		bad "lanes: $1: ${l:-no run line}"
+	fi
+}
+lane_ok "the go lane (go test -race)" 'go test -race -timeout 20m -count=1 \./\.\.\.' 65530 /cache go
+lane_ok "the network lane (deps-current)" 'bash scripts/deps-current\.sh' 65531 /cache/lane-network network
+if grep -E '^run .*scripts/exposure/gen\.sh' "$log6" | grep -q -- ' -u 65533:65533 .*GOCACHE=/cache/lane-containers/build '; then
+	ok "lanes: the containers lane (exposure) runs as 65533 with its own cache"
+else
+	bad "lanes: the containers lane (exposure)" <(grep -E '^run .*exposure' "$log6")
+fi
+if grep -E '^run ' "$log6" | grep -q -- ' -u 65532:65532 '; then
+	bad "lanes: a container ran as 65532" <(grep -E '^run .* -u 65532:65532 ' "$log6")
+else
+	ok "lanes: no container of a lane runs as 65532"
+fi
+
+# 7. The lanes run at once: while the go lane's go test -race hangs, the
+#    network and containers lanes still run their steps; then the interrupt
+#    stops every lane and removes the labelled containers.
+lanes_hang() { # lanes_hang <log> <out> <env…>: start, wait for the hang
+	local log="$1" out="$2"
+	shift 2
+	: >"$log"
+	env "${common_env[@]}" FAKE_DOCKER_LOG="$log" FAKE_DOCKER_HANG_ON="go test -race -timeout 20m -count=1 ./..." "$@" \
+		setsid bash "$repo/scripts/ci-local.sh" >"$out" 2>&1 &
+	hang_pid=$!
+	for _ in $(seq 1 100); do
+		[[ -e "$log.hanging" ]] && break
+		sleep 0.1
+	done
+}
+lanes_hang "$work/par.log" "$work/par.out" CI_LOCAL_FIXED_UIDS=1
+if [[ ! -e "$work/par.log.hanging" ]]; then
+	bad "parallel lanes: never reached the test step" "$work/par.out"
+	kill -KILL -- "-$hang_pid" 2>/dev/null || true
+else
+	for _ in $(seq 1 100); do
+		grep -q '^run .*deps-current_test\.sh' "$work/par.log" && grep -q '^run .*scripts/exposure/gen\.sh' "$work/par.log" && break
+		sleep 0.1
+	done
+	if grep -q '^run .*deps-current_test\.sh' "$work/par.log" && grep -q '^run .*scripts/exposure/gen\.sh' "$work/par.log"; then
+		ok "parallel lanes: the network and containers lanes run while the go lane's tests run"
+	else
+		bad "parallel lanes: the other lanes waited for the go lane" "$work/par.log"
+	fi
+	kill -TERM -- "-$hang_pid"
+	wait "$hang_pid" || true
+	if sed -n '/go test -race -timeout 20m -count=1 \.\/\.\.\./,$p' "$work/par.log" | grep -q '^run .*govulncheck'; then
+		bad "parallel lanes: the go lane kept running after the interrupt" "$work/par.log"
+	else
+		ok "parallel lanes: the interrupt stops the go lane"
+	fi
+	if tail -n 1 "$work/par.log" | grep -q '^rm -f ctr-ours-1$'; then
+		ok "parallel lanes: the labelled containers are removed after the interrupt"
+	else
+		bad "parallel lanes: no removal by label after the interrupt" "$work/par.log"
+	fi
+fi
+
+# 8. CI_LOCAL_SERIAL=1: one lane after another, so nothing of another lane
+#    runs while the go lane's tests hang.
+lanes_hang "$work/ser.log" "$work/ser.out" CI_LOCAL_FIXED_UIDS=1 CI_LOCAL_SERIAL=1
+if [[ ! -e "$work/ser.log.hanging" ]]; then
+	bad "serial lanes: never reached the test step" "$work/ser.out"
+	kill -KILL -- "-$hang_pid" 2>/dev/null || true
+else
+	sleep 2
+	if grep -q '^run .*deps-current' "$work/ser.log"; then
+		bad "serial lanes: the network lane ran beside the go lane" "$work/ser.log"
+	else
+		ok "serial lanes: one lane at a time"
+	fi
+	kill -TERM -- "-$hang_pid"
+	wait "$hang_pid" || true
+fi
+
 echo "ci-local tests: $pass passed, $fail failed"
 [[ $fail -eq 0 ]]

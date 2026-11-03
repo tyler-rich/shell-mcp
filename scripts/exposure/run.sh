@@ -38,6 +38,10 @@ if [[ "$(uname -s)" == Linux ]] && [[ "$(id -u)" != 0 ]]; then
 else
 	run_as="65532:65532"
 fi
+# Under scripts/ci-local.sh: its containers lane's user and Go caches (a
+# uid of its own: RLIMIT_NPROC counts per uid, beside the other lanes).
+run_as="${SHELL_MCP_CI_RUN_AS:-$run_as}"
+ci_cache="${SHELL_MCP_CI_CACHE:-/cache}"
 if [[ "$run_as" == 0:* ]]; then
 	echo "exposure: run as a non-root user" >&2
 	exit 1
@@ -71,7 +75,7 @@ fi
 units_tar="$(mktemp)"
 trap 'rm -f "$units_tar"; remove_own_containers' EXIT
 docker run --rm --label "$label" -u "$run_as" \
-	-e HOME=/tmp -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local -e GOCACHE=/cache/build -e GOMODCACHE=/cache/mod \
+	-e HOME=/tmp -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local -e GOCACHE="$ci_cache/build" -e GOMODCACHE="$ci_cache/mod" \
 	--tmpfs "/work:exec,uid=${run_as%%:*},gid=${run_as##*:},mode=0700" -e TMPDIR=/work \
 	-v shell-mcp-ci-cache:/cache -v "$repo:/src:ro" -w /src "$go_image" \
 	bash -c 'bash scripts/exposure/gen.sh /work/out >&2 && tar -C /work/out -cf - .' >"$units_tar"

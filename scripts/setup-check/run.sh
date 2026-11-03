@@ -59,6 +59,10 @@ if [[ "$(uname -s)" == Linux ]] && [[ "$(id -u)" != 0 ]]; then
 else
 	run_as="65532:65532"
 fi
+# Under scripts/ci-local.sh: its containers lane's user and Go caches (a
+# uid of its own: RLIMIT_NPROC counts per uid, beside the other lanes).
+run_as="${SHELL_MCP_CI_RUN_AS:-$run_as}"
+ci_cache="${SHELL_MCP_CI_CACHE:-/cache}"
 
 bins_tar="$(mktemp)"
 cleanup() {
@@ -96,7 +100,7 @@ if [[ -z "${SHELL_MCP_CI_LOCAL_LABEL:-}" ]]; then
 		sh -c "mkdir -p /cache/build /cache/mod && chown -R $run_as /cache/build /cache/mod && chown $run_as /cache" >/dev/null
 fi
 docker run --rm --label "$label" -u "$run_as" \
-	-e HOME=/tmp -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local -e GOCACHE=/cache/build -e GOMODCACHE=/cache/mod -e CGO_ENABLED=0 \
+	-e HOME=/tmp -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local -e GOCACHE="$ci_cache/build" -e GOMODCACHE="$ci_cache/mod" -e CGO_ENABLED=0 \
 	--tmpfs "/work:exec,uid=${run_as%%:*},gid=${run_as##*:},mode=0700" \
 	-v shell-mcp-ci-cache:/cache -v "$repo:/src:ro" -w /src "$go_image" \
 	sh -c 'set -e; for c in shell-mcp shell-mcp-gate shell-mcp-privd; do go build -trimpath -ldflags "-X main.version=setup-check" -o /work/setup-check/$c ./cmd/$c >&2; done
@@ -107,7 +111,7 @@ docker run --rm --label "$label" -u "$run_as" \
 # root, a private GOCACHE, the module cache read-only. They must run and pass;
 # a skip is a failure.
 cred_out="$(docker run --rm --label "$label" -u 0:0 --security-opt no-new-privileges:true \
-	-e HOME=/root -e GOCACHE=/gocache -e GOMODCACHE=/cache/mod -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local -e GOPROXY=off \
+	-e HOME=/root -e GOCACHE=/gocache -e GOMODCACHE="$ci_cache/mod" -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local -e GOPROXY=off \
 	-e SHELL_MCP_REQUIRE_ROOT_TESTS=1 --tmpfs /gocache:exec --tmpfs /tmp:exec,mode=1777 \
 	-v shell-mcp-ci-cache:/cache:ro -v "$repo:/src:ro" -w /src "$go_image" \
 	go test -count=1 -v -run 'Credential|NilCredential' ./internal/gate/execx/ 2>&1)" || true
