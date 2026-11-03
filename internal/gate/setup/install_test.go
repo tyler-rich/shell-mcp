@@ -845,3 +845,19 @@ func TestInstallCredentialUnsupported(t *testing.T) {
 		t.Fatalf("a refused run changed something: %v", h.order)
 	}
 }
+
+// TestInstallSessionNoteNamesWhoseLogin: the closing note says whose
+// session to keep and whose login to try: the operator's own, because the
+// sshd reload applies to every account, not only the service account.
+func TestInstallSessionNoteNamesWhoseLogin(t *testing.T) {
+	h, _ := newHost(t)
+	r := install(t, h)
+	if r.code != 0 {
+		t.Fatalf("exit %d:\n%s", r.code, r.out)
+	}
+	for _, want := range []string{"keep your own session to this host open", "a second SSH login of your own", "every account"} {
+		if !strings.Contains(r.out, want) {
+			t.Errorf("output lacks %q:\n%s", want, r.out)
+		}
+	}
+}
