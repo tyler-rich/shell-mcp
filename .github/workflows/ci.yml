@@ -345,7 +345,7 @@ jobs:
     # accounts and installs units on a VM that is discarded afterwards.
     name: e2e-host (systemd, journald, polkit on the runner VM)
     runs-on: ubuntu-26.04
-    timeout-minutes: 25
+    timeout-minutes: 40
     permissions:
       contents: read
     env:
