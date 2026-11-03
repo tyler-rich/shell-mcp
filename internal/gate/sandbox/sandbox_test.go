@@ -617,3 +617,30 @@ func TestSocketDir(t *testing.T) {
 		}
 	}
 }
+
+// TestPlanRefusalSaysUpgradeFirst: the FAIL that check-policy, policy new
+// and install print for a kernel without the ABI under landlock: required
+// names the kernel upgrade first, says that best-effort weakens the sandbox
+// (POLICY §4a), and offers it only as the deployer's explicit choice, never
+// as the way out.
+func TestPlanRefusalSaysUpgradeFirst(t *testing.T) {
+	req := parse(t, "version: 1\nmax_tier: read\n")
+	for _, abi := range []int{0, 3} {
+		_, err := sandbox.Plan(req, abi)
+		if !errors.Is(err, sandbox.ErrUnavailable) {
+			t.Fatalf("ABI %d: %v", abi, err)
+		}
+		msg := err.Error()
+		for _, want := range []string{"kernel Landlock ABI " + strconv.Itoa(abi), "upgrade the kernel", "Linux 6.7", "weakens the sandbox", "POLICY §4a", "explicit choice"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("ABI %d: %q lacks %q", abi, msg, want)
+			}
+		}
+		if i, j := strings.Index(msg, "upgrade the kernel"), strings.Index(msg, "best-effort"); i < 0 || j < 0 || j < i {
+			t.Errorf("ABI %d: %q must name the upgrade before best-effort", abi, msg)
+		}
+		if strings.Contains(msg, "set sandbox.landlock: best-effort to") {
+			t.Errorf("ABI %d: %q still offers best-effort as the remedy", abi, msg)
+		}
+	}
+}

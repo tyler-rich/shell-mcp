@@ -787,3 +787,19 @@ func TestTrustProxyVariableReplaced(t *testing.T) {
 		wantReason(t, env, "SHELL_MCP_TRUST_PROXY was replaced by SHELL_MCP_TRUSTED_PROXIES: a comma list of the proxies' IP addresses or CIDR prefixes (empty: X-Forwarded-For is never used)")
 	}
 }
+
+// TestHostKeyPinFormatNamesNoNetworkSource: the hint for a malformed pin
+// (the server's start, init compose's refusal) sends the deployer to the
+// target's own host-key files, through shell-mcp-gate host-key and a
+// trusted channel, and never to ssh-keyscan, which reads what the network
+// shows.
+func TestHostKeyPinFormatNamesNoNetworkSource(t *testing.T) {
+	for _, want := range []string{"shell-mcp-gate host-key", "on the target", "trusted channel"} {
+		if !strings.Contains(HostKeyPinFormat, want) {
+			t.Errorf("HostKeyPinFormat lacks %q: %s", want, HostKeyPinFormat)
+		}
+	}
+	if strings.Contains(HostKeyPinFormat, "keyscan") {
+		t.Errorf("HostKeyPinFormat suggests ssh-keyscan: %s", HostKeyPinFormat)
+	}
+}

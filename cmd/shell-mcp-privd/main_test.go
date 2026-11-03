@@ -527,3 +527,34 @@ func TestCheckPolicyReportsProtectHome(t *testing.T) {
 		t.Errorf("report lacks %q:\n%s", want, so.String())
 	}
 }
+
+// TestHelpExitsZero: --help (and -h) on every deployer-facing subcommand
+// prints its usage on stdout and exits 0, before anything about the host is
+// looked up; a missing required flag or subcommand is a usage error, exit
+// 2, on stderr. serve is started by its unit and is not one of them.
+func TestHelpExitsZero(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"install", "--help"}, "usage: shell-mcp-privd install"},
+		{[]string{"install", "-h"}, "usage: shell-mcp-privd install"},
+		{[]string{"policy", "--help"}, "usage: shell-mcp-privd policy new"},
+		{[]string{"policy", "new", "--help"}, "usage: shell-mcp-privd policy new"},
+		{[]string{"check-policy", "--help"}, "usage: shell-mcp-privd check-policy"},
+		{[]string{"units", "--help"}, "usage: shell-mcp-privd units"},
+	} {
+		var out, errb bytes.Buffer
+		code := run(c.args, &out, &errb)
+		if code != 0 || !strings.Contains(out.String(), c.want) || errb.Len() != 0 {
+			t.Errorf("%v: exit %d, stdout %q, stderr %q; want 0 and %q on stdout", c.args, code, out.String(), errb.String(), c.want)
+		}
+	}
+	for _, args := range [][]string{{"install"}, {"policy"}, {"policy", "new"}} {
+		var out, errb bytes.Buffer
+		code := run(args, &out, &errb)
+		if code != 2 || out.Len() != 0 || !strings.Contains(errb.String(), "usage:") {
+			t.Errorf("%v: exit %d, stdout %q, stderr %q; want 2 and the usage on stderr", args, code, out.String(), errb.String())
+		}
+	}
+}
