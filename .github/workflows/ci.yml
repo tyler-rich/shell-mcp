@@ -223,6 +223,9 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # No cache of its own: this job builds little, and saving first under the
+          # runner's key would leave the go job a near-empty cache (P4, ARCHIVE §14).
+          cache: false
       - name: deps-current
         run: bash scripts/deps-current.sh
       - name: deps-current self-test
@@ -283,6 +286,9 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # No cache of its own: this job builds little, and saving first under the
+          # runner's key would leave the go job a near-empty cache (P4, ARCHIVE §14).
+          cache: false
       # The image's binary is a release build too: no test-only tag or code.
       - name: image binary is a release build
         run: |
@@ -326,6 +332,9 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # No cache of its own: this job builds little, and saving first under the
+          # runner's key would leave the go job a near-empty cache (P4, ARCHIVE §14).
+          cache: false
       - name: probe
         run: |
           {
