@@ -49,9 +49,9 @@ on:
 env:
   GOTOOLCHAIN: local
   TRIVY_VERSION: v0.76.1
-  GRYPE_VERSION: v0.121.0
+  GRYPE_VERSION: v0.121.1
   COSIGN_VERSION: v3.1.4
-  SYFT_VERSION: v1.55.0
+  SYFT_VERSION: v1.56.0
   GOVULNCHECK_VERSION: v1.9.0
   VERSION: ${{ inputs.version }}
   LOOPBACK: localhost:5000/shell-mcp

@@ -20,7 +20,7 @@ env:
   GOLANGCI_LINT_VERSION: v2.15.0
   GOVULNCHECK_VERSION: v1.9.0
   TRIVY_VERSION: v0.76.1
-  GRYPE_VERSION: v0.121.0
+  GRYPE_VERSION: v0.121.1
   GOTOOLCHAIN: local
 
 jobs:
@@ -345,7 +345,7 @@ jobs:
     # accounts and installs units on a VM that is discarded afterwards.
     name: e2e-host (systemd, journald, polkit on the runner VM)
     runs-on: ubuntu-26.04
-    timeout-minutes: 25
+    timeout-minutes: 40
     permissions:
       contents: read
     env:

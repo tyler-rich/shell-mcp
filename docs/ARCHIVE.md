@@ -4886,3 +4886,16 @@ setup-check was the exception. Its first run reported 194 passed and 2 failed: t
 **Deferred.** None of this session's beyond the handoff's: `keys list`/`revoke`, uninstall, and an automated live-proxy test. shellcheck is not run on the new scripts: it is in neither CI nor ci-local, and adding it would be a new tool. The self-test runs `verify-release.sh` under dash instead.
 
 **Versions (D-013):** Go 1.27.3 (go.mod; deps-current in ci-local). `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing. Direct modules: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6, x/crypto v0.58.0, x/sys v0.49.0. Tools: golangci-lint v2.15.0, govulncheck v1.9.0. New test-only image: `caddy:2.11.7@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e` (the newest stable 2.x, tracked by Dependabot). No dependency added.
+
+### 2026-11-02 — e2e-host's timeout raised from 25 to 40 minutes, a stopgap (branch ci/e2e-host-timeout-stopgap)
+**What changed:** `timeout-minutes` of the `e2e-host` job in `.github/workflows/ci.yml`, 25 to 40. Nothing else: no step, test, runner image or required check changed, so coverage is unchanged and the `ci` aggregate still requires the job.
+
+**Why:** the S8 sessions added e2e-host tests, and the job now runs close to its own limit. On #80 (run 41456619965, attempt 1) it was cancelled at the limit, 13:51:38 to 14:16:46 UTC on 2026-11-02, which failed `ci`; the re-run passed. On #84 (run 41440390849) it took 24m54s. Ordinary variation between runs crosses 25 minutes, so about half of all PRs would be cancelled.
+
+**Stopgap only.** 40 minutes leaves headroom for the variation seen so far. The real speedup (measuring where e2e-host's time goes, and reviewing every CI job and ci-local step for need, overlap and speed) follows in a separate PR (branch `ci/review-and-speed`), which also decides whether the limit comes back down.
+
+**Rejected:** shortening or skipping tests to fit 25 minutes (loses coverage); retrying on timeout (hides real hangs).
+
+**Tool pins (D-013), a separate first commit:** Grype v0.121.0 to v0.121.1 (`ci.yml`, `release-build.yml`) and syft v1.55.0 to v1.56.0 (`release-build.yml`), both released 2026-11-02; deps-current failed on `dev` until they moved. Included here at the maintainer's choice so the PR's `ci` can pass.
+
+**Versions:** Go 1.27.3; direct modules unchanged (deps-current: all current): go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6, x/crypto v0.58.0, x/sys v0.49.0. Tools: golangci-lint v2.15.0, govulncheck v1.9.0, Trivy v0.76.1, Grype v0.121.1, gitleaks v8.30.1, cosign v3.1.4, syft v1.56.0. No dependency added.
