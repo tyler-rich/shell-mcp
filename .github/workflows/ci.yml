@@ -189,9 +189,7 @@ jobs:
               grep -E -- '--- (PASS|SKIP|FAIL): Test(Apply|AddPath|LandlockThreadPath|ThreadPathDecision|IntegrationSandbox)' /tmp/go-test-forcepsx.log || true
               echo '```'
             fi
-          } |        run: |
-          set -o pipefail
-          bash scripts/exposure/run.sh | tee -a "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: govulncheck
         run: go run "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}" ./...
       - name: cross-build (linux/amd64, linux/arm64)
