@@ -202,13 +202,6 @@ fi
 if [[ -z "${CI_LOCAL_UNDER_TEST:-}" ]]; then
 	step "caddy-check (deploy/caddy)" "" bash scripts/caddy-check/run.sh
 fi
-# shell-mcp init's bind form from a real host directory runs on e2e-host only
-# (test/e2e/zz_init_test.go, the disposable runner VM): reported as not run
-# here, never as passed.
-names+=("e2e-host: init bind form, host dir")
-results+=("NOT RUN")
-times+=("-")
-notes+=("runner VM only (the e2e-host job)")
 step "go test -race" "" in_go go test -race -timeout 20m -count=1 ./...
 # The Landlock forced-psx test build, which CI's psx entry runs, for the
 # packages that apply the sandbox (the helper's unit tests stub it). This
@@ -257,6 +250,21 @@ if [[ -z "${CI_LOCAL_SKIP_PROBES:-}" ]]; then
 	probe "Landlock in test container" in_go go run ./scripts/probe/landlock
 	probe "systemd container (unprivileged)" bash scripts/probe/systemd.sh
 fi
+
+# --- What only CI runs ------------------------------------------------------------
+# Checks CI runs that this run cannot: reported as NOT RUN, never as passed.
+not_run() { # not_run <name> <why>
+	names+=("$1")
+	results+=("NOT RUN")
+	times+=("-")
+	notes+=("$2")
+}
+not_run "e2e-host (every e2e test)" "runner VM only: the e2e-host shards and e2e-host-coverage (init's bind form among them)"
+not_run "gitleaks" "CI only (the gitleaks job)"
+not_run "image build, Trivy, Grype" "CI only (the image job)"
+not_run "CodeQL (go, actions)" "CI only (the codeql workflow)"
+not_run "MPTCP tests" "skip on a kernel without MPTCP (Docker Desktop's); CI requires them"
+not_run "Landlock tests above this ABI" "skip above this kernel's Landlock ABI; CI requires ABI 7 and 8"
 
 # --- Summary ----------------------------------------------------------------------
 echo
