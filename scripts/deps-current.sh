@@ -255,14 +255,15 @@ effective="$(printf '%s\n%s\n' "$go_line" "${toolchain_line:-$go_line}" | sort -
 lint_go_ok=1
 lint_run='in_lint() { in_go go run "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$golangci_lint_version" "$@"; }'
 if ! grep -q -x -F -- "$lint_run" "$ci_local" ||
-	! grep -q -x -F -- 'in_go() { docker run "${common[@]}" "$go_image" "$@"; }' "$ci_local" ||
+	! grep -q -x -F -- '		-v "$cache_volume:/cache" -v "$repo:/src:ro" -w /src "$go_image" "$@"' "$ci_local" ||
 	! grep -q '^go_image="$(awk .* Dockerfile)"$' "$ci_local"; then
 	echo "deps-current: FAIL — golangci-lint in $ci_local does not run with the Go image's go (expected: $lint_run, with in_go on the Dockerfile's golang image)"
 	fail=1
 	lint_go_ok=0
 fi
-lint_steps="$(grep -c '^step "golangci-lint' "$ci_local" || true)"
-lint_steps_in_go="$(grep -c '^step "golangci-lint[^"]*" "" in_lint run ' "$ci_local" || true)"
+# The steps sit in ci-local's lane functions, indented.
+lint_steps="$(grep -c '^[[:space:]]*\(full \)\?step "golangci-lint' "$ci_local" || true)"
+lint_steps_in_go="$(grep -c '^[[:space:]]*\(full \)\?step "golangci-lint[^"]*" "" in_lint run ' "$ci_local" || true)"
 if [[ "$lint_steps" -eq 0 || "$lint_steps" != "$lint_steps_in_go" ]]; then
 	echo "deps-current: FAIL — golangci-lint in $ci_local does not run with the Go image's go ($lint_steps_in_go of $lint_steps lint steps use in_lint)"
 	fail=1

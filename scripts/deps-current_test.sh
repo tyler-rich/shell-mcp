@@ -142,6 +142,20 @@ else
 	expect "lint step outside the Go image fails" 1 "golangci-lint in scripts/ci-local.sh does not run with the Go image's go" "$lintimage"
 fi
 
+# 11b. in_go (which in_lint runs through) on another image than the
+#     Dockerfile's Go image fails, and so does a lint step that does not go
+#     through in_lint.
+ingoimage="$(copy ingoimage)"
+sed -i 's#^\(\t\t-v "$cache_volume:/cache" -v "$repo:/src:ro" -w /src \)"$go_image" "$@"$#\1"golang:1.20" "$@"#' "$ingoimage/scripts/ci-local.sh"
+if grep -q -F '"golang:1.20" "$@"' "$ingoimage/scripts/ci-local.sh"; then
+	expect "in_go on another image fails" 1 "golangci-lint in scripts/ci-local.sh does not run with the Go image's go" "$ingoimage"
+else setup_failed "could not point the scratch ci-local.sh in_go at another image"; fi
+lintdirect="$(copy lintdirect)"
+sed -i 's#^\(\tstep "golangci-lint" "" \)in_lint run#\1docker run golangci/golangci-lint:v2.14.0 golangci-lint run#' "$lintdirect/scripts/ci-local.sh"
+if grep -q 'step "golangci-lint" "" docker run' "$lintdirect/scripts/ci-local.sh"; then
+	expect "a lint step outside in_lint fails" 1 "1 of 2 lint steps use in_lint" "$lintdirect"
+else setup_failed "could not change the scratch ci-local.sh lint step"; fi
+
 # 11a. An actionlint pin older than its newest stable release fails, and
 #     ci.yml and ci-local.sh must agree on it.
 oldal="$(copy oldal)"
