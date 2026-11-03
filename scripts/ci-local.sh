@@ -240,6 +240,7 @@ step "doc links and section references" "" in_go go run ./scripts/doccheck
 step "deps-current" "run go get -u ./... && go mod tidy, or bump go.mod's go line" in_go bash scripts/deps-current.sh
 step "deps-current self-test" "" in_go bash scripts/deps-current_test.sh
 step "release-binary-check self-test" "" in_go bash scripts/release-binary-check_test.sh
+step "e2e shards self-test" "" in_go bash test/e2e/shards_test.sh
 # The ci-local test runs this script against a fake docker; not from itself.
 if [[ -z "${CI_LOCAL_UNDER_TEST:-}" ]]; then
 	step "ci-local self-test" "" in_go bash scripts/ci-local_test.sh

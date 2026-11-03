@@ -294,6 +294,10 @@ jobs:
       # documents resolves (handoff §4.H).
       - name: doc links and section references
         run: go run ./scripts/doccheck
+      # The e2e-host shards: lists from the manifest, and the coverage check
+      # refusing every incomplete, failed or overlapping set of results.
+      - name: e2e shards self-test
+        run: bash test/e2e/shards_test.sh
       # ci-local against a fake docker: it may label, list, stop and remove
       # only its own containers. No container is started here.
       - name: ci-local self-test
@@ -406,17 +410,30 @@ jobs:
     # uses sudo (CLAUDE.md exception): a GitHub-hosted runner, no secrets,
     # read-only token, pull_request and push only. It creates invented test
     # accounts and installs units on a VM that is discarded afterwards.
-    name: e2e-host (systemd, journald, polkit on the runner VM)
+    # Sharded (P1, ARCHIVE §14): each shard is a runner VM of its own with the
+    # full setup and runs its share of the e2e binary's tests
+    # (test/e2e/shards.txt); e2e-host-coverage checks that together they ran
+    # every test once and that each passed. Both are in ci's needs, so a
+    # failed, cancelled or skipped shard, or a coverage mismatch, fails ci.
+    name: e2e-host shard ${{ matrix.shard }} (systemd, journald, polkit on the runner VM)
     runs-on: ubuntu-26.04
     timeout-minutes: 40
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # One more than the highest shard test/e2e/shards.txt names: the
+        # shard's tests step fails if the two disagree.
+        shard: [1, 2, 3, 4]
     env:
       # The core unit's score on this image: the job fails if systemd-analyze
       # security rates it worse (ARCHIVE §14: S1c 1.6, S1d 1.4, S6-5 1.3 with
       # ProtectHome=yes, as the offline check in the exposure job predicts). The
       # broad unit's score is recorded, not enforced (root-equivalent by design).
       E2E_SECURITY_MAX: "1.3"
+      SHARD: ${{ matrix.shard }}
+      SHARDS: ${{ strategy.job-total }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -424,6 +441,11 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          # Its own cache key (setup-go hashes these files), apart from the go
+          # jobs' on the same runner image (P3, P4: ARCHIVE §14).
+          cache-dependency-path: |
+            go.sum
+            test/e2e/setup.sh
       - name: build the binaries and the e2e suite (CGO_ENABLED=0)
         env:
           CGO_ENABLED: "0"
@@ -446,6 +468,7 @@ jobs:
         run: |
           {
             echo "### e2e-host runner"
+            echo "- shard $SHARD of $SHARDS"
             echo "- image: ubuntu-26.04, kernel $(uname -r)"
             echo "- $(systemctl --version | head -n1)"
             echo "- landlock: $(go run ./scripts/probe/landlock 2>&1 | tail -n1)"
@@ -472,61 +495,114 @@ jobs:
           # and RUNNER_ENVIRONMENT through, for the runner-only guards of
           # setup.sh and the e2e test binary.
           sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" E2E_BIN=/opt/e2e-bin E2E_LANDLOCK=required bash test/e2e/setup.sh
+      - name: the shard's tests
+        run: |
+          n="$(bash test/e2e/shards.sh count test/e2e/shards.txt)"
+          test "$SHARDS" = "$n" || { echo "the matrix has $SHARDS shards, test/e2e/shards.txt $n" >&2; exit 1; }
+          out="$RUNNER_TEMP/e2e-shard"
+          mkdir -p "$out"
+          sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
+            /opt/e2e-bin/e2e.test -test.list '.*' >"$out/raw-list"
+          grep '^Test' "$out/raw-list" >"$out/all-tests"
+          bash test/e2e/shards.sh list test/e2e/shards.txt "$out/all-tests" "$SHARD" >"$out/list"
+          test -s "$out/list" || { echo "shard $SHARD runs no test" >&2; exit 1; }
+          echo "shard $SHARD of $n: $(wc -l <"$out/list") of the binary's $(wc -l <"$out/all-tests") tests"
+          cat "$out/list"
       - name: e2e tests (as root; nothing may skip)
         run: |
+          run="$(bash test/e2e/shards.sh regex "$RUNNER_TEMP/e2e-shard/list")"
           sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
             E2E_BIN=/opt/e2e-bin E2E_REQUIRE_ALL=1 E2E_SECURITY_MAX="$E2E_SECURITY_MAX" E2E_SERVER_IMAGE=shell-mcp-e2e:server \
-            /opt/e2e-bin/e2e.test -test.v -test.count=1 2>&1 | tee "$RUNNER_TEMP/e2e.log"
-          test "${PIPESTATUS[0]}" -eq 0
+            /opt/e2e-bin/e2e.test -test.v -test.count=1 -test.run "$run" 2>&1 | tee "$RUNNER_TEMP/e2e-shard/log"
       # execx's credential option needs a root test process (handoff §4.A,
       # TARGET-SETUP §12.1 step 4); with SHELL_MCP_REQUIRE_ROOT_TESTS=1 a skip
-      # is a failure, and each test must be listed as passed.
+      # is a failure, and each test must be listed as passed. In the last
+      # shard; e2e-host-coverage checks that its log is there.
       - name: execx credential tests (as root; nothing may skip)
+        if: matrix.shard == strategy.job-total
         run: |
+          log="$RUNNER_TEMP/e2e-shard/credential.log"
           sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" PATH="$PATH" HOME=/root TMPDIR=/tmp \
             GOCACHE="$RUNNER_TEMP/root-gocache" GOMODCACHE="$(go env GOMODCACHE)" GOFLAGS=-mod=readonly GOPROXY=off GOTOOLCHAIN=local \
-            SHELL_MCP_REQUIRE_ROOT_TESTS=1 go test -count=1 -v -run 'Credential|NilCredential' ./internal/gate/execx/ 2>&1 | tee "$RUNNER_TEMP/credential.log"
-          test "${PIPESTATUS[0]}" -eq 0
+            SHELL_MCP_REQUIRE_ROOT_TESTS=1 go test -count=1 -v -run 'Credential|NilCredential' ./internal/gate/execx/ 2>&1 | tee "$log"
           for t in TestCredentialSwitch TestCredentialNoGroups TestCredentialNPROC TestCredentialRefusedValuesAsRoot TestNilCredentialAsRoot TestCredentialCallSites; do
-            grep -q -- "^--- PASS: $t " "$RUNNER_TEMP/credential.log" || { echo "$t did not pass as root" >&2; exit 1; }
+            grep -q -- "^--- PASS: $t " "$log" || { echo "$t did not pass as root" >&2; exit 1; }
           done
           # The non-root refusal test is the one that skips as root (it runs in every non-root go test).
-          if grep -E -- '--- (SKIP|FAIL)' "$RUNNER_TEMP/credential.log" | grep -v -- '--- SKIP: TestCredentialRefusedWhenNotRoot '; then exit 1; fi
-      - name: summary (every test must have run and passed)
+          if grep -E -- '--- (SKIP|FAIL)' "$log" | grep -v -- '--- SKIP: TestCredentialRefusedWhenNotRoot '; then exit 1; fi
+      - name: summary (every test of the shard must have run and passed)
         if: always()
         run: |
-          log="$RUNNER_TEMP/e2e.log"
+          d="$RUNNER_TEMP/e2e-shard"
           table="$RUNNER_TEMP/e2e-summary.md"
-          touch "$log"
-          sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_ENVIRONMENT="$RUNNER_ENVIRONMENT" \
-            /opt/e2e-bin/e2e.test -test.list '.*' | grep '^Test' >"$RUNNER_TEMP/e2e.tests"
+          mkdir -p "$d"
+          touch "$d/log" "$d/list"
           # An empty list (a refused or broken binary) must fail, not pass.
-          test -s "$RUNNER_TEMP/e2e.tests" || { echo "no e2e tests listed" >&2; exit 1; }
+          test -s "$d/list" || { echo "no e2e tests listed for shard $SHARD" >&2; exit 1; }
           fail=0
           {
-            echo "### e2e-host tests"
+            echo "### e2e-host shard $SHARD of $SHARDS"
             echo "| test | result |"
             echo "|---|---|"
           } >"$table"
           while read -r t; do
             # One awk, no pipeline: no result line is "NOT RUN", not an early exit.
-            r="$(awk -v t="$t" '$1 == "---" && $3 == t { sub(/:$/, "", $2); print $2; exit }' "$log")"
+            r="$(awk -v t="$t" '$1 == "---" && $3 == t { sub(/:$/, "", $2); print $2; exit }' "$d/log")"
             [ -n "$r" ] || r="NOT RUN"
             [ "$r" = PASS ] || fail=1
             echo "| $t | $r |" >>"$table"
-          done <"$RUNNER_TEMP/e2e.tests"
-          grep -o 'E2E_EXPOSURE=[0-9.]*' "$log" | sed 's/^E2E_EXPOSURE=/- systemd-analyze security exposure (core unit): /' >>"$table" || true
-          grep -o 'E2E_EXPOSURE_BROAD=[0-9.]*' "$log" | sed 's/^E2E_EXPOSURE_BROAD=/- systemd-analyze security exposure (broad unit, root-equivalent by design, information only): /' >>"$table" || true
+          done <"$d/list"
+          grep -o 'E2E_EXPOSURE=[0-9.]*' "$d/log" | sed 's/^E2E_EXPOSURE=/- systemd-analyze security exposure (core unit): /' >>"$table" || true
+          grep -o 'E2E_EXPOSURE_BROAD=[0-9.]*' "$d/log" | sed 's/^E2E_EXPOSURE_BROAD=/- systemd-analyze security exposure (broad unit, root-equivalent by design, information only): /' >>"$table" || true
           echo "- threshold (E2E_SECURITY_MAX): $E2E_SECURITY_MAX" >>"$table"
           tee -a "$GITHUB_STEP_SUMMARY" <"$table"
-          if grep -qE -- '--- (SKIP|FAIL)' "$log"; then fail=1; fi
+          if grep -qE -- '--- (SKIP|FAIL)' "$d/log"; then fail=1; fi
           exit "$fail"
+      # The shard's test lists, its log and (last shard) the credential log,
+      # for e2e-host-coverage: test names and test output, as in this job's log.
+      - name: upload the shard's results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/e2e-shard/
+          if-no-files-found: error
+          retention-days: 7
       - name: journal (on failure)
         if: failure()
         run: |
           sudo journalctl --no-pager -n 100 -t shell-mcp-privd -t shell-mcp-gate || true
           sudo journalctl --no-pager -n 60 -u 'shell-mcp-privd@*' -u polkit.service || true
           systemctl --failed --no-pager || true
+
+  e2e-host-coverage:
+    # Every e2e test ran in exactly one e2e-host shard and passed, and the
+    # last shard's credential tests passed (test/e2e/shards.sh cover). Runs
+    # whatever the shards' results, and fails unless every shard succeeded.
+    name: e2e-host coverage (every e2e test in one shard, all passed)
+    needs: e2e-host
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: e2e-shard-*
+          path: shards
+      - name: every test in one shard, each passed
+        if: always()
+        run: bash test/e2e/shards.sh cover test/e2e/shards.txt shards | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: every shard succeeded
+        if: always()
+        env:
+          RESULT: ${{ needs.e2e-host.result }}
+        run: |
+          test "$RESULT" = success || { echo "e2e-host shards: $RESULT" >&2; exit 1; }
 
   exposure:
     # The offline exposure check (handoff N-28): the helper's generated core
@@ -602,7 +678,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [go, go-checks, deps-current, gitleaks, image, e2e-host, exposure, setup-check, caddy-check]
+    needs: [go, go-checks, deps-current, gitleaks, image, e2e-host, e2e-host-coverage, exposure, setup-check, caddy-check]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
