@@ -21,6 +21,11 @@ repo="$(cd "$here/../.." && { pwd -W 2>/dev/null || pwd; })"
 dir_native="$(cd "$here" && { pwd -W 2>/dev/null || pwd; })"
 cd "$here/../.."
 label="${SHELL_MCP_CI_LOCAL_LABEL:-shell-mcp.ci-local=exposure-$$-$RANDOM}"
+# Everything this script creates also carries part, and its cleanup removes
+# only that: under ci-local the run label is shared with the steps of the
+# other lanes, whose containers must keep running (ci-local removes every
+# container of the run label when the run ends).
+part="shell-mcp.ci-local.part=exposure-$$-$RANDOM"
 record="${1:-}"
 case "$record" in "" | --record) ;; *)
 	echo "usage: run.sh [--record]" >&2
@@ -50,7 +55,7 @@ fi
 
 remove_own_containers() {
 	local ids
-	ids="$(docker ps -aq --filter "label=$label" 2>/dev/null || true)"
+	ids="$(docker ps -aq --filter "label=$part" 2>/dev/null || true)"
 	if [[ -n "$ids" ]]; then
 		# shellcheck disable=SC2086 # one container id per word
 		docker rm -f $ids >/dev/null 2>&1 || true
@@ -60,14 +65,14 @@ trap remove_own_containers EXIT
 
 images=(debian13 ubuntu2404 ubuntu2604)
 for i in "${images[@]}"; do
-	docker build -q --label "$label" --target "$i" -t "shell-mcp-exposure:$i" -f "$dir_native/Dockerfile" "$dir_native" >/dev/null
+	docker build -q --label "$label" --label "$part" --target "$i" -t "shell-mcp-exposure:$i" -f "$dir_native/Dockerfile" "$dir_native" >/dev/null
 done
 
 # Standalone (CI), the Go cache volume is created and given to the container
 # user, as ci-local does for its own run; under ci-local it already is.
 docker volume create "$cache_volume" >/dev/null
 if [[ -z "${SHELL_MCP_CI_LOCAL_LABEL:-}" ]]; then
-	docker run --rm --label "$label" -u 0:0 -v "$cache_volume":/cache "$go_image" \
+	docker run --rm --label "$label" --label "$part" -u 0:0 -v "$cache_volume":/cache "$go_image" \
 		sh -c "mkdir -p /cache/build /cache/mod && chown -R $run_as /cache/build /cache/mod && chown $run_as /cache" >/dev/null
 fi
 
@@ -75,7 +80,7 @@ fi
 # directory is a private tmpfs the container user owns (exec: go run).
 units_tar="$(mktemp)"
 trap 'rm -f "$units_tar"; remove_own_containers' EXIT
-docker run --rm --label "$label" -u "$run_as" \
+docker run --rm --label "$label" --label "$part" -u "$run_as" \
 	-e HOME=/tmp -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local -e GOCACHE="$ci_cache/build" -e GOMODCACHE="$ci_cache/mod" \
 	--tmpfs "/work:exec,uid=${run_as%%:*},gid=${run_as##*:},mode=0700" -e TMPDIR=/work \
 	-v "$cache_volume":/cache -v "$repo:/src:ro" -w /src "$go_image" \
@@ -93,7 +98,7 @@ fi
 
 overall=0
 for i in "${images[@]}"; do
-	docker run --rm -i --label "$label" -u "$run_as" --network none --read-only \
+	docker run --rm -i --label "$label" --label "$part" -u "$run_as" --network none --read-only \
 		--tmpfs "/tmp:uid=${run_as%%:*},gid=${run_as##*:},mode=0700" \
 		--tmpfs "/run:uid=${run_as%%:*},gid=${run_as##*:},mode=0755" \
 		-v "$repo:/src:ro" "shell-mcp-exposure:$i" \

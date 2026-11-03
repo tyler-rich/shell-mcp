@@ -24,6 +24,11 @@ export MSYS_NO_PATHCONV=1
 here="$(cd "$(dirname "$0")" && pwd)"
 cd "$here/../.."
 label="${SHELL_MCP_CI_LOCAL_LABEL:-shell-mcp.ci-local=caddy-check-$$-$RANDOM}"
+# Everything this script creates also carries part, and its cleanup removes
+# only that: under ci-local the run label is shared with the steps of the
+# other lanes, whose containers must keep running (ci-local removes every
+# container of the run label when the run ends).
+part="shell-mcp.ci-local.part=caddy-check-$$-$RANDOM"
 run_id="${label#*=}"
 tag="shell-mcp-caddy-check:$(tr -c 'a-zA-Z0-9_.-' '-' <<<"$run_id" | cut -c1-100 | sed 's/-*$//')"
 caddyfile="deploy/caddy/Caddyfile"
@@ -32,7 +37,7 @@ compose="deploy/docker-compose.yml"
 ctx="$(mktemp -d)"
 cleanup() {
 	local ids
-	ids="$(docker ps -aq --filter "label=$label" 2>/dev/null || true)"
+	ids="$(docker ps -aq --filter "label=$part" 2>/dev/null || true)"
 	if [[ -n "$ids" ]]; then
 		# shellcheck disable=SC2086 # one container id per word
 		docker rm -f $ids >/dev/null 2>&1 || true
@@ -95,8 +100,8 @@ done
 validate() { # validate <Caddyfile>: build the test image with it, then validate
 	cp "$here/Dockerfile" "$ctx/Dockerfile"
 	cp "$1" "$ctx/Caddyfile"
-	docker build -q --label "$label" -t "$tag" "$(cd "$ctx" && { pwd -W 2>/dev/null || pwd; })" >/dev/null || return 3
-	docker run --rm --label "$label" --network none --read-only --tmpfs /data --tmpfs /config \
+	docker build -q --label "$label" --label "$part" -t "$tag" "$(cd "$ctx" && { pwd -W 2>/dev/null || pwd; })" >/dev/null || return 3
+	docker run --rm --label "$label" --label "$part" --network none --read-only --tmpfs /data --tmpfs /config \
 		--cap-drop ALL --security-opt no-new-privileges:true --user 65532:65532 \
 		"$tag" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 }

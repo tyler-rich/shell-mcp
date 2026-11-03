@@ -14,9 +14,14 @@ name="shell-mcp-probe-systemd-$$"
 # The container carries a label, and only containers with it are removed:
 # ci-local's run label when ci-local runs this probe, its own otherwise.
 label="${SHELL_MCP_CI_LOCAL_LABEL:-shell-mcp.ci-local=probe-$$-$RANDOM}"
+# Everything this script creates also carries part, and its cleanup removes
+# only that: under ci-local the run label is shared with the steps of the
+# other lanes, whose containers must keep running (ci-local removes every
+# container of the run label when the run ends).
+part="shell-mcp.ci-local.part=probe-$$-$RANDOM"
 remove_own_containers() {
 	local ids
-	ids="$(docker ps -aq --filter "label=$label" 2>/dev/null || true)"
+	ids="$(docker ps -aq --filter "label=$part" 2>/dev/null || true)"
 	if [[ -n "$ids" ]]; then
 		# shellcheck disable=SC2086 # one container id per word
 		docker rm -f $ids >/dev/null 2>&1 || true
@@ -34,7 +39,7 @@ trap remove_own_containers EXIT
 # write access to the host (or VM) cgroup tree: run this on disposable test
 # machines only (a workstation's Docker VM, a CI runner). The tmpfs mounts are
 # what systemd expects; container=docker lets it detect the container.
-docker run -d -t --name "$name" --label "$label" --cgroupns=private \
+docker run -d -t --name "$name" --label "$label" --label "$part" --cgroupns=private \
 	-v /sys/fs/cgroup:/sys/fs/cgroup:rw -e container=docker \
 	--tmpfs /run --tmpfs /run/lock --tmpfs /tmp \
 	"$image" >/dev/null

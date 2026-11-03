@@ -5,8 +5,12 @@
 #   - every container ci-local starts (its own and the systemd probe's)
 #     carries the label shell-mcp.ci-local=<run id>, one id per run;
 #   - it never prunes, and never lists, stops, kills or removes a container
-#     except through that label: the fake reports a foreign container to any
-#     unfiltered `docker ps`, and it must never be named;
+#     except through that label (or a part label, below): the fake reports a
+#     foreign container to any unfiltered `docker ps`, and it must never be
+#     named;
+#   - a script it runs (exposure, the systemd probe) removes only its own
+#     containers, by its part label: the run's containers, which steps
+#     running beside it own, are removed once, when the run ends;
 #   - on exit, and when interrupted mid-step, it removes the containers that
 #     carry its label.
 # Needs bash and setsid (Linux); docker is never called for real.
@@ -24,7 +28,9 @@ cat >"$work/bin/docker" <<'FAKE'
 printf '%s\n' "$*" >>"$FAKE_DOCKER_LOG"
 case "$1" in
 ps)
-	if [[ "$*" == *"--filter label=shell-mcp.ci-local="* ]]; then
+	if [[ "$*" == *"--filter label=shell-mcp.ci-local.part="* ]]; then
+		echo ctr-part-1
+	elif [[ "$*" == *"--filter label=shell-mcp.ci-local="* ]]; then
 		echo ctr-ours-1
 	else
 		echo ctr-foreign-1
@@ -75,12 +81,12 @@ check_log() {
 	else
 		ok "$name: nothing is pruned"
 	fi
-	if grep -q 'ctr-foreign-1' "$log" || grep -E '^(ps|container ls|container list)( |$)' "$log" | grep -v -q -- '--filter label=shell-mcp.ci-local='; then
+	if grep -q 'ctr-foreign-1' "$log" || grep -E '^(ps|container ls|container list)( |$)' "$log" | grep -v -q -E -- '--filter label=shell-mcp\.ci-local(\.part)?='; then
 		bad "$name: a container was listed or named without the run label" "$log"
 	else
 		ok "$name: containers are listed only by the run label"
 	fi
-	if grep -E '^(stop|kill|rm|container (stop|kill|rm))( |$)' "$log" | grep -v -q -E 'ctr-ours-1|ctr-probe-1|shell-mcp-probe-systemd-'; then
+	if grep -E '^(stop|kill|rm|container (stop|kill|rm))( |$)' "$log" | grep -v -q -E 'ctr-ours-1|ctr-part-1|ctr-probe-1|shell-mcp-probe-systemd-'; then
 		bad "$name: stopped or removed something it did not start" "$log"
 	else
 		ok "$name: stops and removes only its own containers"
@@ -103,6 +109,14 @@ if tail -n 2 "$log1" | grep -q -- '^ps -aq --filter label=shell-mcp.ci-local=' &
 	ok "complete run: its labelled containers are removed at exit"
 else
 	bad "complete run: no removal by label at exit" "$log1"
+fi
+# The run label's containers belong to every step: removed once, at the end,
+# never by a script's own cleanup while other lanes' containers run.
+n="$(grep -c '^rm -f ctr-ours-1$' "$log1" || true)"
+if [[ "$n" -eq 1 ]] && grep -q '^ps -aq --filter label=shell-mcp.ci-local.part=' "$log1"; then
+	ok "complete run: scripts remove only their own part; the run's containers once, at the end"
+else
+	bad "complete run: the run's containers removed $n times (want 1, at the end); part-label cleanup: $(grep -c -- '--filter label=shell-mcp.ci-local.part=' "$log1" || true)" "$log1"
 fi
 
 # 2. Interrupted while a step's container runs: SIGTERM to the whole process
