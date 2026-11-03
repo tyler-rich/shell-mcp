@@ -20,6 +20,13 @@ concurrency:
   group: codeql-${{ github.ref }}
   cancel-in-progress: true
 
+# An explicit shell makes every run step bash --noprofile --norc -eo pipefail:
+# without it GitHub uses bash -e, and a step piped through tee takes tee's
+# exit status (scripts/workflowcheck keeps this present in every workflow).
+defaults:
+  run:
+    shell: bash
+
 jobs:
   analyze:
     name: analyze (${{ matrix.language }})

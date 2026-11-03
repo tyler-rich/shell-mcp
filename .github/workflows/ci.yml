@@ -23,6 +23,13 @@ env:
   GRYPE_VERSION: v0.121.1
   GOTOOLCHAIN: local
 
+# An explicit shell makes every run step bash --noprofile --norc -eo pipefail:
+# without it GitHub uses bash -e, and a step piped through tee takes tee's
+# exit status (scripts/workflowcheck keeps this present in every workflow).
+defaults:
+  run:
+    shell: bash
+
 jobs:
   go:
     # Two pinned runner images, one per all-thread Landlock path: below ABI 8
@@ -444,7 +451,8 @@ jobs:
             echo "|---|---|"
           } >"$table"
           while read -r t; do
-            r="$(grep -E -- "^--- (PASS|FAIL|SKIP): $t " "$log" | head -n1 | awk '{print $2}' | tr -d ':')"
+            # One awk, no pipeline: no result line is "NOT RUN", not an early exit.
+            r="$(awk -v t="$t" '$1 == "---" && $3 == t { sub(/:$/, "", $2); print $2; exit }' "$log")"
             [ -n "$r" ] || r="NOT RUN"
             [ "$r" = PASS ] || fail=1
             echo "| $t | $r |" >>"$table"
