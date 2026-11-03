@@ -85,6 +85,12 @@ func FuzzRender(f *testing.F) {
 		n := 10
 		if approve != "" {
 			n += 4
+			if profile == "operator" {
+				n++ // SHELL_MCP_APPROVAL_TIERS: operator,destructive
+				if e["SHELL_MCP_APPROVAL_TIERS"] != "operator,destructive" {
+					t.Fatalf("operator with the approval page: SHELL_MCP_APPROVAL_TIERS = %#v", e["SHELL_MCP_APPROVAL_TIERS"])
+				}
+			}
 		}
 		if len(e) != n {
 			t.Fatalf("%d variables, want %d: %v", len(e), n, e)

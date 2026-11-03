@@ -223,7 +223,12 @@ func (v *Values) Check() (notes []string, err error) {
 			"so admin without the approval page would only refuse those calls")
 	case profile == tools.ProfileOperator && v.ApproveHost == "":
 		notes = append(notes, "--profile operator without --approve-host: operator tools then run without approval "+
-			"under the default SHELL_MCP_APPROVAL_TIERS; add --approve-host to require an approver's code")
+			"under the default SHELL_MCP_APPROVAL_TIERS (destructive); add --approve-host to require an approver's code "+
+			"for them, which also sets SHELL_MCP_APPROVAL_TIERS: operator,destructive")
+	case profile == tools.ProfileAdmin:
+		notes = append(notes, "--profile admin: destructive and privileged operations need an approver's code; operator tools "+
+			"run without approval under the default SHELL_MCP_APPROVAL_TIERS (destructive): add "+
+			"SHELL_MCP_APPROVAL_TIERS: operator,destructive to the environment by hand if they should too")
 	case profile == tools.ProfileReadOnly && v.ApproveHost != "":
 		notes = append(notes, "--profile read-only never needs an approval; the approval page is configured but unused")
 	}
@@ -376,6 +381,13 @@ func Render(v *Values) ([]byte, error) {
 	}
 	mounted := "[mcp_token, ssh_key]"
 	if v.ApproveHost != "" {
+		// Operator with the approval page: the deployer wants operator tools
+		// behind an approver's code, which the server's default tiers
+		// (destructive) would not give. Admin keeps the default (Check's note).
+		tiers := ""
+		if v.Profile == string(tools.ProfileOperator) {
+			tiers = "      SHELL_MCP_APPROVAL_TIERS: operator,destructive  # --profile operator with the approval page: operator tools need an approver's code too\n"
+		}
 		at := strings.Index(r.s, proxyLine)
 		end := at + strings.Index(r.s[at:], "\n") + 1
 		r.s = r.s[:end] +
@@ -383,7 +395,7 @@ func Render(v *Values) ([]byte, error) {
 			"      SHELL_MCP_APPROVAL_PUBLIC_URL: " + scalar("https://"+v.ApproveHost) + "\n" +
 			"      SHELL_MCP_APPROVERS_FILE: /run/secrets/approvers\n" +
 			"      SHELL_MCP_APPROVAL_BIND: 0.0.0.0  # inside the container; the proxy forwards the approval host to port 8081 on `front`\n" +
-			r.s[end:]
+			tiers + r.s[end:]
 		mounted = "[mcp_token, ssh_key, approvers]"
 	}
 	if v.Form == FormBind {
