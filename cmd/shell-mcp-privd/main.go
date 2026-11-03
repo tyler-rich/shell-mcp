@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 
 	"github.com/tyler-rich/shell-mcp/internal/gate/execx"
@@ -116,6 +117,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "policy":
 		return policyWith(args[1:], stdout, stderr, productionEnv, func() (setupx.Host, error) { return system.NewSystem() })
 	case "check-policy", "units":
+		if helpRequested(args[1:]) {
+			_, _ = io.WriteString(stdout, subUsage(args[0]))
+			return 0
+		}
 		env, err := productionEnv()
 		if err != nil {
 			_, _ = fmt.Fprintf(stderr, "shell-mcp-privd %s: %v\n", args[0], err)
@@ -188,7 +193,7 @@ func unitsWith(args []string, stdout, stderr io.Writer, env *loadEnv) int {
 	policyPath := fs.String("policy", "", "")
 	out := fs.String("out", ".", "")
 	if err := fs.Parse(args); err != nil || *policyPath == "" || fs.NArg() != 0 {
-		_, _ = io.WriteString(stderr, "usage: shell-mcp-privd units --policy <file> [--out <dir>]\n")
+		_, _ = io.WriteString(stderr, subUsage("units"))
 		return 2
 	}
 	p, err := env.load(*policyPath)
@@ -288,7 +293,7 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, env *loadEnv) int 
 	fs.SetOutput(io.Discard)
 	policyPath := fs.String("policy", "", "")
 	if err := fs.Parse(args); err != nil || *policyPath == "" || fs.NArg() != 0 {
-		_, _ = io.WriteString(stderr, "usage: shell-mcp-privd check-policy --policy <file>\n")
+		_, _ = io.WriteString(stderr, subUsage("check-policy"))
 		return 2
 	}
 	pr := func(format string, a ...any) { _, _ = fmt.Fprintf(stdout, format+"\n", a...) }
@@ -534,6 +539,10 @@ func (h *installHost) LoadGatePolicy(path, home string) (*gpolicy.Policy, error)
 // installWith is shell-mcp-privd install (TARGET-SETUP §12.3); production
 // passes productionEnv, and no flag or variable chooses another host.
 func installWith(args []string, stdout, stderr io.Writer, mkEnv func() (*loadEnv, error)) int {
+	if helpRequested(args) {
+		_, _ = io.WriteString(stdout, privdsetup.Usage)
+		return 0
+	}
 	o, err := privdsetup.ParseFlags(args)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "shell-mcp-privd install: %v\n%s", err, privdsetup.Usage)
@@ -565,6 +574,10 @@ func (e *loadEnv) parse(data []byte, file string) (*policy.Policy, error) {
 // environment and host the constructors return; production passes
 // productionEnv and system.NewSystem.
 func policyWith(args []string, stdout, stderr io.Writer, mkEnv func() (*loadEnv, error), newHost func() (setupx.Host, error)) int {
+	if helpRequested(args) {
+		_, _ = io.WriteString(stdout, policyUsage)
+		return 0
+	}
 	if len(args) == 0 || args[0] != "new" {
 		_, _ = io.WriteString(stderr, policyUsage)
 		return 2
@@ -592,3 +605,18 @@ func policyWith(args []string, stdout, stderr io.Writer, mkEnv func() (*loadEnv,
 }
 
 const policyUsage = "usage: shell-mcp-privd policy new --answers <file> --out <file>|- [--dry-run]\n"
+
+// subUsage is the usage of check-policy or units.
+func subUsage(cmd string) string {
+	if cmd == "units" {
+		return "usage: shell-mcp-privd units --policy <file> [--out <dir>]\n"
+	}
+	return "usage: shell-mcp-privd check-policy --policy <file>\n"
+}
+
+// helpRequested reports whether a subcommand's args ask for its usage,
+// which then goes to stdout with exit 0; a usage error goes to stderr with
+// exit 2.
+func helpRequested(args []string) bool {
+	return slices.ContainsFunc(args, func(a string) bool { return a == "-h" || a == "-help" || a == "--help" })
+}

@@ -44,6 +44,10 @@ func cmdApprover(args []string, stdout, stderr io.Writer, env approverEnv) int {
 		_, _ = io.WriteString(stderr, approverUsage)
 		return 2
 	}
+	if helpRequested(args) {
+		_, _ = io.WriteString(stdout, approverUsage)
+		return 0
+	}
 	switch args[0] {
 	case "add":
 		return approverAdd(args[1:], stdout, stderr, env)
@@ -64,6 +68,7 @@ func cmdApprover(args []string, stdout, stderr io.Writer, env approverEnv) int {
 func approverFlags(cmd string, args []string, stderr io.Writer, name, file *string, multiple *bool) bool {
 	fs := flag.NewFlagSet("approver "+cmd, flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	fs.Usage = func() { _, _ = io.WriteString(stderr, approverUsage) }
 	if name != nil {
 		fs.StringVar(name, "name", "", "approver name, matching ^[a-z][a-z0-9-]{0,31}$")
 	}
