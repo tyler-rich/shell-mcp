@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -35,7 +36,7 @@ func (f *fixture) memPolicy(tier string) {
 	f.t.Helper()
 	y := strings.NewReplacer("{TIER}", tier, "{PRIV}", "", "  max_stdin_bytes: 16\n", fmt.Sprintf("  max_stdin_bytes: 16\n  max_memory_mb: %d\n", memMB)).Replace(basePolicy)
 	y += "  - id: probe-mem\n    path: {BIN}/probe\n    tier: read\n" +
-		"    templates: [[\"rlimits\"], [\"child-rlimits\"], [\"raise-data\"], [\"alloc\", \"{int:1-4096}\"]]\n"
+		"    templates: [[\"rlimits\"], [\"child-rlimits\"], [\"raise-data\"], [\"alloc\", \"{int:1-4096}\"], [\"alloc-report\", \"{int:1-4096}\"]]\n"
 	f.rawPolicy(y)
 }
 
@@ -68,10 +69,11 @@ func TestExecMemoryLimit(t *testing.T) {
 		}
 	}
 	start := time.Now()
-	f.ok("exec", m{"command_id": "probe-mem", "args": []string{"alloc", "2048"}}, &d)
+	f.ok("exec", m{"command_id": "probe-mem", "args": []string{"alloc-report", "2048"}}, &d)
 	if err := memLimitStop(d, memMB); err != nil {
 		t.Fatalf("2048 MiB under %d MiB: %v: %+v", memMB, err, d)
 	}
+	t.Logf("stopped at the limit: %s, holding %d MiB", memStopKind(d.Stderr), lastHeld(d.Stderr))
 	if el := time.Since(start); el > 10*time.Second {
 		t.Fatalf("took %v", el)
 	}
@@ -271,14 +273,63 @@ func TestGitThreadsIndependentOfCPUs(t *testing.T) {
 	t.Logf("threads started at 2/64 CPUs: %s", strings.Join(report, ", "))
 }
 
-// memLimitStop reports why an exec result does not show the probe stopped
-// at its memory limit by its own runtime, or nil when it does.
+// memLimitStop reports why an exec result of `probe alloc-report` does not
+// show the probe stopped at its memory limit by its own runtime, or nil when
+// it does (POLICY §4a, "What a command sees at the limit"). The probe must
+// have ended by itself with Go's fatal exit status 2 (no signal), never
+// finished the allocation, and last reported holding between half the limit
+// and the limit: it was stopped near the limit, and not past it. Its stderr
+// must be Go's out-of-memory error (goOOM) or the fault Go 1.27's garbage
+// collector has at the limit (gcSpanQueueFault).
 func memLimitStop(d memExec, limitMB int) error {
-	_ = limitMB
-	if d.ExitCode == nil || *d.ExitCode == 0 || strings.Contains(d.Stdout, "allocated") || !goOOM(d.Stderr) {
-		return fmt.Errorf("not stopped at the limit")
+	switch {
+	case d.Signal != nil:
+		return fmt.Errorf("ended by signal %s", *d.Signal)
+	case d.ExitCode == nil || *d.ExitCode != 2:
+		return fmt.Errorf("exit status %v, want Go's fatal 2", d.ExitCode)
+	case strings.Contains(d.Stdout, "allocated"):
+		return fmt.Errorf("the allocation completed")
+	}
+	held := lastHeld(d.Stderr)
+	if held < limitMB/2 || held > limitMB {
+		return fmt.Errorf("last held %d MiB, want %d to %d", held, limitMB/2, limitMB)
+	}
+	if memStopKind(d.Stderr) == "" {
+		return fmt.Errorf("neither Go's out-of-memory error nor its GC span-queue fault")
 	}
 	return nil
+}
+
+// heldRE is the probe's alloc-report line.
+var heldRE = regexp.MustCompile(`(?m)^held (\d+) MiB$`)
+
+// lastHeld is the MiB of the probe's last "held" line, -1 without one.
+func lastHeld(stderr string) int {
+	l := heldRE.FindAllStringSubmatch(stderr, -1)
+	if len(l) == 0 {
+		return -1
+	}
+	n, _ := strconv.Atoi(l[len(l)-1][1])
+	return n
+}
+
+// gcSpanQueueFault is the fault Go 1.27's garbage collector has at
+// RLIMIT_DATA: newSpanSPMC stores sysAlloc's result unchecked, sysAlloc
+// returns nil when the limit refuses the mapping, and the next tryDrain
+// (called by drain) writes slot 0 of that nil ring. So: a SIGSEGV at
+// address 0, SEGV_MAPERR, whose faulting goroutine's first frame is
+// tryDrain in mgcmark_greenteagc.go and its second drain.
+var gcSpanQueueFault = regexp.MustCompile(`(?m)^SIGSEGV: segmentation violation\nPC=0x[0-9a-f]+ m=\d+ sigcode=1 addr=0x0\n\ngoroutine \d+ [^\n]*:\nruntime\.\(\*spanQueue\)\.tryDrain\([^\n]*\n\truntime/mgcmark_greenteagc\.go:\d+ [^\n]*\nruntime\.\(\*spanQueue\)\.drain\(`)
+
+// memStopKind names how a Go child stopped at its limit, "" for neither way.
+func memStopKind(stderr string) string {
+	switch {
+	case goOOM(stderr):
+		return "out of memory"
+	case gcSpanQueueFault.MatchString(stderr):
+		return "the GC's span-queue fault (Go 1.27, POLICY §4a)"
+	}
+	return ""
 }
 
 // TestMemLimitStop: which results count as a Go child stopped at its
