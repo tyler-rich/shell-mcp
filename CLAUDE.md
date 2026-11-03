@@ -81,7 +81,7 @@ Stop and ask the maintainer before continuing if you would need to:
 2. Latest-everything refresh (above).
 3. Do the work in small conventional commits (`feat(gate): …`, `fix(sshx): …`).
 4. Append the dated ARCHIVE §14 entry: what changed, why, alternatives rejected, deferred items, versions in use.
-5. Run the full local gate yourself and keep the output for the report: `bash scripts/ci-local.sh` (format, vet, lint, `go test -race`, govulncheck — in Linux containers) plus any fuzz/e2e runs the prompt names.
+5. Run the full local gate yourself before every push and every PR, and keep the output for the report: `bash scripts/ci-local.sh` with no flags (format, vet, lint, `go test -race`, govulncheck and the rest, in Linux containers) plus any fuzz/e2e runs the prompt names. Report only that run's result. `bash scripts/ci-local.sh --quick` is for iterating within a session: it is NOT the full gate, it says so, and its result is never reported as "ci-local passed" or used in place of the full gate before a push.
 6. Hygiene review (above), then `git push -u origin <branch>`.
 7. `gh pr create --base dev` with the PR template filled. **Do not merge.**
 8. Strip any AI attribution footer from the PR body, then `gh pr view --json body -q .body` and confirm it is gone.

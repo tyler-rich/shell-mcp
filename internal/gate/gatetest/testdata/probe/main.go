@@ -287,6 +287,17 @@ func main() {
 		n, _ := strconv.Atoi(args[0])
 		allocMiB(n)
 		fmt.Printf("allocated %d MiB\n", n)
+	case "alloc-report":
+		// alloc, writing "held <k> MiB" to stderr after every 4 MiB it holds,
+		// so a death at the limit shows how much it held then.
+		n, _ := strconv.Atoi(args[0])
+		for k := 1; k <= n; k++ {
+			allocMiB(1)
+			if k%4 == 0 {
+				_, _ = os.Stderr.WriteString("held " + strconv.Itoa(k) + " MiB\n")
+			}
+		}
+		fmt.Printf("allocated %d MiB\n", n)
 	case "alloc-tree":
 		allocTree(args)
 	case "alloc-tree-detach":

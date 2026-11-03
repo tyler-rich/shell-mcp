@@ -46,6 +46,11 @@ repo="$(cd "$here/../.." && { pwd -W 2>/dev/null || pwd; })"
 dir_native="$(cd "$here" && { pwd -W 2>/dev/null || pwd; })"
 cd "$here/../.."
 label="${SHELL_MCP_CI_LOCAL_LABEL:-shell-mcp.ci-local=setup-check-$$-$RANDOM}"
+# Everything this script creates also carries part, and its cleanup removes
+# only that: under ci-local the run label is shared with the steps of the
+# other lanes, whose containers must keep running (ci-local removes every
+# container of the run label when the run ends).
+part="shell-mcp.ci-local.part=setup-check-$$-$RANDOM"
 run_id="${label#*=}"
 net="shell-mcp-setup-check-$run_id"
 
@@ -59,20 +64,25 @@ if [[ "$(uname -s)" == Linux ]] && [[ "$(id -u)" != 0 ]]; then
 else
 	run_as="65532:65532"
 fi
+# Under scripts/ci-local.sh: its containers lane's user and Go caches (a
+# uid of its own: RLIMIT_NPROC counts per uid, beside the other lanes).
+run_as="${SHELL_MCP_CI_RUN_AS:-$run_as}"
+ci_cache="${SHELL_MCP_CI_CACHE:-/cache}"
+cache_volume="${CI_LOCAL_CACHE_VOLUME:-shell-mcp-ci-cache}"
 
 bins_tar="$(mktemp)"
 cleanup() {
 	local ids
-	ids="$(docker ps -aq --filter "label=$label" 2>/dev/null || true)"
+	ids="$(docker ps -aq --filter "label=$part" 2>/dev/null || true)"
 	if [[ -n "$ids" ]]; then
 		# shellcheck disable=SC2086 # one container id per word
 		docker rm -f $ids >/dev/null 2>&1 || true
 	fi
 	local n
-	for n in $(docker network ls -q --filter "label=$label" 2>/dev/null || true); do
+	for n in $(docker network ls -q --filter "label=$part" 2>/dev/null || true); do
 		docker network rm "$n" >/dev/null 2>&1 || true
 	done
-	for n in $(docker volume ls -q --filter "label=$label" 2>/dev/null || true); do
+	for n in $(docker volume ls -q --filter "label=$part" 2>/dev/null || true); do
 		docker volume rm "$n" >/dev/null 2>&1 || true
 	done
 	rm -f "$bins_tar"
@@ -88,17 +98,17 @@ bad() { echo "FAIL $*"; fail=$((fail + 1)); }
 # --- Images and binaries -------------------------------------------------------
 read -r -a images <<<"${SETUP_CHECK_IMAGES:-debian13 ubuntu2404 ubuntu2604}"
 for i in "${images[@]}"; do
-	docker build -q --label "$label" --target "$i" -t "shell-mcp-setup-check:$i" -f "$dir_native/Dockerfile" "$dir_native" >/dev/null
+	docker build -q --label "$label" --label "$part" --target "$i" -t "shell-mcp-setup-check:$i" -f "$dir_native/Dockerfile" "$dir_native" >/dev/null
 done
-docker volume create shell-mcp-ci-cache >/dev/null
+docker volume create "$cache_volume" >/dev/null
 if [[ -z "${SHELL_MCP_CI_LOCAL_LABEL:-}" ]]; then
-	docker run --rm --label "$label" -u 0:0 -v shell-mcp-ci-cache:/cache "$go_image" \
+	docker run --rm --label "$label" --label "$part" -u 0:0 -v "$cache_volume":/cache "$go_image" \
 		sh -c "mkdir -p /cache/build /cache/mod && chown -R $run_as /cache/build /cache/mod && chown $run_as /cache" >/dev/null
 fi
-docker run --rm --label "$label" -u "$run_as" \
-	-e HOME=/tmp -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local -e GOCACHE=/cache/build -e GOMODCACHE=/cache/mod -e CGO_ENABLED=0 \
+docker run --rm --label "$label" --label "$part" -u "$run_as" \
+	-e HOME=/tmp -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local -e GOCACHE="$ci_cache/build" -e GOMODCACHE="$ci_cache/mod" -e CGO_ENABLED=0 \
 	--tmpfs "/work:exec,uid=${run_as%%:*},gid=${run_as##*:},mode=0700" \
-	-v shell-mcp-ci-cache:/cache -v "$repo:/src:ro" -w /src "$go_image" \
+	-v "$cache_volume":/cache -v "$repo:/src:ro" -w /src "$go_image" \
 	sh -c 'set -e; for c in shell-mcp shell-mcp-gate shell-mcp-privd; do go build -trimpath -ldflags "-X main.version=setup-check" -o /work/setup-check/$c ./cmd/$c >&2; done
 		tar -C /work -cf - setup-check' >"$bins_tar"
 
@@ -106,10 +116,10 @@ docker run --rm --label "$label" -u "$run_as" \
 # execx's switch tests need a root test process (handoff §4.A): the Go image's
 # root, a private GOCACHE, the module cache read-only. They must run and pass;
 # a skip is a failure.
-cred_out="$(docker run --rm --label "$label" -u 0:0 --security-opt no-new-privileges:true \
-	-e HOME=/root -e GOCACHE=/gocache -e GOMODCACHE=/cache/mod -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local -e GOPROXY=off \
+cred_out="$(docker run --rm --label "$label" --label "$part" -u 0:0 --security-opt no-new-privileges:true \
+	-e HOME=/root -e GOCACHE=/gocache -e GOMODCACHE="$ci_cache/mod" -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local -e GOPROXY=off \
 	-e SHELL_MCP_REQUIRE_ROOT_TESTS=1 --tmpfs /gocache:exec --tmpfs /tmp:exec,mode=1777 \
-	-v shell-mcp-ci-cache:/cache:ro -v "$repo:/src:ro" -w /src "$go_image" \
+	-v "$cache_volume":/cache:ro -v "$repo:/src:ro" -w /src "$go_image" \
 	go test -count=1 -v -run 'Credential|NilCredential' ./internal/gate/execx/ 2>&1)" || true
 for t in TestCredentialSwitch TestCredentialNoGroups TestCredentialNPROC TestCredentialRefusedValuesAsRoot TestNilCredentialAsRoot TestCredentialCallSites; do
 	if grep -q -- "^--- PASS: $t " <<<"$cred_out"; then
@@ -120,14 +130,14 @@ for t in TestCredentialSwitch TestCredentialNoGroups TestCredentialNPROC TestCre
 	fi
 done
 
-docker network create --label "$label" "$net" >/dev/null
+docker network create --label "$label" --label "$part" "$net" >/dev/null
 
 # --- Helpers ---------------------------------------------------------------------
 # new <image> [<prepare>]: a fresh container, the binaries copied in and
 # installed (prepare-bare: without the test policies).
 new() {
 	local c
-	c="$(docker run -d --label "$label" --network "$net" --security-opt no-new-privileges:true \
+	c="$(docker run -d --label "$label" --label "$part" --network "$net" --security-opt no-new-privileges:true \
 		-v "$repo:/src:ro" "shell-mcp-setup-check:$1" sleep infinity)"
 	docker cp - "$c:/opt" <"$bins_tar"
 	docker exec "$c" bash /src/scripts/setup-check/target.sh "${2:-prepare}" >&2
@@ -441,11 +451,11 @@ done
 # (test/e2e/zz_init_test.go).
 echo "=== init and init compose"
 srv="shell-mcp-setup-check:server"
-docker build -q --label "$label" -t "$srv" -f Dockerfile . >/dev/null
+docker build -q --label "$label" --label "$part" -t "$srv" -f Dockerfile . >/dev/null
 vol="shell-mcp-setup-check-init-$run_id"
-docker volume create --label "$label" "$vol" >/dev/null
-hostc=(docker run --rm -i --label "$label" --network none --security-opt no-new-privileges:true -u 0:0 -v "$vol:/secrets" "shell-mcp-setup-check:${images[0]}")
-hardened=(--label "$label" --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true)
+docker volume create --label "$label" --label "$part" "$vol" >/dev/null
+hostc=(docker run --rm -i --label "$label" --label "$part" --network none --security-opt no-new-privileges:true -u 0:0 -v "$vol:/secrets" "shell-mcp-setup-check:${images[0]}")
+hardened=(--label "$label" --label "$part" --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true)
 initc=(docker run --rm "${hardened[@]}" -v "$vol:/secrets" "$srv")
 initt=(docker run --rm -t "${hardened[@]}" -v "$vol:/secrets" "$srv")
 # snap: every entry's kind, mode, owner, size, mtime and content hash, kept in
@@ -496,8 +506,8 @@ out="$(docker run --rm "${hardened[@]}" -u 1000:1000 -v "$vol:/secrets" "$srv" i
 [[ "$rc" == 1 ]] && grep -q 'effective uid 1000 is neither 0 nor --uid 65532' <<<"$out" &&
 	ok "init refused: an effective uid neither 0 nor --uid" || bad "init as uid 1000: exit $rc"
 vol2="shell-mcp-setup-check-init-root-$run_id"
-docker volume create --label "$label" "$vol2" >/dev/null
-docker run --rm --label "$label" --network none --security-opt no-new-privileges:true -u 0:0 -v "$vol2:/secrets" "shell-mcp-setup-check:${images[0]}" chmod 0700 /secrets
+docker volume create --label "$label" --label "$part" "$vol2" >/dev/null
+docker run --rm --label "$label" --label "$part" --network none --security-opt no-new-privileges:true -u 0:0 -v "$vol2:/secrets" "shell-mcp-setup-check:${images[0]}" chmod 0700 /secrets
 rc=0
 out="$(docker run --rm "${hardened[@]}" -v "$vol2:/secrets" "$srv" init --dir /secrets 2>/dev/null)" || rc=$?
 if [[ "$rc" == 1 ]] && grep -q 'is owned by 0, not --uid 65532' <<<"$out"; then
@@ -522,6 +532,8 @@ ex -d "$t" /usr/sbin/sshd -D -e
 compose_tmp="$(mktemp -d)"
 lkey="${label%%=*}"
 lval="${label#*=}"
+pkey="${part%%=*}"
+pval="${part#*=}"
 for form in secrets bind; do
 	d="$compose_tmp/$form"
 	mkdir -p "$d"
@@ -537,13 +549,13 @@ for form in secrets bind; do
 		echo "services:"
 		echo "  shell-mcp:"
 		echo "    image: $srv"
-		echo "    labels: { \"$lkey\": \"$lval\" }"
+		echo "    labels: { \"$lkey\": \"$lval\", \"$pkey\": \"$pval\" }"
 		[[ "$form" == secrets ]] && echo "    secrets: !reset []"
 		echo "    volumes:"
 		echo "      - { type: volume, source: init-secrets, target: /run/secrets, read_only: true }"
 		echo "networks:"
 		echo "  front:"
-		echo "    labels: { \"$lkey\": \"$lval\" }"
+		echo "    labels: { \"$lkey\": \"$lval\", \"$pkey\": \"$pval\" }"
 		echo "volumes:"
 		echo "  init-secrets: { external: true, name: $vol }"
 	} >"$d/override.yml"

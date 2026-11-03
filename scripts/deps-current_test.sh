@@ -2,7 +2,7 @@
 # Proves deps-current.sh cannot pass vacuously: on a scratch copy of the
 # module it must fail when a real go.mod requirement is behind its newest
 # release, when the go line is behind the newest stable Go, when a CI tool pin
-# (golangci-lint, govulncheck, Trivy, Grype, gitleaks, cosign, syft, the loopback
+# (golangci-lint, govulncheck, actionlint, Trivy, Grype, gitleaks, cosign, syft, the loopback
 # registry image) is behind or drifts, and when ci-local's golangci-lint runs on a Go older than
 # go.mod's go line; and that the Go check follows the published golang image
 # (deps-current-go.sh, against a fake go.dev and registry, offline). Needs go,
@@ -141,6 +141,32 @@ if ! grep -q '^in_lint() { docker run ' "$lintimage/scripts/ci-local.sh"; then
 else
 	expect "lint step outside the Go image fails" 1 "golangci-lint in scripts/ci-local.sh does not run with the Go image's go" "$lintimage"
 fi
+
+# 11b. in_go (which in_lint runs through) on another image than the
+#     Dockerfile's Go image fails, and so does a lint step that does not go
+#     through in_lint.
+ingoimage="$(copy ingoimage)"
+sed -i 's#^\(\t\t-v "$cache_volume:/cache" -v "$repo:/src:ro" -w /src \)"$go_image" "$@"$#\1"golang:1.20" "$@"#' "$ingoimage/scripts/ci-local.sh"
+if grep -q -F '"golang:1.20" "$@"' "$ingoimage/scripts/ci-local.sh"; then
+	expect "in_go on another image fails" 1 "golangci-lint in scripts/ci-local.sh does not run with the Go image's go" "$ingoimage"
+else setup_failed "could not point the scratch ci-local.sh in_go at another image"; fi
+lintdirect="$(copy lintdirect)"
+sed -i 's#^\(\tstep "golangci-lint" "" \)in_lint run#\1docker run golangci/golangci-lint:v2.14.0 golangci-lint run#' "$lintdirect/scripts/ci-local.sh"
+if grep -q 'step "golangci-lint" "" docker run' "$lintdirect/scripts/ci-local.sh"; then
+	expect "a lint step outside in_lint fails" 1 "1 of 2 lint steps use in_lint" "$lintdirect"
+else setup_failed "could not change the scratch ci-local.sh lint step"; fi
+
+# 11a. An actionlint pin older than its newest stable release fails, and
+#     ci.yml and ci-local.sh must agree on it.
+oldal="$(copy oldal)"
+sed -i 's/^\(  ACTIONLINT_VERSION: \).*/\1v1.7.0/' "$oldal/.github/workflows/ci.yml"
+sed -i 's/^actionlint_version="v[0-9.]*"/actionlint_version="v1.7.0"/' "$oldal/scripts/ci-local.sh"
+if grep -q '^actionlint_version="v1.7.0"$' "$oldal/scripts/ci-local.sh" && grep -q '^  ACTIONLINT_VERSION: v1.7.0$' "$oldal/.github/workflows/ci.yml"; then
+	expect "old actionlint pin fails" 1 "actionlint v1.7.0 is older than the newest stable" "$oldal"
+else setup_failed "could not set the actionlint pins"; fi
+aldrift="$(copy aldrift)"
+sed -i 's/^actionlint_version="v[0-9.]*"/actionlint_version="v1.7.0"/' "$aldrift/scripts/ci-local.sh"
+expect "actionlint pin drift fails" 1 "actionlint is pinned differently" "$aldrift"
 
 # 12-20. The release and scanner tools: each pin older than its newest stable
 #     release fails, the files that pin one tool must agree, and a pin that

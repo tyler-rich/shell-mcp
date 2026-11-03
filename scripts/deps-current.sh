@@ -7,7 +7,8 @@
 #   - a tool pinned in the workflows or scripts/ci-local.sh is older than its
 #     newest stable release, or the files that pin it disagree, or a pin is
 #     missing: golangci-lint and govulncheck (ci.yml, ci-local.sh and, for
-#     govulncheck, release-build.yml), Trivy and Grype (ci.yml and
+#     govulncheck, release-build.yml), actionlint (ci.yml and ci-local.sh),
+#     Trivy and Grype (ci.yml and
 #     release-build.yml), gitleaks (ci.yml), cosign and syft
 #     (release-build.yml);
 #   - the release workflow's loopback registry image
@@ -165,6 +166,10 @@ check_pins govulncheck "$(go list -m -f '{{.Version}}' golang.org/x/vuln@latest 
 	"$ci_yml=$(pin_of "$ci_yml" GOVULNCHECK_VERSION)" \
 	"$ci_local=$(sed -n 's/^govulncheck_version="\(v[0-9.]*\)"$/\1/p' "$ci_local" 2>/dev/null || true)" \
 	"$release_yml=$(pin_of "$release_yml" GOVULNCHECK_VERSION)"
+# actionlint (G2), the same way.
+check_pins actionlint "$(go list -m -f '{{.Version}}' github.com/rhysd/actionlint@latest 2>/dev/null || true)" \
+	"$ci_yml=$(pin_of "$ci_yml" ACTIONLINT_VERSION)" \
+	"$ci_local=$(sed -n 's/^actionlint_version="\(v[0-9.]*\)"$/\1/p' "$ci_local" 2>/dev/null || true)"
 
 check_pins Trivy "$(newest_tag aquasecurity/trivy)" \
 	"$ci_yml=$(pin_of "$ci_yml" TRIVY_VERSION)" "$release_yml=$(pin_of "$release_yml" TRIVY_VERSION)"
@@ -250,14 +255,15 @@ effective="$(printf '%s\n%s\n' "$go_line" "${toolchain_line:-$go_line}" | sort -
 lint_go_ok=1
 lint_run='in_lint() { in_go go run "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$golangci_lint_version" "$@"; }'
 if ! grep -q -x -F -- "$lint_run" "$ci_local" ||
-	! grep -q -x -F -- 'in_go() { docker run "${common[@]}" "$go_image" "$@"; }' "$ci_local" ||
+	! grep -q -x -F -- '		-v "$cache_volume:/cache" -v "$repo:/src:ro" -w /src "$go_image" "$@"' "$ci_local" ||
 	! grep -q '^go_image="$(awk .* Dockerfile)"$' "$ci_local"; then
 	echo "deps-current: FAIL — golangci-lint in $ci_local does not run with the Go image's go (expected: $lint_run, with in_go on the Dockerfile's golang image)"
 	fail=1
 	lint_go_ok=0
 fi
-lint_steps="$(grep -c '^step "golangci-lint' "$ci_local" || true)"
-lint_steps_in_go="$(grep -c '^step "golangci-lint[^"]*" "" in_lint run ' "$ci_local" || true)"
+# The steps sit in ci-local's lane functions, indented.
+lint_steps="$(grep -c '^[[:space:]]*\(full \)\?step "golangci-lint' "$ci_local" || true)"
+lint_steps_in_go="$(grep -c '^[[:space:]]*\(full \)\?step "golangci-lint[^"]*" "" in_lint run ' "$ci_local" || true)"
 if [[ "$lint_steps" -eq 0 || "$lint_steps" != "$lint_steps_in_go" ]]; then
 	echo "deps-current: FAIL — golangci-lint in $ci_local does not run with the Go image's go ($lint_steps_in_go of $lint_steps lint steps use in_lint)"
 	fail=1

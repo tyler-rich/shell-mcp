@@ -20,6 +20,13 @@ concurrency:
   group: codeql-${{ github.ref }}
   cancel-in-progress: true
 
+# An explicit shell makes every run step bash --noprofile --norc -eo pipefail:
+# without it GitHub uses bash -e, and a step piped through tee takes tee's
+# exit status (scripts/workflowcheck keeps this present in every workflow).
+defaults:
+  run:
+    shell: bash
+
 jobs:
   analyze:
     name: analyze (${{ matrix.language }})
@@ -44,6 +51,9 @@ jobs:
         if: matrix.language == 'go'
         with:
           go-version-file: go.mod
+          # No cache: saving first under the runner's key would leave ci's go
+          # job a near-empty cache. What CodeQL analyses is unchanged.
+          cache: false
       - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           languages: ${{ matrix.language }}

@@ -4899,3 +4899,130 @@ setup-check was the exception. Its first run reported 194 passed and 2 failed: t
 **Tool pins (D-013), a separate first commit:** Grype v0.121.0 to v0.121.1 (`ci.yml`, `release-build.yml`) and syft v1.55.0 to v1.56.0 (`release-build.yml`), both released 2026-11-02; deps-current failed on `dev` until they moved. Included here at the maintainer's choice so the PR's `ci` can pass.
 
 **Versions:** Go 1.27.3; direct modules unchanged (deps-current: all current): go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6, x/crypto v0.58.0, x/sys v0.49.0. Tools: golangci-lint v2.15.0, govulncheck v1.9.0, Trivy v0.76.1, Grype v0.121.1, gitleaks v8.30.1, cosign v3.1.4, syft v1.56.0. No dependency added.
+
+### 2026-11-03 — CI and ci-local reviewed and sped up: e2e-host in shards, pipefail in every workflow, ci-local lanes; three checks that could not fail; Go 1.27's GC fault at the memory limit (N-37) (branch ci/review-and-speed)
+**Scope (the session prompt):** review every CI job and ci-local step for need, overlap and speed, then make them faster without losing coverage. The stopgap came first, in its own PR (#85, the entry before). Inventory and proposal were shown to the maintainer before anything was built; this branch implements only what was approved: P1–P5, G1, G2, L1–L4. L5 was deferred, L6 dropped, and G3 stays report-only. Nothing was removed, merged, made optional or taken out of the required set.
+
+**Inventory (step 1, measured).**
+- **Required checks:** `ci`, `analyze (go)` and `analyze (actions)`, in the `protect-dev` and `protect-main` rulesets.
+- **What `ci` aggregated:** go (two runner images), deps-current, gitleaks, image, e2e-host, exposure, setup-check and caddy-check. `probes` is report-only.
+- **Measured over twelve runs (2026-11-01 to 11-02):**
+
+| Job | Seconds | Note |
+|---|---|---|
+| e2e-host | 1357–1508 | the critical path |
+| go (ubuntu-24.04) | 542–956 | |
+| go (ubuntu-26.04) | 471–752 | |
+| setup-check | 159–273 | |
+| deps-current | 119–236 | |
+| image | 131–162 | |
+| exposure | about 70 | |
+| caddy-check | about 15 | |
+| gitleaks | about 10 | |
+| CodeQL | go 70–113, actions about 40 | |
+| release dry run | build about 150, verify about 150, sign 150–540 | path-filtered, not required; its `verify-release.sh` step 288 s |
+
+- **Where e2e-host's time went:** about 70 s of setup, then one `e2e.test` run of 1302–1405 s.
+  - 543–553 s of 30 s TOTP step waits, single-approver: TestApprovalWebFlow 281–300 s, TestGateKeyRotation 245–269 s.
+  - 401–406 s of waits that are what the tests check: TestPowerLogindRefusals 127.9 s, TestPowerInstanceKilled 71.0 s, TestPackageStopPoints 71 s, TestPrivExecKilledOnHangup 41 s, and others.
+  - 362–457 s of CPU-bound work, which was all of the run-to-run difference. The cancelled #80 run (1413 s of tests) was a slow runner, not a hang.
+- **go's `go test -race`:** 394–509 s, bounded by `internal/gate/ops` (412–422 s) and `privd/ops` (351–369 s). Their racers are iteration-bound and already parallel. PR #55's earlier attempt at more parallelism had been reverted.
+- **ci-local on the maintainer's workstation:** 1160 s, one step after another.
+
+| ci-local step | Seconds |
+|---|---|
+| setup-check | about 458 (three distros at 108 s each, init 119) |
+| deps-current self-test | 254 (each of about 14 cases runs the real `deps-current.sh`: about 7 s local package loading, the rest network) |
+| `go test -race` | 152 |
+| forced-psx | 105 |
+| everything else | under 35 each |
+
+- **Every check was kept.** Each covers something no other does, or is cheap and off the critical path. The deliberate overlaps stay: Trivy and Grype, three distributions, the release dry run. History from §14 recorded per check: e2e-host has the most real catches, among them CAP_KILL and signal scoping, ProtectProc, swap and MemoryMax, logind's stale ScheduledShutdown, install idempotence.
+
+**Findings, fixed here with failing-first evidence.**
+1. **Three required checks and the release preflight could not fail since they were written.** Without an explicit shell GitHub runs steps as `bash -e {0}`, with no pipefail. So `bash scripts/{exposure,setup-check,caddy-check}/run.sh | tee -a "$GITHUB_STEP_SUMMARY"` (ci.yml) and `bash scripts/release/notes.sh … | tee` (release.yml) took tee's exit status. Each step with a stub that exits 1 gave exit 0 under `bash -e` and exit 1 under `-eo pipefail`. **No run hid a failure:** the exposure logs' FAIL lines are its negative control's. Every workflow now has a top-level `defaults: run: shell: bash`, which gives `bash --noprofile --norc -eo pipefail {0}`; the maintainer approved it for the release workflows too, since it changes nothing about what they check. Every pipeline in the workflows was reviewed for one that fails on purpose. The only one whose meaning pipefail changes is the e2e summary's per-test lookup (`grep | head | awk | tr` in an assignment), now one awk. `scripts/workflowcheck` (a Go test in the go job and ci-local) fails if any workflow loses the default.
+2. **The go job's sandbox summary was lost since #65.** A paste left `} |        run: |` and a copy of the exposure check in the step, so the summary was piped into a command named `run:`, and each go entry ran the exposure check a second and third time. The exposure job is unchanged.
+3. **The ubuntu-24.04 go entry ran with a near-empty Go cache.** deps-current, probes, image and CodeQL's go entry, all on `ubuntu-latest` (24.04), saved setup-go's cache under the same key and finished first: 12 MB restored against 342 MB on 26.04.
+4. **A script's cleanup removed the whole run's containers.** exposure, setup-check, caddy-check and the systemd probe removed every container of ci-local's run label when they ended: harmless one step at a time, but in the lanes it killed the other lanes' running containers (exit 137 in `go vet` and `deps-current` on the first lane runs). They now also add a part label (`shell-mcp.ci-local.part=<script>-<pid>-<random>`) and remove only by it; ci-local still removes everything of the run label when the run ends. ci-local_test before: "the run's containers removed 4 times (want 1)".
+5. **deps-current's ci-local lint check broke on the lane layout:** caught by ci-local's own lane runs. It now reads `in_go`'s run line and indented `step`s; two new self-test cases.
+6. **TestExecMemoryLimit's SIGSEGV: a Go 1.27.3 runtime bug, not a weaker limit (N-37).** Seen once on the first three-lane run.
+   - **Measured:**
+
+| Run | Out of memory | "cannot allocate memory" | SIGSEGV | Pass |
+|---|---|---|---|---|
+| the probe under the 192 MiB limit, 200 serial | 197 | 1 | 2 | |
+| the same, 200 beside a full `go test -race` and setup-check | 194 | 6 | 0 | |
+| the test, 200 serial | | | 1 | 199 |
+| the test, 200 under that load | | | 0 | 200 |
+
+   - **The limit held in every probe run:** `/proc/<pid>/limits` showed 201326592/201326592, peak VmData was 197,892–199,952 KiB against 196,608 KiB (POLICY §4a's one mapping), and every run exited 2 with no signal. dmesg is not readable from the containers (CAP_SYSLOG); no child was killed. Host memory pressure is excluded: a 32 GB VM, children at about 150 MiB RSS.
+   - **Cause, from the Go 1.27.3 source:** `newSpanSPMC` (`runtime/mgcmark_greenteagc.go`) stores `sysAlloc`'s result unchecked. `sysAllocOS` returns nil when `mmap` fails (ENOMEM at RLIMIT_DATA). The next `tryDrain`, called by `drain`, writes slot 0 of the nil ring: `SIGSEGV`, `sigcode=1 addr=0x0`, at `mgcmark_greenteagc.go:520`.
+   - **The test** accepts the fault only with that exact shape, exit status 2, no signal, and the probe's new `alloc-report` progress showing it held between half the limit and the limit. It now requires the same of Go's out-of-memory errors; the old check accepted any non-zero exit with the message. Failing-first: 6 TestMemLimitStop cases failed against the old check. 600 runs of the updated test: 597 out of memory, 3 the fault, all holding 144–152 MiB, all pass.
+   - **POLICY §4a** describes the fault.
+   - **POST-RELEASE N-37** records the bug and its removal condition. When a Go release checks the allocation, remove the acceptance and §4a's sentence in that release's PR. `TestGCSpanQueueBugInRuntime` reads `newSpanSPMC` in the toolchain's own source and fails on that release (failing-first against a stub).
+   - **Nothing filed upstream:** the maintainer decides that.
+
+**Built (one commit per item).**
+- **P1, e2e-host in four shards.** Shards 1–3 run the tests `test/e2e/shards.txt` names (TestApprovalWebFlow and TestGateKeyRotation in different shards; the power and package delay tests together). The last shard runs every other test, the `zz_` files last on its VM. `e2e-host-coverage` (required through `ci`, `if: always()`) checks with `test/e2e/shards.sh cover` that:
+  - the shards' lists are exactly the binary's tests, each in one shard;
+  - each passed there and ran nowhere else, and nothing failed or skipped;
+  - the last shard's execx credential tests passed;
+  - every shard succeeded.
+
+  `shards_test.sh` (deps-current job, ci-local) covers every refusal, 28 cases. No test depended on another's state; none was moved, loosened or dropped.
+- **P2:** the summary restored (finding 2).
+- **P3:** `go` (the race tests, forced-psx, the summary) and `go-checks` (everything else), per image, both required, same commands.
+- **P4:** `cache: false` on the light jobs and CodeQL's setup-go (cache only; CodeQL checks the same).
+- **P5:** e2e-host's timeout from 40 to 20 minutes per shard.
+- **G1:** workflowcheck's aggregate check. `ci` must run `always()`, need every job but the report-only ones (which must be `continue-on-error`), and fail on any failure, cancelled or skipped result. Failing-first: with caddy-check left out, "job caddy-check is not in ci's needs".
+- **G2: actionlint v1.7.12** in the deps-current job and ci-local, via `go run` (go.sum and the Go checksum database), its pin in deps-current (failing-first: 33 passed, 2 failed). Its one finding: its runner labels predate `ubuntu-26.04` (`.github/actionlint.yaml`). It does not catch the #65 paste or the missing pipefail without shellcheck.
+- **L1:** seconds per step and for the run.
+- **L4:** NOT RUN rows for everything only CI runs: the e2e-host suite, gitleaks, the image scans, CodeQL, MPTCP, Landlock above the local ABI.
+- **L3:** `--quick` says it is NOT the full gate in its first line, its summary title and its last line. CLAUDE.md: the full gate before every push and PR, and only its result reported. Failing-first: 23 passed, 4 failed.
+- **L2:** lanes go, network, containers, with uids 65530, 65531, 65533, their own caches and TMPDIR, and none 65532: RLIMIT_NPROC counts every task of a uid, the gate gives its children a few, and the server image and caddy-check run as 65532. On Linux every lane runs as the invoking user, so one at a time, unless `CI_LOCAL_FIXED_UIDS=1`. **The two-lane fallback** (the maintainer's condition, after finding 6 showed on the first three-lane runs): go then network, beside containers. `CI_LOCAL_SERIAL=1` keeps one at a time, and a lane that ends early fails the run. Failing-first: 36 passed, 5 failed. `CI_LOCAL_CACHE_VOLUME` runs on another volume (the cold timing).
+
+**The shellcheck pass (maintainer decision 2026-11-03).** On the first CI run actionlint found the runner image's unpinned shellcheck on PATH and failed on three findings that ci-local, whose Go image has none, never ran. Both now run `actionlint -shellcheck=`, the same pinned check. shellcheck itself is approved as a new tool for a separate PR after this one: pinned by exact version and checksum or digest, kept current by deps-current, run in CI and ci-local over every shell script and the workflows' run: blocks, findings fixed or each exception justified inline. Its starting point, run 1's findings verbatim, none a real bug:
+- `.github/workflows/ci.yml:506:9: shellcheck reported issue in this script: SC2024:warning:6:41: sudo doesn't affect redirects. Use ..| sudo tee file [shellcheck]`. The e2e shard's `-test.list` output is redirected as the runner user on purpose: the file in `$RUNNER_TEMP` is the job's, not root's.
+- `.github/workflows/release-build.yml:142:9: shellcheck reported issue in this script: SC2012:info:2:13: Use find instead of ls to better handle non-alphanumeric filenames [shellcheck]`. Robustness only: the release files' names are fixed-format.
+- `.github/workflows/release-build.yml:199:9: shellcheck reported issue in this script: SC2010:warning:4:20: Don't use ls | grep. Use a glob or a for loop with a condition to allow non-alphanumeric filenames [shellcheck]`. The same, inside a `test … = …` that compares against SHA256SUMS.
+
+**Results, CI.** Baseline: the twelve runs above, the critical path about 25 minutes. Times are from the first job's start to the last job's end (queueing for runners not included).
+
+| Run | Commit | Shards 1–4 (s) | go test -race 24.04 / 26.04 (s) | go-checks 24.04 / 26.04 (s) | setup-check (s) | Wall time | Result |
+|---|---|---|---|---|---|---|---|
+| 1 | 1f9dee0 | 440, 392, 433, 459 | 540 / 542 | 217 / 334 | 287 | 9m07s | failed: actionlint's shellcheck pass, everything else green |
+| 2 | 0ed4065 | 422, 377, 394, 500 | 454 / 402 | 140 / 147 | 297 | 8m36s | green |
+| 3 | 0ed4065 (re-run) | 405, 364, 401, 373 | 395 / 478 | 143 / 150 | 259 | 8m13s | green |
+| 4 | 0ed4065 (re-run) | 380, 379, 401, 434 | 307 / 394 | 148 / 140 | 312 | 7m30s | green |
+
+**Test counts against the baseline (#84, run 41440390849), by test name.** The sandbox summary's reprint of result lines is not counted (P2 restored it).
+- **go, ubuntu-24.04:** baseline 1972 PASS, 4216 subtests PASS, 17 SKIP. Run 2 (go and go-checks together): 1979, 4250, 17. Every baseline result is present; the only additions are 7 new tests (41 results): workflowcheck (TestEveryWorkflowRunsWithPipefail, TestCIAggregateRequiresEveryJob, TestCheckAggregate, TestCheckPipefail) and the memory test's (TestMemLimitStop, TestNewSpanSPMCUnchecked, TestGCSpanQueueBugInRuntime).
+- **go, ubuntu-26.04:** baseline 2035, 4219, 21. Run 2: 2042, 4253, 21; the same 7 additions.
+- **e2e-host:** identical. 171 top-level PASS (157 e2e tests and 14 execx credential), 347 subtests, 1 SKIP (TestCredentialRefusedWhenNotRoot, the expected one). e2e-host-coverage: "total: 157 e2e tests in 4 shards, 157 passed".
+- **exposure:** identical (TestGenerateUnits, once). The go job's two extra copies were P2's duplicate.
+
+Runs 3 and 4 gave the same counts as run 2, test for test (go 1979/4250/17 and 2042/4253/21; e2e-host 171/347/1; the coverage job "total: 157 e2e tests in 4 shards, 157 passed"). Runs 2, 3 and 4 are three consecutive green runs of `0ed4065` (run 41619620667, attempts 1 to 3): 8m36s, 8m13s, 7m30s against about 25 minutes, the e2e shards 6.1 to 8.3 minutes each against 22.6 to 25.1 for the one job, and the critical path now go test -race (about 5 to 9 minutes).
+
+**Results, ci-local** (the maintainer's Windows workstation, Docker Desktop, 32 CPUs, 32 GB). Cold means a new cache volume, so empty Go caches; Docker's image build cache stays warm, since pruning it is not allowed.
+
+| Gate | Cold | Warm | Result |
+|---|---|---|---|
+| Old (`dev`) | 19m43s | 19m40s | cold: deps-current failed on GitHub and Docker Hub lookups during that run; warm: the stopgap's run, every step PASS |
+| New (two lane groups) | 13m53s | 11m22s, 11m14s, 11m12s (the pre-push gate) | every step PASS |
+
+The new gate runs the old one's 29 steps, with the same results, and two more: actionlint and the e2e shards self-test. setup-check (459 s, its three distros one after another) now sets the containers lane's length; that is L5's follow-up.
+
+**Rejected or not built (maintainer, 2026-11-03).**
+- Binaries and images shared between jobs as artifacts: their upload and download would cost more than the 7 s and 36 s builds, and add a serial dependency.
+- A Grype DB cache (a new action, off the critical path).
+- A BuildKit cache mount in the release Dockerfile (a release input).
+- TestGateKeyRotation on several approvers: not needed with shards.
+- L6 (the deps-current self-test sharing one fetch): off the critical path in the network lane; half of each case is local package loading.
+
+**Deferred.**
+- **L5, setup-check's distros in parallel:** the three create svc-shell with uid 60123, and RLIMIT_NPROC counts per uid on the shared kernel, so each distro needs its own svc-shell and priv uid first (a follow-up PR).
+- **The shellcheck PR** (above).
+- **N-37** until the Go release that fixes it.
+- **G3:** the release dry run's path filter, report only.
+
+**Versions (D-013):** Go 1.27.3; `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing. Direct modules: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6, x/crypto v0.58.0, x/sys v0.49.0. Tools: golangci-lint v2.15.0, govulncheck v1.9.0, actionlint v1.7.12 (new, approved: G2), Trivy v0.76.1, Grype v0.121.1, gitleaks v8.30.1, cosign v3.1.4, syft v1.56.0. Actions: actions/upload-artifact v7.0.2 and actions/download-artifact v8.0.2, already pinned in release-build.yml, newly used in ci.yml. No module dependency added.

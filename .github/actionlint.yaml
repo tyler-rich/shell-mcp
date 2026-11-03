@@ -1,0 +1,9 @@
+# actionlint's configuration (scripts/ci-local.sh and the deps-current job
+# run it). Its built-in list of GitHub-hosted runner labels predates
+# ubuntu-26.04, a GitHub-hosted image the go, go-checks and e2e-host jobs
+# run on. actionlint's only way to accept another label is this key, whose
+# name says self-hosted: no job of this repository runs on a self-hosted
+# runner (CLAUDE.md), and this list does not make one.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

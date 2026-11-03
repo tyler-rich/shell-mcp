@@ -33,6 +33,13 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# An explicit shell makes every run step bash --noprofile --norc -eo pipefail:
+# without it GitHub uses bash -e, and a step piped through tee takes tee's
+# exit status (scripts/workflowcheck keeps this present in every workflow).
+defaults:
+  run:
+    shell: bash
+
 jobs:
   preflight:
     name: preflight (version, main, CI and CodeQL, notes, environment)

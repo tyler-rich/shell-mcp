@@ -56,6 +56,13 @@ env:
   VERSION: ${{ inputs.version }}
   LOOPBACK: localhost:5000/shell-mcp
 
+# An explicit shell makes every run step bash --noprofile --norc -eo pipefail:
+# without it GitHub uses bash -e, and a step piped through tee takes tee's
+# exit status (scripts/workflowcheck keeps this present in every workflow).
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build:
     name: build (binaries, images, SBOMs, checksums)
