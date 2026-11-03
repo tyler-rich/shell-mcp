@@ -69,8 +69,8 @@ func TestExecMemoryLimit(t *testing.T) {
 	}
 	start := time.Now()
 	f.ok("exec", m{"command_id": "probe-mem", "args": []string{"alloc", "2048"}}, &d)
-	if d.ExitCode == nil || *d.ExitCode == 0 || strings.Contains(d.Stdout, "allocated") || !goOOM(d.Stderr) {
-		t.Fatalf("2048 MiB under %d MiB: %+v", memMB, d)
+	if err := memLimitStop(d, memMB); err != nil {
+		t.Fatalf("2048 MiB under %d MiB: %v: %+v", memMB, err, d)
 	}
 	if el := time.Since(start); el > 10*time.Second {
 		t.Fatalf("took %v", el)
@@ -269,6 +269,70 @@ func TestGitThreadsIndependentOfCPUs(t *testing.T) {
 		}
 	}
 	t.Logf("threads started at 2/64 CPUs: %s", strings.Join(report, ", "))
+}
+
+// memLimitStop reports why an exec result does not show the probe stopped
+// at its memory limit by its own runtime, or nil when it does.
+func memLimitStop(d memExec, limitMB int) error {
+	_ = limitMB
+	if d.ExitCode == nil || *d.ExitCode == 0 || strings.Contains(d.Stdout, "allocated") || !goOOM(d.Stderr) {
+		return fmt.Errorf("not stopped at the limit")
+	}
+	return nil
+}
+
+// TestMemLimitStop: which results count as a Go child stopped at its
+// memory limit (invented outputs, shaped as the probe's and Go 1.27's).
+func TestMemLimitStop(t *testing.T) {
+	held := func(to int) string {
+		var b strings.Builder
+		for k := 4; k <= to; k += 4 {
+			fmt.Fprintf(&b, "held %d MiB\n", k)
+		}
+		return b.String()
+	}
+	oom := "fatal error: runtime: out of memory\n\nruntime stack:\nruntime.throw({0x5a0b1c?, 0x0?})\n"
+	cannot := "fatal error: runtime: cannot allocate memory\n\ngoroutine 1 gp=0xc000002380 m=0 mp=0x6a1e40 [running]:\n"
+	segv := func(addr, frame, caller string) string {
+		return "SIGSEGV: segmentation violation\nPC=0x431b7c m=4 sigcode=1 addr=" + addr + "\n\n" +
+			"goroutine 0 gp=0xc000184380 m=4 mp=0xc000180008 [idle]:\n" +
+			frame + "(0xc000400400?, 0x4662ab?, 0x44155a?)\n\truntime/mgcmark_greenteagc.go:520 +0x5c fp=0xc0001a7bb0 sp=0xc0001a7b90 pc=0x431b7c\n" +
+			caller + "(0xc0001cf278, 0x6)\n\truntime/mgcmark_greenteagc.go:473 +0x66 fp=0xc0001a7be0 sp=0xc0001a7bb0 pc=0x431a66\n"
+	}
+	gcSegv := segv("0x0", "runtime.(*spanQueue).tryDrain", "runtime.(*spanQueue).drain")
+	two, one, zero := 2, 1, 0
+	kill := "killed"
+	cases := []struct {
+		name string
+		d    memExec
+		ok   bool
+	}{
+		{"out of memory near the limit", memExec{ExitCode: &two, Stderr: held(148) + oom}, true},
+		{"cannot allocate memory near the limit", memExec{ExitCode: &two, Stderr: held(152) + cannot}, true},
+		{"the GC's span queue at the limit", memExec{ExitCode: &two, Stderr: held(152) + gcSegv}, true},
+		{"the GC's span queue at the limit, the last report at the limit", memExec{ExitCode: &two, Stderr: held(192) + gcSegv}, true},
+		{"a SIGSEGV in another frame", memExec{ExitCode: &two, Stderr: held(152) + segv("0x0", "main.allocMiB", "main.main")}, false},
+		{"a SIGSEGV in the span queue at another address", memExec{ExitCode: &two, Stderr: held(152) + segv("0x18", "runtime.(*spanQueue).tryDrain", "runtime.(*spanQueue).drain")}, false},
+		{"a SIGSEGV in tryDrain from another caller", memExec{ExitCode: &two, Stderr: held(152) + segv("0x0", "runtime.(*spanQueue).tryDrain", "runtime.(*spanQueue).steal")}, false},
+		{"the GC's span queue far below the limit", memExec{ExitCode: &two, Stderr: held(12) + gcSegv}, false},
+		{"out of memory far below the limit", memExec{ExitCode: &two, Stderr: held(20) + oom}, false},
+		{"out of memory past the limit", memExec{ExitCode: &two, Stderr: held(300) + oom}, false},
+		{"out of memory with no report", memExec{ExitCode: &two, Stderr: oom}, false},
+		{"another exit status", memExec{ExitCode: &one, Stderr: held(148) + oom}, false},
+		{"killed by a signal", memExec{Signal: &kill, Stderr: held(148)}, false},
+		{"the whole allocation", memExec{ExitCode: &zero, Stdout: "allocated 2048 MiB\n", Stderr: held(2048)}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := memLimitStop(c.d, memMB)
+			if c.ok && err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			if !c.ok && err == nil {
+				t.Fatal("accepted")
+			}
+		})
+	}
 }
 
 // goOOM reports a Go program's fatal error at its memory limit: "out of
