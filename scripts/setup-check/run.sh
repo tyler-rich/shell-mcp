@@ -63,6 +63,7 @@ fi
 # uid of its own: RLIMIT_NPROC counts per uid, beside the other lanes).
 run_as="${SHELL_MCP_CI_RUN_AS:-$run_as}"
 ci_cache="${SHELL_MCP_CI_CACHE:-/cache}"
+cache_volume="${CI_LOCAL_CACHE_VOLUME:-shell-mcp-ci-cache}"
 
 bins_tar="$(mktemp)"
 cleanup() {
@@ -94,15 +95,15 @@ read -r -a images <<<"${SETUP_CHECK_IMAGES:-debian13 ubuntu2404 ubuntu2604}"
 for i in "${images[@]}"; do
 	docker build -q --label "$label" --target "$i" -t "shell-mcp-setup-check:$i" -f "$dir_native/Dockerfile" "$dir_native" >/dev/null
 done
-docker volume create shell-mcp-ci-cache >/dev/null
+docker volume create "$cache_volume" >/dev/null
 if [[ -z "${SHELL_MCP_CI_LOCAL_LABEL:-}" ]]; then
-	docker run --rm --label "$label" -u 0:0 -v shell-mcp-ci-cache:/cache "$go_image" \
+	docker run --rm --label "$label" -u 0:0 -v "$cache_volume":/cache "$go_image" \
 		sh -c "mkdir -p /cache/build /cache/mod && chown -R $run_as /cache/build /cache/mod && chown $run_as /cache" >/dev/null
 fi
 docker run --rm --label "$label" -u "$run_as" \
 	-e HOME=/tmp -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local -e GOCACHE="$ci_cache/build" -e GOMODCACHE="$ci_cache/mod" -e CGO_ENABLED=0 \
 	--tmpfs "/work:exec,uid=${run_as%%:*},gid=${run_as##*:},mode=0700" \
-	-v shell-mcp-ci-cache:/cache -v "$repo:/src:ro" -w /src "$go_image" \
+	-v "$cache_volume":/cache -v "$repo:/src:ro" -w /src "$go_image" \
 	sh -c 'set -e; for c in shell-mcp shell-mcp-gate shell-mcp-privd; do go build -trimpath -ldflags "-X main.version=setup-check" -o /work/setup-check/$c ./cmd/$c >&2; done
 		tar -C /work -cf - setup-check' >"$bins_tar"
 
@@ -113,7 +114,7 @@ docker run --rm --label "$label" -u "$run_as" \
 cred_out="$(docker run --rm --label "$label" -u 0:0 --security-opt no-new-privileges:true \
 	-e HOME=/root -e GOCACHE=/gocache -e GOMODCACHE="$ci_cache/mod" -e GOFLAGS=-buildvcs=false -e GOTOOLCHAIN=local -e GOPROXY=off \
 	-e SHELL_MCP_REQUIRE_ROOT_TESTS=1 --tmpfs /gocache:exec --tmpfs /tmp:exec,mode=1777 \
-	-v shell-mcp-ci-cache:/cache:ro -v "$repo:/src:ro" -w /src "$go_image" \
+	-v "$cache_volume":/cache:ro -v "$repo:/src:ro" -w /src "$go_image" \
 	go test -count=1 -v -run 'Credential|NilCredential' ./internal/gate/execx/ 2>&1)" || true
 for t in TestCredentialSwitch TestCredentialNoGroups TestCredentialNPROC TestCredentialRefusedValuesAsRoot TestNilCredentialAsRoot TestCredentialCallSites; do
 	if grep -q -- "^--- PASS: $t " <<<"$cred_out"; then

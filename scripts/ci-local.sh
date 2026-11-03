@@ -125,7 +125,10 @@ fi
 if [[ -n "${CI_LOCAL_SERIAL:-}" ]]; then
 	parallel=""
 fi
-cache_volume="shell-mcp-ci-cache"
+# CI_LOCAL_CACHE_VOLUME: another volume, such as a new one for a run with
+# empty Go caches (the scripts of the containers lane use it too).
+cache_volume="${CI_LOCAL_CACHE_VOLUME:-shell-mcp-ci-cache}"
+export CI_LOCAL_CACHE_VOLUME="$cache_volume"
 docker volume create "$cache_volume" >/dev/null
 # The caches belong to their lane's user. /cache/tmp holds every run's
 # TMPDIR, so nothing under it is chowned recursively: chown(2) moves the
