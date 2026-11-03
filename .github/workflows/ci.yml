@@ -417,7 +417,8 @@ jobs:
     # failed, cancelled or skipped shard, or a coverage mismatch, fails ci.
     name: e2e-host shard ${{ matrix.shard }} (systemd, journald, polkit on the runner VM)
     runs-on: ubuntu-26.04
-    timeout-minutes: 40
+    # About 2.3 times a shard's expected 8 to 9 minutes (P5, ARCHIVE §14).
+    timeout-minutes: 20
     permissions:
       contents: read
     strategy:
