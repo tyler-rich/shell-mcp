@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -319,6 +320,13 @@ func lastHeld(stderr string) int {
 // (called by drain) writes slot 0 of that nil ring. So: a SIGSEGV at
 // address 0, SEGV_MAPERR, whose faulting goroutine's first frame is
 // tryDrain in mgcmark_greenteagc.go and its second drain.
+//
+// Accepted only while the Go runtime has that bug (Go 1.27.3,
+// runtime/mgcmark_greenteagc.go:520; docs/handoff/POST-RELEASE.md N-37).
+// TestGCSpanQueueBugInRuntime fails once a Go release fixes it: then remove
+// this acceptance (gcSpanQueueFault, its case in memStopKind, the
+// TestMemLimitStop cases that expect it, TestGCSpanQueueBugInRuntime) and
+// the fault's sentence in POLICY §4a, in that same PR, and close N-37.
 var gcSpanQueueFault = regexp.MustCompile(`(?m)^SIGSEGV: segmentation violation\nPC=0x[0-9a-f]+ m=\d+ sigcode=1 addr=0x0\n\ngoroutine \d+ [^\n]*:\nruntime\.\(\*spanQueue\)\.tryDrain\([^\n]*\n\truntime/mgcmark_greenteagc\.go:\d+ [^\n]*\nruntime\.\(\*spanQueue\)\.drain\(`)
 
 // memStopKind names how a Go child stopped at its limit, "" for neither way.
@@ -383,6 +391,61 @@ func TestMemLimitStop(t *testing.T) {
 				t.Fatal("accepted")
 			}
 		})
+	}
+}
+
+// newSpanSPMCUnchecked reports whether a runtime/mgcmark_greenteagc.go's
+// newSpanSPMC stores sysAlloc's result in r.ring with no check between
+// (the Go 1.27.3 bug gcSpanQueueFault describes).
+func newSpanSPMCUnchecked(src string) (bool, error) {
+	return true, nil
+}
+
+// TestNewSpanSPMCUnchecked: the source check, on invented excerpts shaped
+// as Go 1.27.3's newSpanSPMC and as a fixed one.
+func TestNewSpanSPMCUnchecked(t *testing.T) {
+	const head = "func newSpanSPMC(cap uint32) *spanSPMC {\n\tlock(&work.spanSPMCs.lock)\n\tr.cap = cap\n"
+	cases := []struct {
+		name, src string
+		bug, err  bool
+	}{
+		{"Go 1.27.3", head + "\tring := sysAlloc(uintptr(cap)*unsafe.Sizeof(objptr(0)), &memstats.gcMiscSys, \"GC span queue\")\n\tatomic.StorepNoWB(unsafe.Pointer(&r.ring), ring)\n\treturn r\n}\n", true, false},
+		{"a nil check", head + "\tring := sysAlloc(uintptr(cap)*unsafe.Sizeof(objptr(0)), &memstats.gcMiscSys, \"GC span queue\")\n\tif ring == nil {\n\t\tthrow(\"out of memory\")\n\t}\n\tatomic.StorepNoWB(unsafe.Pointer(&r.ring), ring)\n\treturn r\n}\n", false, false},
+		{"another allocator", head + "\tring := persistentalloc(uintptr(cap)*unsafe.Sizeof(objptr(0)), 0, &memstats.gcMiscSys)\n\tatomic.StorepNoWB(unsafe.Pointer(&r.ring), ring)\n\treturn r\n}\n", false, false},
+		{"no newSpanSPMC", "func other() {\n}\n", false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bug, err := newSpanSPMCUnchecked(c.src)
+			if (err != nil) != c.err || (err == nil && bug != c.bug) {
+				t.Fatalf("bug %v err %v, want bug %v err %v", bug, err, c.bug, c.err)
+			}
+		})
+	}
+}
+
+// TestGCSpanQueueBugInRuntime: the Go runtime these tests are built with
+// still has the bug memLimitStop accepts the fault of; when it does not,
+// remove that acceptance (see gcSpanQueueFault).
+func TestGCSpanQueueBugInRuntime(t *testing.T) {
+	out, err := exec.Command("go", "env", "GOROOT", "GOVERSION").Output()
+	if err != nil {
+		t.Fatalf("go env: %v", err)
+	}
+	f := strings.Fields(string(out))
+	if len(f) != 2 || f[1] != runtime.Version() {
+		t.Fatalf("go env GOROOT GOVERSION %q, want this test's %s", out, runtime.Version())
+	}
+	src, err := os.ReadFile(filepath.Join(f[0], "src", "runtime", "mgcmark_greenteagc.go")) //nolint:gosec // G304: the toolchain's own runtime source
+	if err != nil {
+		t.Fatalf("the runtime's source: %v", err)
+	}
+	bug, err := newSpanSPMCUnchecked(string(src))
+	if err != nil {
+		t.Fatalf("%s: %v; check by hand whether Go still has the bug gcSpanQueueFault accepts (POST-RELEASE N-37)", runtime.Version(), err)
+	}
+	if !bug {
+		t.Fatalf("%s's newSpanSPMC checks its allocation: remove the GC span-queue fault's acceptance and POLICY §4a's sentence on it, and close POST-RELEASE N-37 (see gcSpanQueueFault)", runtime.Version())
 	}
 }
 
