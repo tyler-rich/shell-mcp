@@ -298,8 +298,12 @@ jobs:
       # The workflows themselves (G2): expressions, contexts, job and step
       # keys, runner labels (.github/actionlint.yaml). Built from its module at
       # the pinned version and verified by go.sum and the Go checksum database.
+      # -shellcheck= turns off its shellcheck pass: the runner image's
+      # unpinned shellcheck would otherwise run here and not in ci-local, whose
+      # Go image has none. shellcheck comes as a pinned tool of its own in a
+      # follow-up (ARCHIVE §14, 2026-11-03).
       - name: actionlint
-        run: go run "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}"
+        run: go run "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_VERSION}" -shellcheck=
       # The e2e-host shards: lists from the manifest, and the coverage check
       # refusing every incomplete, failed or overlapping set of results.
       - name: e2e shards self-test

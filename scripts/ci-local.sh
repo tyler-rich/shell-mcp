@@ -309,8 +309,9 @@ lane_go() {
 
 lane_network() {
 	lane=network
-	# The workflows (G2), as the deps-current job runs it (.github/actionlint.yaml).
-	full step "actionlint" "" in_go go run "github.com/rhysd/actionlint/cmd/actionlint@$actionlint_version"
+	# The workflows (G2), exactly as the deps-current job runs it
+	# (.github/actionlint.yaml; -shellcheck=: no shellcheck pass, as in CI).
+	full step "actionlint" "" in_go go run "github.com/rhysd/actionlint/cmd/actionlint@$actionlint_version" -shellcheck=
 	step "doc links and section references" "" in_go go run ./scripts/doccheck
 	full step "release scripts self-test" "" in_go bash scripts/release/release_test.sh
 	full step "verify-release self-test" "" in_go bash scripts/verify-release_test.sh
