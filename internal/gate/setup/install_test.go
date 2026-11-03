@@ -296,7 +296,7 @@ func TestInstallFresh(t *testing.T) {
 	if !reflect.DeepEqual(h.scanned, [][]uint32{{60123, 60123}}) {
 		t.Fatalf("owner scan for %v", h.scanned)
 	}
-	if !strings.Contains(r.out, "SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:") || !strings.Contains(r.out, "keep this session open") {
+	if !strings.Contains(r.out, "SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:") || !strings.Contains(r.out, "keep your own session") {
 		t.Fatalf("output:\n%s", r.out)
 	}
 	audit := strings.Join(r.audit, "\n")
@@ -843,5 +843,21 @@ func TestInstallCredentialUnsupported(t *testing.T) {
 	}
 	if !reflect.DeepEqual(h.Snapshot(), r.before) || slices.ContainsFunc(h.order, func(o string) bool { return strings.HasPrefix(o, "groupadd") || strings.HasPrefix(o, "write") }) {
 		t.Fatalf("a refused run changed something: %v", h.order)
+	}
+}
+
+// TestInstallSessionNoteNamesWhoseLogin: the closing note says whose
+// session to keep and whose login to try: the operator's own, because the
+// sshd reload applies to every account, not only the service account.
+func TestInstallSessionNoteNamesWhoseLogin(t *testing.T) {
+	h, _ := newHost(t)
+	r := install(t, h)
+	if r.code != 0 {
+		t.Fatalf("exit %d:\n%s", r.code, r.out)
+	}
+	for _, want := range []string{"keep your own session to this host open", "a second SSH login of your own", "every account"} {
+		if !strings.Contains(r.out, want) {
+			t.Errorf("output lacks %q:\n%s", want, r.out)
+		}
 	}
 }

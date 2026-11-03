@@ -98,7 +98,7 @@ trap 'echo "ci-local: interrupted" >&2; stop_lanes; exit 130' INT TERM
 # --- Lanes, their users and caches ---------------------------------------------
 # The steps run in three lanes: go (vet, lint, the tests, the builds),
 # network (the self-tests and checks that mostly wait on the network) and
-# containers (exposure, setup-check, caddy-check). Two groups run at once:
+# containers (exposure, setup-check, caddy-check, nginx-check). Two groups run at once:
 # go and then network, beside containers. (All three at once showed a
 # failure of TestExecMemoryLimit on the first runs, so the go lane's tests
 # share the machine only with the containers lane: ARCHIVE §14.)
@@ -108,7 +108,7 @@ trap 'echo "ci-local: interrupted" >&2; stop_lanes; exit 130' INT TERM
 # counts every task of a uid on the kernel, and the gate gives its
 # children a limit of a few tasks, so a lane's processes must not share a
 # uid with the go lane's tests; nor may any lane be 65532, the uid the
-# server image and caddy-check run as in the containers lane (ARCHIVE §14).
+# server image, caddy-check and nginx-check run as in the containers lane (ARCHIVE §14).
 # On Windows Docker Desktop's bind mounts are readable by any uid. On Linux
 # every lane runs as the invoking user (so the bind-mounted checkout is
 # readable), and so one lane at a time; CI_LOCAL_FIXED_UIDS=1 gives the
@@ -347,6 +347,7 @@ lane_containers() {
 	# handoff §4.G). Real containers, so the self-test (a fake docker) leaves it out.
 	if [[ -z "${CI_LOCAL_UNDER_TEST:-}" ]]; then
 		full step "caddy-check (deploy/caddy)" "" bash scripts/caddy-check/run.sh
+		full step "nginx-check (deploy/caddy/nginx.conf)" "" bash scripts/nginx-check/run.sh
 	fi
 	lane_end
 }

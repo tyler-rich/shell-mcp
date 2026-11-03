@@ -180,3 +180,36 @@ func TestUnknownSubcommand(t *testing.T) {
 		t.Fatalf("unknown subcommand exit %d, want 2", code)
 	}
 }
+
+// TestHelpExitsZero: --help (and -h) on every subcommand prints its usage on
+// stdout and exits 0; a missing required flag is a usage error, exit 2, on
+// stderr.
+func TestHelpExitsZero(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"serve", "--help"}, "usage: shell-mcp serve"},
+		{[]string{"check", "--help"}, "usage: shell-mcp check"},
+		{[]string{"tools", "-h"}, "usage: shell-mcp tools"},
+		{[]string{"doctor", "--help"}, "usage: shell-mcp doctor"},
+		{[]string{"approver", "add", "--help"}, "usage: shell-mcp approver"},
+		{[]string{"approver", "remove", "--help"}, "usage: shell-mcp approver"},
+		{[]string{"approver", "list", "-h"}, "usage: shell-mcp approver"},
+		{[]string{"init", "--help"}, "usage: shell-mcp init"},
+		{[]string{"init", "compose", "--help"}, "usage: shell-mcp init compose"},
+	} {
+		var out, errb bytes.Buffer
+		code := run(context.Background(), strings.NewReader(""), c.args, lookup(nil), &out, &errb)
+		if code != 0 || !strings.Contains(out.String(), c.want) || errb.Len() != 0 {
+			t.Errorf("%v: exit %d, stdout %q, stderr %q; want 0 and %q on stdout", c.args, code, out.String(), errb.String(), c.want)
+		}
+	}
+	for _, args := range [][]string{{"init"}, {"init", "compose"}, {"approver", "add"}, {"approver", "add", "--name", "alice"}} {
+		var out, errb bytes.Buffer
+		code := run(context.Background(), strings.NewReader(""), args, lookup(nil), &out, &errb)
+		if code != 2 || out.Len() != 0 || !strings.Contains(errb.String(), "usage:") {
+			t.Errorf("%v: exit %d, stdout %q, stderr %q; want 2 and the usage on stderr", args, code, out.String(), errb.String())
+		}
+	}
+}

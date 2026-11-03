@@ -247,7 +247,8 @@ func PlanRules(mode policy.LandlockMode, rules *Rules, abi int) (Report, error) 
 		r.UnixSocketControl = "file permissions and the helper's peer-UID check (kernel ABI below 9)"
 	}
 	if mode == policy.LandlockRequired && eff < RequiredMinABI {
-		return r, fmt.Errorf("%w: kernel Landlock ABI %d, policy needs %d (set sandbox.landlock: best-effort to run with reduced enforcement)",
+		return r, fmt.Errorf("%w: kernel Landlock ABI %d, policy needs %d; upgrade the kernel first (Linux 6.7 or later, with landlock among the enabled LSMs). "+
+			"sandbox.landlock: best-effort weakens the sandbox (POLICY §4a) and is only ever the deployer's explicit choice",
 			ErrUnavailable, abi, RequiredMinABI)
 	}
 	return r, nil

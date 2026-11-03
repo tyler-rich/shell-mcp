@@ -89,10 +89,54 @@ if grep -v '^[[:space:]]*#' "$caddyfile" | grep -q 'trusted_proxies'; then
 else
 	ok "no trusted_proxies: Caddy replaces a client's X-Forwarded-For with the address it saw"
 fi
+# --- The LAN/VPN ranges: explicit, and none that holds a Docker network -------------
+# A tunnel's connector (Cloudflare Tunnel, ngrok, Tailscale Funnel, …) in a
+# container connects from a Docker network's address, so a matcher that
+# admits such a network (private_ranges, 172.16.0.0/12, the compose's own
+# subnet) admits whatever the tunnel carries.
+subnet="$(sed -n 's/^ *- subnet: *\([0-9.\/]*\).*/\1/p' "$compose" | head -n1)"
+gateway="${subnet%.*/*}.1"
+ip4() { # ip4 <a.b.c.d>: the address as a number
+	local IFS=. a b c d
+	read -r a b c d <<<"$1"
+	echo $(((a << 24) | (b << 16) | (c << 8) | d))
+}
+holds() { # holds <cidr> <address>: the prefix holds the address
+	local net="${1%/*}" len="${1#*/}" mask
+	[[ "$1" == */* ]] || len=32
+	mask=$(((0xffffffff << (32 - len)) & 0xffffffff))
+	(($(($(ip4 "$net") & mask)) == $(($(ip4 "$2") & mask))))
+}
+ranges() { # ranges <Caddyfile>: "bad …" for each matcher range outside the rule
+	local r b
+	while read -r r; do
+		if [[ ! "$r" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]]; then
+			echo "bad remote_ip $r is not an explicit IPv4 range"
+			continue
+		fi
+		for b in "$gateway" "$server" "$proxy" 172.17.0.1 172.18.0.1 10.0.0.1 192.168.0.1; do
+			if holds "$r" "$b"; then
+				echo "bad remote_ip $r holds $b (a Docker network or the compose's own subnet)"
+				break
+			fi
+		done
+	done < <(grep -v '^[[:space:]]*#' "$1" | sed -n 's/^[[:space:]]*@private[[:space:]]\{1,\}remote_ip[[:space:]]\{1,\}//p' | tr -s ' \t' '\n\n')
+}
+out="$(ranges "$caddyfile")"
+[[ -z "$out" ]] && ok "the @private ranges are explicit and hold no Docker network" || bad "${out//$'\n'/; }"
+for neg in "private_ranges" "172.16.0.0/12" "$subnet"; do
+	f="$(mktemp)"
+	sed "0,/@private remote_ip 192.0.2.0\/24/s//@private remote_ip ${neg//\//\\/}/" "$caddyfile" >"$f"
+	[[ -n "$(ranges "$f")" ]] && ok "refused: remote_ip $neg" || bad "not refused: remote_ip $neg"
+	rm -f "$f"
+done
+grep -B3 '^[[:space:]]*@private' "$caddyfile" | grep -q 'tunnel' && ok "$caddyfile comments on tunnels beside the matcher" ||
+	bad "$caddyfile has no comment on tunnels beside the @private matcher"
+
 for a in "$proxy" "$server"; do
 	grep -qF -- "\`$a\`" "$readme" && ok "$readme names $a, as the compose does" || bad "$readme does not name $a (the compose's address)"
 done
-for want in "SHELL_MCP_TRUSTED_PROXIES" "gateway" "X-Forwarded-For" "restart" "authentication failed"; do
+for want in "SHELL_MCP_TRUSTED_PROXIES" "gateway" "X-Forwarded-For" "restart" "authentication failed" "tunnel" "installed on the host" "nginx.conf"; do
 	grep -qF -- "$want" "$readme" && ok "$readme covers $want" || bad "$readme does not cover $want"
 done
 

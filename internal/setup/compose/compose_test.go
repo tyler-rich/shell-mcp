@@ -72,6 +72,7 @@ var goldenCases = []goldenCase{
 	{"secrets-approvals.golden.yml", []string{"--image", image3, "--host-key", pin1, "--host-key", pin2, "--target-name", "target-a",
 		"--target-host", "target-a.example.test", "--mcp-host", "mcp.example.test", "--subnet", "192.0.2.0/24", "--server-addr", "192.0.2.10",
 		"--proxy-addr", "192.0.2.5", "--profile", "operator", "--approve-host", "approve.example.test", "--form", "secrets"}},
+	{"secrets-operator.golden.yml", append(base(), "--profile", "operator")},
 	{"bind.golden.yml", []string{"--form", "bind", "--dir", "/srv/shell-mcp/secrets", "--image", "ghcr.io/tyler-rich/shell-mcp@sha256:" + digest,
 		"--host-key", pin1, "--target-name", "app-host", "--target-host", "192.0.2.20", "--target-user", "svc-shell", "--mcp-host", "mcp.example.test",
 		"--subnet", "198.51.100.0/24", "--server-addr", "198.51.100.10", "--proxy-addr", "198.51.100.5"}},
@@ -395,6 +396,76 @@ func TestNotes(t *testing.T) {
 	}
 	if notes, err := v.Check(); err != nil || slices.ContainsFunc(notes, func(n string) bool { return strings.Contains(n, "approval") }) {
 		t.Errorf("read-only: notes %q, err %v", notes, err)
+	}
+}
+
+// approve are base()'s flags with the approval page.
+func approve(profile string) []string {
+	return append(base(), "--profile", profile, "--approve-host", "approve.example.test")
+}
+
+func checkNotes(t *testing.T, args []string) []string {
+	t.Helper()
+	v, err := compose.ParseFlags(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes, err := v.Check()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return notes
+}
+
+// TestApprovalTiers: with --profile operator and --approve-host the printed
+// compose sets SHELL_MCP_APPROVAL_TIERS to operator,destructive, so operator
+// tools need an approver's code; every other combination leaves the server's
+// default (destructive) and says what it means.
+func TestApprovalTiers(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		args []string
+		want string // the variable's value, "" for absent
+	}{
+		{"operator with --approve-host", approve("operator"), "operator,destructive"},
+		{"operator without --approve-host", append(base(), "--profile", "operator"), ""},
+		{"admin with --approve-host", approve("admin"), ""},
+		{"read-only with --approve-host", approve("read-only"), ""},
+		{"read-only", base(), ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := env(t, parse(t, render(t, c.args)))["SHELL_MCP_APPROVAL_TIERS"]
+			if c.want == "" && ok {
+				t.Fatalf("SHELL_MCP_APPROVAL_TIERS set to %q", got)
+			}
+			if got != c.want {
+				t.Fatalf("SHELL_MCP_APPROVAL_TIERS %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestApprovalNotes: the NOTE texts for operator without the approval page
+// and for admin with it say exactly what each needs.
+func TestApprovalNotes(t *testing.T) {
+	const operatorNote = "--profile operator without --approve-host: operator tools then run without approval " +
+		"under the default SHELL_MCP_APPROVAL_TIERS (destructive); add --approve-host to require an approver's code " +
+		"for them, which also sets SHELL_MCP_APPROVAL_TIERS: operator,destructive"
+	const adminNote = "--profile admin: destructive and privileged operations need an approver's code; operator tools " +
+		"run without approval under the default SHELL_MCP_APPROVAL_TIERS (destructive): add " +
+		"SHELL_MCP_APPROVAL_TIERS: operator,destructive to the environment by hand if they should too"
+	if notes := checkNotes(t, append(base(), "--profile", "operator")); !slices.Contains(notes, operatorNote) {
+		t.Errorf("operator without --approve-host: notes %q, want %q", notes, operatorNote)
+	}
+	if notes := checkNotes(t, approve("admin")); !slices.Contains(notes, adminNote) {
+		t.Errorf("admin with --approve-host: notes %q, want %q", notes, adminNote)
+	}
+	for _, args := range [][]string{approve("operator"), approve("read-only")} {
+		for _, n := range checkNotes(t, args) {
+			if strings.Contains(n, "SHELL_MCP_APPROVAL_TIERS") {
+				t.Errorf("%v: unexpected note %q", args, n)
+			}
+		}
 	}
 }
 

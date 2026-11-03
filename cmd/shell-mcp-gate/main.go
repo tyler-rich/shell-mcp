@@ -155,12 +155,17 @@ func checkPolicy(args []string, stdout, stderr io.Writer) int {
 // home directory in the protected set. Only tests pass a trust set other
 // than policy.RootTrust().
 func polkitWith(args []string, stdout, stderr io.Writer, trust policy.Trust) int {
+	const usage = "usage: shell-mcp-gate polkit --policy <file> --user <name>\n"
+	if helpRequested(args) {
+		_, _ = io.WriteString(stdout, usage)
+		return 0
+	}
 	fs := flag.NewFlagSet("polkit", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	policyPath := fs.String("policy", "", "")
 	userName := fs.String("user", "", "")
 	if err := fs.Parse(args); err != nil || *policyPath == "" || *userName == "" || fs.NArg() != 0 {
-		_, _ = io.WriteString(stderr, "usage: shell-mcp-gate polkit --policy <file> --user <name>\n")
+		_, _ = io.WriteString(stderr, usage)
 		return 2
 	}
 	fail := func(format string, a ...any) int {
@@ -216,11 +221,16 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust
 // checkPolicyWithParam is checkPolicyWith reading the kernel's
 // ignore_rlimit_data parameter from param.
 func checkPolicyWithParam(args []string, stdout, stderr io.Writer, trust policy.Trust, home, param string) int {
+	const usage = "usage: shell-mcp-gate check-policy --policy <file>\n"
+	if helpRequested(args) {
+		_, _ = io.WriteString(stdout, usage)
+		return 0
+	}
 	fs := flag.NewFlagSet("check-policy", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	policyPath := fs.String("policy", "", "")
 	if err := fs.Parse(args); err != nil || *policyPath == "" || fs.NArg() != 0 {
-		_, _ = io.WriteString(stderr, "usage: shell-mcp-gate check-policy --policy <file>\n")
+		_, _ = io.WriteString(stderr, usage)
 		return 2
 	}
 	pr := func(format string, a ...any) { _, _ = fmt.Fprintf(stdout, format+"\n", a...) }
@@ -431,6 +441,10 @@ func rlimitDataWarning(param string) string {
 // newHost returns; production passes setup.NewHost, and no flag or
 // variable chooses another.
 func installWith(args []string, stdout, stderr io.Writer, newHost func() (setup.Host, error)) int {
+	if helpRequested(args) {
+		_, _ = io.WriteString(stdout, setup.Usage)
+		return 0
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		cwd = "/"
@@ -452,8 +466,13 @@ func installWith(args []string, stdout, stderr io.Writer, newHost func() (setup.
 // hostKey is shell-mcp-gate host-key (TARGET-SETUP §12.2): this host's pin
 // lines, from its own host-key files, as any user.
 func hostKey(args []string, stdout, stderr io.Writer) int {
+	const usage = "usage: shell-mcp-gate host-key\n"
+	if helpRequested(args) {
+		_, _ = io.WriteString(stdout, usage)
+		return 0
+	}
 	if len(args) != 0 {
-		_, _ = io.WriteString(stderr, "usage: shell-mcp-gate host-key\n")
+		_, _ = io.WriteString(stderr, usage)
 		return 2
 	}
 	h, err := system.NewSystem()
@@ -468,6 +487,10 @@ func hostKey(args []string, stdout, stderr io.Writer) int {
 // returns; production passes system.NewSystem, and no flag or variable
 // chooses another.
 func policyWith(args []string, stdout, stderr io.Writer, newHost func() (setupx.Host, error)) int {
+	if helpRequested(args) {
+		_, _ = io.WriteString(stdout, policyUsage)
+		return 0
+	}
 	if len(args) == 0 || args[0] != "new" {
 		_, _ = io.WriteString(stderr, policyUsage)
 		return 2
@@ -495,3 +518,10 @@ func policyWith(args []string, stdout, stderr io.Writer, newHost func() (setupx.
 }
 
 const policyUsage = "usage: shell-mcp-gate policy new --answers <file> --out <file>|- [--dry-run]\n"
+
+// helpRequested reports whether a subcommand's args ask for its usage,
+// which then goes to stdout with exit 0; a usage error goes to stderr with
+// exit 2.
+func helpRequested(args []string) bool {
+	return slices.ContainsFunc(args, func(a string) bool { return a == "-h" || a == "-help" || a == "--help" })
+}
