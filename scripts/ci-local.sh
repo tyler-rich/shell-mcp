@@ -98,7 +98,7 @@ trap 'echo "ci-local: interrupted" >&2; stop_lanes; exit 130' INT TERM
 # --- Lanes, their users and caches ---------------------------------------------
 # The steps run in three lanes: go (vet, lint, the tests, the builds),
 # network (the self-tests and checks that mostly wait on the network) and
-# containers (exposure, setup-check, caddy-check, nginx-check). Two groups run at once:
+# containers (exposure, setup-check, caddy-check, nginx-check, proxy-live-check). Two groups run at once:
 # go and then network, beside containers. (All three at once showed a
 # failure of TestExecMemoryLimit on the first runs, so the go lane's tests
 # share the machine only with the containers lane: ARCHIVE §14.)
@@ -303,6 +303,13 @@ lane_go() {
 	full step "govulncheck" "" in_go go run "golang.org/x/vuln/cmd/govulncheck@$govulncheck_version" ./...
 	full step "build linux/amd64" "" cross_build amd64
 	full step "build linux/arm64" "" cross_build arm64
+	# README's quick start and CLIENTS §3.2: every subcommand and flag of a
+	# shell-mcp, shell-mcp-gate or shell-mcp-privd command is in that
+	# binary's --help (scripts/doccheck/commands.go), with the release build
+	# for this machine's architecture, so that it runs here.
+	full step "README and CLIENTS §3.2 commands against --help" "" in_go sh -c "set -e; mkdir -p /tmp/bin; for c in shell-mcp shell-mcp-gate shell-mcp-privd; do
+		CGO_ENABLED=0 go build -trimpath -ldflags '-s -w' -o /tmp/bin/\$c ./cmd/\$c; done
+		go run ./scripts/doccheck -commands /tmp/bin"
 	full step "release snapshot build (twice)" "" release_snapshot
 	lane_end
 }
@@ -348,6 +355,10 @@ lane_containers() {
 	if [[ -z "${CI_LOCAL_UNDER_TEST:-}" ]]; then
 		full step "caddy-check (deploy/caddy)" "" bash scripts/caddy-check/run.sh
 		full step "nginx-check (deploy/caddy/nginx.conf)" "" bash scripts/nginx-check/run.sh
+		# The two example proxies live in front of a server started from init
+		# compose's file, with clients on a separate network (the proxies'
+		# test-only images; non-root, no capabilities, no host mount).
+		full step "proxy-live-check (Caddy and nginx in front of the server)" "" bash scripts/proxy-live-check/run.sh
 	fi
 	lane_end
 }

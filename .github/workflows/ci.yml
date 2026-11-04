@@ -261,6 +261,14 @@ jobs:
               echo "built $c linux/$arch (CGO_ENABLED=0)"
             done
           done
+      # README's quick start and CLIENTS §3.2: every subcommand and flag of a
+      # shell-mcp, shell-mcp-gate or shell-mcp-privd command is in the --help
+      # of the binary just built (scripts/doccheck/commands.go).
+      - name: README and CLIENTS §3.2 commands against --help
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          for c in shell-mcp shell-mcp-gate shell-mcp-privd; do cp "/tmp/$c-amd64" "$RUNNER_TEMP/bin/$c"; done
+          go run ./scripts/doccheck -commands "$RUNNER_TEMP/bin"
 
   deps-current:
     name: deps-current
@@ -689,10 +697,32 @@ jobs:
       - name: nginx.conf drift, shape and nginx -t
         run: bash scripts/nginx-check/run.sh | tee -a "$GITHUB_STEP_SUMMARY"
 
+  proxy-live-check:
+    # deploy/caddy/Caddyfile and nginx.conf live, each in its static check's
+    # test-only image, in front of the server image built from this commit
+    # and started from init compose's printed file; clients on a separate
+    # internal network that reaches only the proxy. The token, the client
+    # address the server logs (forged X-Forwarded-For included), the
+    # approval page's Host rule, the allowed ranges and doctor's rows, with
+    # negative controls (scripts/proxy-live-check/run.sh). Containers are
+    # non-root where they can be, with no capabilities added, no host mount
+    # and every one labelled. No sudo.
+    name: proxy-live-check (Caddy and nginx in front of the server)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: the example proxies, live
+        run: bash scripts/proxy-live-check/run.sh | tee -a "$GITHUB_STEP_SUMMARY"
+
   ci:
     name: ci
     if: always()
-    needs: [go, go-checks, deps-current, gitleaks, image, e2e-host, e2e-host-coverage, exposure, setup-check, caddy-check]
+    needs: [go, go-checks, deps-current, gitleaks, image, e2e-host, e2e-host-coverage, exposure, setup-check, caddy-check, proxy-live-check]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
