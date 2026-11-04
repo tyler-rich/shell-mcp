@@ -5104,6 +5104,8 @@ Negative controls, part of every run, each shown caught:
 
 **Durations.** Locally (Docker Desktop, WSL2): proxy-live-check 156 s, of which about 100 s build the server image and make the secrets; each proxy's (a)-(f) and its controls about 20 s. The command check runs in seconds after the build. In CI, proxy-live-check is its own job beside setup-check (about 5 minutes), inside the critical path (an e2e-host shard, about 9 minutes).
 
+**CI's gitleaks** fired on the first push, a false positive: its `curl-auth-user` rule read the docker flag `-u 65532:65532` (the containers' uid:gid), a few lines after a `curl` in `scripts/proxy-live-check/run.sh`, as `curl -u user:password`. A later commit passes the user through an array (`nonroot`). The flagged line stays in the branch's first commit (no force-push: the maintainer's standing rule), so `.gitleaksignore` gains exactly its fingerprint, `9517d11c165c9af4cee9307ad27ad576b7400cf8:scripts/proxy-live-check/run.sh:curl-auth-user:374`, with a comment, as S8-1 did for its invented key; nothing broader. The PR's squash merge keeps the flagged line out of dev's history: dev gets only the final tree, where the array is used. gitleaks v8.30.1 passes on the branch's whole commit range with the entry.
+
 **Deferred.** None of this session's.
 
 **Versions (D-013):** Go 1.27.3, the newest stable with a published `golang:1.27.3-trixie` image; `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing. Direct modules: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6, x/crypto v0.58.0, x/sys v0.49.0. No new image (the proxies' images and the client are the pinned `caddy:2.11.7` and `nginx:1.30.6` of caddy-check and nginx-check). No module dependency added.
