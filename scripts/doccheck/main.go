@@ -11,6 +11,13 @@
 // else the document it is in. Code blocks and code spans are not checked,
 // nor the history (ARCHIVE, CHANGELOG, the handoffs), whose references are
 // to what the documents said then.
+//
+// With -commands <dir>, it checks instead that the quick start's commands
+// (README.md, and CLIENTS §3.2's recipe) use only subcommands and flags that
+// the binaries in <dir> (shell-mcp, shell-mcp-gate, shell-mcp-privd, built
+// for this machine) show in their --help (commands.go):
+//
+//	go run ./scripts/doccheck -commands /tmp/bin
 package main
 
 import (
@@ -45,6 +52,29 @@ var named = map[string]string{
 var unchecked = map[string]bool{"handoff": true}
 
 func main() {
+	if len(os.Args) > 1 {
+		if len(os.Args) != 3 || os.Args[1] != "-commands" || os.Args[2] == "" {
+			fmt.Fprintln(os.Stderr, "usage: doccheck [-commands <dir with shell-mcp, shell-mcp-gate, shell-mcp-privd>]")
+			os.Exit(2)
+		}
+		problems, checked, err := checkCommands(os.DirFS("."), runBinaries(os.Args[2]))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "doccheck:", err)
+			os.Exit(1)
+		}
+		for _, c := range checked {
+			fmt.Println("checked", strings.TrimSpace(c))
+		}
+		for _, p := range problems {
+			fmt.Println("FAIL", p)
+		}
+		if len(problems) > 0 {
+			fmt.Fprintf(os.Stderr, "doccheck: %d subcommand(s) or flag(s) in README.md's and CLIENTS §3.2's commands are not in the binaries' --help\n", len(problems))
+			os.Exit(1)
+		}
+		fmt.Printf("doccheck: %d commands of README.md's setup steps and CLIENTS §3.2 match the binaries' --help\n", len(checked))
+		return
+	}
 	problems, err := check(os.DirFS("."), docs)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "doccheck:", err)
