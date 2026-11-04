@@ -111,6 +111,10 @@ desktop=""
 [[ "$(docker info --format '{{.OperatingSystem}}' 2>/dev/null)" == "Docker Desktop" ]] && desktop=1
 
 hard=(--label "$label" --label "$part" --read-only --cap-drop ALL --security-opt no-new-privileges:true)
+# The proxies' and clients' user. An array, not -u inline: gitleaks reads a
+# uid:gid pair a few lines after the HTTP client's command as a user and
+# password given to it.
+nonroot=(--user 65532:65532)
 
 # --- The server image, init's secrets, the test certificates --------------------------
 docker build -q --label "$label" --label "$part" -t "$srv" -f Dockerfile . >/dev/null
@@ -207,7 +211,7 @@ docker network create --internal --label "$label" --label "$part" --subnet "$C.0
 client() { # client <ip> [extra docker args…]
 	local ip="$1"
 	shift
-	docker run -d "${hard[@]}" -u 65532:65532 --network "$cnet" --ip "$ip" -v "$tls:/ca:ro" "$@" --entrypoint sleep "$client_image" infinity
+	docker run -d "${hard[@]}" "${nonroot[@]}" --network "$cnet" --ip "$ip" -v "$tls:/ca:ro" "$@" --entrypoint sleep "$client_image" infinity
 }
 ca="$(client "$A" -v "$vol:/secrets:ro")"
 cb="$(client "$B")"
@@ -278,7 +282,7 @@ proxy() {
 		cp scripts/caddy-check/Dockerfile "$ctx/"
 		cp "$conf" "$ctx/Caddyfile"
 		docker build -q --label "$label" --label "$part" -t "$tag" "$(native "$ctx")" >/dev/null || return 1
-		pxy="$(docker run -d "${hard[@]}" -u 65532:65532 --network "$front" --ip "$S.5" \
+		pxy="$(docker run -d "${hard[@]}" "${nonroot[@]}" --network "$front" --ip "$S.5" \
 			--tmpfs /data:uid=65532,gid=65532 --tmpfs /config:uid=65532,gid=65532 -v "$tls:/etc/proxy-tls:ro" "$@" \
 			"$tag" caddy run --config /etc/caddy/Caddyfile --adapter caddyfile)"
 	else
@@ -286,7 +290,7 @@ proxy() {
 		cp scripts/nginx-check/Dockerfile scripts/nginx-check/nginx-test.conf "$ctx/"
 		cp "$conf" "$ctx/nginx.conf"
 		docker build -q --label "$label" --label "$part" -t "$tag" "$(native "$ctx")" >/dev/null || return 1
-		pxy="$(docker run -d "${hard[@]}" -u 65532:65532 --network "$front" --ip "$S.5" \
+		pxy="$(docker run -d "${hard[@]}" "${nonroot[@]}" --network "$front" --ip "$S.5" \
 			--tmpfs /tmp:uid=65532,gid=65532 -v "$tls:/etc/proxy-tls:ro" "$@" \
 			--entrypoint nginx "$tag" -g 'daemon off;' -c /etc/nginx/nginx-test.conf)"
 	fi
@@ -371,9 +375,9 @@ live() { # live <kind>: (a)-(f) through that proxy
 		head -n 12 <<<"$hdr" || true
 	fi
 	local own other
-	own="$(docker run --rm "${hard[@]}" -u 65532:65532 --network "container:$pxy" --entrypoint curl "$client_image" \
+	own="$(docker run --rm "${hard[@]}" "${nonroot[@]}" --network "container:$pxy" --entrypoint curl "$client_image" \
 		-s --max-time 10 -o /dev/null -w '%{http_code}' -H 'Host: approve.example.test' "http://$S.10:8081/" || true)"
-	other="$(docker run --rm "${hard[@]}" -u 65532:65532 --network "container:$pxy" --entrypoint curl "$client_image" \
+	other="$(docker run --rm "${hard[@]}" "${nonroot[@]}" --network "container:$pxy" --entrypoint curl "$client_image" \
 		-s --max-time 10 -o /dev/null -w '%{http_code}' -H 'Host: mcp.example.test' "http://$S.10:8081/" || true)"
 	[[ "$own" == 200 && "$other" == 421 ]] && ok "$k: (d) from the proxy's address the approval listener answers its own name 200 and refuses Host mcp.example.test with 421" ||
 		bad "$k: (d) from the proxy's address: its own name $own (want 200), another Host $other (want 421)"
