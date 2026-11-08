@@ -564,7 +564,7 @@ func TestOperatorToolRunCommand(t *testing.T) {
 		// comes from the operator tool's ceiling. The tool resolves the
 		// command first (its approval follows the command's tier), so the
 		// refusal comes from exec_preview and no exec is sent.
-		resp := gateExecAt(t, opsKey, protocol.TierDestructive, "probe-destructive", []string{"echo", "destructive"})
+		resp := gateExecAt(t, "svc-shell-std", opsKey, protocol.TierDestructive, "probe-destructive", []string{"echo", "destructive"})
 		if !resp.OK {
 			t.Fatalf("control: the gate refused the destructive command: %+v", resp.Error)
 		}
@@ -642,11 +642,12 @@ func TestOperatorToolsApprovalGuard(t *testing.T) {
 	conn.same(t)
 }
 
-// gateExecAt sends one exec request straight to the gate with key, at the
-// given ceiling.
-func gateExecAt(t *testing.T, key, ceiling, id string, args []string) *protocol.Response {
+// gateExecAt sends one exec request straight to the gate as user with key,
+// at the given ceiling. The key must be in user's keys file: the operator
+// key is svc-shell-std's, the forwarding key svc-shell's.
+func gateExecAt(t *testing.T, user, key, ceiling, id string, args []string) *protocol.Response {
 	t.Helper()
-	c := sshClient(t, []config.HostKey{hostPin(t, "ssh_host_ed25519_key.pub")}, clientKey(t, key))
+	c := sshClientAs(t, user, []config.HostKey{hostPin(t, "ssh_host_ed25519_key.pub")}, clientKey(t, key))
 	resp, err := gateclient.New(gateclient.Options{}).Call(t.Context(), c, protocol.OpExec, ceiling,
 		map[string]any{"command_id": id, "args": args}, 20*time.Second)
 	if err != nil {
