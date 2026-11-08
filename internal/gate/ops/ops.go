@@ -263,6 +263,23 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 	s.p = p
 	s.gate.PolicySHA256 = p.SHA256
 	s.gate.MaxTier = p.MaxTier.String()
+	// The shared-account rule (SECURITY §2): an account in the helper's
+	// socket group serves only policies that forward to the helper, since
+	// below Landlock ABI 9 nothing but the socket's permissions and the
+	// helper's peer-UID check governs a command's connect to it. Before
+	// the sandbox and before any byte of the request.
+	runDir := o.HelperRunDir
+	if runDir == "" {
+		runDir = install.HelperRunDir
+	}
+	if err := install.CheckSocketGroup(&install.SocketGroupEnv{Identity: o.Identity, RunDir: runDir, Forwarding: p.Privileged.Enabled}); err != nil {
+		msg := "gate installation is insecure"
+		var ie *install.Error
+		if errors.As(err, &ie) {
+			msg = ie.Wire
+		}
+		return Failure("", protocol.CodeInstallInsecure, msg)
+	}
 
 	// The gate itself never dumps core; children get their own limits.
 	_ = unix.Setrlimit(unix.RLIMIT_CORE, &unix.Rlimit{Cur: 0, Max: 0})

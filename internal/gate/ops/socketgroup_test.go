@@ -83,6 +83,7 @@ func TestSharedAccountServesWithForwarding(t *testing.T) {
 	f.ok("hello", m{}, nil)
 	// A policy with the section but forwarding off is refused.
 	f.writePolicy("operator", "privileged:\n  enabled: false\n")
+	f.sandboxCalls = 0
 	f.wantRefusedUnread("hello")
 }
 
