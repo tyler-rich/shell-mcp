@@ -3,7 +3,9 @@
 # Fails when
 #   - a module we build from is behind its newest stable release;
 #   - a direct requirement has a stable next major version (<path>/vN+1, or
-#     <path>/v2 for a v0/v1 module) — pre-release-only next majors are info;
+#     <path>/v2 for a v0/v1 module) — pre-release-only next majors are info,
+#     and so is a next major held back by a dated exception below until the
+#     exception expires;
 #   - a tool pinned in the workflows or scripts/ci-local.sh is older than its
 #     newest stable release, or the files that pin it disagree, or a pin is
 #     missing: golangci-lint and govulncheck (ci.yml, ci-local.sh and, for
@@ -75,6 +77,41 @@ fi
 # --- Next major versions -------------------------------------------------------
 # `go list -m -u` never crosses a major version, so query the module proxy for
 # the next major path of every direct requirement.
+#
+# Next-major exceptions: a direct requirement the maintainer decided to hold
+# below one stable next major. Each entry names exactly that requirement and
+# that next major path, the day it was granted, the last day it applies, and
+# why. From the day after its last day the next major fails again, with no
+# edit needed. Fields: requirement, next major path, granted, last day, why.
+next_major_exceptions=(
+	"go.yaml.in/yaml/v3|go.yaml.in/yaml/v4|2026-11-08|2026-12-08|v4.0.0 accepts YAML that v3 refuses at the policy boundary (docs/ARCHIVE.md, 2026-11-08; PR #91)"
+)
+date_re='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+today="$(date -u +%F)"
+if [[ ! "$today" =~ $date_re ]]; then
+	echo "deps-current: FAIL — cannot read today's date (got '$today')"
+	exit 1
+fi
+for e in "${next_major_exceptions[@]}"; do
+	IFS='|' read -r e_mod e_next e_granted e_until e_why <<<"$e"
+	if [[ -z "$e_mod" || -z "$e_next" || ! "$e_granted" =~ $date_re || ! "$e_until" =~ $date_re ||
+		"$e_granted" > "$e_until" || -z "$e_why" ]]; then
+		echo "deps-current: FAIL — malformed next-major exception: $e"
+		exit 1
+	fi
+done
+# exception_for MOD NEXT: the matching exception's "granted|last day|why", or
+# nothing.
+exception_for() {
+	local e e_mod e_next e_granted e_until e_why
+	for e in "${next_major_exceptions[@]}"; do
+		IFS='|' read -r e_mod e_next e_granted e_until e_why <<<"$e"
+		if [[ "$e_mod" == "$1" && "$e_next" == "$2" ]]; then
+			printf '%s|%s|%s\n' "$e_granted" "$e_until" "$e_why"
+			return
+		fi
+	done
+}
 direct="$(go mod edit -print | awk '
 	/^require \(/ { inblock = 1; next }
 	inblock && /^\)/ { inblock = 0; next }
@@ -96,7 +133,16 @@ while read -r mod; do
 	versions="$(go list -m -versions "$next" 2>/dev/null | awk '{ $1 = ""; print }' | tr ' ' '\n' | grep -v '^$' || true)"
 	newest_stable="$(grep -E "$stable_re" <<<"$versions" | sort -V | tail -n1 || true)"
 	newest_any="$(sort -V <<<"$versions" | tail -n1 || true)"
-	if [[ -n "$newest_stable" ]]; then
+	exception="$(exception_for "$mod" "$next")"
+	if [[ -n "$newest_stable" && -n "$exception" ]]; then
+		IFS='|' read -r granted until why <<<"$exception"
+		if [[ "$today" > "$until" ]]; then
+			echo "deps-current: FAIL — $mod has a stable next major: $next $newest_stable (the exception granted $granted applied through $until; today is $today)"
+			fail=1
+		else
+			echo "deps-current: info — $mod is held below its stable next major $next $newest_stable by the exception granted $granted, through $until: $why"
+		fi
+	elif [[ -n "$newest_stable" ]]; then
 		echo "deps-current: FAIL — $mod has a stable next major: $next $newest_stable"
 		fail=1
 	elif [[ -n "$newest_any" ]]; then

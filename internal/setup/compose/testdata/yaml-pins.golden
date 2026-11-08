@@ -1,0 +1,225 @@
+# The YAML layer's results for the yamltest corpus, recorded with
+# go.yaml.in/yaml/v3. Regenerate with -update only when the YAML module is
+# meant to change, and review every changed line (docs/ARCHIVE.md, 2026-11-08).
+
+== "a"
+OK "a"
+
+== "svc-shell"
+OK "svc-shell"
+
+== "/srv/app"
+OK "/srv/app"
+
+== "**/*.key"
+OK "\"**/*.key\""
+
+== "{path:read}"
+OK "\"{path:read}\""
+
+== "SOURCE,FSTYPE"
+OK "SOURCE,FSTYPE"
+
+== "60123"
+OK "\"60123\""
+
+== "00000000"
+OK "\"00000000\""
+
+== "true"
+OK "\"true\""
+
+== "True"
+OK "\"True\""
+
+== "yes"
+OK "yes"
+
+== "on"
+OK "on"
+
+== "null"
+OK "\"null\""
+
+== "Null"
+OK "\"Null\""
+
+== "~"
+OK "\"~\""
+
+== ""
+OK "\"\""
+
+== "-0"
+OK "\"-0\""
+
+== "-0.0"
+OK "\"-0.0\""
+
+== "+1"
+OK "\"+1\""
+
+== "+18446744073709551615"
+OK "\"+18446744073709551615\""
+
+== "0x1F"
+OK "\"0x1F\""
+
+== "0o17"
+OK "\"0o17\""
+
+== "017"
+OK "\"017\""
+
+== "0b101"
+OK "\"0b101\""
+
+== "1_000"
+OK "\"1_000\""
+
+== "1e3"
+OK "\"1e3\""
+
+== ".inf"
+OK "\".inf\""
+
+== ".nan"
+OK "\".nan\""
+
+== "2001-12-14"
+OK "\"2001-12-14\""
+
+== "1:20"
+OK "1:20"
+
+== "<<"
+OK "\u003c\u003c"
+
+== "!"
+OK "\"!\""
+
+== "! a"
+OK "\"! a\""
+
+== "!!str"
+OK "\"!!str\""
+
+== "&a"
+OK "\"\u0026a\""
+
+== "*a"
+OK "\"*a\""
+
+== "a:"
+OK "\"a:\""
+
+== ":a"
+OK ":a"
+
+== "a: b"
+OK "\"a: b\""
+
+== "a:b"
+OK "a:b"
+
+== "#a"
+OK "\"#a\""
+
+== "a #b"
+OK "\"a #b\""
+
+== "a#b"
+OK "a#b"
+
+== "- a"
+OK "\"- a\""
+
+== "-"
+OK "\"-\""
+
+== "?"
+OK "\"?\""
+
+== "? a"
+OK "\"? a\""
+
+== "[a]"
+OK "\"[a]\""
+
+== "{a}"
+OK "\"{a}\""
+
+== "a,b"
+OK "a,b"
+
+== "a]"
+OK "a]"
+
+== "a}"
+OK "a}"
+
+== "'a'"
+OK "\"'a'\""
+
+== "\"a\""
+OK "\"\\\"a\\\"\""
+
+== "|"
+OK "\"|\""
+
+== ">"
+OK "\"\u003e\""
+
+== "%a"
+OK "\"%a\""
+
+== "@a"
+OK "\"@a\""
+
+== "`a"
+OK "\"`a\""
+
+== " a"
+OK "\" a\""
+
+== "a "
+OK "\"a \""
+
+== "a\tb"
+OK "a\tb"
+
+== "a\\b"
+OK "a\\b"
+
+== "..."
+OK "..."
+
+== "---"
+OK "---"
+
+== "é"
+OK "é"
+
+== "a\u2028b"
+OK "\"a\\u2028b\""
+
+== "a\u2029b"
+OK "\"a\\u2029b\""
+
+== "a\u0085b"
+OK "\"a\\u0085b\""
+
+== "a\x7fb"
+OK "\"a\\x7fb\""
+
+== "a\u0080b"
+OK "\"a\\u0080b\""
+
+== "a\u009fb"
+OK "\"a\\u009fb\""
+
+== "\ufeffa"
+OK "﻿a"
+
+== "a\x01b"
+OK "\"a\\x01b\""
