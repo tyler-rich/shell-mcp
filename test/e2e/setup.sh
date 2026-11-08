@@ -16,12 +16,16 @@ fi
 # writes under /etc, /usr/local and /var/lib.
 #
 # Everything here is invented test data. Test identities use the documented
-# test id range 4200001-4200009, above distribution, systemd dynamic-user
+# test id range 4200001-4200019, above distribution, systemd dynamic-user
 # and common container id ranges:
-#   svc-shell       4200001  the gate's service account (the helper's client_uid)
+#   svc-shell       4200001  the gate's service account for the policies that
+#                            forward to the helper (the helper's client_uid)
 #   svc-shell-priv  4200002  the helper's socket group
 #   svc-other       4200003  a second account in the socket group (the wrong peer)
 #   example-app     4200004  an owner the helper may chown to
+#   svc-shell-std   4200010  the second service account, for the policies
+#                            without privileged forwarding (not in the
+#                            socket group: TARGET-SETUP §4)
 #
 #   E2E_BIN       directory holding the built binaries and this script's inputs
 #   E2E_LANDLOCK  required (default) or best-effort, for both policies
@@ -49,8 +53,11 @@ getent group svc-other >/dev/null || groupadd -g 4200003 svc-other
 getent passwd svc-other >/dev/null || useradd -u 4200003 -g svc-other -G svc-shell-priv -M -d /home/svc-other -s /bin/sh svc-other
 getent group example-app >/dev/null || groupadd -g 4200004 example-app
 getent passwd example-app >/dev/null || useradd -u 4200004 -g example-app -M -d /nonexistent -s /usr/sbin/nologin example-app
+getent group svc-shell-std >/dev/null || groupadd -g 4200010 svc-shell-std
+getent passwd svc-shell-std >/dev/null || useradd -u 4200010 -g svc-shell-std -G systemd-journal -M -d /home/svc-shell-std -s /bin/sh svc-shell-std
 passwd -l svc-shell >/dev/null
 passwd -l svc-other >/dev/null
+passwd -l svc-shell-std >/dev/null
 
 # --- Binaries (root:root 0755) ----------------------------------------------
 # The gate and the helper refuse binaries whose directories are group- or
@@ -425,6 +432,25 @@ commands:
     templates: [["--format=%U", "{path:read}"]]
 EOF
 chmod 0644 /etc/shell-mcp/gate-multicall.yaml
+
+# The shared-account policy (shared_account_test.go): no privileged
+# forwarding, and one read command, the test probe asking a helper socket
+# for priv_policy (a read op that changes nothing). Served by svc-shell (in
+# the socket group) the gate refuses it; served by svc-shell-std the probe's
+# connect is refused by the socket's permissions.
+cat >/etc/shell-mcp/gate-shared.yaml <<EOF
+version: 1
+max_tier: read
+sandbox:
+  landlock: $landlock
+commands:
+  - id: probe-priv-ask
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["priv-ask", "{enum:/run/shell-mcp/privd.sock|/run/shell-mcp/privd-broad.sock}"]]
+EOF
+chmod 0644 /etc/shell-mcp/gate-shared.yaml
+/usr/local/bin/shell-mcp-gate check-policy --policy /etc/shell-mcp/gate-shared.yaml >/dev/null
 
 # Static read-tool fixtures: a tree with a directory symlink whose target is
 # absolute (os.Root refuses to follow it), a file on the built-in deny list

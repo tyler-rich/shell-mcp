@@ -52,6 +52,9 @@ const (
 	socketGroup = 4200002
 	svcOther    = 4200003
 	exampleApp  = 4200004
+	// svcStd is the second service account, for the policies without
+	// privileged forwarding: not in the socket group (TARGET-SETUP §4).
+	svcStd = 4200010
 )
 
 // bin is the directory with the test binaries and policy variants.
@@ -172,6 +175,8 @@ func cred(t *testing.T, uid uint32) *syscall.Credential {
 		return &syscall.Credential{Uid: svcShell, Gid: svcShell, Groups: []uint32{socketGroup, gid(t, "systemd-journal")}}
 	case svcOther: // in the socket group, not in systemd-journal
 		return &syscall.Credential{Uid: svcOther, Gid: svcOther, Groups: []uint32{socketGroup}}
+	case svcStd: // the second account: its own group and systemd-journal, never the socket group
+		return &syscall.Credential{Uid: svcStd, Gid: svcStd, Groups: []uint32{gid(t, "systemd-journal")}}
 	}
 	return &syscall.Credential{Uid: uid, Gid: uid}
 }

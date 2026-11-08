@@ -212,6 +212,11 @@ var (
 	// devFDPath is where commands reopen a {path:read:fd}; tests replace
 	// it.
 	devFDPath = "/dev/fd"
+	// currentIdentity and helperRunDir are the process's identity and the
+	// privileged helper's socket directory, for the install checks; tests
+	// replace them.
+	currentIdentity = install.Current
+	helperRunDir    = install.HelperRunDir
 )
 
 func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust, home string) int {
@@ -251,10 +256,10 @@ func checkPolicyWithParam(args []string, stdout, stderr io.Writer, trust policy.
 	if err != nil {
 		failf("binary: cannot resolve own path: %v", err)
 	}
-	id, err := install.Current()
+	id, idErr := currentIdentity()
 	switch {
-	case err != nil:
-		failf("install: cannot read own identity: %v", err)
+	case idErr != nil:
+		failf("install: cannot read own identity: %v", idErr)
 	case id.UID == 0:
 		pr("NOTE install: running as root, so the uid and group checks describe root, not the service account;")
 		pr("     run check-policy as the service account to check its identity and home directory;")

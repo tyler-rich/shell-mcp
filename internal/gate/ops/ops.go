@@ -43,6 +43,10 @@ type Options struct {
 	Executable         string
 	SSHOriginalCommand *string
 	ServiceHome        string
+	// HelperRunDir is the directory of the privileged helper's sockets,
+	// whose group the shared-account check reads (production and when
+	// empty: install.HelperRunDir); tests point it elsewhere.
+	HelperRunDir string
 
 	// ApplySandbox applies the sandbox (production: sandbox.Apply).
 	ApplySandbox func(*policy.Policy) (sandbox.Report, error)
@@ -108,7 +112,7 @@ func ProductionOptions(version, policyPath, principal string) (Options, error) {
 	o := Options{
 		Version: version, PolicyPath: policyPath, Principal: principal,
 		Identity: id, Trust: policy.RootTrust(), Executable: exe,
-		ServiceHome: ServiceHome(), ApplySandbox: sandbox.Apply,
+		ServiceHome: ServiceHome(), HelperRunDir: install.HelperRunDir, ApplySandbox: sandbox.Apply,
 		Audit:     audit.NewSyslog(audit.DevLog),
 		Systemctl: SystemctlPath, Journalctl: JournalctlPath, Git: GitPath,
 		DialHelper: DialHelper,

@@ -7,6 +7,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -189,6 +190,8 @@ func main() {
 			_ = c.Close()
 		}
 		report(err, "CONNECTED")
+	case "priv-ask":
+		privAsk(args[0])
 	case "abstract-connect":
 		// An abstract Unix socket (a name, not a file), which belongs to a
 		// network namespace.
@@ -449,6 +452,54 @@ func spawn(args ...string) int {
 }
 
 // report prints ok on success, else the errno name (EACCES, EPERM, …).
+// privAsk connects to a privileged helper socket and sends it one read-tier
+// request, priv_policy (which changes nothing), as the gate would forward
+// it, then prints one line: the connect's errno, or ANSWERED with whether
+// the answer was a result (ok) or an error (its code), and whether it
+// carried the helper's own block. It never prints the answer's content.
+// The shared-account test (test/e2e) uses it to show whether a command of a
+// policy without privileged forwarding can reach the helper.
+func privAsk(socket string) {
+	c, err := net.DialTimeout("unix", socket, 2*time.Second)
+	if err != nil {
+		report(err, "")
+		return
+	}
+	defer func() { _ = c.Close() }()
+	_ = c.SetDeadline(time.Now().Add(20 * time.Second))
+	req := `{"v":2,"id":"6f1c2a4e-0b7d-4c3a-9e21-5d8f0a6b7c90","ceiling":"read","op":"priv_policy","args":{},"timeout_ms":10000}` + "\n"
+	if _, err = io.WriteString(c, req); err != nil {
+		fmt.Println("CONNECTED; WRITE:", err)
+		return
+	}
+	if uc, ok := c.(*net.UnixConn); ok {
+		_ = uc.CloseWrite()
+	}
+	line, err := bufio.NewReaderSize(c, 1<<16).ReadString('\n')
+	if line == "" {
+		fmt.Println("CONNECTED; NO ANSWER:", err)
+		return
+	}
+	var resp struct {
+		OK    bool            `json:"ok"`
+		Data  json.RawMessage `json:"data"`
+		Error *struct {
+			Code string `json:"code"`
+		} `json:"error"`
+		Gate json.RawMessage `json:"gate"`
+	}
+	if err = json.Unmarshal([]byte(line), &resp); err != nil {
+		fmt.Println("CONNECTED; UNREADABLE ANSWER")
+		return
+	}
+	switch {
+	case resp.Error != nil:
+		fmt.Printf("ANSWERED error=%s helper_block=%v\n", resp.Error.Code, len(resp.Gate) > 0)
+	default:
+		fmt.Printf("ANSWERED ok=%v data=%v helper_block=%v\n", resp.OK, len(resp.Data) > 0, len(resp.Gate) > 0)
+	}
+}
+
 func report(err error, ok string) {
 	if err == nil {
 		fmt.Println(ok)
