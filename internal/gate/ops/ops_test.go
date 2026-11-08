@@ -100,6 +100,8 @@ func newFixture(t testing.TB, tier string) *fixture {
 		Trust:       gatetest.Trust(),
 		Executable:  f.exe,
 		ServiceHome: f.home,
+		// No helper on the test host unless a test makes one (socketgroup_test.go).
+		HelperRunDir: filepath.Join(d, "run-shell-mcp-absent"),
 		ApplySandbox: func(p *policy.Policy) (sandbox.Report, error) {
 			f.sandboxCalls++
 			return sandbox.Plan(p, 7)
@@ -513,7 +515,7 @@ func TestProductionOptionsHaveNoTestHooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	if o.TestGitCAFile != "" || o.InjectReadBackFault != nil || o.InjectBeforeCommit != nil || o.InjectNoReplaceFault != nil || o.InjectDeleteStep != nil || o.InjectDiscardStep != nil || o.InjectMetadataReadBackFault != nil || o.InjectBeforeExec != nil || o.Audit == nil ||
-		o.Systemctl != ops.SystemctlPath || o.Journalctl != ops.JournalctlPath || o.Git != ops.GitPath {
+		o.Systemctl != ops.SystemctlPath || o.Journalctl != ops.JournalctlPath || o.Git != ops.GitPath || o.HelperRunDir != install.HelperRunDir {
 		t.Fatalf("production options %+v", o)
 	}
 }

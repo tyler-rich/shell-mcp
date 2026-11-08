@@ -629,14 +629,19 @@ func TestHelperExecTrampoline(t *testing.T) {
 
 // ---- A command does not outlive the gate or the helper that started it ----------
 
-// startGate starts the real gate as svc-shell with one request on stdin and
-// returns it while it runs.
+// startGate starts the real gate with one request on stdin and returns it
+// while it runs: as svc-shell for the forwarding policy, as svc-shell-std for
+// any other.
 func startGate(t *testing.T, policy, principal, ceiling, op string, args any) *exec.Cmd {
 	t.Helper()
 	a, _ := json.Marshal(args)
 	req := fmt.Sprintf(`{"v":2,"id":%q,"ceiling":%q,"op":%q,"args":%s,"timeout_ms":30000}`+"\n", newID(), ceiling, op, a)
 	cmd := exec.CommandContext(t.Context(), gateBin, "serve", "--policy", policy, "--principal", principal) //nolint:gosec // G204: the installed gate; policy and principal are this file's constants
-	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, svcShell)}
+	uid := uint32(svcStd)
+	if policy == gatePolicy {
+		uid = svcShell
+	}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, uid)}
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin"}
 	cmd.Dir = "/"
 	cmd.Stdin = strings.NewReader(req)
