@@ -2,7 +2,7 @@
 
 This guide sets up one Linux host ("target") so that a shell-mcp server can reach it: the gate (`shell-mcp-gate`) as an SSH forced command, and optionally the privileged helper (`shell-mcp-privd`) for root actions. It turns `docs/SECURITY.md` §5 into steps. The normative rules are in `docs/POLICY.md` (gate policy) and `docs/PRIVILEGED.md` (helper); where this guide and they disagree, they win.
 
-Every name below is a placeholder: the service account `svc-shell` (uid/gid 60123), the helper's socket group `svc-shell-priv` (gid 60124), the application account `example-app`, the paths `/srv/app` and `/etc/example-app`, the unit `example-app.service`, the server's network `192.0.2.0/24`. Use your own.
+Every name below is a placeholder: the service account `svc-shell` (uid/gid 60123), the helper's socket group `svc-shell-priv` (gid 60124), the second service account `svc-shell-std` (uid/gid 60125) for the keys without root actions on a host that has the helper (step 4), the application account `example-app`, the paths `/srv/app` and `/etc/example-app`, the unit `example-app.service`, the server's network `192.0.2.0/24`. Use your own.
 
 **How each step was checked.** Every command marked *(container)* was run as written, as root, in throwaway containers of `debian:trixie` (Debian 13), `ubuntu:24.04` and `ubuntu:26.04`, against the binaries of the commit this guide was released with. Commands marked *(real host)* need something a container does not have: a running systemd and polkit, journald, a kernel with the Landlock ABI the gate needs, or the published release. The end-to-end tests (`e2e-host` in CI) run the gate and the helper on a real Ubuntu 26.04 machine.
 
@@ -102,7 +102,9 @@ They are under `shell-mcp_0.2.0/examples/policies/` (`read-only.yaml`, `operator
 
 ## 4. Create the service account *(container)*
 
-*Done by `shell-mcp-gate install` (§12.1): the free-id checks, the groups, the account, the lock and the slice drop-in.*
+*Done by `shell-mcp-gate install` (§12.1): the free-id checks, the groups, the account, the lock and the slice drop-in. A second account, below, is a hand step for now.*
+
+**One account per privilege level.** Keys with different privilege levels need different accounts. The account in the helper's socket group (step 9) serves only keys whose gate policy has `privileged.enabled: true`. Every other key (read-only, operator, destructive without root actions) runs as an account outside that group. Reason: below Landlock ABI 9 only the socket's permissions and the helper's peer-UID check govern a connect to the helper's socket. For the account the helper serves, both pass. Any command a key runs as that account could therefore ask the helper for root actions directly, and no approval covers that (approval is the server's, PRIVILEGED §3; SECURITY §2). The gate refuses to serve a policy without `privileged.enabled` as an account in the group of the helper's sockets (`install_insecure`, naming the fix), and `check-policy` reports it as a FAIL. `install` refuses to create the layout (§12.1). On a host without the helper, one account serves every key.
 
 Choose an explicit uid and gid (D-020); never let `useradd` pick one, and check that nothing on the host already uses them, including files that container volumes or backups own:
 
@@ -131,9 +133,28 @@ Groups, only as needed, and nothing else (the gate refuses to serve as a member 
 ```bash
 usermod -aG systemd-journal svc-shell       # only if the policy has a journal section
 groupadd --gid 60124 svc-shell-priv         # only if you install the helper (step 9)
-usermod -aG svc-shell-priv svc-shell
+usermod -aG svc-shell-priv svc-shell        # only for the account whose keys' policies have privileged.enabled: true
 id svc-shell
 ```
+
+**A second service account** *(container)*, for the keys whose policy has no `privileged.enabled` on a host where `svc-shell` is in the socket group. It is made exactly as `svc-shell` is, with its own unused uid and gid (check them as above), and never joins the socket group:
+
+```bash
+getent passwd 60125; getent group 60125
+find / -xdev \( -uid 60125 -o -gid 60125 \) -print
+groupadd --gid 60125 svc-shell-std
+useradd --uid 60125 --gid svc-shell-std --home-dir /var/lib/svc-shell-std --create-home --shell /bin/sh svc-shell-std
+usermod -L svc-shell-std
+usermod -aG systemd-journal svc-shell-std   # only if a policy it serves has a journal section
+mkdir -p /etc/systemd/system/user-60125.slice.d
+printf '[Slice]\nMemoryMax=4G\nMemorySwapMax=0\n' >/etc/systemd/system/user-60125.slice.d/50-shell-mcp.conf
+systemctl daemon-reload
+id svc-shell-std
+```
+
+It also needs its own `Match` block and keys file (step 7) and, when one of its policies has `services.control`, its own polkit rule (step 8). Its write roots and repositories must be its own (step 6). These steps write exactly the files that `install` writes for an account (§12.1): the same account entries, slice drop-in, `Match` block, keys file and key lines, so a later `install` can adopt them as they are.
+
+**`install` and a second account.** `shell-mcp-gate install` does not support a second account yet: it writes one `Match` block per host. On a host with the second account's block in the drop-in, `install` refuses for either account and changes nothing: for `svc-shell-std` with `dropin_other_account` (the drop-in starts with another account's block), and for `svc-shell` with `file_differs` (the drop-in holds more than its own block). Re-running `install` for the first account after these steps therefore fails until a later release lets `install` manage several accounts. Until then, add a key, or change one, with the hand steps of step 7, and check each policy with `check-policy` as its account (step 5).
 
 **Bound the account's memory as a whole** (recommended). The gate gives each process it starts its own memory limit (`limits.max_memory_mb`, POLICY §4a), but several requests, or a command that starts several processes, each get one. A `MemoryMax=` on the account's slice bounds them all together, so the host's OOM killer never has to choose a victim outside it. sshd places each login in `user-<uid>.slice` through `pam_systemd` (`UsePAM yes`, the distributions' default):
 
@@ -149,6 +170,8 @@ Choose the value from the requests you expect at once times `limits.max_memory_m
 ## 5. Write the gate policy *(container)*
 
 One policy per SSH key, so each server instance gets its own ceiling. Write it for the worst case: what would you accept a fully compromised MCP server doing with this key? (POLICY §1.)
+
+Each key runs as the account for its privilege level (step 4). A policy with `privileged.enabled: true` runs as the account in the helper's socket group (`svc-shell`). Every other policy runs as an account outside that group (`svc-shell-std` on a host with the helper). Check each policy as the account that will serve it.
 
 **Generated** (`shell-mcp-gate policy new`, POLICY §9): write an answers file (`setup.yaml`: the preset, your roots, deny patterns, units, repositories and commands; `examples/policies/*.answers.yaml` show the format), look at the result, then write it. It renders the preset's example with its comments, loads it strictly before anything is written, writes it `root:root 0644` (creating `/etc/shell-mcp` `0755` when absent) and runs `check-policy` as root:
 
@@ -170,7 +193,7 @@ The policy and every directory above it must be root's and not group- or world-w
 runuser -u svc-shell -- shell-mcp-gate check-policy --policy /etc/shell-mcp/read-only.yaml
 ```
 
-It prints `ok`, `WARN` and `FAIL` lines, then the effective policy, and exits non-zero when `serve` would refuse. Run as root it prints a `NOTE` that the identity checks describe root instead. Read every WARN; the common ones:
+It prints `ok`, `WARN` and `FAIL` lines, then the effective policy, and exits non-zero when `serve` would refuse. Run as root it prints a `NOTE` that the identity checks describe root instead. A policy without `privileged.enabled`, checked as an account in the group of the helper's sockets, fails with `FAIL install: gate process belongs to group "svc-shell-priv" (gid 60124), which owns the privileged helper's socket /run/shell-mcp/privd.sock, and this policy has no privileged forwarding …`. Serve that key from the second account (step 4). Read every WARN; the common ones:
 
 - `remote uses TCP port 443, which sandbox.tcp_connect_ports does not list` — `git_pull` cannot connect; add 443 for a key that may pull.
 - `apt has documented escape techniques (GTFOBins …)` — every command whose binary has known escapes is listed; review its templates and never give such a binary a `{path:write}`.
@@ -242,6 +265,40 @@ Match User svc-shell
     MaxSessions 8
 ```
 
+**With a second account** (step 4), the same file holds one block per account: the first account's block, an empty line, then the second account's block, which is the same block with its name. Nothing else changes: `AuthorizedKeysFile` names `%u`, so each account reads its own keys file.
+
+```
+Match User svc-shell
+    AuthorizedKeysFile /etc/ssh/authorized_keys.d/%u
+    …the eleven lines above, unchanged…
+    MaxSessions 8
+
+Match User svc-shell-std
+    AuthorizedKeysFile /etc/ssh/authorized_keys.d/%u
+    AuthenticationMethods publickey
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    PermitTTY no
+    AllowTcpForwarding no
+    AllowStreamLocalForwarding no
+    AllowAgentForwarding no
+    X11Forwarding no
+    PermitTunnel no
+    PermitUserRC no
+    MaxSessions 8
+```
+
+Write it without an editor, so the bytes are exactly these. This appends the second block to a drop-in that holds only the first account's block:
+
+```bash
+f=/etc/ssh/sshd_config.d/60-shell-mcp.conf
+test "$(head -n1 "$f")" = "Match User svc-shell" && test "$(grep -c '^Match ' "$f")" = 1 &&
+  { cat "$f"; echo; sed '1s/^Match User svc-shell$/Match User svc-shell-std/' "$f"; } >/root/60-shell-mcp.conf &&
+  install -o root -g root -m 0644 /root/60-shell-mcp.conf "$f" && rm /root/60-shell-mcp.conf
+```
+
+Then run the `sshd -t` and `sshd -T -C` checks below for each account, and apply the configuration with the reload below. Until sshd reloads, it does not know the second account's block, and its keys are refused.
+
 Debian 13 and Ubuntu 24.04 and 26.04 include `/etc/ssh/sshd_config.d/*.conf` near the top of `sshd_config`. Check the syntax, then the effective settings for the service account and for anyone else (the block must not change other accounts):
 
 ```bash
@@ -259,6 +316,21 @@ Add one line per server key to `/etc/ssh/authorized_keys.d/svc-shell` (`root:roo
 ```
 restrict,from="192.0.2.10",command="/usr/local/bin/shell-mcp-gate serve --policy /etc/shell-mcp/read-only.yaml --principal readonly" ssh-ed25519 AAAA… shell-mcp-readonly
 ```
+
+Each line goes in the keys file of the account that serves its policy (step 4): `/etc/ssh/authorized_keys.d/svc-shell` for keys whose policy has `privileged.enabled: true`, `/etc/ssh/authorized_keys.d/svc-shell-std` (`root:root 0644`, like the first) for every other key on a host with the helper. A line is the same in either file. **Moving a line** to the second account copies it byte for byte, without an editor. Here it is the `readonly` key's line, selected by its forced command's `--principal`: first into the new file, then the server's target user for that key changes to `svc-shell-std` (`SHELL_MCP_TARGET_USER`, or `user` in the targets file), and only then is the line removed from the old file:
+
+```bash
+cd /etc/ssh/authorized_keys.d
+grep -F -- '--principal readonly"' svc-shell >/root/moved.keys
+cat /root/moved.keys
+cat svc-shell-std /root/moved.keys 2>/dev/null >/root/svc-shell-std.keys
+install -o root -g root -m 0644 /root/svc-shell-std.keys svc-shell-std
+grep -vF -- '--principal readonly"' svc-shell >/root/svc-shell.keys
+install -o root -g root -m 0644 /root/svc-shell.keys svc-shell
+rm /root/moved.keys /root/svc-shell-std.keys /root/svc-shell.keys
+```
+
+`cat /root/moved.keys` must show exactly the lines to move, and nothing else. The second `cat` keeps the lines `svc-shell-std` already has. sshd reads the keys files at every login, so nothing is reloaded. Run the ownership check below on both files.
 
 The key is the server's `ssh_key.pub` (`deploy/README.md`); it must be Ed25519. Make `from=` the server's own fixed address as a single address (`192.0.2.10`, or `/32`; `/128` for IPv6). When the server's container runs on the target itself, that is the container's fixed address on its network (`ipv4_address` in the reference compose), which is where its connections to the host come from (SECURITY §7). A prefix, where one is needed, must be `/24` or narrower (`/64` for IPv6): `shell-mcp-gate install` refuses anything wider, with no override, and warns about anything wider than one address.
 
@@ -300,7 +372,16 @@ shell-mcp-gate polkit --policy /etc/shell-mcp/operator.yaml --user svc-shell > 6
 install -o root -g root -m 0644 60-shell-mcp.rules /etc/polkit-1/rules.d/60-shell-mcp.rules
 ```
 
-`polkitd` is the package on all three distributions; `/etc/polkit-1/rules.d` is `root:polkitd 0750` there. Regenerate the rule whenever `services.control` changes. Check that it works *(real host)*:
+`polkitd` is the package on all three distributions; `/etc/polkit-1/rules.d` is `root:polkitd 0750` there. Regenerate the rule whenever `services.control` changes.
+
+**Per account.** The rule names one account, and it is generated from the policy of one of that account's keys. The first account's rule is `60-shell-mcp.rules`. A second account (step 4) whose policy has `services.control` gets its own file, named after it, with exactly what `polkit` prints for that policy and account:
+
+```bash
+shell-mcp-gate polkit --policy /etc/shell-mcp/operator.yaml --user svc-shell-std > 60-shell-mcp-svc-shell-std.rules
+install -o root -g root -m 0644 60-shell-mcp-svc-shell-std.rules /etc/polkit-1/rules.d/60-shell-mcp-svc-shell-std.rules
+```
+
+When a key moves to the second account, regenerate the first account's rule from the policy of a key it still serves that has `services.control`. If none of its keys has `services.control` any more, remove `60-shell-mcp.rules`: the old rule would keep granting the first account the moved key's units. Check that it works *(real host)*:
 
 ```bash
 runuser -u svc-shell -- systemctl --no-ask-password restart example-app.service
@@ -365,7 +446,7 @@ CI rates the core unit of the example policy and every end-to-end policy offline
 
 ### 9.5 Let the gate forward to it *(container)*
 
-A gate policy generated with a `root:` section (step 5, POLICY §9) has this section already, with `broad_socket` exactly when the privileged policy uses the broad unit. By hand: in the gate policy of each key that may use root actions (only an admin server's key, normally), enable forwarding and give the broad socket when the broad pair is installed:
+A gate policy generated with a `root:` section (step 5, POLICY §9) has this section already, with `broad_socket` exactly when the privileged policy uses the broad unit. By hand: in the gate policy of each key that may use root actions (only an admin server's key, normally), enable forwarding and give the broad socket when the broad pair is installed. Those keys, and only those, run as the account in the socket group; every other key on this host runs as the second account (step 4):
 
 ```yaml
 privileged:
@@ -414,7 +495,7 @@ The gate writes one JSON line per request (authpriv), the helper one per connect
 
 ## 11. Updating and removing
 
-- **A new release:** verify it (step 2) and `install` the new binaries over the old ones (step 3). The gate and the helper start per request, so nothing needs restarting. Read the release notes for policy changes and run both `check-policy` commands. When the release notes say the helper's units changed (0.2.0's did), regenerate them: `shell-mcp-privd install --accept <the policy's sha256>` (§12.3), or by hand `units` and `systemctl daemon-reload` (step 9.2). Upgrading from 0.1.0: the numbered steps in `CHANGELOG.md`, "Upgrading from 0.1.0"; from 0.2.0 to the setup commands: the README, "Upgrading from 0.2.0".
+- **A new release:** verify it (step 2) and `install` the new binaries over the old ones (step 3). The gate and the helper start per request, so nothing needs restarting. Read the release notes for policy changes and run both `check-policy` commands. When the release notes say the helper's units changed (0.2.0's did), regenerate them: `shell-mcp-privd install --accept <the policy's sha256>` (§12.3), or by hand `units` and `systemctl daemon-reload` (step 9.2). Upgrading from 0.1.0: the numbered steps in `CHANGELOG.md`, "Upgrading from 0.1.0"; from 0.2.0 to the setup commands: the README, "Upgrading from 0.2.0", whose step 3 (splitting the shared account, §4) is required on a host with the helper whose account also serves keys without `privileged.enabled`.
 - **A gate policy edit:** `check-policy` (step 5); regenerate the polkit rule if `services.control` changed (step 8).
 - **A privileged policy edit:** `check-policy`, `units`, `systemctl daemon-reload` (step 9.2), or `shell-mcp-privd install` again with the new hash (§12.3), which does all of it.
 - **Revoking a server:** remove its line from `/etc/ssh/authorized_keys.d/svc-shell`. sshd reads the file on every login. Rotating the server's key, with an overlap: `deploy/README.md`, "Rotating secrets".
@@ -423,10 +504,10 @@ The gate writes one JSON line per request (authpriv), the helper one per connect
 
 As root, in this order: first nothing new can log in, then nothing runs, then the files go. The server side (its container, network, secrets and the clients' configuration) is `deploy/README.md`, "Removing the server".
 
-1. **No new logins:** remove the key file. sshd reads it at every login.
+1. **No new logins:** remove the key file, and the second account's if there is one (step 4). sshd reads them at every login.
 
    ```bash
-   rm -f /etc/ssh/authorized_keys.d/svc-shell
+   rm -f /etc/ssh/authorized_keys.d/svc-shell /etc/ssh/authorized_keys.d/svc-shell-std
    ```
 
 2. **The helper:** stop and disable its sockets (the broad one exists only when its pair was generated), then remove its units. Each request's instance ends with its request.
@@ -456,10 +537,10 @@ As root, in this order: first nothing new can log in, then nothing runs, then th
    /usr/sbin/sshd -t && systemctl reload ssh
    ```
 
-5. **The polkit rule**, if the policy had `services.control`:
+5. **The polkit rules**, if a policy had `services.control` (the second account's file only exists when it had one):
 
    ```bash
-   rm -f /etc/polkit-1/rules.d/60-shell-mcp.rules
+   rm -f /etc/polkit-1/rules.d/60-shell-mcp.rules /etc/polkit-1/rules.d/60-shell-mcp-svc-shell-std.rules
    ```
 
 6. **The account, its home and its groups.** `userdel` refuses while the account still runs a process; a request in flight ends within its timeout, or `loginctl terminate-user svc-shell` ends it now. `--remove` deletes the home directory (`/var/lib/svc-shell`). The primary group goes with the account where `USERGROUPS_ENAB` is `yes` (the default on Debian and Ubuntu); the two `groupdel` lines are for a group that is left, and for the helper's socket group.
@@ -468,6 +549,13 @@ As root, in this order: first nothing new can log in, then nothing runs, then th
    userdel --remove svc-shell
    getent group svc-shell >/dev/null && groupdel svc-shell
    getent group svc-shell-priv >/dev/null && groupdel svc-shell-priv
+   ```
+
+   A second account (step 4) goes the same way, with its slice drop-in (step 3's commands with its uid, 60125):
+
+   ```bash
+   userdel --remove svc-shell-std
+   getent group svc-shell-std >/dev/null && groupdel svc-shell-std
    ```
 
 7. **The policies and the binaries:**
@@ -501,7 +589,7 @@ shell-mcp-gate install --policy /etc/shell-mcp/read-only.yaml --principal readon
 | `--principal <label>` | Required. The key's label, `^[a-z][a-z0-9-]{0,31}$`; also the key line's comment `shell-mcp-<label>`. |
 | `--from <addr>[,<addr>…]` | Required, at most 8 entries. IP addresses or canonical CIDR prefixes. Never wider than `/24` (IPv4) or `/64` (IPv6), IPv4-mapped IPv6 judged as IPv4; no host names, wildcards or negations. Anything wider than one address is a WARN. |
 | `--key <file.pub>` | Required. The server's `ssh_key.pub`: one `ssh-ed25519` line. |
-| `--user <name>` | The service account (default `svc-shell`); its primary group has the same name. |
+| `--user <name>` | The service account (default `svc-shell`); its primary group has the same name. One account per privilege level (§4): the account in the helper's socket group only for a policy with `privileged.enabled: true`. Until `install` supports several accounts on a host, it refuses a host where a second account was added by hand (§4, "`install` and a second account"). |
 | `--uid <n>`, `--gid <n>` | Required, never defaulted (D-020): 1000 or above, not 65534, not in systemd's dynamic range 61184–65519. |
 | `--home <dir>` | The account's home (default `/var/lib/<user>`). |
 | `--socket-group <name>`, `--socket-gid <n>` | Required exactly when the policy has `privileged.enabled: true`: the helper's socket group. |
@@ -527,7 +615,7 @@ What it does, in this order; nothing sshd reads exists until everything before i
 |---|---|---|
 | `/etc/systemd/system/user-<uid>.slice.d/50-shell-mcp.conf` | `root:root 0644` | `[Slice]`, `MemoryMax=<size>`, `MemorySwapMax=0` (step 4) |
 | `/etc/polkit-1/rules.d/60-shell-mcp.rules` | `root:root 0644` | `shell-mcp-gate polkit --policy <file> --user <user>` (step 8); the directory must exist |
-| `/etc/ssh/sshd_config.d/60-shell-mcp.conf` | `root:root 0644` | step 7's `Match User` block; one service account per host |
+| `/etc/ssh/sshd_config.d/60-shell-mcp.conf` | `root:root 0644` | step 7's `Match User` block; one service account per host for now (a second account's block, added by hand, makes `install` refuse: §4) |
 | `/etc/ssh/authorized_keys.d/` | `root:root 0755` | |
 | `/etc/ssh/authorized_keys.d/<user>` | `root:root 0644` | one line per key: `restrict,from="<list>",command="/usr/local/bin/shell-mcp-gate serve --policy <file> --principal <label>" ssh-ed25519 <key> shell-mcp-<label>` |
 
@@ -539,7 +627,7 @@ What it does, in this order; nothing sshd reads exists until everything before i
 - The keys file: a line for the same key with other options (unless `--replace-key`); any line that does not parse or does not pass these checks (`restrict`, `from=` within the rules, `command=` exactly the forced command with a safe policy path and label, an Ed25519 key), reported by line number. Comments and blank lines are kept.
 - The account: uid or gid 0, 65534, below 1000 or in 61184–65519; a uid or gid used by another name; an existing account whose uid, primary gid, home or shell (`/bin/sh`) differ; a member of `root`, `sudo`, `wheel`, `adm`, `docker`, `lxd`, `incus-admin`, `libvirt`, `kvm`, `disk` or `shadow`, or of any supplementary group but the two above (install never removes a membership: remove it and run again); a file owned by a new id (the owner scan); `--owner-scan-paths` with nothing to scan (when nothing is created there is nothing to scan for, and the flag only gets a NOTE, so a second run with the same flags reports `unchanged`).
 - The socket group: a gid used by another group, the group existing with another gid, given for a policy without `privileged.enabled` or missing for one with it.
-- sshd: `/run/sshd` missing (`sshd -t` cannot run; the message names the tmpfiles entry or `systemctl start ssh.service`, see §7, and install never creates it); `strictmodes no`; `/etc/ssh`, the keys directory or the keys file not `root:root` or group- or world-writable; `sshd -t` failing; the effective configuration differing (step 7); a drop-in for another account.
+- sshd: `/run/sshd` missing (`sshd -t` cannot run; the message names the tmpfiles entry or `systemctl start ssh.service`, see §7, and install never creates it); `strictmodes no`; `/etc/ssh`, the keys directory or the keys file not `root:root` or group- or world-writable; `sshd -t` failing; the effective configuration differing (step 7); a drop-in for another account (`dropin_other_account`), or one that also holds a second account's block (`file_differs`, §4).
 - Any existing file with other content (a unified diff of what is there and what would be written is printed; the file is never overwritten: remove it or revert the edit and run again); `--policy` or `--principal` outside their character sets; a policy that does not load; `check-policy` as the account reporting FAIL.
 
 **Idempotency.** A second run with the same flags changes nothing and reports every item `unchanged`; a run with another `--key` and `--principal` appends one line. Accounts and groups created before a failure are not removed by the rollback; the next run finds them `unchanged`.
