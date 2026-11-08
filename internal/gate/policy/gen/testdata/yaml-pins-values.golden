@@ -1,0 +1,432 @@
+# The YAML layer's results for the yamltest corpus, recorded with
+# go.yaml.in/yaml/v3. Regenerate with -update only when the YAML module is
+# meant to change, and review every changed line (docs/ARCHIVE.md, 2026-11-08).
+
+== base
+OK {"k":"a"}
+
+== unknown key
+OK {"k":"a","zzz_unknown":int(1)}
+
+== two unknown keys
+OK {"k":"a","zzz_one":int(1),"zzz_two":int(2)}
+
+== unknown key in a mapping
+OK {"m":{"x":"a","zzz_unknown":int(1)}}
+
+== duplicate key
+ERR "yaml: unmarshal errors:\n  line 2: mapping key \"k\" already defined at line 1"
+
+== duplicate key quoted
+ERR "yaml: unmarshal errors:\n  line 2: mapping key \"k\" already defined at line 1"
+
+== duplicate key in a mapping
+ERR "yaml: unmarshal errors:\n  line 1: mapping key \"x\" already defined at line 1"
+
+== string: a list
+OK {"k":["a"]}
+
+== string: a mapping
+OK {"k":{"a":"b"}}
+
+== list: a string
+OK {"l":"a"}
+
+== int: text
+OK {"n":"abc"}
+
+== top level: a list
+ERR "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!seq into map[string]interface {}"
+
+== top level: a string
+ERR "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `hello` into map[string]interface {}"
+
+== top level: block scalar at column 0
+ERR "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `` into map[string]interface {}"
+
+== empty
+OK {}
+
+== comment only
+OK {}
+
+== document start only
+OK {}
+
+== document end only
+ERR "yaml: did not find expected node content"
+
+== two documents
+OK {"k":"a"}
+
+== empty second document
+OK {"k":"a"}
+
+== second document broken
+OK {"k":"a"}
+
+== document end
+OK {"k":"a"}
+
+== document end then comment
+OK {"k":"a"}
+
+== directive 1.1
+OK {"k":"a"}
+
+== directive 1.2
+ERR "yaml: found incompatible YAML document"
+
+== directive 2.0
+ERR "yaml: found incompatible YAML document"
+
+== unclosed flow at the end
+ERR "yaml: line 2: did not find expected node content"
+
+== tab indentation
+ERR "yaml: line 3: found character that cannot start any token"
+
+== bad indentation
+ERR "yaml: line 2: mapping values are not allowed in this context"
+
+== depth over 10000
+ERR "yaml: exceeded max depth of 10000"
+
+== CR line breaks
+OK {"k":"a"}
+
+== CRLF line breaks
+OK {"k":"a"}
+
+== U+2028 in a comment, then a key
+OK {"k":"a","zzz_unknown":int(1)}
+
+== U+2028 in a comment, then a known key
+OK {"k":"a"}
+
+== U+2029 in a comment, then a known key
+OK {"k":"a"}
+
+== U+0085 in a comment, then a known key
+OK {"k":"a"}
+
+== CR in a comment, then a known key
+OK {"k":"a"}
+
+== U+2028 in a plain value
+ERR "yaml: line 2: could not find expected ':'"
+
+== U+2029 in a plain value
+ERR "yaml: line 2: could not find expected ':'"
+
+== U+0085 in a plain value
+ERR "yaml: line 2: could not find expected ':'"
+
+== U+2028 in a double-quoted value
+OK {"k":"a\u2028b"}
+
+== U+2028 in a single-quoted value
+OK {"k":"a\u2028b"}
+
+== escaped U+2028
+OK {"k":"a\u2028b"}
+
+== escaped U+0085
+OK {"k":"a\u0085b"}
+
+== escaped U+0080
+OK {"k":"a\u0080b"}
+
+== U+007F in a plain value
+ERR "yaml: control characters are not allowed"
+
+== U+0080 in a plain value
+ERR "yaml: control characters are not allowed"
+
+== U+0086 in a plain value
+ERR "yaml: control characters are not allowed"
+
+== U+009F in a double-quoted value
+ERR "yaml: control characters are not allowed"
+
+== U+0085 in a double-quoted value
+OK {"k":"a b"}
+
+== U+007F in a comment
+ERR "yaml: control characters are not allowed"
+
+== U+0080 in a comment
+ERR "yaml: control characters are not allowed"
+
+== U+007F in a key
+ERR "yaml: control characters are not allowed"
+
+== U+0001 in a plain value
+ERR "yaml: control characters are not allowed"
+
+== NUL
+ERR "yaml: control characters are not allowed"
+
+== byte-order mark
+OK {"k":"a"}
+
+== byte-order mark inside a value
+OK {"k":"a\ufeffb"}
+
+== invalid UTF-8
+ERR "yaml: invalid leading UTF-8 octet"
+
+== UTF-16LE with U+007F
+ERR "yaml: control characters are not allowed"
+
+== UTF-16LE
+OK {"k":"a"}
+
+== empty key
+ERR "yaml: line 1: did not find expected key"
+
+== empty key with a mapping value
+ERR "yaml: line 1: did not find expected key"
+
+== colon only
+ERR "yaml: line 1: did not find expected key"
+
+== empty key in a flow mapping
+ERR "yaml: did not find expected node content"
+
+== empty key in a flow list
+ERR "yaml: did not find expected node content"
+
+== explicit empty key
+OK {"k":"a"}
+
+== explicit empty key in a flow mapping
+OK {"m":map[any]{nil:"a"}}
+
+== anchored empty key
+OK {"k":"a"}
+
+== null key
+OK {"k":"a"}
+
+== key and colon 1024 characters apart
+OK {"k":"a"}
+
+== key and colon 1025 characters apart
+ERR "yaml: mapping values are not allowed in this context"
+
+== key and colon 1100 characters apart
+ERR "yaml: mapping values are not allowed in this context"
+
+== long unknown key
+ERR "yaml: line 2: could not find expected ':'"
+
+== long explicit unknown key
+OK {"k":"a","kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk":"a"}
+
+== long key in a flow mapping
+ERR "yaml: did not find expected ',' or '}'"
+
+== long anchor before a key
+ERR "yaml: line 2: could not find expected ':'"
+
+== anchor and alias
+OK {"l":["a","a"]}
+
+== undefined alias
+ERR "yaml: unknown anchor 'nope' referenced"
+
+== recursive alias
+ERR "yaml: anchor 'r' value contains itself"
+
+== anchor name !
+ERR "yaml: did not find expected alphabetic or numeric character"
+
+== anchor name with a dot
+ERR "yaml: did not find expected alphabetic or numeric character"
+
+== alias expansion
+ERR "yaml: document contains excessive aliasing"
+
+== non-specific tag, empty
+OK {"k":nil}
+
+== non-specific tag, text
+OK {"k":"a"}
+
+== non-specific tag on an int
+OK {"n":nil}
+
+== str tag on an int
+OK {"n":"5"}
+
+== int tag on quoted text
+OK {"n":int(5)}
+
+== custom tag
+OK {"k":"a"}
+
+== binary tag
+OK {"k":"hello"}
+
+== tag ended by a flow indicator
+ERR "yaml: did not find expected whitespace or line break"
+
+== tag ended by ]
+ERR "yaml: line 1: did not find expected ',' or ']'"
+
+== merge
+OK {"m":{"x":"a"}}
+
+== merge, then the key
+OK {"m":{"x":"b"}}
+
+== merge of a list
+OK {"m":{"x":"a"}}
+
+== merge with an unknown key
+OK {"m":{"zzz_unknown":"a"}}
+
+== merge of a scalar
+ERR "yaml: map merge requires map or sequence of maps as the value"
+
+== merge quoted
+OK {"m":{"<<":{"x":"a"}}}
+
+== two merges
+ERR "yaml: unmarshal errors:\n  line 1: mapping key \"<<\" already defined at line 1"
+
+== << as a string value
+OK {"k":"<<"}
+
+== << in a list
+OK {"l":["<<"]}
+
+== colon before } in a flow mapping
+OK {"m":{"x:":nil}}
+
+== colon before ] in a flow list
+OK {"l":["a:"]}
+
+== colon before , in a flow list
+OK {"l":["a:","b"]}
+
+== pair in a flow list
+OK {"l":[{"a":"b"}]}
+
+== trailing comma
+OK {"l":["a","b"]}
+
+== comment in a flow list
+OK {"l":["a","b"]}
+
+== string 00000000
+OK {"k":int(0)}
+
+== string true
+OK {"k":bool(true)}
+
+== string null
+OK {"k":nil}
+
+== string ~
+OK {"k":nil}
+
+== string empty
+OK {"k":""}
+
+== string -0
+OK {"k":int(0)}
+
+== string 0x1F
+OK {"k":int(31)}
+
+== string 1e3
+OK {"k":float64(1000)}
+
+== string .inf
+OK {"k":float64(+Inf)}
+
+== string yes
+OK {"k":"yes"}
+
+== string 2001-12-14
+OK {"k":time.Time(2001-12-14 00:00:00 +0000 UTC)}
+
+== string 1:20
+OK {"k":"1:20"}
+
+== string a:b
+OK {"k":"a:b"}
+
+== string a #b
+OK {"k":"a"}
+
+== string a#b
+OK {"k":"a#b"}
+
+== string literal block
+OK {"k":"a\nb\n"}
+
+== string folded block
+OK {"k":"a b\n"}
+
+== int 00000000
+OK {"n":int(0)}
+
+== int 0x10
+OK {"n":int(16)}
+
+== int 0o17
+OK {"n":int(15)}
+
+== int 017
+OK {"n":int(15)}
+
+== int 0b101
+OK {"n":int(5)}
+
+== int -0
+OK {"n":int(0)}
+
+== int -0.0
+OK {"n":float64(-0)}
+
+== int 1_000
+OK {"n":int(1000)}
+
+== int +5
+OK {"n":int(5)}
+
+== int 3.0
+OK {"n":float64(3)}
+
+== int 3.5
+OK {"n":float64(3.5)}
+
+== int 1e3
+OK {"n":float64(1000)}
+
+== int .5
+OK {"n":float64(0.5)}
+
+== int 9223372036854775808
+OK {"n":uint64(9223372036854775808)}
+
+== int +18446744073709551615
+OK {"n":float64(1.8446744073709552e+19)}
+
+== int quoted
+OK {"n":"5"}
+
+== int true
+OK {"n":bool(true)}
+
+== int null
+OK {"n":nil}
+
+== int empty
+OK {"n":""}
+
+== int .inf
+OK {"n":float64(+Inf)}

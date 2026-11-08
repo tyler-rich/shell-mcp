@@ -5109,3 +5109,89 @@ Negative controls, part of every run, each shown caught:
 **Deferred.** None of this session's.
 
 **Versions (D-013):** Go 1.27.3, the newest stable with a published `golang:1.27.3-trixie` image; `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing. Direct modules: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6, x/crypto v0.58.0, x/sys v0.49.0. No new image (the proxies' images and the client are the pinned `caddy:2.11.7` and `nginx:1.30.6` of caddy-check and nginx-check). No module dependency added.
+
+### 2026-11-08 — go.yaml.in/yaml/v4 v4.0.0 evaluated and held: v3 kept under a dated exception, every parser's YAML layer pinned (PR #91, branch deps/yaml-v4)
+
+**Scope (the session prompt):** migrate from `go.yaml.in/yaml/v3` to `v4` (v4.0.0, released 2026-11-04) without changing what any parser accepts or refuses, except where v4 is stricter and that is shown. The behaviours were verified at the module source in the pinned `golang:1.27.3-trixie` image's module cache (v3.0.6 `h1:zcDfvjXEqTQmpjniUBLc91xYJMB2c4QOFxEF/LCEckM=`, v4.0.0 `h1:/LG1pNO84Z4l603j/xMn69CcS5OYhMQ/f7l2LoQUGuw=`), and by running both modules side by side on one corpus (a scratch module, not committed). v4 was found to accept a family of inputs v3 refuses, and in flow context to read some text differently. The session stopped and asked, as the prompt requires when restoring v3's behaviour is not straightforward.
+
+**Decided by the maintainer (2026-11-08): hold on v3 for now.**
+- deps-current gains an exception that covers exactly `go.yaml.in/yaml/v4` as the next major of `go.yaml.in/yaml/v3` and nothing else. It was granted 2026-11-08 and applies through 2026-12-08. From 2026-12-09 deps-current fails again on its own, in CI and in the release workflow. Its message names the reason and this entry.
+- This change lands the differential tests that pin v3's behaviour, the fixed deps-current self-test, and this entry with every divergence class found so far.
+- **Removal condition:** a dedicated PR after v0.3.0 that adopts a narrow YAML profile in the strict loaders (the gate policy, the privileged policy, the answers file and the targets file). The profile refuses anchors, aliases, merge keys, explicit tags, U+007F–U+009F, empty keys, keys or lines over 1024 characters, and the flow-context edge cases below. It is applied on v3 first, so its effect is visible alone. That PR then migrates to v4 and runs the differential fuzzer, to show that v3 and v4 agree on everything the profile accepts. It removes the exception and its self-test cases. It regenerates the yamltest goldens, and every changed line other than a reworded error must be one the profile explains. None of the repository's YAML (examples, presets, fixtures) uses anchors, aliases, merge keys or tags, and its longest line is 109 characters.
+- The relaxations are reported upstream. The issue text was drafted for the maintainer, who files it; the session did not.
+
+**v3.0.6 against v4.0.0, for each behaviour the loaders depend on.** The classic API (`NewDecoder`, `KnownFields`, `Decode`, `Unmarshal`, `Node`) is kept in v4 with v3 defaults (`WithV3Defaults()` plus a legacy flag). The table describes that API.
+
+| Behaviour | v3.0.6 | v4.0.0 |
+|---|---|---|
+| Strict mode | `Decoder.KnownFields(true)`: "field X not found in type T" | the same check through the legacy `KnownFields` (or `WithKnownFields()`), same text |
+| Duplicate keys | refused when kind and text are equal: "mapping key "k" already defined at line N" | the same (`UniqueKeys` on in every preset), same text |
+| Errors and positions | type errors: `yaml: unmarshal errors:\n  line N: …`, one per line; "cannot unmarshal"; parser errors sometimes without a line | `yaml: construct errors: line N: …; …` on one line; "cannot construct"; parser errors gain `line N:`; control-character errors gain `(value: N)`; a few scanner errors one line later; no column in the text of either |
+| Multiple documents | `Decode` returns `io.EOF` after the last; our second `Decode` refuses a second document | the same; a stream of only `...` is an empty stream (v3: "did not find expected node content") |
+| Line breaks | CR, LF, CRLF, U+0085, U+2028, U+2029 | the same set (`isLineBreak` is v3's `is_break`); S8-3's U+2028-in-a-comment finding still holds |
+| Characters | refuses all C0 controls except TAB, LF and CR; refuses U+007F–U+009F except U+0085 | refuses C0 only; **accepts U+007F–U+009F anywhere** (values, keys, comments, UTF-16 input) |
+| Anchors and aliases | names `[A-Za-z0-9_-]`; undefined, recursive refused; expansion ratio check (aliases > 100, constructs > 1000, 0.99 → 0.10 over 400k–4M); depth 10000 | **any non-space, non-flow-indicator name**; the same refusals, ratio and depth (now a pluggable `loaderlimits`) |
+| Merge keys | `<<` merges a mapping or a list of mappings, the explicit key wins, quoted `"<<"` is a plain key, two `<<` are duplicates | the same (a pluggable merge-key plugin with the same default) |
+| Scalar resolution | `true/True/TRUE`, `null/Null/NULL/~/""`, `.inf/.nan`, ints with `0x`/`0o`/`0`/`0b`/`_`; `00000000` → int 0; YAML 1.1 `yes/on/y` only into a typed bool | the same tables; `-0` and `-0.0` → float −0 (v3: int 0 for `-0`); `+N` beyond int64 → uint64 (v3: float64) |
+| Floats into integers | `3.5` → 3, `.5` → 0 (truncated) | **refused** ("cannot construct !!float") |
+| Simple keys | the `:` within 1024 characters of the key's start, one line | **no 1024 bound** (one line still) |
+| Empty implicit keys | `: a`, `{: a}`, `- : a` refused ("did not find expected key"); `? \n: a`, `&k : a`, `~: a` accepted | **all accepted** as a null key, which strict struct decoding silently ignores |
+
+**Divergence classes, verbatim.** Results are through the gate policy's `decodeStrict`, unless the row names another parser. Inputs are Go string literals. `B` is `"version: 1\nmax_tier: read\n"`.
+
+| # | Input | v3.0.6 | v4.0.0 |
+|---|---|---|---|
+| 1 | `"version: 1\nmax_tier: a\x7fb\n"`, also `\u0080`, `\u0086`, `"\u009f"` quoted, `"# a\u0080b\n" + B`, UTF-16LE with U+007F | `yaml: control characters are not allowed` | accepted, `max_tier` = `"a\x7fb"`, etc. |
+| 2 | `B + ": a\n"`, `B + ":\n"`, `B + "sandbox: {: a}\n"` | `yaml: line 2: did not find expected key` / `did not find expected node content` | accepted; the null key is ignored |
+| 3 | `"version" + 1018 spaces + ": 1\nmax_tier: read\n"` (the `:` 1025 characters after the key's start); 1017 spaces | `yaml: mapping values are not allowed in this context`; accepted | accepted, `version` = 1; accepted |
+| 3a | `B + "sandbox: {landlock" + 1100 spaces + ": a}\n"` | `did not find expected ',' or '}'` | accepted, `landlock` = `"a"` |
+| 4 | `"version: 1\nmax_tier: &! a\n"`; `B + "redact:\n  patterns: [&a.b a, *a.b]\n"` | `did not find expected alphabetic or numeric character` | accepted (`"a"`; `["a","a"]`) |
+| 5 | `"version: 1\nmax_tier: !\n"`; `"version: !\nmax_tier: read\n"` | `max_tier` null; `version` null | `max_tier` = `""`; refused, "cannot construct !" (the empty value) "into int" |
+| 6 | `B + "sandbox: {landlock: !0}\n"`; `patterns: [!!str]` | `did not find expected whitespace or line break`; `did not find expected ',' or ']'` | accepted, `landlock` = `""`; `[""]` |
+| 7 | `B + "sandbox: {landlock:}\n"` | `field landlock: not found in type policy.rawSandbox` | accepted, `landlock` unset |
+| 7a | `patterns: [a:]`, `patterns: [a:, b]` | `["a:"]`, `["a:","b"]` | `cannot construct !!map into string` (a one-pair mapping) |
+| 8 | any-typed decode (the values check): `"k: <<\n"`, `"l: [<<]\n"`; the document `"<<"` into a struct | `{"k":"<<"}`, `["<<"]`; refused (`!!merge` into a struct) | **`{}` and `[]`: the value is dropped**; accepted |
+| 9 | any-typed: `"\|\n00000"` (top-level block scalar, content at column 0) | `""` | `"00000"` |
+| 10 | `"...\n"` | `did not find expected node content` | an empty stream: "policy is empty" |
+| 11 | `"version: 3.5\n…"`, `"version: .5\n…"` | 3, 0 (truncated) | refused (stricter) |
+| 12 | any-typed: `"n: -0"`, `"n: +18446744073709551615"` | `int(0)`, `float64(1.8446744073709552e+19)` | `float64(-0)`, `uint64(18446744073709551615)` |
+| 13 | compose's `scalar("a\x7fb")`, C1; `scalar("<<")` | double-quoted with escapes; plain | plain, the raw character; double-quoted |
+
+A differential fuzzer (scratch module; `FuzzDiff` over the strict decode into a struct, `Unmarshal` into a `Node` and into `any`, and the comments) found classes 4–10 in its first rounds. Each round found a new class within seconds, after the known ones were excluded. The list is therefore not shown to be complete, which is why the maintainer chose a profile over class-by-class restoration.
+
+**Already true of v3, recorded for the profile PR (not changed here):**
+- A fractional integer is truncated: `max_memory_mb: 1.5` loads as 1, and the validator then refuses it by range, as `TestMaxMemoryMB` expects.
+- An explicit, anchored or `~` null key (`? \n: a`, `&k : a`, `~: a`) is silently ignored by every strict loader.
+- Merge keys are honoured: `sandbox: {<<: {landlock: a}}` sets `landlock`.
+- A bare `<<` is accepted as a string value.
+
+**The pins (`internal/yamltest`, failing first against v4).** A test-only package holds one corpus of 150 documents. It covers each row of the first table and each class of the second, built through a per-parser schema (a string, an integer, a list, a boolean and a flow-mapping field). It also holds 75 scalars for the renderers. Golden files record the v3 results through each parser's own YAML layer:
+- the gate policy's and the privileged policy's `decodeStrict`;
+- the targets file's `readTargetsFile`;
+- the answers file's `Decode`, with 21 comment placements;
+- the renderer's `Plain` and `Quoted`;
+- `RenderGate` with each injection and scalar as the header comment and as a command's comment;
+- the any-typed decode the values check and the template reader use;
+- compose's `scalar`.
+
+`-update` regenerates them, for an intended module change only. With the imports switched to v4.0.0 in a scratch copy (not committed), 345 results change:
+- 110 flip between accepted and refused: 92 are now accepted, 18 now refused.
+- 16 decode to other values.
+- 219 only reword an error.
+- By package: gate policy 71, privileged policy 71, targets file 71, answers and renderer 128, compose 4. The quoting and comment-renderer pins are unchanged under v4.
+- The existing tests that also fail under v4 are `TestMaxMemoryMB` (gate), `TestDecodeRefusals` (answers), `TestStrictParsing` and `TestLimits` (privileged), plus config's and compose's. Each fails on the "cannot unmarshal" wording, and `TestMaxMemoryMB` also because `1.5` is now refused in the YAML layer instead of by the range check.
+
+**deps-current.**
+- **The exception:** the next-major check reads a list of exceptions (requirement, next major path, granted, last day, why). Inside the window a stable next major is info, and from the day after it is a FAIL that names both dates. A malformed entry, or a `date -u +%F` that is not a date, fails.
+- **The self-test's stale fixture:** "next-major pre-releases are info only" assumed v4 had only release candidates. It now requires `example.test/premajor`, an invented module served from a `file://` proxy in front of the real one (go.mod only; `GONOSUMDB=example.test`, `-mod=mod`), whose `/v2` has only `v2.0.0-rc.1`.
+- **New cases:** the exception applies inside the window and on its last day and fails the day after, with a fake `date` first on `PATH`. It holds back nothing else: `example.test/stablemajor`, whose `/v2` has `v2.0.0`, still fails inside the window. An unreadable date fails.
+- **Failing first:** against the unchanged script, 36 passed and 7 failed. "Expires" and "holds back nothing else" pass on it by design: they guard against an exception that never expires or covers too much.
+- **Pins:** deps-current's own run found Trivy v0.76.2, Grype v0.121.2 and syft v1.57.0 released, and they are bumped (D-013).
+
+**Fuzz targets, 60 s each, no finding:** FuzzMaxMemoryMB (gate policy), FuzzParse (privileged policy), FuzzDecode, FuzzComment, FuzzParseTemplate and FuzzLoaderField (gate `policy new`), FuzzRootComments and FuzzField (privileged `policy new`), FuzzRender (compose). The existing strict-parsing, answers and comment-sanitising tests pass unchanged.
+
+**Not changed, and why.** No parser, schema, loader or answers-format change: v3 stays, and the pins only record it. plan.md's D-013 text is unchanged: the exception is CLAUDE.md's temporary pin ("a dated ARCHIVE entry with a removal condition"), recorded here. scripts/workflowcheck and test/e2e also import yaml, for CI tooling and test fixtures, and are not pinned.
+
+**Deferred:** the narrow-profile PR described above, after v0.3.0 and before 2026-12-08. If it has not landed by then, deps-current fails in CI and in the release workflow from 2026-12-09.
+
+**Versions (D-013):** Go 1.27.3, the newest stable with a published `golang:1.27.3-trixie` image; `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing. Direct modules: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6 (held; v4.0.0 evaluated), x/crypto v0.58.0, x/sys v0.49.0. Tools: Trivy v0.76.2, Grype v0.121.2, syft v1.57.0 (bumped); golangci-lint v2.15.0, govulncheck v1.9.0, actionlint v1.7.12, gitleaks v8.30.1, cosign v3.1.4 unchanged. No dependency added.

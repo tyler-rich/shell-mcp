@@ -1,0 +1,225 @@
+# The YAML layer's results for the yamltest corpus, recorded with
+# go.yaml.in/yaml/v3. Regenerate with -update only when the YAML module is
+# meant to change, and review every changed line (docs/ARCHIVE.md, 2026-11-08).
+
+== "a"
+OK {"plain":"a","plain_err":"","quoted":"\"a\"","quoted_err":""}
+
+== "svc-shell"
+OK {"plain":"svc-shell","plain_err":"","quoted":"\"svc-shell\"","quoted_err":""}
+
+== "/srv/app"
+OK {"plain":"/srv/app","plain_err":"","quoted":"\"/srv/app\"","quoted_err":""}
+
+== "**/*.key"
+OK {"plain":"\"**/*.key\"","plain_err":"","quoted":"\"**/*.key\"","quoted_err":""}
+
+== "{path:read}"
+OK {"plain":"\"{path:read}\"","plain_err":"","quoted":"\"{path:read}\"","quoted_err":""}
+
+== "SOURCE,FSTYPE"
+OK {"plain":"\"SOURCE,FSTYPE\"","plain_err":"","quoted":"\"SOURCE,FSTYPE\"","quoted_err":""}
+
+== "60123"
+OK {"plain":"\"60123\"","plain_err":"","quoted":"\"60123\"","quoted_err":""}
+
+== "00000000"
+OK {"plain":"\"00000000\"","plain_err":"","quoted":"\"00000000\"","quoted_err":""}
+
+== "true"
+OK {"plain":"\"true\"","plain_err":"","quoted":"\"true\"","quoted_err":""}
+
+== "True"
+OK {"plain":"\"True\"","plain_err":"","quoted":"\"True\"","quoted_err":""}
+
+== "yes"
+OK {"plain":"yes","plain_err":"","quoted":"\"yes\"","quoted_err":""}
+
+== "on"
+OK {"plain":"on","plain_err":"","quoted":"\"on\"","quoted_err":""}
+
+== "null"
+OK {"plain":"\"null\"","plain_err":"","quoted":"\"null\"","quoted_err":""}
+
+== "Null"
+OK {"plain":"\"Null\"","plain_err":"","quoted":"\"Null\"","quoted_err":""}
+
+== "~"
+OK {"plain":"\"~\"","plain_err":"","quoted":"\"~\"","quoted_err":""}
+
+== ""
+OK {"plain":"\"\"","plain_err":"","quoted":"\"\"","quoted_err":""}
+
+== "-0"
+OK {"plain":"\"-0\"","plain_err":"","quoted":"\"-0\"","quoted_err":""}
+
+== "-0.0"
+OK {"plain":"\"-0.0\"","plain_err":"","quoted":"\"-0.0\"","quoted_err":""}
+
+== "+1"
+OK {"plain":"\"+1\"","plain_err":"","quoted":"\"+1\"","quoted_err":""}
+
+== "+18446744073709551615"
+OK {"plain":"\"+18446744073709551615\"","plain_err":"","quoted":"\"+18446744073709551615\"","quoted_err":""}
+
+== "0x1F"
+OK {"plain":"\"0x1F\"","plain_err":"","quoted":"\"0x1F\"","quoted_err":""}
+
+== "0o17"
+OK {"plain":"\"0o17\"","plain_err":"","quoted":"\"0o17\"","quoted_err":""}
+
+== "017"
+OK {"plain":"\"017\"","plain_err":"","quoted":"\"017\"","quoted_err":""}
+
+== "0b101"
+OK {"plain":"\"0b101\"","plain_err":"","quoted":"\"0b101\"","quoted_err":""}
+
+== "1_000"
+OK {"plain":"\"1_000\"","plain_err":"","quoted":"\"1_000\"","quoted_err":""}
+
+== "1e3"
+OK {"plain":"\"1e3\"","plain_err":"","quoted":"\"1e3\"","quoted_err":""}
+
+== ".inf"
+OK {"plain":"\".inf\"","plain_err":"","quoted":"\".inf\"","quoted_err":""}
+
+== ".nan"
+OK {"plain":"\".nan\"","plain_err":"","quoted":"\".nan\"","quoted_err":""}
+
+== "2001-12-14"
+OK {"plain":"\"2001-12-14\"","plain_err":"","quoted":"\"2001-12-14\"","quoted_err":""}
+
+== "1:20"
+OK {"plain":"1:20","plain_err":"","quoted":"\"1:20\"","quoted_err":""}
+
+== "<<"
+OK {"plain":"\"\u003c\u003c\"","plain_err":"","quoted":"\"\u003c\u003c\"","quoted_err":""}
+
+== "!"
+OK {"plain":"\"!\"","plain_err":"","quoted":"\"!\"","quoted_err":""}
+
+== "! a"
+OK {"plain":"\"! a\"","plain_err":"","quoted":"\"! a\"","quoted_err":""}
+
+== "!!str"
+OK {"plain":"\"!!str\"","plain_err":"","quoted":"\"!!str\"","quoted_err":""}
+
+== "&a"
+OK {"plain":"\"\u0026a\"","plain_err":"","quoted":"\"\u0026a\"","quoted_err":""}
+
+== "*a"
+OK {"plain":"\"*a\"","plain_err":"","quoted":"\"*a\"","quoted_err":""}
+
+== "a:"
+OK {"plain":"\"a:\"","plain_err":"","quoted":"\"a:\"","quoted_err":""}
+
+== ":a"
+OK {"plain":"\":a\"","plain_err":"","quoted":"\":a\"","quoted_err":""}
+
+== "a: b"
+OK {"plain":"\"a: b\"","plain_err":"","quoted":"\"a: b\"","quoted_err":""}
+
+== "a:b"
+OK {"plain":"a:b","plain_err":"","quoted":"\"a:b\"","quoted_err":""}
+
+== "#a"
+OK {"plain":"\"#a\"","plain_err":"","quoted":"\"#a\"","quoted_err":""}
+
+== "a #b"
+OK {"plain":"\"a #b\"","plain_err":"","quoted":"\"a #b\"","quoted_err":""}
+
+== "a#b"
+OK {"plain":"\"a#b\"","plain_err":"","quoted":"\"a#b\"","quoted_err":""}
+
+== "- a"
+OK {"plain":"\"- a\"","plain_err":"","quoted":"\"- a\"","quoted_err":""}
+
+== "-"
+OK {"plain":"\"-\"","plain_err":"","quoted":"\"-\"","quoted_err":""}
+
+== "?"
+OK {"plain":"\"?\"","plain_err":"","quoted":"\"?\"","quoted_err":""}
+
+== "? a"
+OK {"plain":"\"? a\"","plain_err":"","quoted":"\"? a\"","quoted_err":""}
+
+== "[a]"
+OK {"plain":"\"[a]\"","plain_err":"","quoted":"\"[a]\"","quoted_err":""}
+
+== "{a}"
+OK {"plain":"\"{a}\"","plain_err":"","quoted":"\"{a}\"","quoted_err":""}
+
+== "a,b"
+OK {"plain":"\"a,b\"","plain_err":"","quoted":"\"a,b\"","quoted_err":""}
+
+== "a]"
+OK {"plain":"\"a]\"","plain_err":"","quoted":"\"a]\"","quoted_err":""}
+
+== "a}"
+OK {"plain":"\"a}\"","plain_err":"","quoted":"\"a}\"","quoted_err":""}
+
+== "'a'"
+OK {"plain":"\"'a'\"","plain_err":"","quoted":"\"'a'\"","quoted_err":""}
+
+== "\"a\""
+OK {"plain":"\"\\\"a\\\"\"","plain_err":"","quoted":"\"\\\"a\\\"\"","quoted_err":""}
+
+== "|"
+OK {"plain":"\"|\"","plain_err":"","quoted":"\"|\"","quoted_err":""}
+
+== ">"
+OK {"plain":"\"\u003e\"","plain_err":"","quoted":"\"\u003e\"","quoted_err":""}
+
+== "%a"
+OK {"plain":"\"%a\"","plain_err":"","quoted":"\"%a\"","quoted_err":""}
+
+== "@a"
+OK {"plain":"\"@a\"","plain_err":"","quoted":"\"@a\"","quoted_err":""}
+
+== "`a"
+OK {"plain":"\"`a\"","plain_err":"","quoted":"\"`a\"","quoted_err":""}
+
+== " a"
+OK {"plain":"\" a\"","plain_err":"","quoted":"\" a\"","quoted_err":""}
+
+== "a "
+OK {"plain":"\"a \"","plain_err":"","quoted":"\"a \"","quoted_err":""}
+
+== "a\tb"
+OK {"plain":"\"\"","plain_err":"value \"a\\tb\" holds the control character U+0009","quoted":"\"\"","quoted_err":"value \"a\\tb\" holds the control character U+0009"}
+
+== "a\\b"
+OK {"plain":"\"a\\\\b\"","plain_err":"","quoted":"\"a\\\\b\"","quoted_err":""}
+
+== "..."
+OK {"plain":"...","plain_err":"","quoted":"\"...\"","quoted_err":""}
+
+== "---"
+OK {"plain":"\"---\"","plain_err":"","quoted":"\"---\"","quoted_err":""}
+
+== "é"
+OK {"plain":"\"é\"","plain_err":"","quoted":"\"é\"","quoted_err":""}
+
+== "a\u2028b"
+OK {"plain":"\"\"","plain_err":"value \"a\\u2028b\" holds U+2028, which is refused","quoted":"\"\"","quoted_err":"value \"a\\u2028b\" holds U+2028, which is refused"}
+
+== "a\u2029b"
+OK {"plain":"\"\"","plain_err":"value \"a\\u2029b\" holds U+2029, which is refused","quoted":"\"\"","quoted_err":"value \"a\\u2029b\" holds U+2029, which is refused"}
+
+== "a\u0085b"
+OK {"plain":"\"\"","plain_err":"value \"a\\u0085b\" holds U+0085, which is refused","quoted":"\"\"","quoted_err":"value \"a\\u0085b\" holds U+0085, which is refused"}
+
+== "a\x7fb"
+OK {"plain":"\"\"","plain_err":"value \"a\\x7fb\" holds the control character U+007F","quoted":"\"\"","quoted_err":"value \"a\\x7fb\" holds the control character U+007F"}
+
+== "a\u0080b"
+OK {"plain":"\"\"","plain_err":"value \"a\\u0080b\" holds the control character U+0080","quoted":"\"\"","quoted_err":"value \"a\\u0080b\" holds the control character U+0080"}
+
+== "a\u009fb"
+OK {"plain":"\"\"","plain_err":"value \"a\\u009fb\" holds the control character U+009F","quoted":"\"\"","quoted_err":"value \"a\\u009fb\" holds the control character U+009F"}
+
+== "\ufeffa"
+OK {"plain":"\"\"","plain_err":"value \"\\ufeffa\" holds U+FEFF, which is refused","quoted":"\"\"","quoted_err":"value \"\\ufeffa\" holds U+FEFF, which is refused"}
+
+== "a\x01b"
+OK {"plain":"\"\"","plain_err":"value \"a\\x01b\" holds the control character U+0001","quoted":"\"\"","quoted_err":"value \"a\\x01b\" holds the control character U+0001"}

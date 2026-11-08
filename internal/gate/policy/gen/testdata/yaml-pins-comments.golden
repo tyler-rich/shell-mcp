@@ -1,0 +1,261 @@
+# The YAML layer's results for the yamltest corpus, recorded with
+# go.yaml.in/yaml/v3. Regenerate with -update only when the YAML module is
+# meant to change, and review every changed line (docs/ARCHIVE.md, 2026-11-08).
+
+== "\nmax_tier: destructive"
+OK ["OK","OK"]
+
+== "x\nmax_tier: destructive\n"
+OK ["OK","OK"]
+
+== "x\r\nmax_tier: destructive\r\n"
+OK ["OK","OK"]
+
+== "x\rprivileged:\r  enabled: true"
+OK ["OK","OK"]
+
+== "---\nmax_tier: destructive\n..."
+OK ["OK","OK"]
+
+== "# ## #\n#\n##"
+OK ["OK","OK"]
+
+== "- id: evil\n  path: /bin/sh\n  tier: destructive"
+OK ["OK","OK"]
+
+== "a\n\n\nb"
+OK ["OK","OK"]
+
+== "  indented: value"
+OK ["OK","OK"]
+
+== "limits: { max_output_bytes: 4194304 }"
+OK ["OK","OK"]
+
+== "'\"quoted\"' & *alias !!binary |"
+OK ["OK","OK"]
+
+== "write: [/]"
+OK ["OK","OK"]
+
+== "a"
+OK ["OK","OK"]
+
+== "svc-shell"
+OK ["OK","OK"]
+
+== "/srv/app"
+OK ["OK","OK"]
+
+== "**/*.key"
+OK ["OK","OK"]
+
+== "{path:read}"
+OK ["OK","OK"]
+
+== "SOURCE,FSTYPE"
+OK ["OK","OK"]
+
+== "60123"
+OK ["OK","OK"]
+
+== "00000000"
+OK ["OK","OK"]
+
+== "true"
+OK ["OK","OK"]
+
+== "True"
+OK ["OK","OK"]
+
+== "yes"
+OK ["OK","OK"]
+
+== "on"
+OK ["OK","OK"]
+
+== "null"
+OK ["OK","OK"]
+
+== "Null"
+OK ["OK","OK"]
+
+== "~"
+OK ["OK","OK"]
+
+== ""
+OK ["OK","OK"]
+
+== "-0"
+OK ["OK","OK"]
+
+== "-0.0"
+OK ["OK","OK"]
+
+== "+1"
+OK ["OK","OK"]
+
+== "+18446744073709551615"
+OK ["OK","OK"]
+
+== "0x1F"
+OK ["OK","OK"]
+
+== "0o17"
+OK ["OK","OK"]
+
+== "017"
+OK ["OK","OK"]
+
+== "0b101"
+OK ["OK","OK"]
+
+== "1_000"
+OK ["OK","OK"]
+
+== "1e3"
+OK ["OK","OK"]
+
+== ".inf"
+OK ["OK","OK"]
+
+== ".nan"
+OK ["OK","OK"]
+
+== "2001-12-14"
+OK ["OK","OK"]
+
+== "1:20"
+OK ["OK","OK"]
+
+== "<<"
+OK ["OK","OK"]
+
+== "!"
+OK ["OK","OK"]
+
+== "! a"
+OK ["OK","OK"]
+
+== "!!str"
+OK ["OK","OK"]
+
+== "&a"
+OK ["OK","OK"]
+
+== "*a"
+OK ["OK","OK"]
+
+== "a:"
+OK ["OK","OK"]
+
+== ":a"
+OK ["OK","OK"]
+
+== "a: b"
+OK ["OK","OK"]
+
+== "a:b"
+OK ["OK","OK"]
+
+== "#a"
+OK ["OK","OK"]
+
+== "a #b"
+OK ["OK","OK"]
+
+== "a#b"
+OK ["OK","OK"]
+
+== "- a"
+OK ["OK","OK"]
+
+== "-"
+OK ["OK","OK"]
+
+== "?"
+OK ["OK","OK"]
+
+== "? a"
+OK ["OK","OK"]
+
+== "[a]"
+OK ["OK","OK"]
+
+== "{a}"
+OK ["OK","OK"]
+
+== "a,b"
+OK ["OK","OK"]
+
+== "a]"
+OK ["OK","OK"]
+
+== "a}"
+OK ["OK","OK"]
+
+== "'a'"
+OK ["OK","OK"]
+
+== "\"a\""
+OK ["OK","OK"]
+
+== "|"
+OK ["OK","OK"]
+
+== ">"
+OK ["OK","OK"]
+
+== "%a"
+OK ["OK","OK"]
+
+== "@a"
+OK ["OK","OK"]
+
+== "`a"
+OK ["OK","OK"]
+
+== " a"
+OK ["OK","OK"]
+
+== "a "
+OK ["OK","OK"]
+
+== "a\tb"
+OK ["ERR answers: the opening comment: line 1 holds the control character U+0009","ERR a comment line 1 holds the control character U+0009"]
+
+== "a\\b"
+OK ["OK","OK"]
+
+== "..."
+OK ["OK","OK"]
+
+== "---"
+OK ["OK","OK"]
+
+== "é"
+OK ["OK","OK"]
+
+== "a\u2028b"
+OK ["ERR answers: the opening comment: line 1 holds U+2028, which is refused","ERR a comment line 1 holds U+2028, which is refused"]
+
+== "a\u2029b"
+OK ["ERR answers: the opening comment: line 1 holds U+2029, which is refused","ERR a comment line 1 holds U+2029, which is refused"]
+
+== "a\u0085b"
+OK ["ERR answers: the opening comment: line 1 holds U+0085, which is refused","ERR a comment line 1 holds U+0085, which is refused"]
+
+== "a\x7fb"
+OK ["ERR answers: the opening comment: line 1 holds the control character U+007F","ERR a comment line 1 holds the control character U+007F"]
+
+== "a\u0080b"
+OK ["ERR answers: the opening comment: line 1 holds the control character U+0080","ERR a comment line 1 holds the control character U+0080"]
+
+== "a\u009fb"
+OK ["ERR answers: the opening comment: line 1 holds the control character U+009F","ERR a comment line 1 holds the control character U+009F"]
+
+== "\ufeffa"
+OK ["ERR answers: the opening comment: line 1 holds U+FEFF, which is refused","ERR a comment line 1 holds U+FEFF, which is refused"]
+
+== "a\x01b"
+OK ["ERR answers: the opening comment: line 1 holds the control character U+0001","ERR a comment line 1 holds the control character U+0001"]
