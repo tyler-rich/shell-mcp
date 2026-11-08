@@ -160,8 +160,8 @@ func TestInstallSecondAccount(t *testing.T) {
 			t.Errorf("not in order %q:\n%s", seq, strings.Join(h.order, "\n"))
 		}
 	}
-	if !strings.Contains(r.out, "     |+Match User svc-shell-std") {
-		t.Errorf("no diff of the appended block:\n%s", r.out)
+	if !strings.Contains(r.out, dropPath+": replace (root:root 0644)") {
+		t.Errorf("the drop-in not reported replaced:\n%s", r.out)
 	}
 	// The same flags again, the first account's again, and dry runs of both:
 	// only unchanged, nothing written, no reload.
@@ -206,7 +206,7 @@ func TestInstallSecondAccountDryRun(t *testing.T) {
 	if r.code != 0 || !reflect.DeepEqual(h.Snapshot(), r.before) {
 		t.Fatalf("exit %d, changed: %v\n%s", r.code, !reflect.DeepEqual(h.Snapshot(), r.before), r.out)
 	}
-	for _, s := range []string{"file " + dropPath + " root:root 0644: replace", "     |+Match User svc-shell-std", "would run /usr/bin/systemctl reload ssh.service",
+	for _, s := range []string{"file " + dropPath + " root:root 0644: replace", "     | +Match User svc-shell-std", "would run /usr/bin/systemctl reload ssh.service",
 		"would run /usr/sbin/groupadd --gid 60125 svc-shell-std"} {
 		if !strings.Contains(r.out, s) {
 			t.Errorf("dry run lacks %q:\n%s", s, r.out)
@@ -286,7 +286,12 @@ func TestInstallAdoptsHandSplit(t *testing.T) {
 		}
 	}
 	// install alone, on a fresh host with the same keys.
-	g := build(t)
+	g, _ := newHost(t)
+	withPolicies(g)
+	g.Put(keyPath, mustGet(h, keyPath), 0o644, 0, 0)
+	if r := install(t, g); r.code != 0 {
+		t.Fatalf("svc-shell: %d\n%s", r.code, r.out)
+	}
 	g.Put(stdKey, webLine+" shell-mcp\n", 0o644, 0, 0)
 	if r := install(t, g, stdFlags("--policy", opPath)...); r.code != 0 {
 		t.Fatalf("install alone: %d\n%s", r.code, r.out)

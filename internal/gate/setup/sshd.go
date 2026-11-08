@@ -3,6 +3,7 @@ package setup
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -57,19 +58,59 @@ var (
 	ErrDropInEdited  = errors.New("the drop-in's content was edited")
 )
 
+// MaxDropInAccounts bounds the accounts of one drop-in.
+const MaxDropInAccounts = 64
+
 // ParseDropIn reads an existing drop-in as install writes it and returns
-// its accounts in order. Not implemented yet.
+// its accounts in order: exactly DropInFor of distinct plain account names,
+// nothing before, between or after the blocks. A block that does not start
+// with "Match User <name>" for one plain name (another Match criterion, a
+// list of names, Match all) is ErrDropInForeign; anything else that is not
+// install's bytes (an edited block, a missing or extra empty line, a block
+// twice, a comment) is ErrDropInEdited.
 func ParseDropIn(b []byte) ([]string, error) {
-	return nil, fmt.Errorf("%w: not implemented", ErrDropInEdited)
+	var users []string
+	rest := string(b)
+	for {
+		header, _, _ := strings.Cut(rest, "\n")
+		name, ok := strings.CutPrefix(header, "Match User ")
+		if !ok || !ValidName(name) {
+			if f := strings.Fields(header); len(f) > 0 && strings.EqualFold(f[0], "Match") {
+				return nil, fmt.Errorf("%w: %.80q", ErrDropInForeign, header)
+			}
+			return nil, fmt.Errorf("%w: %.80q is not the first line of a block install writes", ErrDropInEdited, header)
+		}
+		switch {
+		case slices.Contains(users, name):
+			return nil, fmt.Errorf("%w: account %s has two blocks", ErrDropInEdited, name)
+		case len(users) == MaxDropInAccounts:
+			return nil, fmt.Errorf("%w: more than %d blocks", ErrDropInEdited, MaxDropInAccounts)
+		case !strings.HasPrefix(rest, string(DropIn(name))):
+			return nil, fmt.Errorf("%w: account %s's block is not install's", ErrDropInEdited, name)
+		}
+		users = append(users, name)
+		rest = rest[len(DropIn(name)):]
+		if rest == "" {
+			return users, nil
+		}
+		if rest[0] != '\n' || len(rest) == 1 {
+			return nil, fmt.Errorf("%w: after account %s's block, the next block must follow after exactly one empty line", ErrDropInEdited, name)
+		}
+		rest = rest[1:]
+	}
 }
 
-// dropInUser is the account an existing drop-in's first line names, or "".
-func dropInUser(b []byte) string {
-	first, _, _ := strings.Cut(string(b), "\n")
-	if f := strings.Fields(first); len(f) == 3 && f[0] == "Match" && f[1] == "User" {
-		return f[2]
+// dropInNames are the plain account names of every "Match User <name>"
+// line of b, in order, each once: for the diff shown when a drop-in was
+// edited.
+func dropInNames(b []byte) []string {
+	var out []string
+	for _, l := range strings.Split(string(b), "\n") {
+		if n, ok := strings.CutPrefix(l, "Match User "); ok && ValidName(n) && !slices.Contains(out, n) && len(out) < MaxDropInAccounts {
+			out = append(out, n)
+		}
 	}
-	return ""
+	return out
 }
 
 // maxSshdT bounds sshd -T's output (it is about 10 KiB).
