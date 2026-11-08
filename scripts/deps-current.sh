@@ -84,7 +84,7 @@ fi
 # why. From the day after its last day the next major fails again, with no
 # edit needed. Fields: requirement, next major path, granted, last day, why.
 next_major_exceptions=(
-	"go.yaml.in/yaml/v3|go.yaml.in/yaml/v4|2026-11-08|2026-12-08|v4.0.0 accepts YAML that v3 refuses at the policy boundary (docs/ARCHIVE.md, 2026-11-08; branch deps/yaml-v4)"
+	"go.yaml.in/yaml/v3|go.yaml.in/yaml/v4|2026-11-08|2026-12-08|v4.0.0 accepts YAML that v3 refuses at the policy boundary (docs/ARCHIVE.md, 2026-11-08; PR #91)"
 )
 date_re='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
 today="$(date -u +%F)"

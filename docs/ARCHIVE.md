@@ -5110,7 +5110,7 @@ Negative controls, part of every run, each shown caught:
 
 **Versions (D-013):** Go 1.27.3, the newest stable with a published `golang:1.27.3-trixie` image; `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing. Direct modules: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6, x/crypto v0.58.0, x/sys v0.49.0. No new image (the proxies' images and the client are the pinned `caddy:2.11.7` and `nginx:1.30.6` of caddy-check and nginx-check). No module dependency added.
 
-### 2026-11-08 — go.yaml.in/yaml/v4 v4.0.0 evaluated and held: v3 kept under a dated exception, every parser's YAML layer pinned (branch deps/yaml-v4)
+### 2026-11-08 — go.yaml.in/yaml/v4 v4.0.0 evaluated and held: v3 kept under a dated exception, every parser's YAML layer pinned (PR #91, branch deps/yaml-v4)
 
 **Scope (the session prompt):** migrate from `go.yaml.in/yaml/v3` to `v4` (v4.0.0, released 2026-11-04) without changing what any parser accepts or refuses, except where v4 is stricter and that is shown. The behaviours were verified at the module source in the pinned `golang:1.27.3-trixie` image's module cache (v3.0.6 `h1:zcDfvjXEqTQmpjniUBLc91xYJMB2c4QOFxEF/LCEckM=`, v4.0.0 `h1:/LG1pNO84Z4l603j/xMn69CcS5OYhMQ/f7l2LoQUGuw=`), and by running both modules side by side on one corpus (a scratch module, not committed). v4 was found to accept a family of inputs v3 refuses, and in flow context to read some text differently. The session stopped and asked, as the prompt requires when restoring v3's behaviour is not straightforward.
 
