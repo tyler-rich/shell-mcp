@@ -15,6 +15,7 @@ package yamltest
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -23,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf16"
 )
 
 // Schema places values in one parser's fields. Every builder returns a
@@ -230,18 +232,13 @@ func Corpus(s *Schema) []Case {
 	return c
 }
 
-// utf16le encodes ASCII-and-BMP text as UTF-16LE (the corpus needs no
-// surrogate pairs).
+// utf16le encodes s as UTF-16LE, without a byte-order mark.
 func utf16le(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if r > 0xffff {
-			panic("yamltest: utf16le: rune outside the BMP")
-		}
-		b.WriteByte(byte(r))
-		b.WriteByte(byte(r >> 8))
+	var b []byte
+	for _, u := range utf16.Encode([]rune(s)) {
+		b = binary.LittleEndian.AppendUint16(b, u)
 	}
-	return b.String()
+	return string(b)
 }
 
 // Scalars is the corpus for the renderers' quoting decisions: texts that
