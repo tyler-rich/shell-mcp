@@ -216,7 +216,7 @@ func TestMulticallCheckPolicy(t *testing.T) {
 			cmd := fmt.Sprintf("commands:\n  - id: x\n    path: %s\n    tier: read\n%%s    templates: %s\n", c.path, c.tpl)
 			gp := filepath.Join(mcPolicyDir, c.name+"-gate.yaml")
 			rootFile(t, gp, "version: 1\nmax_tier: read\npaths:\n  read: [/srv/e2e-gate]\n"+fmt.Sprintf(cmd, ""), 0o644)
-			out := runAs(t, svcShell, gateBin, "check-policy", "--policy", gp)
+			out := runAs(t, svcStd, gateBin, "check-policy", "--policy", gp)
 			wantCheck(t, "gate", out, c.gate, c.gateNote)
 
 			privHead := "version: 1\nclient_uid: 4200001\nsocket_group: svc-shell-priv\nmax_tier: operator\npaths:\n  write: [/srv/e2e-priv-exec/root]\n" +
@@ -237,18 +237,18 @@ func TestMulticallCheckPolicy(t *testing.T) {
 // TestMulticallGateExec: the gate runs uutils' chown and stat, under its
 // sandbox, as the utilities the policy names.
 func TestMulticallGateExec(t *testing.T) {
-	r, _ := gatePolicyAt(t, mcGatePolicy, svcShell, "read", "exec_preview", map[string]any{"command_id": "mc-chown-version", "args": []string{"--version"}})
+	r, _ := gatePolicyAt(t, mcGatePolicy, svcStd, "read", "exec_preview", map[string]any{"command_id": "mc-chown-version", "args": []string{"--version"}})
 	if !r.OK {
 		t.Fatalf("preview refused: %+v", r.Error)
 	}
 	if !strings.Contains(string(r.Data), `"/usr/lib/cargo/bin/coreutils/chown"`) {
 		t.Fatalf("preview's argv[0] is not the resolved utility: %s", r.Data)
 	}
-	r, _ = gatePolicyAt(t, mcGatePolicy, svcShell, "read", "exec", map[string]any{"command_id": "mc-chown-version", "args": []string{"--version"}})
+	r, _ = gatePolicyAt(t, mcGatePolicy, svcStd, "read", "exec", map[string]any{"command_id": "mc-chown-version", "args": []string{"--version"}})
 	if out := stdoutOf(t, &r); !strings.HasPrefix(out, "chown (uutils coreutils)") {
 		t.Fatalf("ran as %q", out)
 	}
-	r, _ = gatePolicyAt(t, mcGatePolicy, svcShell, "read", "exec", map[string]any{"command_id": "mc-stat-owner", "args": []string{"--format=%U", "/srv/e2e-gate"}})
+	r, _ = gatePolicyAt(t, mcGatePolicy, svcStd, "read", "exec", map[string]any{"command_id": "mc-stat-owner", "args": []string{"--format=%U", "/srv/e2e-gate"}})
 	if out := stdoutOf(t, &r); out != "root\n" {
 		t.Fatalf("stat said %q", out)
 	}

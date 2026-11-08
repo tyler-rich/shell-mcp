@@ -343,7 +343,7 @@ chmod 0644 /etc/shell-mcp/gate-operator.yaml
 # file beneath it.
 rm -rf /srv/e2e-gate
 install -o root -g root -m 0755 -d /srv/e2e-gate
-install -o svc-shell -g svc-shell -m 0755 -d /srv/e2e-gate/work
+install -o svc-shell-std -g svc-shell-std -m 0755 -d /srv/e2e-gate/work
 cat >/etc/shell-mcp/gate-hardening.yaml <<EOF
 version: 1
 max_tier: destructive
@@ -465,21 +465,22 @@ printf 'denied by the policy\n' >"$fx/tree/private/note.txt"
 chmod 0644 "$fx/tree/sub/file.txt" "$fx/tree/.netrc" "$fx/tree/private/note.txt"
 ln -s "$fx/tree/sub" "$fx/tree/abs-link"
 
-# Operator-tool roots: the service account owns the two write roots; a file
+# Operator-tool roots: the second service account (the operator policy has
+# no privileged forwarding) owns the two write roots; a file
 # in the read root outside them shows a write being refused. The tests make
 # the files and the repositories.
 ox=/srv/example-ops
 umount "$ox/work/mounted/point" 2>/dev/null || true # a rerun: the tmpfs below
 rm -rf "$ox"
 install -o root -g root -m 0755 -d "$ox"
-install -o svc-shell -g svc-shell -m 0755 -d "$ox/work" "$ox/repos"
+install -o svc-shell-std -g svc-shell-std -m 0755 -d "$ox/work" "$ox/repos"
 printf 'read only\n' >"$ox/readonly.txt"
 chmod 0644 "$ox/readonly.txt"
 # A tmpfs mounted inside a write root (delete_tools_test.go): the delete
 # operations never delete a mount point nor descend into one, so both the
 # mount point and the directory holding it are refused.
-install -o svc-shell -g svc-shell -m 0755 -d "$ox/work/mounted" "$ox/work/mounted/point"
-mount -t tmpfs -o size=1m,mode=0755,uid=4200001,gid=4200001 e2e-delete-mount "$ox/work/mounted/point"
+install -o svc-shell-std -g svc-shell-std -m 0755 -d "$ox/work/mounted" "$ox/work/mounted/point"
+mount -t tmpfs -o size=1m,mode=0755,uid=4200010,gid=4200010 e2e-delete-mount "$ox/work/mounted/point"
 printf 'on the mount\n' >"$ox/work/mounted/point/inside.txt"
 
 # BEGIN privileged-policies: scripts/exposure/gen.sh extracts this block (up to
@@ -675,7 +676,10 @@ done
 /usr/local/libexec/shell-mcp-privd check-policy --policy /etc/shell-mcp/privileged.yaml
 /usr/local/libexec/shell-mcp-privd units --policy /etc/shell-mcp/privileged.yaml --out /etc/systemd/system
 /usr/local/bin/shell-mcp-gate polkit --policy "$bin/gate-rule.yaml" --user svc-shell >/etc/polkit-1/rules.d/60-shell-mcp.rules
-chmod 0644 /etc/polkit-1/rules.d/60-shell-mcp.rules
+# The second account's own rule, in a file of its own (TARGET-SETUP §4,
+# "A second service account"): the operator policy's key runs as svc-shell-std.
+/usr/local/bin/shell-mcp-gate polkit --policy "$bin/gate-rule.yaml" --user svc-shell-std >/etc/polkit-1/rules.d/60-shell-mcp-svc-shell-std.rules
+chmod 0644 /etc/polkit-1/rules.d/60-shell-mcp.rules /etc/polkit-1/rules.d/60-shell-mcp-svc-shell-std.rules
 
 systemctl daemon-reload
 systemctl enable --now example-app.service example-other.service
@@ -686,9 +690,11 @@ systemctl restart polkit.service 2>/dev/null || systemctl restart polkitd.servic
 # A second sshd, on 127.0.0.1:2222 only, with its own configuration, host
 # keys and keys file, so the machine's own sshd is untouched. It has an
 # Ed25519 and an ECDSA host key (the client must negotiate the pinned type),
-# and two client keys for svc-shell, each with restrict, from= and the gate
-# as its forced command: one usable from 127.0.0.1, one only from
-# 192.0.2.1 (TEST-NET-1, never this machine). The directives follow
+# and two client keys for svc-shell (the forwarding policy), each with
+# restrict, from= and the gate as its forced command: one usable from
+# 127.0.0.1, one only from 192.0.2.1 (TEST-NET-1, never this machine); the
+# read and operator keys, whose policies have no privileged forwarding, are
+# svc-shell-std's, in its own keys file (TARGET-SETUP §4). The directives follow
 # SECURITY §5 and are checked with `sshd -t` against this machine's OpenSSH.
 if [ -x /usr/sbin/sshd ]; then
 	sd=/etc/shell-mcp-e2e-sshd
@@ -707,10 +713,12 @@ if [ -x /usr/sbin/sshd ]; then
 	{
 		printf 'restrict,from="127.0.0.1",%s %s\n' "$forced" "$(cut -d' ' -f1,2 "$bin/e2e-client-key.pub")"
 		printf 'restrict,from="192.0.2.1",%s %s\n' "$forced" "$(cut -d' ' -f1,2 "$bin/e2e-client-key-other-from.pub")"
+	} >"$sd/authorized_keys.d/svc-shell"
+	{
 		printf 'restrict,from="127.0.0.1",%s %s\n' "$forced_read" "$(cut -d' ' -f1,2 "$bin/e2e-client-key-read.pub")"
 		printf 'restrict,from="127.0.0.1",%s %s\n' "$forced_operator" "$(cut -d' ' -f1,2 "$bin/e2e-client-key-operator.pub")"
-	} >"$sd/authorized_keys.d/svc-shell"
-	chmod 0644 "$sd/authorized_keys.d/svc-shell"
+	} >"$sd/authorized_keys.d/svc-shell-std"
+	chmod 0644 "$sd/authorized_keys.d/svc-shell" "$sd/authorized_keys.d/svc-shell-std"
 	printf '%s\n' \
 		'Port 2222' \
 		'ListenAddress 127.0.0.1' \
@@ -718,7 +726,7 @@ if [ -x /usr/sbin/sshd ]; then
 		"HostKey $sd/ssh_host_ecdsa_key" \
 		'PidFile /run/shell-mcp-e2e-sshd.pid' \
 		"AuthorizedKeysFile $sd/authorized_keys.d/%u" \
-		'AllowUsers svc-shell' \
+		'AllowUsers svc-shell svc-shell-std' \
 		'AuthenticationMethods publickey' \
 		'PubkeyAuthentication yes' \
 		'PasswordAuthentication no' \

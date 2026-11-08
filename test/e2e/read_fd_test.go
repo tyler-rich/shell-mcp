@@ -19,7 +19,7 @@ import (
 )
 
 // {path:read:fd} end to end (POLICY §4, handoff N-22): the real gate as the
-// service account (svc-shell), with Landlock, passes the descriptor it
+// service account for policies without forwarding (svc-shell-std), with Landlock, passes the descriptor it
 // resolved as /dev/fd/4. setup.sh declares /etc/shell-mcp/gate-fd.yaml
 // over the hardening layout (/srv/e2e-gate, write root
 // /srv/e2e-gate/work): probe-fd (cat, procattrs, write and a delayed cat
@@ -33,7 +33,7 @@ const fdPolicy = "/etc/shell-mcp/gate-fd.yaml"
 func fdExec(t *testing.T, args []string) (preview, run response) {
 	t.Helper()
 	req := map[string]any{"command_id": "probe-fd", "args": args}
-	preview, _ = gatePolicyAt(t, fdPolicy, svcShell, "read", "exec_preview", req)
+	preview, _ = gatePolicyAt(t, fdPolicy, svcStd, "read", "exec_preview", req)
 	hash := strings.Repeat("0", 64)
 	if preview.OK {
 		var p struct {
@@ -45,7 +45,7 @@ func fdExec(t *testing.T, args []string) (preview, run response) {
 		hash = p.PreviewSHA256
 	}
 	req["expected_preview_sha256"] = hash
-	run, _ = gatePolicyAt(t, fdPolicy, svcShell, "read", "exec", req)
+	run, _ = gatePolicyAt(t, fdPolicy, svcStd, "read", "exec", req)
 	return preview, run
 }
 
@@ -56,7 +56,7 @@ func TestGateExecPathReadFD(t *testing.T) {
 	dir := hardRoot + "/fd"
 	ownDir(t, dir, 0, 0, 0o755)
 	f := dir + "/app.conf"
-	ownFile(t, f, "key: value\n", svcShell, 0o644)
+	ownFile(t, f, "key: value\n", svcStd, 0o644)
 	pr, r := fdExec(t, []string{"cat", f})
 	if out := stdoutOf(t, &r); !pr.OK || out != "READ:key: value\n\n" {
 		t.Fatalf("preview %+v %s, ran %q", pr.Error, pr.Data, out)
@@ -98,15 +98,15 @@ func TestGateExecPathReadFD(t *testing.T) {
 // under a read root only, or one it may not write, is not.
 func TestGateExecPathReadFDWritable(t *testing.T) {
 	w := hardWork + "/fdw"
-	ownDir(t, w, svcShell, svcShell, 0o755)
+	ownDir(t, w, svcStd, svcStd, 0o755)
 	writable := w + "/t"
-	ownFile(t, writable, "before\n", svcShell, 0o644)
+	ownFile(t, writable, "before\n", svcStd, 0o644)
 	others := w + "/others"
 	ownFile(t, others, "before\n", exampleApp, 0o644)
 	ro := hardRoot + "/fdro"
 	ownDir(t, ro, 0, 0, 0o755)
 	readOnly := ro + "/t"
-	ownFile(t, readOnly, "before\n", svcShell, 0o644)
+	ownFile(t, readOnly, "before\n", svcStd, 0o644)
 	for _, c := range []struct {
 		name, path, out, content string
 	}{
@@ -140,10 +140,10 @@ func TestGateExecPathReadFDRenamedOut(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := dir + "/t"
-			ownFile(t, f, "ORIGINAL\n", svcShell, 0o644)
+			ownFile(t, f, "ORIGINAL\n", svcStd, 0o644)
 			_ = os.Remove(c.to)
 			done := make(chan []byte, 1)
-			as := cred(t, svcShell)
+			as := cred(t, svcStd)
 			go func() { done <- runGateLine(fdPolicy, as, fdExecLine([]string{"sleep-cat", "3s", f})) }()
 			if !waitForProcess("sleep-cat", 10*time.Second) {
 				t.Fatal("the command did not start")
@@ -175,11 +175,11 @@ func TestGateExecPathReadFDRenamedOut(t *testing.T) {
 // which may read the swapped-in file.
 func TestGateExecOwnerMatchedReadFDRace(t *testing.T) {
 	vault := hardWork + "/vault-read-fd"
-	ownDir(t, vault, svcShell, svcShell, 0o700)
-	ownFile(t, vault+"/t", "SERVICE-ONLY\n", svcShell, 0o600)
+	ownDir(t, vault, svcStd, svcStd, 0o700)
+	ownFile(t, vault+"/t", "SERVICE-ONLY\n", svcStd, 0o600)
 	denied := hardWork + "/denied"
-	ownDir(t, denied, svcShell, svcShell, 0o755)
-	ownFile(t, denied+"/t", "DENIED\n", svcShell, 0o644)
+	ownDir(t, denied, svcStd, svcStd, 0o755)
+	ownFile(t, denied+"/t", "DENIED\n", svcStd, 0o644)
 	rootVault := hardWork + "/root-only-fd"
 	ownDir(t, rootVault, 0, 0, 0o700)
 	rootFile(t, rootVault+"/t", "ROOT-ONLY\n", 0o600)
@@ -259,7 +259,7 @@ func TestGateProtocolVersions(t *testing.T) {
 	} {
 		line := fmt.Sprintf(`{"v":%d,"id":%q,"ceiling":"read","op":"hello","args":{},"timeout_ms":30000}`+"\n", c.v, newID())
 		var r response
-		out := runGateLine(fdPolicy, cred(t, svcShell), line)
+		out := runGateLine(fdPolicy, cred(t, svcStd), line)
 		if err := json.Unmarshal(out, &r); err != nil || r.V != c.frame || r.code() != "protocol_mismatch" || !strings.Contains(r.Error.Message, c.want) {
 			t.Fatalf("v%d: %q", c.v, out)
 		}

@@ -76,7 +76,10 @@ var (
 )
 
 // startServer starts the real shell-mcp (stdio, none auth) with the
-// operator key and profile, plus extra environment.
+// operator key and profile, plus extra environment. The operator key is
+// svc-shell-std's (its policy has no privileged forwarding); a server that
+// uses the forwarding key (e2e-client-key) also sets
+// SHELL_MCP_TARGET_USER=svc-shell.
 func startServer(t *testing.T, log *syncedBuffer, extra ...string) (*mcp.ClientSession, error) {
 	t.Helper()
 	pin := hostPin(t, "ssh_host_ed25519_key.pub")
@@ -88,7 +91,7 @@ func startServer(t *testing.T, log *syncedBuffer, extra ...string) (*mcp.ClientS
 		"SHELL_MCP_TARGET_NAME=app-host",
 		"SHELL_MCP_TARGET_HOST=" + sshdHost,
 		"SHELL_MCP_TARGET_PORT=" + strconv.Itoa(sshdPort),
-		"SHELL_MCP_TARGET_USER=svc-shell",
+		"SHELL_MCP_TARGET_USER=svc-shell-std",
 		"SHELL_MCP_TARGET_HOST_KEYS=" + pin.String(),
 		"SHELL_MCP_SSH_KEY_FILE=" + filepath.Join(bin(), opsKey),
 		"SHELL_MCP_MAX_OUTPUT_BYTES=65536",
@@ -183,7 +186,7 @@ func opsFixtures(t *testing.T) error {
 		gatetest.Git(t, filepath.Join(opsRepos, r.dir), "remote", "set-url", "origin", r.url)
 	}
 	gatetest.Push(t, opsSeed, "upstream.txt", "from upstream\n", "upstream change")
-	if out, err := exec.CommandContext(t.Context(), "chown", "-R", "svc-shell:svc-shell", opsRepos, opsWork).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(t.Context(), "chown", "-R", "svc-shell-std:svc-shell-std", opsRepos, opsWork).CombinedOutput(); err != nil {
 		return fmt.Errorf("chown: %w: %s", err, out)
 	}
 	return nil
@@ -234,7 +237,7 @@ func opsFile(t *testing.T, p, content string, mode os.FileMode) {
 	t.Helper()
 	_ = os.RemoveAll(p)
 	gatetest.WriteFile(t, p, content, mode)
-	if err := os.Chown(p, svcShell, svcShell); err != nil {
+	if err := os.Chown(p, svcStd, svcStd); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -297,7 +300,7 @@ func TestOperatorToolWriteFile(t *testing.T) {
 			t.Fatalf("envelope %v", env)
 		}
 		// Read back independently: the bytes on disk are what was sent.
-		if got := readFile(t, p); got != v1 || sha(got) != d["new_sha256"] || perm(t, p) != 0o640 || owner(t, p) != svcShell {
+		if got := readFile(t, p); got != v1 || sha(got) != d["new_sha256"] || perm(t, p) != 0o640 || owner(t, p) != svcStd {
 			t.Fatalf("on disk: %q mode %v owner %d", got, perm(t, p), owner(t, p))
 		}
 		// The current hash allows the next write (optimistic concurrency).

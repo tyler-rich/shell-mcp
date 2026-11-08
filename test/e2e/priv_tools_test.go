@@ -58,7 +58,7 @@ func privServer(t *testing.T) *mcp.ClientSession {
 			return
 		}
 		// The run's token is redacted only by this server-side pattern.
-		cs, err := startServer(t, &privLog, "SHELL_MCP_PROFILE=admin", "SHELL_MCP_SSH_KEY_FILE="+filepath.Join(bin(), "e2e-client-key"),
+		cs, err := startServer(t, &privLog, "SHELL_MCP_PROFILE=admin", "SHELL_MCP_TARGET_USER=svc-shell", "SHELL_MCP_SSH_KEY_FILE="+filepath.Join(bin(), "e2e-client-key"),
 			"SHELL_MCP_REDACT_PATTERNS=e2eprivtok_[0-9a-f]{32}")
 		if err != nil {
 			privErr = fmt.Sprintf("connect: %v; server log: %s", err, privLog.String())

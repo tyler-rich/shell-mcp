@@ -18,7 +18,7 @@ import (
 
 // The closed repository rule for the gate's git operations, end to end
 // (handoff docs/handoff/S4C-PRIVILEGED.md N-20, POLICY §7): the real gate as
-// the service account (svc-shell), with Landlock, under the hardening policy
+// the service account for policies without forwarding (svc-shell-std), with Landlock, under the hardening policy
 // (setup.sh), whose listed repository /srv/e2e-gate/work/git/repo has the
 // operator tests' local HTTPS server as its origin. Before any git process
 // starts, every git operation refuses the repository when any directory from
@@ -50,20 +50,20 @@ func gitOpArgs() []struct {
 }
 
 // hardRepoFixture clones the operator tests' upstream to hardRepo, every
-// entry svc-shell's and closed.
+// entry svc-shell-std's and closed.
 func hardRepoFixture(t *testing.T) {
 	t.Helper()
 	opsServer(t) // the HTTPS server, its CA in the trust store, and opsBare
-	ownDir(t, hardGit, svcShell, svcShell, 0o755)
+	ownDir(t, hardGit, svcStd, svcStd, 0o755)
 	gatetest.Git(t, hardGit, "clone", "-q", opsBare, "repo")
 	gatetest.Git(t, hardRepo, "remote", "set-url", "origin", opsRemote)
-	if out, err := exec.CommandContext(t.Context(), "chown", "-R", "svc-shell:svc-shell", hardRepo).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(t.Context(), "chown", "-R", "svc-shell-std:svc-shell-std", hardRepo).CombinedOutput(); err != nil {
 		t.Fatalf("chown: %v: %s", err, out)
 	}
 }
 
 // repoState is what a refused git operation must leave alone, read from the
-// filesystem (root running git in svc-shell's repository would be refused
+// filesystem (root running git in svc-shell-std's repository would be refused
 // as dubious ownership): every regular file directly in .git and under
 // .git/refs, and every work-tree file, by content hash, and .git's names.
 func repoState(t *testing.T) string {
@@ -108,8 +108,8 @@ func TestGateGitRepoChain(t *testing.T) {
 				t.Fatalf("%s on a closed repository: %+v", op, r.Error)
 			}
 		}
-		ownFile(t, conf, "changed\n", svcShell, 0o644)
-		ownFile(t, hardRepo+"/untracked.txt", "u\n", svcShell, 0o644)
+		ownFile(t, conf, "changed\n", svcStd, 0o644)
+		ownFile(t, hardRepo+"/untracked.txt", "u\n", svcStd, 0o644)
 		pv := hard(t, "git_discard_preview", map[string]any{"repo": hardRepo, "include_untracked": true})
 		var p struct {
 			PreviewSHA256 string `json:"preview_sha256"`
@@ -126,19 +126,19 @@ func TestGateGitRepoChain(t *testing.T) {
 	})
 
 	// A change for the refused discards to leave alone.
-	ownFile(t, conf, "changed\n", svcShell, 0o644)
-	ownFile(t, hardRepo+"/untracked.txt", "u\n", svcShell, 0o644)
+	ownFile(t, conf, "changed\n", svcStd, 0o644)
+	ownFile(t, hardRepo+"/untracked.txt", "u\n", svcStd, 0o644)
 	for _, lvl := range []struct {
 		name, path, entry string
 		uid               int
 		file              bool
 	}{
 		{"read root", hardRoot, "the directory " + hardRoot, 0, false},
-		{"write root", hardWork, "the directory " + hardWork, svcShell, false},
-		{"intermediate", hardGit, "the directory " + hardGit, svcShell, false},
-		{"repository", hardRepo, "the directory " + hardRepo, svcShell, false},
-		{".git", gitDir, "the directory " + gitDir, svcShell, false},
-		{".git/config", config, "the file " + config, svcShell, true},
+		{"write root", hardWork, "the directory " + hardWork, svcStd, false},
+		{"intermediate", hardGit, "the directory " + hardGit, svcStd, false},
+		{"repository", hardRepo, "the directory " + hardRepo, svcStd, false},
+		{".git", gitDir, "the directory " + gitDir, svcStd, false},
+		{".git/config", config, "the file " + config, svcStd, true},
 	} {
 		closed := os.FileMode(0o755)
 		if lvl.file {
@@ -191,7 +191,7 @@ func TestGateGitRepoChain(t *testing.T) {
 			if err := os.Rename(gitDir, hardRepo+"/real.git"); err != nil {
 				t.Fatal(err)
 			}
-			ownFile(t, gitDir, "gitdir: "+hardRepo+"/real.git\n", svcShell, 0o644)
+			ownFile(t, gitDir, "gitdir: "+hardRepo+"/real.git\n", svcStd, 0o644)
 		}, func(t *testing.T) {
 			if err := os.Remove(gitDir); err != nil {
 				t.Fatal(err)
@@ -200,9 +200,9 @@ func TestGateGitRepoChain(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{"commondir", func(t *testing.T) { ownFile(t, gitDir+"/commondir", opsBare+"\n", svcShell, 0o644) },
+		{"commondir", func(t *testing.T) { ownFile(t, gitDir+"/commondir", opsBare+"\n", svcStd, 0o644) },
 			func(*testing.T) { _ = os.Remove(gitDir + "/commondir") }},
-		{"config.worktree", func(t *testing.T) { ownFile(t, gitDir+"/config.worktree", "[core]\n\tbare = false\n", svcShell, 0o644) },
+		{"config.worktree", func(t *testing.T) { ownFile(t, gitDir+"/config.worktree", "[core]\n\tbare = false\n", svcStd, 0o644) },
 			func(*testing.T) { _ = os.Remove(gitDir + "/config.worktree") }},
 	} {
 		t.Run(s.name, func(t *testing.T) {

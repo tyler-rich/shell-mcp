@@ -16,12 +16,12 @@ import (
 
 // No git process the gate starts enters a submodule, end to end (handoff
 // docs/handoff/S4C-PRIVILEGED.md N-23, POLICY §7): the real gate as the
-// service account (svc-shell), with Landlock, under the hardening policy,
+// service account for policies without forwarding (svc-shell-std), with Landlock, under the hardening policy,
 // on the closed repository of gate_git_chain_test.go with a gitlink at
 // vendor/lib whose directory example-app owns. It holds a repository whose
 // own configuration names a clean filter that only creates a marker file
-// in svc-shell's git directory, applied to a file whose stat data changed,
-// so any git status run inside it as svc-shell runs the filter. Every git
+// in svc-shell-std's git directory, applied to a file whose stat data changed,
+// so any git status run inside it as svc-shell-std runs the filter. Every git
 // operation must answer without creating the marker. Every path and name
 // is invented.
 
@@ -30,7 +30,7 @@ const (
 	subMarker = hardGit + "/submodule-marker"
 )
 
-// asRoot runs git as root in svc-shell's repository (safe.directory: root
+// asRoot runs git as root in svc-shell-std's repository (safe.directory: root
 // is not its owner).
 func asRoot(t *testing.T, dir string, args ...string) {
 	t.Helper()
@@ -55,7 +55,7 @@ func gitlinkRepo(t *testing.T) {
 	gatetest.Mkdir(t, filepath.Dir(subLib), 0o755)
 	gatetest.Git(t, filepath.Dir(subLib), "clone", "-q", src, "lib")
 	gatetest.Git(t, subLib, "config", "filter.marker.clean", "touch "+subMarker+"; cat")
-	if out, err := exec.CommandContext(t.Context(), "chown", "-R", "svc-shell:svc-shell", hardRepo).CombinedOutput(); err != nil {
+	if out, err := exec.CommandContext(t.Context(), "chown", "-R", "svc-shell-std:svc-shell-std", hardRepo).CombinedOutput(); err != nil {
 		t.Fatalf("chown: %v: %s", err, out)
 	}
 	if out, err := exec.CommandContext(t.Context(), "chown", "-R", "example-app:example-app", subLib).CombinedOutput(); err != nil {
@@ -92,7 +92,7 @@ func TestGateGitNeverEntersSubmodule(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			if strings.HasPrefix(c.op, "git_discard") {
-				ownFile(t, conf, "changed\n", svcShell, 0o644)
+				ownFile(t, conf, "changed\n", svcStd, 0o644)
 			}
 			if c.op == "git_discard" {
 				pv := hard(t, "git_discard_preview", map[string]any{"repo": hardRepo, "include_untracked": true})
@@ -107,7 +107,7 @@ func TestGateGitNeverEntersSubmodule(t *testing.T) {
 			subStatDirty(t)
 			r := hard(t, c.op, c.args)
 			if _, err := os.Stat(subMarker); err == nil {
-				t.Fatalf("%s entered the submodule as svc-shell: the filter example-app's configuration names ran (answer %+v)", c.name, r.Error)
+				t.Fatalf("%s entered the submodule as svc-shell-std: the filter example-app's configuration names ran (answer %+v)", c.name, r.Error)
 			}
 			if !r.OK {
 				t.Fatalf("%s with a populated submodule: %+v", c.name, r.Error)

@@ -76,7 +76,14 @@ func clientKey(t *testing.T, name string) *config.PrivateKey {
 
 func sshClient(t *testing.T, pins []config.HostKey, key *config.PrivateKey) *sshx.Client {
 	t.Helper()
-	c, err := sshx.New(&config.Target{Name: "app-host", Host: sshdHost, Port: sshdPort, User: "svc-shell", HostKeys: pins, Key: key},
+	return sshClientAs(t, "svc-shell", pins, key)
+}
+
+// sshClientAs is sshClient for another account of the test sshd
+// (svc-shell-std for the read and operator keys).
+func sshClientAs(t *testing.T, user string, pins []config.HostKey, key *config.PrivateKey) *sshx.Client {
+	t.Helper()
+	c, err := sshx.New(&config.Target{Name: "app-host", Host: sshdHost, Port: sshdPort, User: user, HostKeys: pins, Key: key},
 		sshx.Options{ConnectTimeout: 5 * time.Second})
 	if err != nil {
 		t.Fatal(err)

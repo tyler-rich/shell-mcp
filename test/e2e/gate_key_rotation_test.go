@@ -30,7 +30,7 @@ func TestGateKeyRotation(t *testing.T) {
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chown(dir, svcShell, svcShell); err != nil {
+	if err := os.Chown(dir, svcStd, svcStd); err != nil { // the operator key's account (no forwarding)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })

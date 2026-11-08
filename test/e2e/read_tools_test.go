@@ -205,7 +205,7 @@ func server(t *testing.T) *mcp.ClientSession {
 			"SHELL_MCP_TARGET_NAME=app-host",
 			"SHELL_MCP_TARGET_HOST=" + sshdHost,
 			"SHELL_MCP_TARGET_PORT=" + strconv.Itoa(sshdPort),
-			"SHELL_MCP_TARGET_USER=svc-shell",
+			"SHELL_MCP_TARGET_USER=svc-shell-std",
 			"SHELL_MCP_TARGET_HOST_KEYS=" + pin.String(),
 			"SHELL_MCP_SSH_KEY_FILE=" + filepath.Join(bin(), "e2e-client-key-read"),
 			"SHELL_MCP_REDACT_PATTERNS=e2etok_[0-9a-f]{32}",
@@ -518,7 +518,7 @@ func TestReadToolRunReadCommand(t *testing.T) {
 // at ceiling operator (the read policy's max_tier).
 func gateExec(t *testing.T, id string, args []string) *protocol.Response {
 	t.Helper()
-	c := sshClient(t, []config.HostKey{hostPin(t, "ssh_host_ed25519_key.pub")}, clientKey(t, "e2e-client-key-read"))
+	c := sshClientAs(t, "svc-shell-std", []config.HostKey{hostPin(t, "ssh_host_ed25519_key.pub")}, clientKey(t, "e2e-client-key-read"))
 	resp, err := gateclient.New(gateclient.Options{}).Call(t.Context(), c, protocol.OpExec, protocol.TierOperator,
 		map[string]any{"command_id": id, "args": args}, 20*time.Second)
 	if err != nil {
