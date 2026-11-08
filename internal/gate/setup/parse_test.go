@@ -265,3 +265,37 @@ func FuzzParseSize(f *testing.F) {
 		}
 	})
 }
+
+// FuzzParseDropIn: whatever ParseDropIn accepts is exactly install's own
+// blocks for distinct plain account names, in order, one empty line
+// between two blocks; DropInFor of what it returns is the input, byte for
+// byte.
+func FuzzParseDropIn(f *testing.F) {
+	a, b := string(setup.DropIn("svc-shell")), string(setup.DropIn("svc-shell-std"))
+	for _, s := range []string{a, a + "\n" + b, a + b, a + "\n\n" + b, a + "\n" + a, a + "\nMatch Group admins\n    PermitTTY yes\n", "", "\n", "Match User x\n",
+		strings.Replace(b, "PermitTTY no", "PermitTTY yes", 1), "Match User svc-shell,svc-other\n", a + "\n"} {
+		f.Add([]byte(s))
+	}
+	f.Fuzz(func(t *testing.T, in []byte) {
+		users, err := setup.ParseDropIn(in)
+		if err != nil {
+			if !errors.Is(err, setup.ErrDropInForeign) && !errors.Is(err, setup.ErrDropInEdited) {
+				t.Fatalf("error %v is neither ErrDropInForeign nor ErrDropInEdited", err)
+			}
+			return
+		}
+		if len(users) == 0 {
+			t.Fatal("accepted a drop-in without a block")
+		}
+		seen := map[string]bool{}
+		for _, u := range users {
+			if !setup.ValidName(u) || seen[u] {
+				t.Fatalf("accepted the account %q in %v", u, users)
+			}
+			seen[u] = true
+		}
+		if !bytes.Equal(setup.DropInFor(users), in) {
+			t.Fatalf("accepted %q as %v, whose drop-in is %q", in, users, setup.DropInFor(users))
+		}
+	})
+}

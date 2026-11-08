@@ -35,6 +35,34 @@ func DropIn(user string) []byte {
 	return []byte(b.String())
 }
 
+// DropInFor is the drop-in for several accounts, in their order: each
+// account's DropIn block, with one empty line between two blocks
+// (TARGET-SETUP §7, "With a second account").
+func DropInFor(users []string) []byte {
+	var b []byte
+	for i, u := range users {
+		if i > 0 {
+			b = append(b, '\n')
+		}
+		b = append(b, DropIn(u)...)
+	}
+	return b
+}
+
+// ErrDropInForeign is a drop-in that holds a block install does not write
+// (refused as dropin_other_account); ErrDropInEdited is one whose blocks
+// are install's but whose bytes differ (refused as file_differs).
+var (
+	ErrDropInForeign = errors.New("the drop-in holds a block install did not write")
+	ErrDropInEdited  = errors.New("the drop-in's content was edited")
+)
+
+// ParseDropIn reads an existing drop-in as install writes it and returns
+// its accounts in order. Not implemented yet.
+func ParseDropIn(b []byte) ([]string, error) {
+	return nil, fmt.Errorf("%w: not implemented", ErrDropInEdited)
+}
+
 // dropInUser is the account an existing drop-in's first line names, or "".
 func dropInUser(b []byte) string {
 	first, _, _ := strings.Cut(string(b), "\n")

@@ -62,18 +62,31 @@ type host struct {
 	scanned    [][]uint32
 	runAs      []*execx.Credential
 	checkOut   setupx.Output
-	// sshdOverride makes sshd -T -C for the account report these values.
-	sshdOverride map[string]string
-	sshService   bool
-	sshSocket    bool
-	strictModes  string
+	// sshdOverride makes sshd -T -C for every account with a block report
+	// these values; sshdOverrideFor does it for one account.
+	sshdOverride    map[string]string
+	sshdOverrideFor map[string]map[string]string
+	// pols are the policies by path (h.pol for any other path); loaded
+	// records each LoadPolicy as "path home".
+	pols   map[string]*policy.Policy
+	loaded []string
+	// checkOutFor is check-policy's output for one uid (checkOut for the
+	// others).
+	checkOutFor map[uint32]setupx.Output
+	sshService  bool
+	sshSocket   bool
+	strictModes string
 	// order records writes and runs, in order.
 	order []string
 }
 
-func (h *host) LoadPolicy(_, _ string) (*policy.Policy, error) {
+func (h *host) LoadPolicy(p, home string) (*policy.Policy, error) {
+	h.loaded = append(h.loaded, p+" "+home)
 	if h.polErr != nil {
 		return nil, h.polErr
+	}
+	if pol, ok := h.pols[p]; ok {
+		return pol, nil
 	}
 	return h.pol, nil
 }
@@ -93,6 +106,9 @@ func (h *host) OwnerScan(uids, gids []uint32, _ []string) (setup.ScanResult, err
 func (h *host) RunAs(cred *execx.Credential, _ int, _ ...string) (setupx.Output, error) {
 	h.order = append(h.order, "check-policy")
 	h.runAs = append(h.runAs, cred)
+	if out, ok := h.checkOutFor[cred.UID]; ok {
+		return out, nil
+	}
 	return h.checkOut, nil
 }
 
@@ -106,8 +122,15 @@ func (h *host) Mkdir(p string, mode os.FileMode, owner setupx.Owner) error {
 	return h.Fake.Mkdir(p, mode, owner)
 }
 
+// hasBlock reports whether the drop-in d holds a Match User block for user
+// (at its start or after a line break).
+func hasBlock(d, user string) bool {
+	return strings.HasPrefix(d, "Match User "+user+"\n") || strings.Contains(d, "\nMatch User "+user+"\n")
+}
+
 // sshd answers sshd and systemctl as a real host would, from the fake's
-// files: -T -C for the drop-in's account shows the block's values.
+// files: -T -C for an account with a block in the drop-in shows the
+// block's values.
 func (h *host) programs(f *setuptest.Fake, prog string, args []string) (setupx.Output, error) {
 	h.order = append(h.order, strings.TrimPrefix(prog, "/usr/sbin/")+" "+strings.Join(args, " "))
 	switch prog {
@@ -122,11 +145,14 @@ func (h *host) programs(f *setuptest.Fake, prog string, args []string) (setupx.O
 		vals["strictmodes"] = h.strictModes
 		if len(args) == 3 && args[1] == "-C" {
 			user := strings.TrimPrefix(strings.Split(args[2], ",")[0], "user=")
-			if d, ok := f.Get(dropPath); ok && strings.HasPrefix(d, "Match User "+user+"\n") {
+			if d, ok := f.Get(dropPath); ok && hasBlock(d, user) {
 				for k, v := range blockValues {
 					vals[k] = v
 				}
 				for k, v := range h.sshdOverride {
+					vals[k] = v
+				}
+				for k, v := range h.sshdOverrideFor[user] {
 					vals[k] = v
 				}
 			}
@@ -466,7 +492,9 @@ func TestInstallRefusals(t *testing.T) {
 		{"drop-in differs", func(h *host) {
 			h.Put(dropPath, strings.Replace(string(setup.DropIn("svc-shell")), "PermitTTY no", "PermitTTY yes", 1), 0o644, 0, 0)
 		}, nil, "+    PermitTTY no"},
-		{"drop-in for another account", func(h *host) { h.Put(dropPath, string(setup.DropIn("svc-other")), 0o644, 0, 0) }, nil, "is for account svc-other"},
+		{"drop-in with a block install did not write", func(h *host) {
+			h.Put(dropPath, "Match Group admins\n    PermitTTY yes\n", 0o644, 0, 0)
+		}, nil, "a block install did not write"},
 		{"keys directory group-writable", func(h *host) { h.Dir(setup.KeysDir, 0o775, 0, 0) }, nil, "not a root:root directory of mode 0755"},
 		{"keys file owned by the account", func(h *host) {
 			h.Dir(setup.KeysDir, 0o755, 0, 0)

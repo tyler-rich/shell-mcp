@@ -52,6 +52,9 @@ commands:
   install --policy <file> --principal <label> --from <addr>[,<addr>…] --key <file.pub> --uid <n> --gid <n> […]
                 as root: the service account, the slice, the polkit rule, sshd and the key line
                 (docs/TARGET-SETUP.md §12.1; --dry-run changes nothing)
+  move-key --principal <label> --from-user <name> --to-user <name> […]
+                as root: move a key line from one service account's keys file to another's
+                (docs/TARGET-SETUP.md §12.1; --dry-run changes nothing)
   policy new --answers <file> --out <file>|- [--dry-run]
                 as root: write the gate policy from an answers file and a preset
                 (docs/POLICY.md §9; --out - prints it and writes nothing)
@@ -84,6 +87,8 @@ func runWith(args []string, stdin io.Reader, stdout, stderr io.Writer, mk option
 		return polkitWith(args[1:], stdout, stderr, policy.RootTrust())
 	case "install":
 		return installWith(args[1:], stdout, stderr, setup.NewHost)
+	case "move-key":
+		return moveKeyWith(args[1:], stdout, stderr, setup.NewHost)
 	case "policy":
 		return policyWith(args[1:], stdout, stderr, func() (setupx.Host, error) { return system.NewSystem() })
 	case "host-key":
@@ -477,6 +482,27 @@ func installWith(args []string, stdout, stderr io.Writer, newHost func() (setup.
 	}
 	a := &setupx.Auditor{Stderr: stderr, Syslog: "/dev/log", Tag: "shell-mcp-gate", Component: "gate", DryRun: o.DryRun}
 	return setup.Install(o, h, stdout, a)
+}
+
+// moveKeyWith is shell-mcp-gate move-key (TARGET-SETUP §12.1, "Moving a
+// key between accounts").
+func moveKeyWith(args []string, stdout, stderr io.Writer, newHost func() (setup.Host, error)) int {
+	if helpRequested(args) {
+		_, _ = io.WriteString(stdout, setup.MoveUsage)
+		return 0
+	}
+	o, err := setup.ParseMoveFlags(args)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-gate move-key: %v\n%s", err, setup.MoveUsage)
+		return 2
+	}
+	h, err := newHost()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-gate move-key: %v\n", err)
+		return 1
+	}
+	a := &setupx.Auditor{Stderr: stderr, Syslog: "/dev/log", Tag: "shell-mcp-gate", Component: "gate", DryRun: o.DryRun}
+	return setup.MoveKey(o, h, stdout, a)
 }
 
 // hostKey is shell-mcp-gate host-key (TARGET-SETUP §12.2): this host's pin
