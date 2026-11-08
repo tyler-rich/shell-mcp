@@ -1,0 +1,432 @@
+# The YAML layer's results for the yamltest corpus, recorded with
+# go.yaml.in/yaml/v3. Regenerate with -update only when the YAML module is
+# meant to change, and review every changed line (docs/ARCHIVE.md, 2026-11-08).
+
+== base
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== unknown key
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 3: field zzz_unknown not found in type config.targetsFile"
+
+== two unknown keys
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 3: field zzz_one not found in type config.targetsFile; line 4: field zzz_two not found in type config.targetsFile"
+
+== unknown key in a mapping
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 2: field zzz_unknown not found in type config.fileTarget"
+
+== duplicate key
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 3: mapping key \"targets\" already defined at line 1"
+
+== duplicate key quoted
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 3: mapping key \"targets\" already defined at line 1"
+
+== duplicate key in a mapping
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 2: mapping key \"name\" already defined at line 2"
+
+== string: a list
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 2: cannot unmarshal !!seq into string"
+
+== string: a mapping
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 2: cannot unmarshal !!map into string"
+
+== list: a string
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 3: cannot unmarshal !!str `a` into []string"
+
+== int: text
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 3: cannot unmarshal !!str `abc` into int"
+
+== top level: a list
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 1: cannot unmarshal !!seq into config.targetsFile"
+
+== top level: a string
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 1: cannot unmarshal !!str `hello` into config.targetsFile"
+
+== top level: block scalar at column 0
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 1: cannot unmarshal !!str `` into config.targetsFile"
+
+== empty
+OK null
+
+== comment only
+OK null
+
+== document start only
+OK null
+
+== document end only
+ERR "SHELL_MCP_TARGETS_FILE: yaml: did not find expected node content"
+
+== two documents
+ERR "SHELL_MCP_TARGETS_FILE: must contain exactly one YAML document"
+
+== empty second document
+ERR "SHELL_MCP_TARGETS_FILE: must contain exactly one YAML document"
+
+== second document broken
+ERR "SHELL_MCP_TARGETS_FILE: must contain exactly one YAML document"
+
+== document end
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== document end then comment
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== directive 1.1
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== directive 1.2
+ERR "SHELL_MCP_TARGETS_FILE: yaml: found incompatible YAML document"
+
+== directive 2.0
+ERR "SHELL_MCP_TARGETS_FILE: yaml: found incompatible YAML document"
+
+== unclosed flow at the end
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 3: did not find expected node content"
+
+== tab indentation
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 4: found character that cannot start any token"
+
+== bad indentation
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 1: did not find expected '-' indicator"
+
+== depth over 10000
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 3: exceeded max depth of 10000"
+
+== CR line breaks
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== CRLF line breaks
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== U+2028 in a comment, then a key
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 4: field zzz_unknown not found in type config.targetsFile"
+
+== U+2028 in a comment, then a known key
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== U+2029 in a comment, then a known key
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== U+0085 in a comment, then a known key
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== CR in a comment, then a known key
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== U+2028 in a plain value
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 3: could not find expected ':'"
+
+== U+2029 in a plain value
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 3: could not find expected ':'"
+
+== U+0085 in a plain value
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 3: could not find expected ':'"
+
+== U+2028 in a double-quoted value
+OK [{"Host":"","KeyFile":"","Name":"a\u2028b","Port":0,"User":""}]
+
+== U+2028 in a single-quoted value
+OK [{"Host":"","KeyFile":"","Name":"a\u2028b","Port":0,"User":""}]
+
+== escaped U+2028
+OK [{"Host":"","KeyFile":"","Name":"a\u2028b","Port":0,"User":""}]
+
+== escaped U+0085
+OK [{"Host":"","KeyFile":"","Name":"ab","Port":0,"User":""}]
+
+== escaped U+0080
+OK [{"Host":"","KeyFile":"","Name":"ab","Port":0,"User":""}]
+
+== U+007F in a plain value
+ERR "SHELL_MCP_TARGETS_FILE: yaml: control characters are not allowed"
+
+== U+0080 in a plain value
+ERR "SHELL_MCP_TARGETS_FILE: yaml: control characters are not allowed"
+
+== U+0086 in a plain value
+ERR "SHELL_MCP_TARGETS_FILE: yaml: control characters are not allowed"
+
+== U+009F in a double-quoted value
+ERR "SHELL_MCP_TARGETS_FILE: yaml: control characters are not allowed"
+
+== U+0085 in a double-quoted value
+OK [{"Host":"","KeyFile":"","Name":"a b","Port":0,"User":""}]
+
+== U+007F in a comment
+ERR "SHELL_MCP_TARGETS_FILE: yaml: control characters are not allowed"
+
+== U+0080 in a comment
+ERR "SHELL_MCP_TARGETS_FILE: yaml: control characters are not allowed"
+
+== U+007F in a key
+ERR "SHELL_MCP_TARGETS_FILE: yaml: control characters are not allowed"
+
+== U+0001 in a plain value
+ERR "SHELL_MCP_TARGETS_FILE: yaml: control characters are not allowed"
+
+== NUL
+ERR "SHELL_MCP_TARGETS_FILE: yaml: control characters are not allowed"
+
+== byte-order mark
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== byte-order mark inside a value
+OK [{"Host":"","KeyFile":"","Name":"a﻿b","Port":0,"User":""}]
+
+== invalid UTF-8
+ERR "SHELL_MCP_TARGETS_FILE: yaml: invalid leading UTF-8 octet"
+
+== UTF-16LE with U+007F
+ERR "SHELL_MCP_TARGETS_FILE: yaml: control characters are not allowed"
+
+== UTF-16LE
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== empty key
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 2: did not find expected key"
+
+== empty key with a mapping value
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 2: did not find expected key"
+
+== colon only
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 2: did not find expected key"
+
+== empty key in a flow mapping
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 1: did not find expected node content"
+
+== empty key in a flow list
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 2: did not find expected node content"
+
+== explicit empty key
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== explicit empty key in a flow mapping
+OK [{"Host":"","KeyFile":"","Name":"","Port":0,"User":""}]
+
+== anchored empty key
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== null key
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== key and colon 1024 characters apart
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== key and colon 1025 characters apart
+ERR "SHELL_MCP_TARGETS_FILE: yaml: mapping values are not allowed in this context"
+
+== key and colon 1100 characters apart
+ERR "SHELL_MCP_TARGETS_FILE: yaml: mapping values are not allowed in this context"
+
+== long unknown key
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 3: could not find expected ':'"
+
+== long explicit unknown key
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 3: field kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk not found in type config.targetsFile"
+
+== long key in a flow mapping
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 1: did not find expected ',' or '}'"
+
+== long anchor before a key
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 3: could not find expected ':'"
+
+== anchor and alias
+OK [{"Host":"","HostKeys":["a","a"],"KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== undefined alias
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unknown anchor 'nope' referenced"
+
+== recursive alias
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 3: cannot unmarshal !!seq into string"
+
+== anchor name !
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 2: did not find expected alphabetic or numeric character"
+
+== anchor name with a dot
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 3: did not find expected alphabetic or numeric character"
+
+== alias expansion
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 3: cannot unmarshal !!seq into string; line 3: cannot unmarshal !!seq into string; line 3: cannot unmarshal !!seq into string; line 3: cannot unmarshal !!seq into string; line 3: cannot unmarshal !!seq into string; line 3: cannot unmarshal !!seq into string"
+
+== non-specific tag, empty
+OK [{"Host":"","KeyFile":"","Name":"","Port":0,"User":""}]
+
+== non-specific tag, text
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== non-specific tag on an int
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== str tag on an int
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 3: cannot unmarshal !!str `5` into int"
+
+== int tag on quoted text
+OK [{"Host":"","KeyFile":"","Name":"a","Port":5,"User":""}]
+
+== custom tag
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== binary tag
+OK [{"Host":"","KeyFile":"","Name":"hello","Port":0,"User":""}]
+
+== tag ended by a flow indicator
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 2: did not find expected whitespace or line break"
+
+== tag ended by ]
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 2: did not find expected ',' or ']'"
+
+== merge
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== merge, then the key
+OK [{"Host":"","KeyFile":"","Name":"b","Port":0,"User":""}]
+
+== merge of a list
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== merge with an unknown key
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 2: field zzz_unknown not found in type config.fileTarget"
+
+== merge of a scalar
+ERR "SHELL_MCP_TARGETS_FILE: yaml: map merge requires map or sequence of maps as the value"
+
+== merge quoted
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 2: field << not found in type config.fileTarget"
+
+== two merges
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 2: mapping key \"<<\" already defined at line 2"
+
+== << as a string value
+OK [{"Host":"","KeyFile":"","Name":"\u003c\u003c","Port":0,"User":""}]
+
+== << in a list
+OK [{"Host":"","HostKeys":["\u003c\u003c"],"KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== colon before } in a flow mapping
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 2: field name: not found in type config.fileTarget"
+
+== colon before ] in a flow list
+OK [{"Host":"","HostKeys":["a:"],"KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== colon before , in a flow list
+OK [{"Host":"","HostKeys":["a:","b"],"KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== pair in a flow list
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 3: cannot unmarshal !!map into string"
+
+== trailing comma
+OK [{"Host":"","HostKeys":["a","b"],"KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== comment in a flow list
+OK [{"Host":"","HostKeys":["a","b"],"KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== string 00000000
+OK [{"Host":"","KeyFile":"","Name":"00000000","Port":0,"User":""}]
+
+== string true
+OK [{"Host":"","KeyFile":"","Name":"true","Port":0,"User":""}]
+
+== string null
+OK [{"Host":"","KeyFile":"","Name":"","Port":0,"User":""}]
+
+== string ~
+OK [{"Host":"","KeyFile":"","Name":"","Port":0,"User":""}]
+
+== string empty
+OK [{"Host":"","KeyFile":"","Name":"","Port":0,"User":""}]
+
+== string -0
+OK [{"Host":"","KeyFile":"","Name":"-0","Port":0,"User":""}]
+
+== string 0x1F
+OK [{"Host":"","KeyFile":"","Name":"0x1F","Port":0,"User":""}]
+
+== string 1e3
+OK [{"Host":"","KeyFile":"","Name":"1e3","Port":0,"User":""}]
+
+== string .inf
+OK [{"Host":"","KeyFile":"","Name":".inf","Port":0,"User":""}]
+
+== string yes
+OK [{"Host":"","KeyFile":"","Name":"yes","Port":0,"User":""}]
+
+== string 2001-12-14
+OK [{"Host":"","KeyFile":"","Name":"2001-12-14","Port":0,"User":""}]
+
+== string 1:20
+OK [{"Host":"","KeyFile":"","Name":"1:20","Port":0,"User":""}]
+
+== string a:b
+OK [{"Host":"","KeyFile":"","Name":"a:b","Port":0,"User":""}]
+
+== string a #b
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== string a#b
+OK [{"Host":"","KeyFile":"","Name":"a#b","Port":0,"User":""}]
+
+== string literal block
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 3: could not find expected ':'"
+
+== string folded block
+ERR "SHELL_MCP_TARGETS_FILE: yaml: line 3: could not find expected ':'"
+
+== int 00000000
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== int 0x10
+OK [{"Host":"","KeyFile":"","Name":"a","Port":16,"User":""}]
+
+== int 0o17
+OK [{"Host":"","KeyFile":"","Name":"a","Port":15,"User":""}]
+
+== int 017
+OK [{"Host":"","KeyFile":"","Name":"a","Port":15,"User":""}]
+
+== int 0b101
+OK [{"Host":"","KeyFile":"","Name":"a","Port":5,"User":""}]
+
+== int -0
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== int -0.0
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== int 1_000
+OK [{"Host":"","KeyFile":"","Name":"a","Port":1000,"User":""}]
+
+== int +5
+OK [{"Host":"","KeyFile":"","Name":"a","Port":5,"User":""}]
+
+== int 3.0
+OK [{"Host":"","KeyFile":"","Name":"a","Port":3,"User":""}]
+
+== int 3.5
+OK [{"Host":"","KeyFile":"","Name":"a","Port":3,"User":""}]
+
+== int 1e3
+OK [{"Host":"","KeyFile":"","Name":"a","Port":1000,"User":""}]
+
+== int .5
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== int 9223372036854775808
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 3: cannot unmarshal !!int `9223372...` into int"
+
+== int +18446744073709551615
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 3: cannot unmarshal !!float `+184467...` into int"
+
+== int quoted
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 3: cannot unmarshal !!str `5` into int"
+
+== int true
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 3: cannot unmarshal !!bool `true` into int"
+
+== int null
+OK [{"Host":"","KeyFile":"","Name":"a","Port":0,"User":""}]
+
+== int empty
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 3: cannot unmarshal !!str `` into int"
+
+== int .inf
+ERR "SHELL_MCP_TARGETS_FILE: yaml: unmarshal errors:; line 3: cannot unmarshal !!float `.inf` into int"

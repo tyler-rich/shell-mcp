@@ -1,0 +1,528 @@
+# The YAML layer's results for the yamltest corpus, recorded with
+# go.yaml.in/yaml/v3. Regenerate with -update only when the YAML module is
+# meant to change, and review every changed line (docs/ARCHIVE.md, 2026-11-08).
+
+== base
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== unknown key
+ERR "answers: yaml: unmarshal errors:\n  line 4: field zzz_unknown not found in type gen.rawAnswers"
+
+== two unknown keys
+ERR "answers: yaml: unmarshal errors:\n  line 4: field zzz_one not found in type gen.rawAnswers\n  line 5: field zzz_two not found in type gen.rawAnswers"
+
+== unknown key in a mapping
+ERR "answers: yaml: unmarshal errors:\n  line 2: field zzz_unknown not found in type gen.rawAccount"
+
+== duplicate key
+ERR "answers: yaml: unmarshal errors:\n  line 4: mapping key \"preset\" already defined at line 1"
+
+== duplicate key quoted
+ERR "answers: yaml: unmarshal errors:\n  line 4: mapping key \"preset\" already defined at line 1"
+
+== duplicate key in a mapping
+ERR "answers: yaml: unmarshal errors:\n  line 2: mapping key \"user\" already defined at line 2"
+
+== string: a list
+ERR "answers: yaml: unmarshal errors:\n  line 6: cannot unmarshal !!seq into string"
+
+== string: a mapping
+ERR "answers: yaml: unmarshal errors:\n  line 6: cannot unmarshal !!map into string"
+
+== list: a string
+ERR "answers: yaml: unmarshal errors:\n  line 3: cannot unmarshal !!str `a` into []string"
+
+== int: text
+ERR "answers: yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `abc` into int64"
+
+== top level: a list
+ERR "answers: yaml: unmarshal errors:\n  line 1: cannot unmarshal !!seq into gen.rawAnswers"
+
+== top level: a string
+ERR "answers: yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `hello` into gen.rawAnswers"
+
+== top level: block scalar at column 0
+ERR "answers: yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `` into gen.rawAnswers"
+
+== empty
+ERR "answers: the file is empty"
+
+== comment only
+ERR "answers: the file is empty"
+
+== document start only
+ERR "answers preset: is required (read-only, operator or admin)"
+
+== document end only
+ERR "answers: yaml: did not find expected node content"
+
+== two documents
+ERR "answers: the file must be a single YAML document"
+
+== empty second document
+ERR "answers: the file must be a single YAML document"
+
+== second document broken
+ERR "answers: the file must be a single YAML document"
+
+== document end
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== document end then comment
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== directive 1.1
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== directive 1.2
+ERR "answers: yaml: found incompatible YAML document"
+
+== directive 2.0
+ERR "answers: yaml: found incompatible YAML document"
+
+== unclosed flow at the end
+ERR "answers: yaml: line 4: did not find expected node content"
+
+== tab indentation
+ERR "answers: yaml: line 5: found character that cannot start any token"
+
+== bad indentation
+ERR "answers: yaml: line 3: did not find expected key"
+
+== depth over 10000
+ERR "answers: yaml: line 3: exceeded max depth of 10000"
+
+== CR line breaks
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== CRLF line breaks
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== U+2028 in a comment, then a key
+ERR "answers: yaml: unmarshal errors:\n  line 5: field zzz_unknown not found in type gen.rawAnswers"
+
+== U+2028 in a comment, then a known key
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== U+2029 in a comment, then a known key
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== U+0085 in a comment, then a known key
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== CR in a comment, then a known key
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== U+2028 in a plain value
+ERR "answers: yaml: line 7: could not find expected ':'"
+
+== U+2029 in a plain value
+ERR "answers: yaml: line 7: could not find expected ':'"
+
+== U+0085 in a plain value
+ERR "answers: yaml: line 7: could not find expected ':'"
+
+== U+2028 in a double-quoted value
+ERR "answers commands[0].description: \"a\\u2028b\" holds U+2028, which is refused"
+
+== U+2028 in a single-quoted value
+ERR "answers commands[0].description: \"a\\u2028b\" holds U+2028, which is refused"
+
+== escaped U+2028
+ERR "answers commands[0].description: \"a\\u2028b\" holds U+2028, which is refused"
+
+== escaped U+0085
+ERR "answers commands[0].description: \"a\\u0085b\" holds U+0085, which is refused"
+
+== escaped U+0080
+ERR "answers commands[0].description: \"a\\u0080b\" holds the control character U+0080"
+
+== U+007F in a plain value
+ERR "answers: yaml: control characters are not allowed"
+
+== U+0080 in a plain value
+ERR "answers: yaml: control characters are not allowed"
+
+== U+0086 in a plain value
+ERR "answers: yaml: control characters are not allowed"
+
+== U+009F in a double-quoted value
+ERR "answers: yaml: control characters are not allowed"
+
+== U+0085 in a double-quoted value
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"a b","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== U+007F in a comment
+ERR "answers: yaml: control characters are not allowed"
+
+== U+0080 in a comment
+ERR "answers: yaml: control characters are not allowed"
+
+== U+007F in a key
+ERR "answers: yaml: control characters are not allowed"
+
+== U+0001 in a plain value
+ERR "answers: yaml: control characters are not allowed"
+
+== NUL
+ERR "answers: yaml: control characters are not allowed"
+
+== byte-order mark
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== byte-order mark inside a value
+ERR "answers commands[0].description: \"a\\ufeffb\" holds U+FEFF, which is refused"
+
+== invalid UTF-8
+ERR "answers: yaml: invalid leading UTF-8 octet"
+
+== UTF-16LE with U+007F
+ERR "answers: yaml: control characters are not allowed"
+
+== UTF-16LE
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== empty key
+ERR "answers: yaml: line 3: did not find expected key"
+
+== empty key with a mapping value
+ERR "answers: yaml: line 3: did not find expected key"
+
+== colon only
+ERR "answers: yaml: line 3: did not find expected key"
+
+== empty key in a flow mapping
+ERR "answers: yaml: line 1: did not find expected node content"
+
+== empty key in a flow list
+ERR "answers: yaml: line 2: did not find expected node content"
+
+== explicit empty key
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== explicit empty key in a flow mapping
+ERR "answers account: is required: { user: <name>, uid: <n> }"
+
+== anchored empty key
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== null key
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== key and colon 1024 characters apart
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== key and colon 1025 characters apart
+ERR "answers: yaml: mapping values are not allowed in this context"
+
+== key and colon 1100 characters apart
+ERR "answers: yaml: mapping values are not allowed in this context"
+
+== long unknown key
+ERR "answers: yaml: line 4: could not find expected ':'"
+
+== long explicit unknown key
+ERR "answers: yaml: unmarshal errors:\n  line 4: field kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk not found in type gen.rawAnswers"
+
+== long key in a flow mapping
+ERR "answers: yaml: line 1: did not find expected ',' or '}'"
+
+== long anchor before a key
+ERR "answers: yaml: line 4: could not find expected ':'"
+
+== anchor and alias
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["a","a"]}
+
+== undefined alias
+ERR "answers: yaml: unknown anchor 'nope' referenced"
+
+== recursive alias
+ERR "answers: yaml: unmarshal errors:\n  line 3: cannot unmarshal !!seq into string"
+
+== anchor name !
+ERR "answers: yaml: line 6: did not find expected alphabetic or numeric character"
+
+== anchor name with a dot
+ERR "answers: yaml: line 3: did not find expected alphabetic or numeric character"
+
+== alias expansion
+ERR "answers: yaml: unmarshal errors:\n  line 3: cannot unmarshal !!seq into string\n  line 3: cannot unmarshal !!seq into string\n  line 3: cannot unmarshal !!seq into string\n  line 3: cannot unmarshal !!seq into string\n  line 3: cannot unmarshal !!seq into string\n  line 3: cannot unmarshal !!seq into string"
+
+== non-specific tag, empty
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== non-specific tag, text
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"a","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== non-specific tag on an int
+ERR "answers account: is required: { user: <name>, uid: <n> }"
+
+== str tag on an int
+ERR "answers: yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `5` into int64"
+
+== int tag on quoted text
+OK {"Account":{"UID":5,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only"}
+
+== custom tag
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"a","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== binary tag
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"hello","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== tag ended by a flow indicator
+ERR "answers account.user: \"\" is not a user name (^[a-z_][a-z0-9_-]{0,31}$)"
+
+== tag ended by ]
+ERR "answers: yaml: line 2: did not find expected ',' or ']'"
+
+== merge
+OK {"Account":{"UID":60123,"User":"a"},"Header":"","Landlock":"","Preset":"read-only"}
+
+== merge, then the key
+OK {"Account":{"UID":60123,"User":"b"},"Header":"","Landlock":"","Preset":"read-only"}
+
+== merge of a list
+OK {"Account":{"UID":60123,"User":"a"},"Header":"","Landlock":"","Preset":"read-only"}
+
+== merge with an unknown key
+ERR "answers: yaml: unmarshal errors:\n  line 2: field zzz_unknown not found in type gen.rawAccount"
+
+== merge of a scalar
+ERR "answers: yaml: map merge requires map or sequence of maps as the value"
+
+== merge quoted
+ERR "answers: yaml: unmarshal errors:\n  line 2: field << not found in type gen.rawAccount"
+
+== two merges
+ERR "answers: yaml: unmarshal errors:\n  line 2: mapping key \"<<\" already defined at line 2"
+
+== << as a string value
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"\u003c\u003c","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== << in a list
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["\u003c\u003c"]}
+
+== colon before } in a flow mapping
+ERR "answers account: is required: { user: <name>, uid: <n> }"
+
+== colon before ] in a flow list
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["a:"]}
+
+== colon before , in a flow list
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["a:","b"]}
+
+== pair in a flow list
+ERR "answers: yaml: unmarshal errors:\n  line 3: cannot unmarshal !!map into string"
+
+== trailing comma
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["a","b"]}
+
+== comment in a flow list
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["a","b"]}
+
+== string 00000000
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"00000000","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== string true
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"true","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== string null
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== string ~
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== string empty
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== string -0
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"-0","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== string 0x1F
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"0x1F","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== string 1e3
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"1e3","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== string .inf
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":".inf","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== string yes
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"yes","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== string 2001-12-14
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"2001-12-14","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== string 1:20
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"1:20","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== string a:b
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"a:b","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== string a #b
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"a","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== string a#b
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"a#b","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== string literal block
+ERR "answers: yaml: line 7: could not find expected ':'"
+
+== string folded block
+ERR "answers: yaml: line 7: could not find expected ':'"
+
+== int 00000000
+ERR "answers account.uid: 0 is not in 1..4294967294 (the service account is never root)"
+
+== int 0x10
+OK {"Account":{"UID":16,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only"}
+
+== int 0o17
+OK {"Account":{"UID":15,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only"}
+
+== int 017
+OK {"Account":{"UID":15,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only"}
+
+== int 0b101
+OK {"Account":{"UID":5,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only"}
+
+== int -0
+ERR "answers account.uid: 0 is not in 1..4294967294 (the service account is never root)"
+
+== int -0.0
+ERR "answers account.uid: 0 is not in 1..4294967294 (the service account is never root)"
+
+== int 1_000
+OK {"Account":{"UID":1000,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only"}
+
+== int +5
+OK {"Account":{"UID":5,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only"}
+
+== int 3.0
+OK {"Account":{"UID":3,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only"}
+
+== int 3.5
+OK {"Account":{"UID":3,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only"}
+
+== int 1e3
+OK {"Account":{"UID":1000,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only"}
+
+== int .5
+ERR "answers account.uid: 0 is not in 1..4294967294 (the service account is never root)"
+
+== int 9223372036854775808
+ERR "answers: yaml: unmarshal errors:\n  line 4: cannot unmarshal !!int `9223372...` into int64"
+
+== int +18446744073709551615
+ERR "answers: yaml: unmarshal errors:\n  line 4: cannot unmarshal !!float `+184467...` into int64"
+
+== int quoted
+ERR "answers: yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `5` into int64"
+
+== int true
+ERR "answers: yaml: unmarshal errors:\n  line 4: cannot unmarshal !!bool `true` into int64"
+
+== int null
+ERR "answers account: is required: { user: <name>, uid: <n> }"
+
+== int empty
+ERR "answers: yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `` into int64"
+
+== int .inf
+ERR "answers: yaml: unmarshal errors:\n  line 4: cannot unmarshal !!float `.inf` into int64"
+
+== bool true
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":true,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== bool True
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":true,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== bool TRUE
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":true,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== bool yes
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":true,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== bool on
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":true,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== bool Off
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== bool y
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":true,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== bool n
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== bool 1
+ERR "answers: yaml: unmarshal errors:\n  line 6: cannot unmarshal !!int `1` into bool"
+
+== bool "true"
+ERR "answers: yaml: unmarshal errors:\n  line 6: cannot unmarshal !!str `true` into bool"
+
+== bool null
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== header comment
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"first\n\nthird","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== header comment, no blank line
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== header comment with a tab
+ERR "answers: the opening comment: line 1 holds the control character U+0009"
+
+== header comment without a space
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"first","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== header comment with U+2028
+ERR "answers: yaml: line 4: mapping values are not allowed in this context"
+
+== header comment with U+2028, then a key
+ERR "answers: yaml: unmarshal errors:\n  line 2: field max_tier not found in type gen.rawAnswers"
+
+== header comment with U+2029
+ERR "answers: yaml: line 4: mapping values are not allowed in this context"
+
+== header comment with U+0085
+ERR "answers: yaml: line 4: mapping values are not allowed in this context"
+
+== header comment with CR
+ERR "answers: yaml: line 4: mapping values are not allowed in this context"
+
+== header comment with U+007F
+ERR "answers: yaml: control characters are not allowed"
+
+== header comment with U+0080
+ERR "answers: yaml: control characters are not allowed"
+
+== header comment with U+FEFF
+ERR "answers: the opening comment: line 1 holds U+FEFF, which is refused"
+
+== comment above a command
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"about a\nsecond line","Description":"","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""},{"Comment":"about b","Description":"","ID":"b","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== comment above a command, flow entries
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"about a","Description":"","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== comment between commands key and list
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"about a\n","Description":"","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== comment after the last command
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== line comment on a command
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Commands":[{"Comment":"","Description":"","ID":"a","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":""}],"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}
+
+== comment above root
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"admin","Root":{"Comment":"about root","Read":["/etc/example-app"],"SocketGroup":{"GID":60124,"Name":"svc-shell-priv"}}}
+
+== comment above root, blank line between
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"admin","Root":{"Comment":"","Read":["/etc/example-app"],"SocketGroup":{"GID":60124,"Name":"svc-shell-priv"}}}
+
+== comment above a root command
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"admin","Root":{"Commands":[{"Acknowledge":"","Comment":"about r","Description":"","ID":"r","Path":"","ReadsPrivateKeys":false,"RootEquivalent":false,"Tier":"","Unit":""}],"Comment":"","Read":["/etc/example-app"],"SocketGroup":{"GID":60124,"Name":"svc-shell-priv"}}}
+
+== comment at the end
+OK {"Account":{"UID":60123,"User":"svc-shell"},"Header":"","Landlock":"","Preset":"read-only","Read":["/srv/app"]}

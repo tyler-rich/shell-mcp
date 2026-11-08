@@ -1,0 +1,465 @@
+# The YAML layer's results for the yamltest corpus, recorded with
+# go.yaml.in/yaml/v3. Regenerate with -update only when the YAML module is
+# meant to change, and review every changed line (docs/ARCHIVE.md, 2026-11-08).
+
+== base
+OK {"MaxTier":"read","Version":1}
+
+== unknown key
+ERR "yaml: unmarshal errors:\n  line 3: field zzz_unknown not found in type policy.rawPolicy"
+
+== two unknown keys
+ERR "yaml: unmarshal errors:\n  line 3: field zzz_one not found in type policy.rawPolicy\n  line 4: field zzz_two not found in type policy.rawPolicy"
+
+== unknown key in a mapping
+ERR "yaml: unmarshal errors:\n  line 3: field zzz_unknown not found in type policy.rawSandbox"
+
+== duplicate key
+ERR "yaml: unmarshal errors:\n  line 3: mapping key \"version\" already defined at line 1"
+
+== duplicate key quoted
+ERR "yaml: unmarshal errors:\n  line 3: mapping key \"version\" already defined at line 1"
+
+== duplicate key in a mapping
+ERR "yaml: unmarshal errors:\n  line 3: mapping key \"landlock\" already defined at line 3"
+
+== string: a list
+ERR "yaml: unmarshal errors:\n  line 2: cannot unmarshal !!seq into string"
+
+== string: a mapping
+ERR "yaml: unmarshal errors:\n  line 2: cannot unmarshal !!map into string"
+
+== list: a string
+ERR "yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `a` into []string"
+
+== int: text
+ERR "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `abc` into int"
+
+== top level: a list
+ERR "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!seq into policy.rawPolicy"
+
+== top level: a string
+ERR "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `hello` into policy.rawPolicy"
+
+== top level: block scalar at column 0
+ERR "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `` into policy.rawPolicy"
+
+== empty
+ERR "policy is empty"
+
+== comment only
+ERR "policy is empty"
+
+== document start only
+OK {}
+
+== document end only
+ERR "yaml: did not find expected node content"
+
+== two documents
+ERR "policy must be a single YAML document"
+
+== empty second document
+ERR "policy must be a single YAML document"
+
+== second document broken
+ERR "policy must be a single YAML document"
+
+== document end
+OK {"MaxTier":"read","Version":1}
+
+== document end then comment
+OK {"MaxTier":"read","Version":1}
+
+== directive 1.1
+OK {"MaxTier":"read","Version":1}
+
+== directive 1.2
+ERR "yaml: found incompatible YAML document"
+
+== directive 2.0
+ERR "yaml: found incompatible YAML document"
+
+== unclosed flow at the end
+ERR "yaml: line 3: did not find expected node content"
+
+== tab indentation
+ERR "yaml: line 4: found character that cannot start any token"
+
+== bad indentation
+ERR "yaml: line 3: mapping values are not allowed in this context"
+
+== depth over 10000
+ERR "yaml: line 4: exceeded max depth of 10000"
+
+== CR line breaks
+OK {"MaxTier":"read","Version":1}
+
+== CRLF line breaks
+OK {"MaxTier":"read","Version":1}
+
+== U+2028 in a comment, then a key
+ERR "yaml: unmarshal errors:\n  line 4: field zzz_unknown not found in type policy.rawPolicy"
+
+== U+2028 in a comment, then a known key
+OK {"MaxTier":"read","Version":1}
+
+== U+2029 in a comment, then a known key
+OK {"MaxTier":"read","Version":1}
+
+== U+0085 in a comment, then a known key
+OK {"MaxTier":"read","Version":1}
+
+== CR in a comment, then a known key
+OK {"MaxTier":"read","Version":1}
+
+== U+2028 in a plain value
+ERR "yaml: line 3: could not find expected ':'"
+
+== U+2029 in a plain value
+ERR "yaml: line 3: could not find expected ':'"
+
+== U+0085 in a plain value
+ERR "yaml: line 3: could not find expected ':'"
+
+== U+2028 in a double-quoted value
+OK {"MaxTier":"a\u2028b","Version":1}
+
+== U+2028 in a single-quoted value
+OK {"MaxTier":"a\u2028b","Version":1}
+
+== escaped U+2028
+OK {"MaxTier":"a\u2028b","Version":1}
+
+== escaped U+0085
+OK {"MaxTier":"ab","Version":1}
+
+== escaped U+0080
+OK {"MaxTier":"ab","Version":1}
+
+== U+007F in a plain value
+ERR "yaml: control characters are not allowed"
+
+== U+0080 in a plain value
+ERR "yaml: control characters are not allowed"
+
+== U+0086 in a plain value
+ERR "yaml: control characters are not allowed"
+
+== U+009F in a double-quoted value
+ERR "yaml: control characters are not allowed"
+
+== U+0085 in a double-quoted value
+OK {"MaxTier":"a b","Version":1}
+
+== U+007F in a comment
+ERR "yaml: control characters are not allowed"
+
+== U+0080 in a comment
+ERR "yaml: control characters are not allowed"
+
+== U+007F in a key
+ERR "yaml: control characters are not allowed"
+
+== U+0001 in a plain value
+ERR "yaml: control characters are not allowed"
+
+== NUL
+ERR "yaml: control characters are not allowed"
+
+== byte-order mark
+OK {"MaxTier":"read","Version":1}
+
+== byte-order mark inside a value
+OK {"MaxTier":"a﻿b","Version":1}
+
+== invalid UTF-8
+ERR "yaml: invalid leading UTF-8 octet"
+
+== UTF-16LE with U+007F
+ERR "yaml: control characters are not allowed"
+
+== UTF-16LE
+OK {"MaxTier":"read","Version":1}
+
+== empty key
+ERR "yaml: line 2: did not find expected key"
+
+== empty key with a mapping value
+ERR "yaml: line 2: did not find expected key"
+
+== colon only
+ERR "yaml: line 2: did not find expected key"
+
+== empty key in a flow mapping
+ERR "yaml: line 2: did not find expected node content"
+
+== empty key in a flow list
+ERR "yaml: line 3: did not find expected node content"
+
+== explicit empty key
+OK {"MaxTier":"read","Version":1}
+
+== explicit empty key in a flow mapping
+OK {"MaxTier":"read","Sandbox":{},"Version":1}
+
+== anchored empty key
+OK {"MaxTier":"read","Version":1}
+
+== null key
+OK {"MaxTier":"read","Version":1}
+
+== key and colon 1024 characters apart
+OK {"MaxTier":"read","Version":1}
+
+== key and colon 1025 characters apart
+ERR "yaml: mapping values are not allowed in this context"
+
+== key and colon 1100 characters apart
+ERR "yaml: mapping values are not allowed in this context"
+
+== long unknown key
+ERR "yaml: line 3: could not find expected ':'"
+
+== long explicit unknown key
+ERR "yaml: unmarshal errors:\n  line 3: field kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk not found in type policy.rawPolicy"
+
+== long key in a flow mapping
+ERR "yaml: line 2: did not find expected ',' or '}'"
+
+== long anchor before a key
+ERR "yaml: line 3: could not find expected ':'"
+
+== anchor and alias
+OK {"MaxTier":"read","Paths":{"Read":["a","a"]},"Version":1}
+
+== undefined alias
+ERR "yaml: unknown anchor 'nope' referenced"
+
+== recursive alias
+ERR "yaml: unmarshal errors:\n  line 4: cannot unmarshal !!seq into string"
+
+== anchor name !
+ERR "yaml: line 2: did not find expected alphabetic or numeric character"
+
+== anchor name with a dot
+ERR "yaml: line 4: did not find expected alphabetic or numeric character"
+
+== alias expansion
+ERR "yaml: unmarshal errors:\n  line 4: cannot unmarshal !!seq into string\n  line 4: cannot unmarshal !!seq into string\n  line 4: cannot unmarshal !!seq into string\n  line 4: cannot unmarshal !!seq into string\n  line 4: cannot unmarshal !!seq into string\n  line 4: cannot unmarshal !!seq into string"
+
+== non-specific tag, empty
+OK {"Version":1}
+
+== non-specific tag, text
+OK {"MaxTier":"a","Version":1}
+
+== non-specific tag on an int
+OK {"MaxTier":"read"}
+
+== str tag on an int
+ERR "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `5` into int"
+
+== int tag on quoted text
+OK {"MaxTier":"read","Version":5}
+
+== custom tag
+OK {"MaxTier":"a","Version":1}
+
+== binary tag
+OK {"MaxTier":"hello","Version":1}
+
+== tag ended by a flow indicator
+ERR "yaml: line 3: did not find expected whitespace or line break"
+
+== tag ended by ]
+ERR "yaml: line 3: did not find expected ',' or ']'"
+
+== merge
+OK {"MaxTier":"read","Sandbox":{"Landlock":"a"},"Version":1}
+
+== merge, then the key
+OK {"MaxTier":"read","Sandbox":{"Landlock":"b"},"Version":1}
+
+== merge of a list
+OK {"MaxTier":"read","Sandbox":{"Landlock":"a"},"Version":1}
+
+== merge with an unknown key
+ERR "yaml: unmarshal errors:\n  line 3: field zzz_unknown not found in type policy.rawSandbox"
+
+== merge of a scalar
+ERR "yaml: map merge requires map or sequence of maps as the value"
+
+== merge quoted
+ERR "yaml: unmarshal errors:\n  line 3: field << not found in type policy.rawSandbox"
+
+== two merges
+ERR "yaml: unmarshal errors:\n  line 3: mapping key \"<<\" already defined at line 3"
+
+== << as a string value
+OK {"MaxTier":"\u003c\u003c","Version":1}
+
+== << in a list
+OK {"MaxTier":"read","Paths":{"Read":["\u003c\u003c"]},"Version":1}
+
+== colon before } in a flow mapping
+ERR "yaml: unmarshal errors:\n  line 3: field landlock: not found in type policy.rawSandbox"
+
+== colon before ] in a flow list
+OK {"MaxTier":"read","Paths":{"Read":["a:"]},"Version":1}
+
+== colon before , in a flow list
+OK {"MaxTier":"read","Paths":{"Read":["a:","b"]},"Version":1}
+
+== pair in a flow list
+ERR "yaml: unmarshal errors:\n  line 4: cannot unmarshal !!map into string"
+
+== trailing comma
+OK {"MaxTier":"read","Paths":{"Read":["a","b"]},"Version":1}
+
+== comment in a flow list
+OK {"MaxTier":"read","Paths":{"Read":["a","b"]},"Version":1}
+
+== string 00000000
+OK {"MaxTier":"00000000","Version":1}
+
+== string true
+OK {"MaxTier":"true","Version":1}
+
+== string null
+OK {"Version":1}
+
+== string ~
+OK {"Version":1}
+
+== string empty
+OK {"MaxTier":"","Version":1}
+
+== string -0
+OK {"MaxTier":"-0","Version":1}
+
+== string 0x1F
+OK {"MaxTier":"0x1F","Version":1}
+
+== string 1e3
+OK {"MaxTier":"1e3","Version":1}
+
+== string .inf
+OK {"MaxTier":".inf","Version":1}
+
+== string yes
+OK {"MaxTier":"yes","Version":1}
+
+== string 2001-12-14
+OK {"MaxTier":"2001-12-14","Version":1}
+
+== string 1:20
+OK {"MaxTier":"1:20","Version":1}
+
+== string a:b
+OK {"MaxTier":"a:b","Version":1}
+
+== string a #b
+OK {"MaxTier":"a","Version":1}
+
+== string a#b
+OK {"MaxTier":"a#b","Version":1}
+
+== string literal block
+OK {"MaxTier":"a\nb\n","Version":1}
+
+== string folded block
+OK {"MaxTier":"a b\n","Version":1}
+
+== int 00000000
+OK {"MaxTier":"read","Version":0}
+
+== int 0x10
+OK {"MaxTier":"read","Version":16}
+
+== int 0o17
+OK {"MaxTier":"read","Version":15}
+
+== int 017
+OK {"MaxTier":"read","Version":15}
+
+== int 0b101
+OK {"MaxTier":"read","Version":5}
+
+== int -0
+OK {"MaxTier":"read","Version":0}
+
+== int -0.0
+OK {"MaxTier":"read","Version":0}
+
+== int 1_000
+OK {"MaxTier":"read","Version":1000}
+
+== int +5
+OK {"MaxTier":"read","Version":5}
+
+== int 3.0
+OK {"MaxTier":"read","Version":3}
+
+== int 3.5
+OK {"MaxTier":"read","Version":3}
+
+== int 1e3
+OK {"MaxTier":"read","Version":1000}
+
+== int .5
+OK {"MaxTier":"read","Version":0}
+
+== int 9223372036854775808
+ERR "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!int `9223372...` into int"
+
+== int +18446744073709551615
+ERR "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!float `+184467...` into int"
+
+== int quoted
+ERR "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `5` into int"
+
+== int true
+ERR "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!bool `true` into int"
+
+== int null
+OK {"MaxTier":"read"}
+
+== int empty
+ERR "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `` into int"
+
+== int .inf
+ERR "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!float `.inf` into int"
+
+== bool true
+OK {"MaxTier":"read","Packages":{"AllowRecover":false,"AllowUpdateIndex":false,"AllowUpgrade":true,"Enabled":false,"Manager":""},"Version":1}
+
+== bool True
+OK {"MaxTier":"read","Packages":{"AllowRecover":false,"AllowUpdateIndex":false,"AllowUpgrade":true,"Enabled":false,"Manager":""},"Version":1}
+
+== bool TRUE
+OK {"MaxTier":"read","Packages":{"AllowRecover":false,"AllowUpdateIndex":false,"AllowUpgrade":true,"Enabled":false,"Manager":""},"Version":1}
+
+== bool yes
+OK {"MaxTier":"read","Packages":{"AllowRecover":false,"AllowUpdateIndex":false,"AllowUpgrade":true,"Enabled":false,"Manager":""},"Version":1}
+
+== bool on
+OK {"MaxTier":"read","Packages":{"AllowRecover":false,"AllowUpdateIndex":false,"AllowUpgrade":true,"Enabled":false,"Manager":""},"Version":1}
+
+== bool Off
+OK {"MaxTier":"read","Packages":{"AllowRecover":false,"AllowUpdateIndex":false,"AllowUpgrade":false,"Enabled":false,"Manager":""},"Version":1}
+
+== bool y
+OK {"MaxTier":"read","Packages":{"AllowRecover":false,"AllowUpdateIndex":false,"AllowUpgrade":true,"Enabled":false,"Manager":""},"Version":1}
+
+== bool n
+OK {"MaxTier":"read","Packages":{"AllowRecover":false,"AllowUpdateIndex":false,"AllowUpgrade":false,"Enabled":false,"Manager":""},"Version":1}
+
+== bool 1
+ERR "yaml: unmarshal errors:\n  line 4: cannot unmarshal !!int `1` into bool"
+
+== bool "true"
+ERR "yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `true` into bool"
+
+== bool null
+OK {"MaxTier":"read","Packages":{"AllowRecover":false,"AllowUpdateIndex":false,"AllowUpgrade":false,"Enabled":false,"Manager":""},"Version":1}
