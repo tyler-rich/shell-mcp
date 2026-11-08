@@ -272,10 +272,10 @@ func (s *server) run(stdin io.Reader) *protocol.Response {
 	if runDir == "" {
 		runDir = install.HelperRunDir
 	}
-	if err := install.CheckSocketGroup(&install.SocketGroupEnv{Identity: o.Identity, RunDir: runDir, Forwarding: p.Privileged.Enabled}); err != nil {
+	if serr := install.CheckSocketGroup(&install.SocketGroupEnv{Identity: o.Identity, RunDir: runDir, Forwarding: p.Privileged.Enabled}); serr != nil {
 		msg := "gate installation is insecure"
 		var ie *install.Error
-		if errors.As(err, &ie) {
+		if errors.As(serr, &ie) {
 			msg = ie.Wire
 		}
 		return Failure("", protocol.CodeInstallInsecure, msg)

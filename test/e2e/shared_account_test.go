@@ -41,7 +41,7 @@ func TestSharedAccountNoForwardingRefused(t *testing.T) {
 			}
 			_ = json.Unmarshal(e.Data, &res)
 			t.Fatalf("the gate served a policy without privileged forwarding to an account in the socket group (hello: %s, sandbox %s); "+
-				"the probe through exec asked %s for priv_policy: %s %q", hello.code(), sandboxOf(hello), sock, e.code(), strings.TrimSpace(res.Stdout))
+				"the probe through exec asked %s for priv_policy: %s %q", hello.code(), sandboxOf(&hello), sock, e.code(), strings.TrimSpace(res.Stdout))
 		}
 		if !strings.Contains(hello.Error.Message, "socket group") || !strings.Contains(hello.Error.Message, "second service account") {
 			t.Fatalf("the refusal must name the cause and the fix: %q", hello.Error.Message)
@@ -50,7 +50,7 @@ func TestSharedAccountNoForwardingRefused(t *testing.T) {
 			t.Fatalf("exec of the probe as svc-shell: %s %s", r.code(), r.Data)
 		}
 	}
-	cmd := exec.CommandContext(t.Context(), gateBin, "check-policy", "--policy", sharedPolicy) //nolint:gosec // G204: the installed gate with setup.sh's policy
+	cmd := exec.CommandContext(t.Context(), gateBin, "check-policy", "--policy", sharedPolicy)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred(t, svcShell)}
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin"}
 	cmd.Dir = "/"
@@ -71,7 +71,7 @@ func TestSharedAccountSecondAccountCannotReachHelper(t *testing.T) {
 	if hello.code() != "ok" {
 		t.Fatalf("hello as svc-shell-std: %s %+v", hello.code(), hello.Error)
 	}
-	t.Logf("sandbox as svc-shell-std: %s", sandboxOf(hello))
+	t.Logf("sandbox as svc-shell-std: %s", sandboxOf(&hello))
 	for _, sock := range []string{socketPath, broadSocket} {
 		r, _ := gatePolicyAt(t, sharedPolicy, svcStd, "read", "exec", map[string]any{"command_id": "probe-priv-ask", "args": []string{"priv-ask", sock}})
 		var res struct {
@@ -85,7 +85,7 @@ func TestSharedAccountSecondAccountCannotReachHelper(t *testing.T) {
 
 // sandboxOf is a hello answer's kernel Landlock ABI and what it enforces on
 // Unix sockets, for the test's messages.
-func sandboxOf(r response) string {
+func sandboxOf(r *response) string {
 	var h struct {
 		Sandbox struct {
 			KernelABI         int    `json:"kernel_abi"`

@@ -24,7 +24,7 @@ import (
 
 // runDir makes a secure helper socket directory with the named socket nodes
 // and returns it and the nodes' gid.
-func runDir(t *testing.T, sockets ...string) (string, uint32) {
+func runDir(t *testing.T, sockets ...string) (dir string, gid uint32) {
 	t.Helper()
 	d := filepath.Join(gatetest.SecureDir(t), "run-shell-mcp")
 	gatetest.Mkdir(t, d, 0o711)
