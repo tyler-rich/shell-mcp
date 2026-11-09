@@ -105,7 +105,7 @@ One request per SSH session, UTF-8 JSON, newline-terminated, on stdin. One respo
 
 ### 4.0 Versions
 
-- **Version 1** is shell-mcp 0.1.x. **Version 2** is shell-mcp 0.2.0 (handoff N-22, maintainer decision 2026-10-25: a new version, not amended in place). Its wire changes: `exec_preview` and `exec` report `fds`, the descriptors a command is given (`{path:read:fd}`, POLICY §4), and `exec_preview`'s hash moves to the domain `shell-mcp exec preview v2`, which covers each descriptor's number, path, device and inode. No op, request field, error code or envelope changed.
+- **Version 1** is shell-mcp 0.1.x. **Version 2** is shell-mcp 0.2.0 and 0.3.0 (handoff N-22, maintainer decision 2026-10-25: a new version, not amended in place). Its wire changes: `exec_preview` and `exec` report `fds`, the descriptors a command is given (`{path:read:fd}`, POLICY §4), and `exec_preview`'s hash moves to the domain `shell-mcp exec preview v2`, which covers each descriptor's number, path, device and inode. No op, request field, error code or envelope changed.
 - **Version 2 is frozen from the `v0.2.0` tag.** Until the tag it was open for additions in place, and only additively (maintainer decision 2026-10-26); the additions below are all of them. From `v0.2.0` on, any wire change (an op, a request or response field, an error code, a hash domain or the envelope) is a new version. No operation is reserved for it.
   - **Added in place (S6-4, handoff N-5, the private-key half):** the read-tier privileged op `priv_hash_file`, `{path}` → `{path, size, sha256, binary, lines, private_key}`, never content (PRIVILEGED §6), in the core unit. The gate forwards it at tier `read` like `priv_read_file`. No request field, error code or envelope changed. A server of this release asks a helper from before the addition (an unreleased version 2 build) for an op it does not know: `unknown_op`, and the overwrite's preview is refused before any approval.
   - **Added in place (S7-3, handoff N-5, the gate's half):** the read-tier gate op `hash_file`, `{path}` → `{path, size, sha256, binary, lines, private_key}`, never content, under `read_file`'s path rules (POLICY §3), refused above 256 MiB (`too_large`); `hello` lists it after `read_file`. The server's `shell_write_file`, `shell_copy_path` and `shell_move_path` previews hash an existing destination with it instead of reading it (TOOLS.md). No request field, error code or envelope changed. A server of this release asks a gate from before the addition (an unreleased version 2 build) for an op it does not know: `unknown_op`, and the overwrite's preview is refused before any approval.
@@ -165,7 +165,7 @@ One request per SSH session, UTF-8 JSON, newline-terminated, on stdin. One respo
   "ok": true,
   "data": { … op-specific … },
   "warnings": [],
-  "gate": { "version": "0.2.0", "principal": "readonly-key", "policy_sha256": "…", "max_tier": "read", "duration_ms": 12 }
+  "gate": { "version": "0.3.0", "principal": "readonly-key", "policy_sha256": "…", "max_tier": "read", "duration_ms": 12 }
 }
 ```
 
@@ -173,8 +173,8 @@ A response the gate forwarded from the privileged helper also carries `helper`, 
 
 ```json
 { "v": 2, "id": "0b5c…", "ok": true, "data": { … }, "warnings": [],
-  "gate":   { "version": "0.2.0", "principal": "admin-key", "policy_sha256": "…", "max_tier": "destructive", "duration_ms": 31 },
-  "helper": { "version": "0.2.0", "principal": "shell-mcp-privd", "policy_sha256": "…", "max_tier": "operator", "unit": "core", "duration_ms": 9 } }
+  "gate":   { "version": "0.3.0", "principal": "admin-key", "policy_sha256": "…", "max_tier": "destructive", "duration_ms": 31 },
+  "helper": { "version": "0.3.0", "principal": "shell-mcp-privd", "policy_sha256": "…", "max_tier": "operator", "unit": "core", "duration_ms": 9 } }
 ```
 
 Failure: `"ok": false, "error": {"code": "<closed set>", "message": "<one line, no content>"}`. Exec ops report process results in `data` (`exit_code`, `signal`, `stdout`, `stderr`, `stdout_truncated`, `stderr_truncated`, `timed_out`) and use `ok: true` whenever the process was started — a non-zero exit is data, not a gate error.
@@ -268,7 +268,7 @@ targets:
   "exec": { "exit_code": 0, "signal": null, "timed_out": false, "stdout_truncated": false, "stderr_truncated": false },
   "verified": true,
   "warnings": [],
-  "gate": { "version": "0.2.0", "principal": "operator-key", "max_tier": "operator", "policy_sha256": "…" }
+  "gate": { "version": "0.3.0", "principal": "operator-key", "max_tier": "operator", "policy_sha256": "…" }
 }
 ```
 

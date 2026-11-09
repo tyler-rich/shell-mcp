@@ -5,7 +5,7 @@
 # The builder runs on the build machine's platform and cross-compiles for the
 # target (TARGETOS/TARGETARCH, set by BuildKit), so the arm64 image needs no
 # emulation: the final stage only copies the binary.
-FROM --platform=$BUILDPLATFORM golang:1.27.3-trixie@sha256:c65ecfe613b539ac74c62a4c3b2c27e8f8a6076384c8f27e8a3c0f3be17cc385 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.3-trixie@sha256:af1bfc2614ebb1dbd31af514b78740fd678850e76498762b425ecee4c5c6ea80 AS builder
 
 ARG VERSION=dev
 ARG REVISION=dev
