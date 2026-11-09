@@ -5270,3 +5270,94 @@ The "no refusal" cases at serve (`…NotMemberServes`, `…NoHelperServes`, `…
 **e2e-host shard 4 failed on `6885c49`** (run 42488576017): `TestOperatorToolRunCommand/refusal_destructive_command` stopped at its control call with `auth_failed_ssh: the target refused the client key`. The control (`gateExecAt`) sends an exec straight to the gate with the operator key, through `sshClient`, which always names `svc-shell`. The harness commit above moved that key into `svc-shell-std`'s keys file and missed this one caller, so the test sshd refused it. The fix is in the test only: `gateExecAt` takes the account, and the control names `svc-shell-std`, as `gateExec` already did for the read key. No other caller dials a moved key: every other `sshClient` call uses `e2e-client-key` or `e2e-client-key-other-from`, which stay on `svc-shell`. The failing run on `6885c49` is the failing-first evidence. The e2e tests run only on GitHub-hosted runners, so there was no local run to show.
 
 **Versions (D-013):** Go 1.27.3, the newest stable with a published `golang:1.27.3-trixie` image. `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing. Direct modules: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6, x/crypto v0.58.0, x/sys v0.49.0. CI tools: Trivy v0.76.2, Grype v0.121.2 and syft v1.57.0, each bumped here (`chore(deps)`). golangci-lint v2.15.0, govulncheck v1.9.0, actionlint v1.7.12, gitleaks v8.30.1 and cosign v3.1.4 were already current. No dependency added.
+
+### 2026-11-08 — `install` for several service accounts per host, and `shell-mcp-gate move-key` (the follow-up to PR #90) (branch feat/install-multi-account)
+
+**Scope (the session prompt):** exactly the three things PR #90's entry scoped for this follow-up: a `Match` block per account in the one sshd drop-in, the polkit rule per account, and a key move between accounts as one transaction with rollback, each writing the bytes PR #90's hand steps write. No change to the protocol, the helper, either policy schema, unit generation or any dependency (go.yaml.in/yaml stays on v3 under PR #91's exception). Out of scope: release notes and version strings, the yaml narrow profile, keys list/revoke, uninstall.
+
+**This supersedes S8's "one service account per host"** (handoff §4.A's drop-in row, S8-1's `dropin_other_account` for a drop-in naming another account). The reason is PR #90's finding: below Landlock ABI 9 an account in the helper's socket group lets any command of a key without privileged forwarding ask the helper for root actions, so a host with both kinds of key needs two accounts, and the gate now refuses the shared layout. `install` therefore has to manage several accounts on one host.
+
+**Decided with the maintainer this session (2026-11-08):**
+- **The command:** a new subcommand, `shell-mcp-gate move-key --principal <label> --from-user <a> --to-user <b> [--dry-run] [--no-reload]`. It selects the line by its forced command's `--principal`, as the hand steps' `grep -F -- '--principal <label>"'` does. Rejected: selecting by `--key` file; an `install --move-from` flag, which would render a line instead of moving the existing bytes.
+- **A forwarding mismatch:** the move applies `install`'s per-account rules for the moved line's policy, with no new flags.
+  - A policy with `privileged.enabled` is refused outright: it stays on the socket-group account, and `install` puts it on another.
+  - The destination's supplementary groups must be exactly what that policy allows (`systemd-journal` only with a journal section, nothing else). A socket-group account is therefore refused for a key without forwarding (S8 Q5, PR #90).
+  - A missing `systemd-journal` is refused too, since `move-key` adds or removes no membership.
+  - `check-policy` then runs as the destination account, as `install`'s step 4.
+  - Rejected: `--socket-group`/`--socket-gid` on the move; reading the group from the helper's socket files, which a container without a running helper never has.
+- **Polkit in the move,** in the same transaction:
+  - The destination gets its rule for the moved policy when it has `services.control`: `60-shell-mcp.rules` for the drop-in's first account, `60-shell-mcp-<user>.rules` otherwise. A file with other content there is refused.
+  - The source's rule is removed when it is exactly the moved policy's and no remaining line's policy needs it, and kept when one does.
+  - The move is refused (`polkit_conflict`) when a remaining line needs another rule. The hand steps say "regenerate" there; `install` already refuses two different rules for one account, so that state only arises by hand.
+- **A move half done:** `install` cannot create an account without installing a key. The install-only upgrade therefore first installs the key being moved on the new account, which writes the same line byte for byte; the key then logs in as either account, and the server can be switched without a gap. `move-key` treats exactly that line in both files as a move half done and removes it from the source. Any other bytes for the same key in the destination are refused (`key_in_destination`). Once moved (no source line names the principal, one destination line does), the same command reports only `unchanged`. This reconciles the prompt's "refuse when … already in the destination" with its same-flags idempotency rule.
+- **The journal rule stays per key (S8 Q5).** setup-check's first run found the conflict:
+  - PR #90's hand step adds `systemd-journal` to the second account "if a policy it serves has a journal section", while `install` judges the allowed groups from the one key it installs.
+  - An account serving a journal key (the operator preset) and a key without one (read-only) is therefore refused for the latter (`supplementary_group`, "member of systemd-journal").
+  - The maintainer kept the rule. TARGET-SETUP §4 and README step 3 now say that an account's keys agree on the journal.
+  - The acceptance tests give the second account a service-control policy without a journal section (`service.yaml`, invented).
+  - Rejected: allowing `systemd-journal` when any key of the account needs it, a change to S8 Q5 beyond the three items.
+
+**What `install` does now:**
+- **The drop-in:** `DropInFor(accounts)`, each account's `DropIn` block in the order `install` added them, with one empty line between two.
+  - An account without a block gets it appended (class `replace`, a diff in the dry run), and sshd is reloaded as after any drop-in change (PR #90's finding: the new account's keys are refused until then).
+  - Re-running for an account that is there changes nothing.
+  - `sshd -T -C` now checks every account's block after the writes, not only the installed one's, so an append that breaks the first block is rolled back.
+- **`ParseDropIn`** accepts only exactly install's blocks, for distinct plain names, at most 64.
+  - A block whose header is another `Match` line (another criterion, a list of names, `Match all`; the keyword in any case) is `ErrDropInForeign`, refused as `dropin_other_account` ("a block install did not write").
+  - Anything else is `ErrDropInEdited`, refused as `file_differs` with a diff against install's blocks for the names the file holds: an edited block, a comment, no or two empty lines between blocks, an empty line at the end, a block twice, no final line break, an empty file.
+- **Polkit:** `PolkitRuleFor(user, first)` is `60-shell-mcp.rules` for the account of the drop-in's first block and `60-shell-mcp-<user>.rules` for any other. It is written only with `services.control`, exactly `polkit.Rule`'s output. The SSH files are now planned before polkit, so that the first account is known.
+- **The keys file** is read by one function for `install` and `move-key` (`readKeys`), with the same checks and messages. Its behaviour is unchanged.
+- **Every S8-1 refusal applies to each account** as to the first. The tests show each as the only refusal for a second account: the first account's uid or gid, the socket group's gid, the `from=` floor, membership of the socket group without forwarding, membership of `docker`, a forwarding policy without the socket group flags, and the owner scan of the new account's own ids.
+
+**What `move-key` does,** in order (TARGET-SETUP §12.1, "Moving a key between accounts"):
+1. Checks: root, not a forced command, the binary and `CredentialSupported`, and `sshd` (and `systemctl` unless `--no-reload`) by the chain rule. Both accounts must exist with `/bin/sh` and a block in a drop-in that `ParseDropIn` accepts. `StrictModes` must be yes, and both keys files must pass install's line checks.
+2. The selection: exactly one source line names the principal. The moved line's policy is loaded for the destination's home, and the account and polkit rules above apply.
+3. `check-policy` as the destination, before any write.
+4. The writes, through the journal: the destination's rule, the destination's keys file (the line appended byte for byte), the source's keys file without the line (an empty file when it was the last one, as `grep -v` leaves it), then the source's rule removed.
+5. Both keys files are read back (the line once in the destination, its key nowhere in the source), then `sshd -t` and `sshd -T -C` run for every account and for a name that is not one.
+6. The reload when a keys file changed, and a NOTE to switch the server's target user.
+
+Any failure after the first write restores every file, and a run leaves no temp file. `TestMoveKeyRollback` covers the destination's block not in force, `sshd -t` failing, a failed write of the source, a failed removal of the source's rule, and a failed read-back. The audit names the fingerprint, principal, policy and its hash, never the key.
+
+**PR #90's recorded bytes against what `install` and `move-key` write:**
+- **Byte-identical:** the account entries, the slice drop-in, the drop-in, the keys files and the second account's polkit rule.
+  - setup-check builds the drop-in (`DropIn(first) + "\n" + DropIn(second)`) with §7's own `{ cat; echo; sed '1s/…/'; }` command, the keys files with §7's `grep -F`, `cat` and `grep -vF` commands, and the rule with §8's `polkit` command.
+  - Its `state` comparison of a hand-split host with one made by `install` alone found no difference in paths, owners, modes, types, SHA-256s, `passwd`, `group` or the shadow password field.
+- **Not bytes, but found:**
+  - The journal rule above.
+  - The first account keeps `systemd-journal` after its journal keys move, and `install` then refuses it for its remaining keys. Documented with `usermod -r -G systemd-journal svc-shell`: `usermod -r` exists in all three images' shadow, while `gpasswd`, which would also do it, is setuid there.
+  - The hand steps' "regenerate the first account's rule" case, which `move-key` refuses as described above.
+
+**Tests, failing first.**
+- Commit `7bdaa7d` holds the tests with inert plumbing: `ParseDropIn`, `ParseMoveFlags` and `MoveKey` refuse, and `DropInFor` and `PolkitRuleFor` are renderers.
+- Against it, 75 test results failed. Among them: every case of `TestInstallSecondAccount`, `…SecondAccountDryRun`, `…AdoptsHandSplit`, `…SecondAccountRefusals` (each per-account refusal, because the old install also refused `dropin_other_account`), `…PolkitPerAccount` and `…SecondAccountRollback`; `TestParseDropIn`; the new foreign-block case of `TestInstallRefusals`; and every move-key test and cmd test (`TestMoveKey*`).
+- Some `TestInstallDropInRefusals` cases pass on the old code by design: they are guards that the old code also refused.
+- Commit `03fe970` made every one pass.
+- `FuzzParseDropIn` (new; whatever it accepts round-trips through `DropInFor`, and its names are distinct and plain): 60 s, 34.1 million executions, no finding. `FuzzParseKeyLine` again, since the keys file reader was refactored: 60 s, 28.0 million executions, no finding.
+
+**Acceptance in `scripts/setup-check/`** on Debian 13, Ubuntu 24.04 and Ubuntu 26.04:
+- **(1) PR #90's hand steps, adopted:** a host built with 0.2.0's shared layout and then PR #90's hand steps as TARGET-SETUP's reference part writes them (`target.sh hand-shared`, `hand-split`). `install` for svc-shell's admin key and for svc-shell-std's two keys reports only `unchanged`.
+- **(2) `install` alone:** a fresh host taken to the same accounts by `install` alone is byte-identical to it.
+- **(3) The upgrade by `install` and `move-key` over SSH,** on another host with the shared layout and `sshd -D`. Every login names its account: the `login`, `serves` and `refused` helpers take the account and the key, and none defaults to svc-shell, which is what failed PR #90's shard 4. The checks:
+  - both keys log in as svc-shell before;
+  - `install` for svc-shell-std; its key is refused until sshd reloads (SIGHUP, the container's reload), then logs in as either account;
+  - `move-key --dry-run` changes nothing; `move-key` finishes the move; the key logs in as svc-shell-std and is refused as svc-shell; the same command again is `unchanged`;
+  - a third account (svc-shell-ops 60126) gets a third block, then a full move to it, and logins as all three accounts after it;
+  - `move-key` refuses the admin key; every key's `install` reports `unchanged` afterwards; no temp file.
+- **Results per distribution:** `bash scripts/setup-check/run.sh`: 301 passed, 0 failed. Each of Debian 13, Ubuntu 24.04 and Ubuntu 26.04 passed its 92 checks, 34 of them the multi-account checks above; the rest are the root credential tests and init's checks. The first run (Debian 13 only), before the journal decision, failed the 3 checks the journal rule refuses.
+- **e2e:** `sshClient` now requires the account. The default svc-shell is gone and `sshClientAs` is merged into it, so no e2e caller can assume the first account. No e2e-host case was added: a second install account on the runner's own sshd is beyond Q3's approval, which covers `svc-install` alone.
+
+**Docs.**
+- TARGET-SETUP §4: the second account by `install`, the hand steps kept as "By hand", the journal rule, and the first account's groups.
+- TARGET-SETUP §7: the drop-in with several blocks, and "Moving a line" by `move-key`, with install-first to keep the key working; the hand commands are kept.
+- TARGET-SETUP §8: "Per account" and "When a key moves".
+- TARGET-SETUP §12 and §12.1: the flag and file tables, steps 5 to 8, the refusals, "Several accounts", and `move-key`'s flags, steps, refusals, half-done moves and idempotency.
+- README: "Upgrading from 0.2.0" step 3 uses `install` and `move-key`, step 4 includes split hosts, and "A target" mentions the second account.
+- The "install refuses a second account" caveats are gone from TARGET-SETUP and README. The S8 handoff's drop-in row is marked superseded. PR #90's entry above is unchanged.
+
+**Deferred:** none of this session's. Keys list/revoke and uninstall stay out of scope. An e2e-host test of `move-key` on the runner would need the maintainer's approval beyond Q3.
+
+**Versions (D-013):** Go 1.27.3, the newest stable with a published `golang:1.27.3-trixie` image (deps-current). `go get -u ./... && go get -u -t ./... && go mod tidy` changed nothing.
+- Direct modules: go-landlock v0.11.0, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6 (held, PR #91), x/crypto v0.58.0, x/sys v0.49.0.
+- Tools: golangci-lint v2.15.0, govulncheck v1.9.0, actionlint v1.7.12, Trivy v0.76.2, Grype v0.121.2, gitleaks v8.30.1, cosign v3.1.4, syft v1.57.0, all current.
+- No dependency added.

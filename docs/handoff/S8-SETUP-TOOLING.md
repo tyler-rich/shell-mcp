@@ -219,7 +219,7 @@ Each session's PR states, in its body, that it checked its defaults and docs aga
 | `/etc/systemd/system/user-<uid>.slice.d/` | `root:root 0755` | owned (directory) | |
 | `/etc/systemd/system/user-<uid>.slice.d/50-shell-mcp.conf` | `root:root 0644` | owned | `[Slice]\nMemoryMax=<size>\nMemorySwapMax=0\n`, exactly TARGET-SETUP §4's bytes, with no header comment (decided 2026-11-01 in S8-1: byte identity wins, so a host set up by hand reports `unchanged`) |
 | `/etc/polkit-1/rules.d/60-shell-mcp.rules` | `root:root 0644` | owned | `polkit.Rule` output, only with `services.control`; the directory (`root:polkitd 0750`) must exist, it is never created |
-| `/etc/ssh/sshd_config.d/60-shell-mcp.conf` | `root:root 0644` | owned | exactly TARGET-SETUP §7's block for `--user`, with no header comment (decided as for the slice drop-in); one service account per host (a file for another user is refused) |
+| `/etc/ssh/sshd_config.d/60-shell-mcp.conf` | `root:root 0644` | owned | exactly TARGET-SETUP §7's block for `--user`, with no header comment (decided as for the slice drop-in); one service account per host (a file for another user is refused). *Superseded 2026-11-08 (ARCHIVE §14, multi-account install): one block per account, appended in order.* |
 | `/etc/ssh/authorized_keys.d/` | `root:root 0755` | owned (directory) | `/etc/ssh` must be `root:root`, not group/other-writable |
 | `/etc/ssh/authorized_keys.d/<user>` | `root:root 0644` | line-keyed | one line per key: `restrict,from="<list>",command="/usr/local/bin/shell-mcp-gate serve --policy <file> --principal <label>" ssh-ed25519 <base64> shell-mcp-<label>` |
 | `/etc/shell-mcp/<policy>` | — | read only | must exist; written by D or by hand |

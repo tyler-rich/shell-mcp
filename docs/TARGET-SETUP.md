@@ -102,7 +102,7 @@ They are under `shell-mcp_0.2.0/examples/policies/` (`read-only.yaml`, `operator
 
 ## 4. Create the service account *(container)*
 
-*Done by `shell-mcp-gate install` (§12.1): the free-id checks, the groups, the account, the lock and the slice drop-in. A second account, below, is a hand step for now.*
+*Done by `shell-mcp-gate install` (§12.1): the free-id checks, the groups, the account, the lock and the slice drop-in, for each account (a second account too, below).*
 
 **One account per privilege level.** Keys with different privilege levels need different accounts. The account in the helper's socket group (step 9) serves only keys whose gate policy has `privileged.enabled: true`. Every other key (read-only, operator, destructive without root actions) runs as an account outside that group. Reason: below Landlock ABI 9 only the socket's permissions and the helper's peer-UID check govern a connect to the helper's socket. For the account the helper serves, both pass. Any command a key runs as that account could therefore ask the helper for root actions directly, and no approval covers that (approval is the server's, PRIVILEGED §3; SECURITY §2). The gate refuses to serve a policy without `privileged.enabled` as an account in the group of the helper's sockets (`install_insecure`, naming the fix), and `check-policy` reports it as a FAIL. `install` refuses to create the layout (§12.1). On a host without the helper, one account serves every key.
 
@@ -137,7 +137,16 @@ usermod -aG svc-shell-priv svc-shell        # only for the account whose keys' p
 id svc-shell
 ```
 
-**A second service account** *(container)*, for the keys whose policy has no `privileged.enabled` on a host where `svc-shell` is in the socket group. It is made exactly as `svc-shell` is, with its own unused uid and gid (check them as above), and never joins the socket group:
+**A second service account** *(container)*, for the keys whose policy has no `privileged.enabled` on a host where `svc-shell` is in the socket group. `install` makes it exactly as it makes `svc-shell`, with its own unused uid and gid, and never puts it in the socket group. Run it for the first key the account serves, with the account's own `--user`, `--uid` and `--gid` (§12.1, "Several accounts"):
+
+```bash
+shell-mcp-gate install --policy /etc/shell-mcp/read-only.yaml --principal readonly \
+  --from 192.0.2.10 --key ssh_key.pub --user svc-shell-std --uid 60125 --gid 60125
+```
+
+It runs the owner scan for the new ids, and writes the account's slice drop-in, its `Match` block (appended to the same sshd drop-in, step 7), its keys file with the key's line and, when the policy has `services.control`, its own polkit rule (step 8). Then it reloads sshd: until sshd reloads, it does not know the new account's block, and the account's keys are refused. Run `install` again for each further key the account serves. A key already on `svc-shell` moves with `shell-mcp-gate move-key` (step 7, "Moving a line"). The account's write roots and repositories must be its own (step 6).
+
+**By hand** *(container)*, which is what `install` writes for the second account. Check the ids as above, then:
 
 ```bash
 getent passwd 60125; getent group 60125
@@ -145,16 +154,22 @@ find / -xdev \( -uid 60125 -o -gid 60125 \) -print
 groupadd --gid 60125 svc-shell-std
 useradd --uid 60125 --gid svc-shell-std --home-dir /var/lib/svc-shell-std --create-home --shell /bin/sh svc-shell-std
 usermod -L svc-shell-std
-usermod -aG systemd-journal svc-shell-std   # only if a policy it serves has a journal section
+usermod -aG systemd-journal svc-shell-std   # only if its policies have a journal section (all of them, below)
 mkdir -p /etc/systemd/system/user-60125.slice.d
 printf '[Slice]\nMemoryMax=4G\nMemorySwapMax=0\n' >/etc/systemd/system/user-60125.slice.d/50-shell-mcp.conf
 systemctl daemon-reload
 id svc-shell-std
 ```
 
-It also needs its own `Match` block and keys file (step 7) and, when one of its policies has `services.control`, its own polkit rule (step 8). Its write roots and repositories must be its own (step 6). These steps write exactly the files that `install` writes for an account (§12.1): the same account entries, slice drop-in, `Match` block, keys file and key lines, so a later `install` can adopt them as they are.
+By hand, it also needs its own `Match` block and keys file (step 7) and, when one of its policies has `services.control`, its own polkit rule (step 8). These steps write exactly the files that `install` writes for an account (§12.1): the same account entries, slice drop-in, `Match` block, keys file and key lines. `install` for each key of either account then reports every item `unchanged`, and a host split this way is byte for byte the host `install` alone makes (both checked by `scripts/setup-check/` on all three images).
 
-**`install` and a second account.** `shell-mcp-gate install` does not support a second account yet: it writes one `Match` block per host. On a host with the second account's block in the drop-in, `install` refuses for either account and changes nothing: for `svc-shell-std` with `dropin_other_account` (the drop-in starts with another account's block), and for `svc-shell` with `file_differs` (the drop-in holds more than its own block). Re-running `install` for the first account after these steps therefore fails until a later release lets `install` manage several accounts. Until then, add a key, or change one, with the hand steps of step 7, and check each policy with `check-policy` as its account (step 5).
+**An account's keys agree on the journal.** `install` allows `systemd-journal` only for a key whose policy has a journal section, and refuses a key whose policy has none on an account in `systemd-journal` (`supplementary_group`); `move-key` refuses to move a key there, or a journal key to an account outside it. Keys whose policy reads the journal and keys whose policy does not therefore go to different accounts.
+
+**The first account's groups after a split** *(container)*. `svc-shell` keeps every supplementary group it had. When it was in `systemd-journal` only for keys that moved (a policy with a journal section), `install` for its remaining keys refuses that membership (`supplementary_group`: its only groups may be the socket group, and `systemd-journal` only for a policy with a journal section). Remove it, then run `install` again:
+
+```bash
+usermod -r -G systemd-journal svc-shell
+```
 
 **Bound the account's memory as a whole** (recommended). The gate gives each process it starts its own memory limit (`limits.max_memory_mb`, POLICY §4a), but several requests, or a command that starts several processes, each get one. A `MemoryMax=` on the account's slice bounds them all together, so the host's OOM killer never has to choose a victim outside it. sshd places each login in `user-<uid>.slice` through `pam_systemd` (`UsePAM yes`, the distributions' default):
 
@@ -265,7 +280,7 @@ Match User svc-shell
     MaxSessions 8
 ```
 
-**With a second account** (step 4), the same file holds one block per account: the first account's block, an empty line, then the second account's block, which is the same block with its name. Nothing else changes: `AuthorizedKeysFile` names `%u`, so each account reads its own keys file.
+**With a second account** (step 4), the same file holds one block per account: the first account's block, an empty line, then the second account's block, which is the same block with its name. Nothing else changes: `AuthorizedKeysFile` names `%u`, so each account reads its own keys file. `install` for the second account appends its block this way (a third account's block follows the second's the same way), checks every account's block with `sshd -T -C` and reloads sshd; it refuses a drop-in with anything else in it (§12.1). The file then holds:
 
 ```
 Match User svc-shell
@@ -288,7 +303,7 @@ Match User svc-shell-std
     MaxSessions 8
 ```
 
-Write it without an editor, so the bytes are exactly these. This appends the second block to a drop-in that holds only the first account's block:
+By hand, write it without an editor, so the bytes are exactly these. This appends the second block to a drop-in that holds only the first account's block:
 
 ```bash
 f=/etc/ssh/sshd_config.d/60-shell-mcp.conf
@@ -317,7 +332,17 @@ Add one line per server key to `/etc/ssh/authorized_keys.d/svc-shell` (`root:roo
 restrict,from="192.0.2.10",command="/usr/local/bin/shell-mcp-gate serve --policy /etc/shell-mcp/read-only.yaml --principal readonly" ssh-ed25519 AAAA… shell-mcp-readonly
 ```
 
-Each line goes in the keys file of the account that serves its policy (step 4): `/etc/ssh/authorized_keys.d/svc-shell` for keys whose policy has `privileged.enabled: true`, `/etc/ssh/authorized_keys.d/svc-shell-std` (`root:root 0644`, like the first) for every other key on a host with the helper. A line is the same in either file. **Moving a line** to the second account copies it byte for byte, without an editor. Here it is the `readonly` key's line, selected by its forced command's `--principal`: first into the new file, then the server's target user for that key changes to `svc-shell-std` (`SHELL_MCP_TARGET_USER`, or `user` in the targets file), and only then is the line removed from the old file:
+Each line goes in the keys file of the account that serves its policy (step 4): `/etc/ssh/authorized_keys.d/svc-shell` for keys whose policy has `privileged.enabled: true`, `/etc/ssh/authorized_keys.d/svc-shell-std` (`root:root 0644`, like the first) for every other key on a host with the helper. A line is the same in either file.
+
+**Moving a line** to another account *(container; the reload: real host)*. `shell-mcp-gate move-key` moves the line of the key whose forced command names `--principal`, byte for byte, to the end of the other account's keys file, and removes it from the old one, in one run. It moves the polkit rule with it (step 8), runs `check-policy` as the new account, checks both files and `sshd -T -C` for every account, reloads sshd, and restores every file it changed if anything fails (§12.1, "Moving a key between accounts"):
+
+```bash
+shell-mcp-gate move-key --principal readonly --from-user svc-shell --to-user svc-shell-std
+```
+
+Then set the server's target user for that key to `svc-shell-std` (`SHELL_MCP_TARGET_USER`, or `user` in the targets file): from the move on, the key no longer logs in as `svc-shell`. To keep the key working throughout, create the line in the new account first: `install` for the same key with the new account's flags (step 4) writes the same line there, so the key logs in as either account. Switch the server's target user, then run `move-key`, which finishes the move by removing the line from the old file. A key with privileged forwarding is never moved: it stays on the account in the helper's socket group.
+
+By hand, the move copies the line byte for byte, without an editor. Here it is the `readonly` key's line, selected by its forced command's `--principal`: first into the new file, then the server's target user for that key changes to `svc-shell-std`, and only then is the line removed from the old file:
 
 ```bash
 cd /etc/ssh/authorized_keys.d
@@ -330,7 +355,7 @@ install -o root -g root -m 0644 /root/svc-shell.keys svc-shell
 rm /root/moved.keys /root/svc-shell-std.keys /root/svc-shell.keys
 ```
 
-`cat /root/moved.keys` must show exactly the lines to move, and nothing else. The second `cat` keeps the lines `svc-shell-std` already has. sshd reads the keys files at every login, so nothing is reloaded. Run the ownership check below on both files.
+`cat /root/moved.keys` must show exactly the lines to move, and nothing else. The second `cat` keeps the lines `svc-shell-std` already has. sshd reads the keys files at every login, so the move itself needs no reload (`move-key` reloads anyway, as `install` does after its sshd changes). Run the ownership check below on both files.
 
 The key is the server's `ssh_key.pub` (`deploy/README.md`); it must be Ed25519. Make `from=` the server's own fixed address as a single address (`192.0.2.10`, or `/32`; `/128` for IPv6). When the server's container runs on the target itself, that is the container's fixed address on its network (`ipv4_address` in the reference compose), which is where its connections to the host come from (SECURITY §7). A prefix, where one is needed, must be `/24` or narrower (`/64` for IPv6): `shell-mcp-gate install` refuses anything wider, with no override, and warns about anything wider than one address.
 
@@ -363,7 +388,7 @@ The server's pin is the key type and the fingerprint: `ssh-ed25519 SHA256:…` (
 
 ## 8. Service control: the polkit rule
 
-*Done by `shell-mcp-gate install` (§12.1) when the policy has `services.control`.*
+*Done by `shell-mcp-gate install` (§12.1) when the policy has `services.control`, for each account; `shell-mcp-gate move-key` moves it with a key (step 7).*
 
 Only when a policy has `services.control` (`read-only.yaml` has none; `operator.yaml` and `admin.yaml` do, each installed and edited like step 5's, for its own key). Generate the rule from that policy *(container)* and review it: it lets the service account run exactly the listed verbs on exactly the listed units, and nothing else.
 
@@ -374,14 +399,14 @@ install -o root -g root -m 0644 60-shell-mcp.rules /etc/polkit-1/rules.d/60-shel
 
 `polkitd` is the package on all three distributions; `/etc/polkit-1/rules.d` is `root:polkitd 0750` there. Regenerate the rule whenever `services.control` changes.
 
-**Per account.** The rule names one account, and it is generated from the policy of one of that account's keys. The first account's rule is `60-shell-mcp.rules`. A second account (step 4) whose policy has `services.control` gets its own file, named after it, with exactly what `polkit` prints for that policy and account:
+**Per account.** The rule names one account, and it is generated from the policy of one of that account's keys. The first account's rule (the account of the sshd drop-in's first block, step 7) is `60-shell-mcp.rules`. A second account (step 4) whose policy has `services.control` gets its own file, named after it, with exactly what `polkit` prints for that policy and account. `install` writes it so for each account; by hand:
 
 ```bash
 shell-mcp-gate polkit --policy /etc/shell-mcp/operator.yaml --user svc-shell-std > 60-shell-mcp-svc-shell-std.rules
 install -o root -g root -m 0644 60-shell-mcp-svc-shell-std.rules /etc/polkit-1/rules.d/60-shell-mcp-svc-shell-std.rules
 ```
 
-When a key moves to the second account, regenerate the first account's rule from the policy of a key it still serves that has `services.control`. If none of its keys has `services.control` any more, remove `60-shell-mcp.rules`: the old rule would keep granting the first account the moved key's units. Check that it works *(real host)*:
+**When a key moves** to another account, the new account needs the rule for the key's policy, and the old account's rule must not keep granting it the moved key's units. `move-key` writes the new account's rule when the moved key's policy has `services.control`. It removes the old account's rule when that rule is exactly the moved policy's and none of the old account's remaining keys needs it, keeps it when one does, and refuses the move when a remaining key's policy needs another rule. By hand: regenerate the old account's rule from the policy of a key it still serves that has `services.control`, and if none of its keys has `services.control` any more, remove `60-shell-mcp.rules`. Check that it works *(real host)*:
 
 ```bash
 runuser -u svc-shell -- systemctl --no-ask-password restart example-app.service
@@ -572,7 +597,7 @@ The journal keeps the gate's and the helper's audit lines (`journalctl -t shell-
 
 ## 12. The install commands
 
-`shell-mcp-gate install` does steps 4, 7 and 8, `shell-mcp-gate host-key` prints step 7's pin, and `shell-mcp-privd install` does steps 9.2 to 9.4. They write the same files as the hand steps, byte for byte, with the same owners and modes, so a host set up by hand shows every item `unchanged`. They change no security property: the gate and the helper check everything they checked before, whoever wrote the files. The policies come from `policy new` (§12.5). Two more commands frame the setup and install nothing: `shell-mcp doctor` checks a running deployment from the server's side (§12.6, step 10), and `verify-release.sh` verifies the downloaded release before anything is installed (§12.7, step 2).
+`shell-mcp-gate install` does steps 4, 7 and 8 for each account, `shell-mcp-gate move-key` moves a key between accounts (step 7, §12.1), `shell-mcp-gate host-key` prints step 7's pin, and `shell-mcp-privd install` does steps 9.2 to 9.4. They write the same files as the hand steps, byte for byte, with the same owners and modes, so a host set up by hand shows every item `unchanged`. They change no security property: the gate and the helper check everything they checked before, whoever wrote the files. The policies come from `policy new` (§12.5). Two more commands frame the setup and install nothing: `shell-mcp doctor` checks a running deployment from the server's side (§12.6, step 10), and `verify-release.sh` verifies the downloaded release before anything is installed (§12.7, step 2).
 
 ### 12.1 `shell-mcp-gate install` *(container; the reload: real host)*
 
@@ -589,7 +614,7 @@ shell-mcp-gate install --policy /etc/shell-mcp/read-only.yaml --principal readon
 | `--principal <label>` | Required. The key's label, `^[a-z][a-z0-9-]{0,31}$`; also the key line's comment `shell-mcp-<label>`. |
 | `--from <addr>[,<addr>…]` | Required, at most 8 entries. IP addresses or canonical CIDR prefixes. Never wider than `/24` (IPv4) or `/64` (IPv6), IPv4-mapped IPv6 judged as IPv4; no host names, wildcards or negations. Anything wider than one address is a WARN. |
 | `--key <file.pub>` | Required. The server's `ssh_key.pub`: one `ssh-ed25519` line. |
-| `--user <name>` | The service account (default `svc-shell`); its primary group has the same name. One account per privilege level (§4): the account in the helper's socket group only for a policy with `privileged.enabled: true`. Until `install` supports several accounts on a host, it refuses a host where a second account was added by hand (§4, "`install` and a second account"). |
+| `--user <name>` | The service account (default `svc-shell`); its primary group has the same name. One account per privilege level (§4): the account in the helper's socket group only for a policy with `privileged.enabled: true`. Several accounts on one host: run `install` once per key, each with its account's own `--user`, `--uid` and `--gid` ("Several accounts", below). |
 | `--uid <n>`, `--gid <n>` | Required, never defaulted (D-020): 1000 or above, not 65534, not in systemd's dynamic range 61184–65519. |
 | `--home <dir>` | The account's home (default `/var/lib/<user>`). |
 | `--socket-group <name>`, `--socket-gid <n>` | Required exactly when the policy has `privileged.enabled: true`: the helper's socket group. |
@@ -605,17 +630,18 @@ What it does, in this order; nothing sshd reads exists until everything before i
 2. **Groups and account** (step 4): `groupadd --gid`, `useradd --uid --gid --home-dir --create-home --shell /bin/sh`, `usermod -L`, and `usermod -aG` for `systemd-journal` (only with a `journal` section) and the socket group (only with `privileged.enabled`). Those two are the only supplementary groups an account may have.
 3. **The slice drop-in** (step 4), then `systemctl daemon-reload` and `systemctl show -p MemoryMax -p MemorySwapMax user-<uid>.slice`, which must show the values.
 4. **`check-policy` as the service account** (step 5): the installed `shell-mcp-gate check-policy` is run with the account's uid, gid and groups. The gate's own process runner switches to them after its usual checks, as root, then verifies them and that no capability is left before the command starts; no `runuser`, `sudo` or setuid program is involved. Its output is printed; a FAIL stops the run.
-5. **The polkit rule** (step 8), when the policy has `services.control`: exactly `shell-mcp-gate polkit`'s output.
-6. **The sshd drop-in, the keys directory, and the key line** (step 7), the key line last.
-7. **`sshd -t`, then `sshd -T -C`** for the account (every value of the `Match` block must be in force) and for a name that is not an account (its effective configuration must be what it was before the drop-in was written: the block reaches no one else). Any difference rolls back every file the run changed.
-8. **The reload**, when the drop-in changed: `systemctl reload ssh.service` when it is active; nothing when only `ssh.socket` is (the next connection starts sshd with the new configuration). When neither is active the run refuses before anything is written (run with `--no-reload` and reload sshd yourself). A new key line needs no reload: sshd reads the keys file at every login.
+5. **The polkit rule** (step 8), when the policy has `services.control`: exactly `shell-mcp-gate polkit`'s output, in `60-shell-mcp.rules` for the drop-in's first account and `60-shell-mcp-<user>.rules` for any other.
+6. **The sshd drop-in, the keys directory, and the key line** (step 7), the key line last. The account's `Match` block is appended to the drop-in when it has none.
+7. **`sshd -t`, then `sshd -T -C`** for every account of the drop-in (every value of each `Match` block must be in force) and for a name that is not an account (its effective configuration must be what it was before the drop-in was written: the blocks reach no one else). Any difference rolls back every file the run changed.
+8. **The reload**, when the drop-in changed (a new account's block: until sshd reloads, that account's keys are refused): `systemctl reload ssh.service` when it is active; nothing when only `ssh.socket` is (the next connection starts sshd with the new configuration). When neither is active the run refuses before anything is written (run with `--no-reload` and reload sshd yourself). A new key line needs no reload: sshd reads the keys file at every login.
 9. **The pin**: `SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:…` from `/etc/ssh/ssh_host_ed25519_key.pub`, read locally (never `ssh-keyscan`), the other host keys as extra pins, and the write roots `check-policy` warned about (step 6 stays yours). Its last note: keep your own session to the host open until a second SSH login of your own has worked, since the reload applies to every account.
 
 | File | Owner, mode | Content |
 |---|---|---|
 | `/etc/systemd/system/user-<uid>.slice.d/50-shell-mcp.conf` | `root:root 0644` | `[Slice]`, `MemoryMax=<size>`, `MemorySwapMax=0` (step 4) |
-| `/etc/polkit-1/rules.d/60-shell-mcp.rules` | `root:root 0644` | `shell-mcp-gate polkit --policy <file> --user <user>` (step 8); the directory must exist |
-| `/etc/ssh/sshd_config.d/60-shell-mcp.conf` | `root:root 0644` | step 7's `Match User` block; one service account per host for now (a second account's block, added by hand, makes `install` refuse: §4) |
+| `/etc/polkit-1/rules.d/60-shell-mcp.rules` | `root:root 0644` | `shell-mcp-gate polkit --policy <file> --user <user>` (step 8) for the drop-in's first account; the directory must exist |
+| `/etc/polkit-1/rules.d/60-shell-mcp-<user>.rules` | `root:root 0644` | the same, for any other account (step 8, "Per account") |
+| `/etc/ssh/sshd_config.d/60-shell-mcp.conf` | `root:root 0644` | step 7's `Match User` block, one per account in the order `install` added them, with one empty line between two blocks |
 | `/etc/ssh/authorized_keys.d/` | `root:root 0755` | |
 | `/etc/ssh/authorized_keys.d/<user>` | `root:root 0644` | one line per key: `restrict,from="<list>",command="/usr/local/bin/shell-mcp-gate serve --policy <file> --principal <label>" ssh-ed25519 <key> shell-mcp-<label>` |
 
@@ -627,10 +653,38 @@ What it does, in this order; nothing sshd reads exists until everything before i
 - The keys file: a line for the same key with other options (unless `--replace-key`); any line that does not parse or does not pass these checks (`restrict`, `from=` within the rules, `command=` exactly the forced command with a safe policy path and label, an Ed25519 key), reported by line number. Comments and blank lines are kept.
 - The account: uid or gid 0, 65534, below 1000 or in 61184–65519; a uid or gid used by another name; an existing account whose uid, primary gid, home or shell (`/bin/sh`) differ; a member of `root`, `sudo`, `wheel`, `adm`, `docker`, `lxd`, `incus-admin`, `libvirt`, `kvm`, `disk` or `shadow`, or of any supplementary group but the two above (install never removes a membership: remove it and run again); a file owned by a new id (the owner scan); `--owner-scan-paths` with nothing to scan (when nothing is created there is nothing to scan for, and the flag only gets a NOTE, so a second run with the same flags reports `unchanged`).
 - The socket group: a gid used by another group, the group existing with another gid, given for a policy without `privileged.enabled` or missing for one with it.
-- sshd: `/run/sshd` missing (`sshd -t` cannot run; the message names the tmpfiles entry or `systemctl start ssh.service`, see §7, and install never creates it); `strictmodes no`; `/etc/ssh`, the keys directory or the keys file not `root:root` or group- or world-writable; `sshd -t` failing; the effective configuration differing (step 7); a drop-in for another account (`dropin_other_account`), or one that also holds a second account's block (`file_differs`, §4).
+- sshd: `/run/sshd` missing (`sshd -t` cannot run; the message names the tmpfiles entry or `systemctl start ssh.service`, see §7, and install never creates it); `strictmodes no`; `/etc/ssh`, the keys directory or the keys file not `root:root` or group- or world-writable; `sshd -t` failing; the effective configuration differing (step 7); a drop-in that holds a block `install` did not write (`dropin_other_account`: another `Match` criterion, several names, `Match all`), or any other content than `install`'s blocks, such as an edited block, a comment or another number of empty lines (`file_differs`, with a diff).
 - Any existing file with other content (a unified diff of what is there and what would be written is printed; the file is never overwritten: remove it or revert the edit and run again); `--policy` or `--principal` outside their character sets; a policy that does not load; `check-policy` as the account reporting FAIL.
 
 **Idempotency.** A second run with the same flags changes nothing and reports every item `unchanged`; a run with another `--key` and `--principal` appends one line. Accounts and groups created before a failure are not removed by the rollback; the next run finds them `unchanged`.
+
+**Several accounts.** One host can have several service accounts (§4, one per privilege level): run `install` for each key with its account's own `--user`, `--uid` and `--gid`. Each account gets everything above for itself: its ids checked and owner-scanned, its groups by the same rules (the socket group only for a policy with `privileged.enabled: true`), its slice drop-in, keys file and polkit rule. The sshd drop-in is shared: an account's `Match` block is appended after the others, with one empty line between two blocks, and sshd is reloaded. Re-running `install` for any key of any account changes nothing. This writes byte for byte what the hand steps of §4, §7 and §8 write, so a host split by hand reports every item `unchanged` *(container)*.
+
+**Moving a key between accounts: `shell-mcp-gate move-key`** *(container; the reload: real host)*. Run as root, on a host where `install` made both accounts:
+
+```bash
+shell-mcp-gate move-key --principal readonly --from-user svc-shell --to-user svc-shell-std
+```
+
+| Flag | Meaning |
+|---|---|
+| `--principal <label>` | Required. Selects the line: the one whose forced command names `--principal <label>`. |
+| `--from-user <name>`, `--to-user <name>` | Required. The account whose keys file holds the line, and the account it moves to. |
+| `--dry-run` | Print every check, file and command, with each file's diff; write and change nothing (§12.4). |
+| `--no-reload` | Move and check everything, but do not reload sshd; print the reload instead. |
+
+What it does, in this order, with everything checked before anything is written:
+
+1. **Checks:** root, not a forced command, the binaries (as `install`); both accounts exist with `/bin/sh` and have their own block in the drop-in, which holds only `install`'s blocks; both keys files are `root:root 0644` and every line in them passes `install`'s line checks; exactly one line of the old account's file names `--principal`, and the new account's file does not hold its key. The moved line's policy is loaded as `serve` will load it for the new account. A policy with `privileged.enabled: true` is refused: such a key stays on the account in the helper's socket group (§4). The new account's supplementary groups follow `install`'s rules for that policy: `systemd-journal` only with a journal section and nothing else, so an account in the socket group is refused. A missing `systemd-journal` membership is refused too, because `move-key` adds or removes no membership (`install` for the key on that account adds it).
+2. **Polkit** (step 8): the new account's rule when the policy has `services.control` (an existing file with other content is refused). The old account's rule is removed when it is exactly the moved policy's and none of the account's remaining keys needs it, and kept when one does. When a remaining key needs another rule, the move is refused.
+3. **`check-policy` as the new account**, as `install`'s step 4. A FAIL stops the run before anything is written.
+4. **The writes**, in this order: the new account's polkit rule, its keys file with the line appended byte for byte, the old account's keys file without the line (an empty file when it was the last line, as the hand steps' `grep -v` leaves it), the old account's rule removed.
+5. **Verify:** both keys files are read back (the line once in the new one, its key nowhere in the old one), then `sshd -t` and `sshd -T -C` for every account of the drop-in and for a name that is not an account. Any failure restores every file the run changed.
+6. **The reload**, as `install`'s step 8, when a keys file changed. Its last note says to switch the server's target user for that key to the new account.
+
+**What it refuses**, each naming the file or value: no line of the old account names `--principal`, or several do (`key_ambiguous`); the new account's file holds the key with other bytes (`key_in_destination`); a policy with privileged forwarding (`forwarding`); the new account in a privileged group, in any group the policy does not allow, or missing `systemd-journal` for a journal section; an account without its block, or a drop-in with anything but `install`'s blocks; a keys file that is not `root:root 0644` or has a line `install` cannot check; a polkit rule with other content; `check-policy` as the new account reporting FAIL; and, unless `--no-reload`, systemd not running or neither `ssh.service` nor `ssh.socket` active.
+
+**A move half done** is finished, not refused: when the new account's file already holds exactly the same line, byte for byte (`install` for the same key on the new account writes it so, step 7), `move-key` only removes it from the old file. **Idempotency:** once moved (the old file names `--principal` nowhere, the new one holds the line once), the same command reports every item `unchanged`.
 
 ### 12.2 `shell-mcp-gate host-key` *(container)*
 
