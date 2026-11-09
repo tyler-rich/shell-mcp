@@ -647,7 +647,7 @@ func TestOperatorToolsApprovalGuard(t *testing.T) {
 // key is svc-shell-std's, the forwarding key svc-shell's.
 func gateExecAt(t *testing.T, user, key, ceiling, id string, args []string) *protocol.Response {
 	t.Helper()
-	c := sshClientAs(t, user, []config.HostKey{hostPin(t, "ssh_host_ed25519_key.pub")}, clientKey(t, key))
+	c := sshClient(t, user, []config.HostKey{hostPin(t, "ssh_host_ed25519_key.pub")}, clientKey(t, key))
 	resp, err := gateclient.New(gateclient.Options{}).Call(t.Context(), c, protocol.OpExec, ceiling,
 		map[string]any{"command_id": id, "args": args}, 20*time.Second)
 	if err != nil {
