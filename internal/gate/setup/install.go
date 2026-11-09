@@ -49,12 +49,15 @@ const (
 	classReplace   = "replace"
 )
 
-// installer is one run of shell-mcp-gate install.
+// installer is one run of shell-mcp-gate install (and the parts of
+// move-key it shares).
 type installer struct {
-	o *Options
-	h Host
-	r *setupx.Report
-	a *setupx.Auditor
+	// name is the command, for its messages: install or move-key.
+	name string
+	o    *Options
+	h    Host
+	r    *setupx.Report
+	a    *setupx.Auditor
 
 	p       *policy.Policy
 	key     *PubKey
@@ -71,16 +74,19 @@ type installer struct {
 	memoryText  string // "" for none
 
 	sliceDir, sliceFile, polkitFile, dropIn, keysDir, keysFile file
-	baseline                                                   []byte // sshd -T -C for otherUser before the drop-in
-	reloadSSH                                                  string // the unit to reload, "" when the socket starts sshd
-	warnedRoots                                                []string
+	// accounts are the drop-in's accounts after the run, in order: the
+	// first one's polkit rule is PolkitRule.
+	accounts    []string
+	baseline    []byte // sshd -T -C for otherUser before the drop-in
+	reloadSSH   string // the unit to reload, "" when the socket starts sshd
+	warnedRoots []string
 }
 
 // Install runs shell-mcp-gate install (TARGET-SETUP §12.1) on h, printing
 // to stdout and auditing through a. It returns the exit code: 0 done, 1
 // refused or failed.
 func Install(o *Options, h Host, stdout io.Writer, a *setupx.Auditor) int {
-	in := &installer{o: o, h: h, r: &setupx.Report{W: stdout}, a: a}
+	in := &installer{name: "install", o: o, h: h, r: &setupx.Report{W: stdout}, a: a}
 	return in.run()
 }
 
@@ -97,12 +103,7 @@ func (in *installer) run() int {
 		mode = " (dry run: nothing is changed; only commands that read are run)"
 	}
 	r.Info("shell-mcp-gate install%s: policy %s, principal %s, account %s (%d:%d)", mode, o.Policy, o.Principal, o.User, o.UID, o.GID)
-	if _, ok := in.h.LookupEnv("SSH_ORIGINAL_COMMAND"); ok {
-		in.refuse("process", "forced_command", "SSH_ORIGINAL_COMMAND is set: install never runs as an SSH forced command")
-		return 1
-	}
-	if in.h.Euid() != 0 {
-		in.refuse("process", "not_root", "install runs as root only (effective uid %d)", in.h.Euid())
+	if !in.rootNotForced() {
 		return 1
 	}
 	in.checks()
@@ -118,23 +119,40 @@ func (in *installer) run() int {
 	return in.apply()
 }
 
+// rootNotForced refuses a run that is an SSH forced command or not root
+// (TARGET-SETUP §12.4).
+func (in *installer) rootNotForced() bool {
+	if _, ok := in.h.LookupEnv("SSH_ORIGINAL_COMMAND"); ok {
+		in.refuse("process", "forced_command", "SSH_ORIGINAL_COMMAND is set: %s never runs as an SSH forced command", in.name)
+		return false
+	}
+	if in.h.Euid() != 0 {
+		in.refuse("process", "not_root", "%s runs as root only (effective uid %d)", in.name, in.h.Euid())
+		return false
+	}
+	return true
+}
+
 // checks is step 1 (TARGET-SETUP §12.1): everything is checked, and every
 // problem reported, before anything is written.
 func (in *installer) checks() {
-	in.checkBinaries()
+	in.checkBinaries(setupx.Groupadd, setupx.Useradd, setupx.Usermod, setupx.Sshd)
 	in.checkPolicy()
 	in.checkKey()
 	in.checkFrom()
 	in.checkSSHD()
 	in.checkAccount()
 	in.checkSlice()
-	in.checkPolkit()
 	in.checkSSHFiles()
+	in.checkPolkit()
 	in.checkOwnerScan()
 	in.checkReload()
 }
 
-func (in *installer) checkBinaries() {
+// checkBinaries checks the running binary, that it can run check-policy as
+// an account, and each program the run may start (systemctl too, unless
+// --no-reload).
+func (in *installer) checkBinaries(progs ...string) {
 	exe, err := in.h.Executable()
 	if err != nil || exe != GatePath {
 		in.refuse("binary", "binary_path", "the running binary is %s, not %s: run the installed gate (TARGET-SETUP §3), which the forced command names", exe, GatePath)
@@ -145,7 +163,6 @@ func (in *installer) checkBinaries() {
 	if err := in.h.CredentialSupported(); err != nil {
 		in.refuse("binary", "credential_unsupported", "%s cannot run check-policy as the account (step 4): %v", GatePath, err)
 	}
-	progs := []string{setupx.Groupadd, setupx.Useradd, setupx.Usermod, setupx.Sshd}
 	if !in.o.NoReload {
 		progs = append(progs, setupx.Systemctl)
 	}
@@ -323,9 +340,14 @@ func (in *installer) state(p string) (setupx.FileState, bool) {
 	return st, true
 }
 
-// owned classifies an owned file (handoff §3.2): absent → create,
-// identical → unchanged, anything else refused with a diff.
-func (in *installer) owned(p string, data []byte, mode fs.FileMode, object string) file {
+// ownedMode is every owned file's mode (TARGET-SETUP §12.1's table).
+const ownedMode fs.FileMode = 0o644
+
+// owned classifies an owned file (handoff §3.2), root:root ownedMode:
+// absent → create, identical → unchanged, anything else refused with a
+// diff.
+func (in *installer) owned(p string, data []byte, object string) file {
+	mode := ownedMode
 	f := file{path: p, data: data, mode: mode, object: object}
 	st, ok := in.state(p)
 	if !ok {
@@ -545,9 +567,24 @@ func (in *installer) checkSlice() {
 		return
 	}
 	in.sliceDir = in.ownedDir(SliceDir(o.UID), 0o755)
-	in.sliceFile = in.owned(SliceDir(o.UID)+"/"+sliceDropIn, SliceDropIn(in.memoryText), 0o644, "slice")
+	in.sliceFile = in.owned(SliceDir(o.UID)+"/"+sliceDropIn, SliceDropIn(in.memoryText), "slice")
 }
 
+// isFirst reports whether user is the drop-in's first account (the one
+// whose polkit rule is PolkitRule), after this run.
+func (in *installer) isFirst(user string) bool {
+	return len(in.accounts) == 0 || in.accounts[0] == user
+}
+
+// polkitRule is polkit's rule for user and p (TARGET-SETUP §8).
+func polkitRule(user string, p *policy.Policy) ([]byte, error) {
+	rule, err := polkit.Rule(&polkit.Spec{User: user, Units: p.Services.ControlUnits, Verbs: p.Services.ControlVerbs, PolicySHA256: p.SHA256})
+	return []byte(rule), err
+}
+
+// checkPolkit plans the account's polkit rule, only with services.control:
+// PolkitRule for the drop-in's first account, 60-shell-mcp-<user>.rules for
+// any other (TARGET-SETUP §8, "Per account").
 func (in *installer) checkPolkit() {
 	if !in.control {
 		return
@@ -555,60 +592,115 @@ func (in *installer) checkPolkit() {
 	if !in.requireDir(PolkitDir, "install polkitd (TARGET-SETUP §8); install never creates the directory") {
 		return
 	}
-	rule, err := polkit.Rule(&polkit.Spec{User: in.o.User, Units: in.p.Services.ControlUnits, Verbs: in.p.Services.ControlVerbs, PolicySHA256: in.p.SHA256})
+	rule, err := polkitRule(in.o.User, in.p)
 	if err != nil {
 		in.refuse("file", "polkit", "polkit rule: %v", err)
 		return
 	}
-	in.polkitFile = in.owned(PolkitRule, []byte(rule), 0o644, "polkit")
+	in.polkitFile = in.owned(PolkitRuleFor(in.o.User, in.isFirst(in.o.User)), rule, "polkit")
 }
 
 func (in *installer) checkSSHFiles() {
-	o := in.o
 	if !in.requireDir(SSHDir, "") || !in.requireDir(SSHDropInDir, "OpenSSH's drop-in directory must exist and be included by sshd_config") {
 		return
 	}
-	// The drop-in: one service account per host.
-	want := DropIn(o.User)
-	if st, ok := in.state(SSHDropIn); ok && st.IsRegular() && !bytes.Equal(st.Data, want) {
-		if u := dropInUser(st.Data); u != "" && u != o.User {
-			in.refuse("file", "dropin_other_account", "%s is for account %s; one service account per host", SSHDropIn, u)
-			return
-		}
-	}
-	in.dropIn = in.owned(SSHDropIn, want, 0o644, "sshd")
+	in.planDropIn()
 	in.keysDir = in.ownedDir(KeysDir, 0o755)
 	in.checkKeysFile()
 }
 
-// checkKeysFile plans the keys file (line-keyed, handoff §3.2): every
-// existing line parsed and checked, the key's own line added, kept or, with
-// --replace-key, rewritten.
-func (in *installer) checkKeysFile() {
+// readDropIn reads the drop-in and returns its accounts (none when it does
+// not exist), refusing what install did not write: a block not of its own
+// (dropin_other_account), or other bytes (file_differs, with a diff against
+// install's blocks for the accounts it names, and user's).
+func (in *installer) readDropIn(user string) (st setupx.FileState, users []string, ok bool) {
+	st, ok = in.state(SSHDropIn)
+	if !ok || !st.Exists {
+		return st, nil, ok
+	}
+	if !st.IsRegular() || st.Perm() != 0o644 || st.Owner != setupx.Root {
+		in.owned(SSHDropIn, DropIn(user), "sshd") // refuses, naming what differs
+		return st, nil, false
+	}
+	users, err := ParseDropIn(st.Data)
+	switch {
+	case errors.Is(err, ErrDropInForeign):
+		in.refuse("file", "dropin_other_account", "%s holds a block install did not write (%v); install writes only its own Match User blocks there: "+
+			"move that block to a drop-in of its own and run again", SSHDropIn, err)
+		return st, nil, false
+	case err != nil:
+		in.refuse("file", "file_differs", "%s exists with other content (%v); install never overwrites it: remove it (or revert the edit) and run again", SSHDropIn, err)
+		names := dropInNames(st.Data)
+		if !slices.Contains(names, user) {
+			names = append(names, user)
+		}
+		in.r.Block(setupx.UnifiedDiff(SSHDropIn+" (on the host)", SSHDropIn+" (install)", st.Data, DropInFor(names)))
+		return st, nil, false
+	}
+	return st, users, true
+}
+
+// planDropIn plans the sshd drop-in (TARGET-SETUP §7): one block per
+// account, in the order install added them, one empty line between two.
+// The account's block is appended when it has none; nothing else is ever
+// changed.
+func (in *installer) planDropIn() {
 	o := in.o
-	p := KeysFile(o.User)
-	st, ok := in.state(p)
-	if !ok || in.key == nil || in.from == nil || !ValidPrincipal(o.Principal) || CheckSafePath("--policy", o.Policy) != nil {
+	st, users, ok := in.readDropIn(o.User)
+	if !ok {
 		return
 	}
-	want := RenderKeyLine(FromList(in.from), o.Policy, o.Principal, in.key)
-	in.keysFile = file{path: p, mode: 0o644, prev: st, object: "key",
-		rec: setupx.Record{User: o.User, Fingerprint: in.key.Fingerprint, Principal: o.Principal, Policy: o.Policy, PolicySHA256: policySHA(in.p)}}
+	in.accounts = users
+	if !slices.Contains(users, o.User) {
+		in.accounts = append(slices.Clone(users), o.User)
+	}
+	in.dropIn = file{path: SSHDropIn, data: DropInFor(in.accounts), mode: 0o644, prev: st, object: "sshd"}
+	switch {
+	case !st.Exists:
+		in.dropIn.class = classCreate
+	case bytes.Equal(st.Data, in.dropIn.data):
+		in.dropIn.class = classUnchanged
+	default:
+		in.dropIn.class = classReplace
+	}
+}
+
+// keysFile is an account's keys file as read: its lines (without their
+// line breaks) and, for each key line, its key, policy, principal and
+// from= value.
+type keysFile struct {
+	path      string
+	st        setupx.FileState
+	lines     []string
+	keys      []*PubKey // nil for a comment or a blank line
+	policies  []string
+	principal []string
+	from      []string
+}
+
+// readKeys reads and checks the keys file p (line-keyed, handoff §3.2):
+// a regular root:root 0644 file, or none; every line a comment, a blank
+// line or a line install can check; no key twice. It refuses everything
+// it finds wrong, and returns ok false then.
+func (in *installer) readKeys(p string) (kf *keysFile, ok bool) {
+	st, ok := in.state(p)
+	if !ok {
+		return nil, false
+	}
+	kf = &keysFile{path: p, st: st}
 	if !st.Exists {
-		in.keysFile.class, in.keysFile.data = classCreate, []byte(want+"\n")
-		return
+		return kf, true
 	}
 	if !st.IsRegular() || st.Owner != setupx.Root || st.Perm() != 0o644 {
 		in.refuse("file", "keys_file_insecure", "%s is %s %04o; it must be a regular root:root 0644 file (StrictModes accepts one the account owns, which could rewrite its own command=)", p, st.Owner, st.Perm())
-		return
+		return nil, false
 	}
-	lines := strings.Split(strings.TrimSuffix(string(st.Data), "\n"), "\n")
-	if len(st.Data) == 0 {
-		lines = nil
-	}
+	kf.lines = keyLines(st.Data)
+	n := len(kf.lines)
+	kf.keys, kf.policies, kf.principal, kf.from = make([]*PubKey, n), make([]string, n), make([]string, n), make([]string, n)
 	seen := map[string]int{}
-	found, bad := -1, false
-	for i, l := range lines {
+	ok = true
+	for i, l := range kf.lines {
 		t := strings.TrimSpace(l)
 		if t == "" || strings.HasPrefix(t, "#") {
 			continue
@@ -619,21 +711,74 @@ func (in *installer) checkKeysFile() {
 			k, err = CheckLine(kl)
 		}
 		if err != nil {
-			in.refuse("key", "keys_file_line", "%s line %d: %v; install keeps only lines it can check: fix or remove the line and run again", p, i+1, err)
-			bad = true
+			in.refuse("key", "keys_file_line", "%s line %d: %v; %s keeps only lines it can check: fix or remove the line and run again", p, i+1, err, in.name)
+			ok = false
 			continue
 		}
 		if j, dup := seen[k.Fingerprint]; dup {
 			in.refuse("key", "keys_file_line", "%s lines %d and %d hold the same key", p, j+1, i+1)
-			bad = true
+			ok = false
 		}
 		seen[k.Fingerprint] = i
-		if k.Fingerprint == in.key.Fingerprint {
-			found = i
+		kf.keys[i] = k
+		for _, opt := range kl.Options {
+			switch opt.Name {
+			case "command":
+				kf.policies[i], kf.principal[i], _ = ForcedCommand(opt.Value) // CheckLine checked it
+			case "from":
+				kf.from[i] = opt.Value
+			}
 		}
 	}
-	if bad {
+	if !ok {
+		return nil, false
+	}
+	return kf, true
+}
+
+// keyLines splits a keys file into its lines, without their line breaks.
+func keyLines(b []byte) []string {
+	if len(b) == 0 {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+}
+
+// joinKeyLines is a keys file of lines, each with its line break; empty
+// for none (as the hand steps' grep -v writes it when it keeps no line).
+func joinKeyLines(lines []string) []byte {
+	if len(lines) == 0 {
+		return []byte{}
+	}
+	return []byte(strings.Join(lines, "\n") + "\n")
+}
+
+// checkKeysFile plans the keys file (line-keyed, handoff §3.2): every
+// existing line parsed and checked, the key's own line added, kept or, with
+// --replace-key, rewritten.
+func (in *installer) checkKeysFile() {
+	o := in.o
+	p := KeysFile(o.User)
+	if in.key == nil || in.from == nil || !ValidPrincipal(o.Principal) || CheckSafePath("--policy", o.Policy) != nil {
 		return
+	}
+	kf, ok := in.readKeys(p)
+	if !ok {
+		return
+	}
+	want := RenderKeyLine(FromList(in.from), o.Policy, o.Principal, in.key)
+	in.keysFile = file{path: p, mode: 0o644, prev: kf.st, object: "key",
+		rec: setupx.Record{User: o.User, Fingerprint: in.key.Fingerprint, Principal: o.Principal, Policy: o.Policy, PolicySHA256: policySHA(in.p)}}
+	if !kf.st.Exists {
+		in.keysFile.class, in.keysFile.data = classCreate, []byte(want+"\n")
+		return
+	}
+	lines := kf.lines
+	found := -1
+	for i, k := range kf.keys {
+		if k != nil && k.Fingerprint == in.key.Fingerprint {
+			found = i
+		}
 	}
 	switch {
 	case found < 0:
@@ -648,7 +793,7 @@ func (in *installer) checkKeysFile() {
 		in.refuse("key", "key_options_differ", "%s line %d holds this key with other options; run with --replace-key to rewrite that line", p, found+1)
 		return
 	}
-	in.keysFile.data = []byte(strings.Join(lines, "\n") + "\n")
+	in.keysFile.data = joinKeyLines(lines)
 }
 
 func policySHA(p *policy.Policy) string {
@@ -774,12 +919,29 @@ func (in *installer) active(unit string) bool {
 	return err == nil && out.OK()
 }
 
-func (in *installer) checkSpec() string {
-	return fmt.Sprintf("user=%s,host=%s,addr=%s", in.o.User, checkHost, in.from[0].Prefix.Addr())
+// specFor is sshd -T -C's connection specification for user, from the
+// first from= entry's address.
+func (in *installer) specFor(user string) string {
+	return fmt.Sprintf("user=%s,host=%s,addr=%s", user, checkHost, in.from[0].Prefix.Addr())
 }
 
-func (in *installer) otherSpec() string {
-	return fmt.Sprintf("user=%s,host=%s,addr=%s", otherUser, checkHost, in.from[0].Prefix.Addr())
+func (in *installer) otherSpec() string { return in.specFor(otherUser) }
+
+// checked are the accounts whose blocks sshd -T -C must show in force after
+// the run: every account of the drop-in.
+func (in *installer) checked() []string {
+	if len(in.accounts) == 0 {
+		return []string{in.o.User}
+	}
+	return in.accounts
+}
+
+func (in *installer) checkSpecs() string {
+	var s []string
+	for _, u := range in.checked() {
+		s = append(s, in.specFor(u))
+	}
+	return strings.Join(s, " and -C ")
 }
 
 // accountRuns are step 2's programs, in order.
@@ -845,7 +1007,7 @@ func (in *installer) describe() {
 	if in.o.NoReload && in.memoryText != "" {
 		r.Info("--no-reload: would skip systemctl daemon-reload and the slice check; the memory limit would not be active until systemd is reloaded")
 	}
-	r.Info("would check %s -t and %s -T -C %s and -C %s", setupx.Sshd, setupx.Sshd, in.checkSpec(), in.otherSpec())
+	r.Info("would check %s -t and %s -T -C %s and -C %s", setupx.Sshd, setupx.Sshd, in.checkSpecs(), in.otherSpec())
 	in.describeReload()
 }
 
@@ -1101,13 +1263,16 @@ func (in *installer) verifySSHD() error {
 	if err != nil {
 		return fmt.Errorf("sshd -t: %w", err)
 	}
-	m, _, err := in.sshdT(in.checkSpec())
-	if err != nil {
-		return fmt.Errorf("sshd -T -C %s: %w", in.checkSpec(), err)
-	}
-	if bad := blockMismatch(m); len(bad) > 0 {
-		return fmt.Errorf("sshd -T -C %s: the Match block is not in force (an earlier drop-in or Match block wins, or sshd_config does not include %s/*.conf): %s",
-			in.checkSpec(), SSHDropInDir, strings.Join(bad, "; "))
+	for _, u := range in.checked() {
+		spec := in.specFor(u)
+		m, _, terr := in.sshdT(spec)
+		if terr != nil {
+			return fmt.Errorf("sshd -T -C %s: %w", spec, terr)
+		}
+		if bad := blockMismatch(m); len(bad) > 0 {
+			return fmt.Errorf("sshd -T -C %s: the Match block is not in force (an earlier drop-in or Match block wins, or sshd_config does not include %s/*.conf): %s",
+				spec, SSHDropInDir, strings.Join(bad, "; "))
+		}
 	}
 	om, other, err := in.sshdT(in.otherSpec())
 	if err != nil {
@@ -1120,7 +1285,7 @@ func (in *installer) verifySSHD() error {
 		in.r.Block(setupx.UnifiedDiff("sshd -T -C "+in.otherSpec()+" (before)", "(after)", in.baseline, other))
 		return fmt.Errorf("sshd -T -C %s: the drop-in changed the effective configuration of other accounts", in.otherSpec())
 	}
-	in.r.OK("sshd -t, and sshd -T -C: the Match block is in force for %s and reaches no other account", in.o.User)
+	in.r.OK("sshd -t, and sshd -T -C: the Match block is in force for %s and reaches no other account", strings.Join(in.checked(), ", "))
 	return nil
 }
 
@@ -1155,7 +1320,7 @@ func (in *installer) rollback(j *setupx.Journal, reloaded bool) {
 	if len(in.accountRuns()) > 0 {
 		in.r.Note("the account and groups this run created remain; a new run finds them unchanged")
 	}
-	in.r.Info("install failed: every file this run changed was restored")
+	in.r.Info("%s failed: every file this run changed was restored", in.name)
 }
 
 // ErrNoHostKey is a host without host keys.

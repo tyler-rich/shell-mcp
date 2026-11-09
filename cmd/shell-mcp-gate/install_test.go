@@ -51,7 +51,7 @@ func TestInstallUsageExit(t *testing.T) {
 // SSH_ORIGINAL_COMMAND, which never selects another subcommand: serve
 // answers with one protocol response and nothing else.
 func TestForcedCommandReachesOnlyServe(t *testing.T) {
-	for _, client := range []string{"install --policy /etc/shell-mcp/a.yaml", "host-key", "check-policy --policy /x", "shell-mcp-gate/1"} {
+	for _, client := range []string{"install --policy /etc/shell-mcp/a.yaml", "move-key --principal readonly --from-user svc-shell --to-user svc-shell-std", "host-key", "check-policy --policy /x", "shell-mcp-gate/1"} {
 		t.Setenv("SSH_ORIGINAL_COMMAND", client)
 		code, out, errb := runCmd([]string{"serve", "--policy", "/nonexistent/policy.yaml", "--principal", "readonly"},
 			`{"v":2,"id":"0b5c0000-0000-4000-8000-000000000001","ceiling":"destructive","op":"hello"}`+"\n")
@@ -62,5 +62,27 @@ func TestForcedCommandReachesOnlyServe(t *testing.T) {
 			strings.Contains(out, "shell-mcp-gate install") || strings.Contains(out, "owner scan") || strings.Contains(out, "SHELL_MCP_TARGET_HOST_KEYS") {
 			t.Fatalf("SSH_ORIGINAL_COMMAND=%q: %d %q %q", client, code, out, errb)
 		}
+	}
+}
+
+var moveKeyArgs = []string{"move-key", "--principal", "readonly", "--from-user", "svc-shell", "--to-user", "svc-shell-std", "--dry-run"}
+
+// TestMoveKeyNeverAsForcedCommand: move-key refuses as a forced command,
+// also in a dry run, as install does.
+func TestMoveKeyNeverAsForcedCommand(t *testing.T) {
+	t.Setenv("SSH_ORIGINAL_COMMAND", "move-key --principal readonly")
+	code, out, _ := runCmd(moveKeyArgs, "")
+	if code != 1 || !strings.Contains(out, "never runs as an SSH forced command") {
+		t.Fatalf("%d:\n%s", code, out)
+	}
+}
+
+func TestMoveKeyUsageExit(t *testing.T) {
+	code, out, errb := runCmd([]string{"move-key", "--principal", "readonly"}, "")
+	if code != 2 || out != "" || !strings.Contains(errb, "--from-user is required") || !strings.Contains(errb, setup.MoveUsage) {
+		t.Fatalf("%d %q %q", code, out, errb)
+	}
+	if code, out, _ := runCmd([]string{"move-key", "--help"}, ""); code != 0 || out != setup.MoveUsage {
+		t.Fatalf("--help: %d %q", code, out)
 	}
 }

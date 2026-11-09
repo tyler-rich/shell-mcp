@@ -518,7 +518,7 @@ func TestReadToolRunReadCommand(t *testing.T) {
 // at ceiling operator (the read policy's max_tier).
 func gateExec(t *testing.T, id string, args []string) *protocol.Response {
 	t.Helper()
-	c := sshClientAs(t, "svc-shell-std", []config.HostKey{hostPin(t, "ssh_host_ed25519_key.pub")}, clientKey(t, "e2e-client-key-read"))
+	c := sshClient(t, "svc-shell-std", []config.HostKey{hostPin(t, "ssh_host_ed25519_key.pub")}, clientKey(t, "e2e-client-key-read"))
 	resp, err := gateclient.New(gateclient.Options{}).Call(t.Context(), c, protocol.OpExec, protocol.TierOperator,
 		map[string]any{"command_id": id, "args": args}, 20*time.Second)
 	if err != nil {

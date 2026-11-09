@@ -44,6 +44,16 @@ func SliceDir(uid uint32) string {
 // KeysFile is the account's keys file.
 func KeysFile(user string) string { return KeysDir + "/" + user }
 
+// PolkitRuleFor is an account's polkit rule file (TARGET-SETUP §8, "Per
+// account"): PolkitRule for the account of the drop-in's first block, and
+// 60-shell-mcp-<user>.rules for every other account.
+func PolkitRuleFor(user string, first bool) string {
+	if first {
+		return PolkitRule
+	}
+	return PolkitDir + "/60-shell-mcp-" + user + ".rules"
+}
+
 var (
 	// nameRE is an account or group name (handoff §3.1).
 	nameRE = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)

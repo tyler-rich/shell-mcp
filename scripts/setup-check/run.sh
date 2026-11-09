@@ -8,6 +8,16 @@
 #     unchanged, and a dry run again;
 #   - a host set up by hand (TARGET-SETUP §4, §7, §8, §9.2 as written): install
 #     and privd install over it report every item unchanged (byte identity);
+#   - several service accounts: a host split by hand with PR #90's steps,
+#     where install refuses the first account's leftover systemd-journal
+#     membership until TARGET-SETUP §4's usermod -r removes it, and then
+#     reports only unchanged for every key of both accounts; a
+#     fresh host taken to the same accounts by install alone, byte-identical
+#     to it; and the upgrade by install and move-key over SSH, each login
+#     naming its account, before and after each move (the second account's
+#     key refused until sshd reloads, the moved key refused where it was);
+#     move-key's dry run, its re-run (unchanged), its refusal of a key with
+#     privileged forwarding;
 #   - the SSH round trip: sshd -D in the target, a second container on a
 #     labelled network: the gate's hello, no shell without a command, no PTY,
 #     shell-mcp check verifying the printed pin and refusing a wrong one;
@@ -165,6 +175,88 @@ no_temps() { # no_temps <container> <what>
 	t="$(ex "$1" bash /src/scripts/setup-check/target.sh temps)"
 	if [[ -z "$t" ]]; then ok "$2: no temp file left"; else bad "$2: temp files left: $t"; fi
 }
+# movekey <container> <args…>: shell-mcp-gate move-key; sets out and code.
+movekey() {
+	local x="$1"
+	shift
+	code=0
+	out="$(docker exec "$x" /usr/local/bin/shell-mcp-gate move-key "$@" 2>/dev/null)" || code=$?
+}
+# unchanged <container> <what> <install args…>: install reports only
+# unchanged and runs nothing.
+unchanged() {
+	local x="$1" what="$2"
+	shift 2
+	install "$x" "$@"
+	if [[ "$code" == 0 ]] && grep -q 'nothing to do: every item unchanged' <<<"$out" && ! grep -qE '^ok   [^ ]+: (create|replace)|^ok   ran ' <<<"$out"; then
+		ok "$i: $what: only unchanged"
+	else
+		bad "$i: $what: exit $code"
+		echo "$out" | grep -E 'FAIL|differ|create|replace|^ok   ran|^     \|' | head -n 30 || true
+	fi
+}
+# installed <container> <what> <install args…>: install succeeds.
+installed() {
+	local x="$1" what="$2"
+	shift 2
+	install "$x" "$@"
+	if [[ "$code" == 0 ]]; then
+		ok "$i: $what"
+	else
+		bad "$i: $what: exit $code"
+		echo "$out" | grep FAIL | head || true
+	fi
+}
+# keys_to <container>: the client's four public keys (admin, ro, op, web)
+# into its /root.
+keys_to() {
+	local k
+	for k in admin ro op web; do docker cp "$c:/root/key_$k.pub" - | docker cp - "$1:/root"; done
+}
+# wait_ssh <ip>: port 22 accepts connections from the client.
+wait_ssh() {
+	local n
+	for n in $(seq 1 40); do
+		ex "$c" bash -c "exec 3<>/dev/tcp/$1/22" 2>/dev/null && return 0
+		sleep 0.25
+	done
+	return 1
+}
+# reload_sshd: the reload of the upgrade host's sshd (SIGHUP to sshd -D),
+# then wait until it listens again.
+reload_sshd() {
+	ex "$u" bash /src/scripts/setup-check/target.sh hup-sshd
+	sleep 1
+	wait_ssh "$uip"
+}
+# login <user> <key>: the gate's hello over SSH to the upgrade host as the
+# account <user>, with the client key /root/key_<key>; sets r.
+login() {
+	r="$(printf '%s\n' '{"v":2,"id":"0b5c0000-0000-4000-8000-000000000002","ceiling":"read","op":"hello"}' |
+		docker exec -i "$c" ssh -i "/root/key_$2" -o UserKnownHostsFile=/root/known_hosts_u -o StrictHostKeyChecking=yes -o BatchMode=yes \
+			-o ConnectTimeout=10 "$1@$uip" shell-mcp-gate/1 2>&1 || true)"
+}
+# serves <user> <key> <principal> <when>: that key logs in as that account
+# and the gate serves it with that principal.
+serves() {
+	login "$1" "$2"
+	if grep -q '"ok":true' <<<"$r" && grep -q "\"principal\":\"$3\"" <<<"$r"; then
+		ok "$i: $4: key $2 logs in as $1, served as $3"
+	else
+		bad "$i: $4: key $2 as $1"
+		echo "$r" | tail -n 3
+	fi
+}
+# refused <user> <key> <when>: sshd refuses that key for that account.
+refused() {
+	login "$1" "$2"
+	if grep -q 'Permission denied' <<<"$r" && ! grep -q '"ok"' <<<"$r"; then
+		ok "$i: $3: key $2 is refused as $1"
+	else
+		bad "$i: $3: key $2 as $1 was not refused"
+		echo "$r" | tail -n 3
+	fi
+}
 
 for i in "${images[@]}"; do
 	echo "=== $i"
@@ -231,6 +323,140 @@ for i in "${images[@]}"; do
 		bad "$i: install over the hand steps, exit $code"
 		echo "$out" | grep -E 'FAIL|differ|^     \|' | head -n 30 || true
 	fi
+
+	# --- Several service accounts (TARGET-SETUP §4, §7, §8, §12.1; PR #90).
+	# Four server keys: admin (forwarding, svc-shell in the socket group),
+	# ro and op (svc-shell-std: read-only.yaml and service.yaml, which agree on
+	# the journal, TARGET-SETUP §4), web (a third account, svc-shell-ops). Every
+	# login names the account it connects as; none assumes svc-shell.
+	for k in admin ro op web; do ex "$c" ssh-keygen -q -t ed25519 -N '' -C "shell-mcp-$k" -f "/root/key_$k"; done
+	adm=(--policy /etc/shell-mcp/admin.yaml --principal admin --key /root/key_admin.pub --from "$cip" --user svc-shell --uid 60123 --gid 60123
+		--socket-group svc-shell-priv --socket-gid 60124 --no-reload)
+	std_op=(--policy /etc/shell-mcp/service.yaml --principal service --key /root/key_op.pub --from "$cip" --user svc-shell-std --uid 60125 --gid 60125 --no-reload)
+	std_ro=(--policy /etc/shell-mcp/read-only.yaml --principal readonly --key /root/key_ro.pub --from "$cip" --user svc-shell-std --uid 60125 --gid 60125 --no-reload)
+	ops_web=(--policy /etc/shell-mcp/read-only.yaml --principal web --key /root/key_web.pub --from "$cip" --user svc-shell-ops --uid 60126 --gid 60126 --no-reload)
+	ops_ro=(--policy /etc/shell-mcp/read-only.yaml --principal readonly --key /root/key_ro.pub --from "$cip" --user svc-shell-ops --uid 60126 --gid 60126 --no-reload)
+
+	# A host split by hand with PR #90's steps (0.2.0's shared layout, then
+	# TARGET-SETUP's reference steps as written): install for every key of
+	# both accounts reports only unchanged.
+	sh_="$(new "$i")"
+	keys_to "$sh_"
+	ex "$sh_" bash /src/scripts/setup-check/target.sh hand-shared "$cip" /root/key_admin.pub /root/key_ro.pub
+	ex "$sh_" bash /src/scripts/setup-check/target.sh hand-split "$cip" /root/key_op.pub
+	# The first account's groups after a split (TARGET-SETUP §4, README
+	# "Upgrading from 0.2.0" step 3): 0.2.0's §4 put svc-shell in
+	# systemd-journal for a key whose policy reads the journal, and that key
+	# moved. install for the remaining admin key refuses the membership, and
+	# the documented command, run as written, removes it (usermod, not setuid).
+	ex "$sh_" usermod -aG systemd-journal svc-shell
+	install "$sh_" "${adm[@]}"
+	if [[ "$code" != 0 ]] && grep -q '^FAIL account svc-shell is a member of systemd-journal; .*remove the membership' <<<"$out"; then
+		ok "$i: after the split, install for svc-shell's admin key refuses its leftover systemd-journal membership"
+	else
+		bad "$i: the leftover systemd-journal membership: exit $code"
+		echo "$out" | grep FAIL | head || true
+	fi
+	if [[ -z "$(ex "$sh_" sh -c 'find "$(command -v usermod)" -perm -4000')" ]]; then ok "$i: usermod is not setuid"; else bad "$i: usermod is setuid"; fi
+	rc=0
+	ex "$sh_" usermod -r -G systemd-journal svc-shell || rc=$?
+	g="$(ex "$sh_" id -nG svc-shell)"
+	if [[ "$rc" == 0 ]] && ! grep -qw systemd-journal <<<"$g" && grep -qw svc-shell-priv <<<"$g"; then
+		ok "$i: usermod -r -G systemd-journal svc-shell as written: the membership is gone, the socket group kept"
+	else
+		bad "$i: usermod -r -G systemd-journal svc-shell: exit $rc, groups $g"
+	fi
+	unchanged "$sh_" "PR #90's hand split, svc-shell's admin key" "${adm[@]}"
+	unchanged "$sh_" "PR #90's hand split, svc-shell-std's service key" "${std_op[@]}"
+	unchanged "$sh_" "PR #90's hand split, svc-shell-std's moved read-only key" "${std_ro[@]}"
+	no_temps "$sh_" "$i: install over the hand split"
+
+	# A fresh host taken to the same two accounts by install alone ends
+	# byte-identical to the hand-split one.
+	si="$(new "$i")"
+	keys_to "$si"
+	installed "$si" "install alone, svc-shell's admin key" "${adm[@]}"
+	installed "$si" "install alone, svc-shell-std's service key" "${std_op[@]}"
+	installed "$si" "install alone, svc-shell-std's read-only key" "${std_ro[@]}"
+	d="$(diff <(ex "$sh_" bash /src/scripts/setup-check/target.sh state) <(ex "$si" bash /src/scripts/setup-check/target.sh state) || true)"
+	if [[ -z "$d" ]] && [[ "$(ex "$si" grep -c '^Match User ' /etc/ssh/sshd_config.d/60-shell-mcp.conf)" == 2 ]]; then
+		ok "$i: install alone and PR #90's hand steps: byte-identical (drop-in, keys files, slices, polkit rules, accounts)"
+	else
+		bad "$i: install alone differs from the hand split"
+		echo "$d" | head -n 30
+	fi
+	docker rm -f "$sh_" "$si" >/dev/null
+
+	# The upgrade with install alone, over SSH: 0.2.0's shared layout, then
+	# install for the second account (the read-only line is then in both
+	# files), move-key finishing that move, and a full move to a third
+	# account. Logins as each account, before and after each move.
+	u="$(new "$i")"
+	keys_to "$u"
+	uip="$(ip "$u")"
+	ex "$u" bash /src/scripts/setup-check/target.sh hand-shared "$cip" /root/key_admin.pub /root/key_ro.pub
+	ex -d "$u" /usr/sbin/sshd -D -e
+	ex "$c" sh -c "echo '$uip $(ex "$u" cat /etc/ssh/ssh_host_ed25519_key.pub | cut -d' ' -f1,2)' >/root/known_hosts_u"
+	wait_ssh "$uip"
+	serves svc-shell admin admin "0.2.0's shared layout"
+	serves svc-shell ro readonly "0.2.0's shared layout"
+	install "$u" "${std_ro[@]}"
+	[[ "$code" == 0 ]] && grep -q 'check-policy as svc-shell-std: serve would accept' <<<"$out" &&
+		ok "$i: install creates svc-shell-std beside svc-shell" || { bad "$i: install for svc-shell-std: exit $code"; echo "$out" | grep FAIL | head || true; }
+	refused svc-shell-std ro "before sshd reloads (PR #90's finding)"
+	reload_sshd
+	serves svc-shell-std ro readonly "after the reload, the line in both files"
+	serves svc-shell admin admin "after the reload"
+	before="$(ex "$u" bash /src/scripts/setup-check/target.sh snapshot)"
+	movekey "$u" --principal readonly --from-user svc-shell --to-user svc-shell-std --no-reload --dry-run
+	after="$(ex "$u" bash /src/scripts/setup-check/target.sh snapshot)"
+	[[ "$code" == 0 && "$before" == "$after" ]] && ok "$i: move-key --dry-run: exit 0, filesystem identical" || bad "$i: move-key --dry-run: exit $code"
+	movekey "$u" --principal readonly --from-user svc-shell --to-user svc-shell-std --no-reload
+	if [[ "$code" == 0 ]] && grep -q '/etc/ssh/authorized_keys.d/svc-shell-std: unchanged' <<<"$out" &&
+		ex "$u" sh -c '! grep -q -- "--principal readonly\"" /etc/ssh/authorized_keys.d/svc-shell && test "$(stat -c "%U:%G %a" /etc/ssh/authorized_keys.d/svc-shell)" = "root:root 644"'; then
+		ok "$i: move-key finishes the move install began (the line left svc-shell's file)"
+	else
+		bad "$i: move-key svc-shell to svc-shell-std: exit $code"
+		echo "$out" | grep -E 'FAIL|differ' | head || true
+	fi
+	reload_sshd
+	serves svc-shell admin admin "after the move"
+	serves svc-shell-std ro readonly "after the move"
+	refused svc-shell ro "after the move"
+	movekey "$u" --principal readonly --from-user svc-shell --to-user svc-shell-std --no-reload
+	[[ "$code" == 0 ]] && grep -q 'nothing to do: every item unchanged' <<<"$out" && ok "$i: move-key again: only unchanged" || bad "$i: move-key again: exit $code"
+	install "$u" "${std_op[@]}"
+	[[ "$code" == 0 ]] && ex "$u" test -f /etc/polkit-1/rules.d/60-shell-mcp-svc-shell-std.rules && ! ex "$u" test -e /etc/polkit-1/rules.d/60-shell-mcp.rules &&
+		ok "$i: svc-shell-std's polkit rule is 60-shell-mcp-svc-shell-std.rules" || bad "$i: install svc-shell-std's service key: exit $code"
+	install "$u" "${ops_web[@]}"
+	[[ "$code" == 0 ]] && [[ "$(ex "$u" grep -c '^Match User ' /etc/ssh/sshd_config.d/60-shell-mcp.conf)" == 3 ]] &&
+		ok "$i: a third account appends a third block" || bad "$i: install svc-shell-ops: exit $code"
+	reload_sshd
+	serves svc-shell-ops web web "a third account"
+	movekey "$u" --principal readonly --from-user svc-shell-std --to-user svc-shell-ops --no-reload
+	if [[ "$code" == 0 ]] && grep -q 'check-policy as svc-shell-ops: serve would accept' <<<"$out" && grep -q '/etc/ssh/authorized_keys.d/svc-shell-ops: replace' <<<"$out"; then
+		ok "$i: move-key from svc-shell-std to svc-shell-ops"
+	else
+		bad "$i: move-key to svc-shell-ops: exit $code"
+		echo "$out" | grep -E 'FAIL|differ' | head || true
+	fi
+	reload_sshd
+	serves svc-shell-ops ro readonly "after the second move"
+	refused svc-shell-std ro "after the second move"
+	serves svc-shell-std op service "after the second move"
+	serves svc-shell-ops web web "after the second move"
+	serves svc-shell admin admin "after the second move"
+	before="$(ex "$u" bash /src/scripts/setup-check/target.sh snapshot)"
+	movekey "$u" --principal admin --from-user svc-shell --to-user svc-shell-std --no-reload
+	after="$(ex "$u" bash /src/scripts/setup-check/target.sh snapshot)"
+	[[ "$code" == 1 && "$before" == "$after" ]] && grep -q 'privileged.enabled' <<<"$out" &&
+		ok "$i: move-key refuses a key with privileged forwarding; nothing changed" || bad "$i: move-key of the admin key: exit $code"
+	unchanged "$u" "after the moves, svc-shell's admin key" "${adm[@]}"
+	unchanged "$u" "after the moves, svc-shell-std's service key" "${std_op[@]}"
+	unchanged "$u" "after the moves, svc-shell-ops's web key" "${ops_web[@]}"
+	unchanged "$u" "after the moves, svc-shell-ops's moved read-only key" "${ops_ro[@]}"
+	no_temps "$u" "$i: install and move-key over SSH"
+	docker rm -f "$u" >/dev/null
 
 	# The refusals a container can build (TARGET-SETUP §12.1), each on a fresh
 	# image, each leaving no temp file and refusing with exit 1.
