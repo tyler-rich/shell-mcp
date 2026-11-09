@@ -6,7 +6,7 @@
 
 shell-mcp is a [Model Context Protocol](https://modelcontextprotocol.io) server that gives AI clients (Claude Code, Claude Desktop, MCP Inspector, any client that can send a bearer header) bounded, audited access to Linux hosts over SSH. It reads and changes what container managers cannot reach: systemd services and the journal, host and root-owned configuration files, ownership and permissions, packages, disks, processes, TLS certificates and git checkouts. It is **not a remote shell**: there is no shell, no PTY, no interpreter and no free-form command line, and every operation runs on the host under a root-owned policy that the server cannot change.
 
-**Status: 0.2.0.** Before 1.0, tool names, arguments and configuration can change in a minor release; read [`CHANGELOG.md`](CHANGELOG.md) before upgrading, and pin the image by digest.
+**Status: 0.3.0.** Before 1.0, tool names, arguments and configuration can change in a minor release; read [`CHANGELOG.md`](CHANGELOG.md) before upgrading, and pin the image by digest.
 
 ## Contents
 
@@ -572,33 +572,33 @@ Then `shell-mcp init compose` with `--approve-host approve.example.test` and the
 
 ## Verifying a release
 
-Each [GitHub release](https://github.com/tyler-rich/shell-mcp/releases) has the binaries (`shell-mcp`, `shell-mcp-gate`, `shell-mcp-privd`, as `<name>_X.Y.Z_linux_<arch>`), `shell-mcp_X.Y.Z_examples.tar.gz`, CycloneDX SBOMs, `LICENSE` and `NOTICE`, `SHA256SUMS`, and a Sigstore bundle `<file>.sigstore.json` for every binary, the archive and `SHA256SUMS`. The image is `ghcr.io/tyler-rich/shell-mcp:X.Y.Z`, with its digest in the release notes. Everything is signed by the release workflow **at the release's tag**, and only that identity is a release: a dry run or a branch build has another one and fails these checks. For 0.2.0:
+Each [GitHub release](https://github.com/tyler-rich/shell-mcp/releases) has the binaries (`shell-mcp`, `shell-mcp-gate`, `shell-mcp-privd`, as `<name>_X.Y.Z_linux_<arch>`), `shell-mcp_X.Y.Z_examples.tar.gz`, CycloneDX SBOMs, `LICENSE` and `NOTICE`, `SHA256SUMS`, and a Sigstore bundle `<file>.sigstore.json` for every binary, the archive and `SHA256SUMS`. The image is `ghcr.io/tyler-rich/shell-mcp:X.Y.Z`, with its digest in the release notes. Everything is signed by the release workflow **at the release's tag**, and only that identity is a release: a dry run or a branch build has another one and fails these checks. For 0.3.0:
 
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
 ```
 
 ```bash
-cosign verify-blob --bundle shell-mcp-gate_0.2.0_linux_amd64.sigstore.json \
-  --certificate-identity https://github.com/tyler-rich/shell-mcp/.github/workflows/release-build.yml@refs/tags/v0.2.0 \
+cosign verify-blob --bundle shell-mcp-gate_0.3.0_linux_amd64.sigstore.json \
+  --certificate-identity https://github.com/tyler-rich/shell-mcp/.github/workflows/release-build.yml@refs/tags/v0.3.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  shell-mcp-gate_0.2.0_linux_amd64
+  shell-mcp-gate_0.3.0_linux_amd64
 ```
 
 ```bash
-gh attestation verify shell-mcp-gate_0.2.0_linux_amd64 --repo tyler-rich/shell-mcp \
-  --signer-workflow tyler-rich/shell-mcp/.github/workflows/release-build.yml --source-ref refs/tags/v0.2.0
+gh attestation verify shell-mcp-gate_0.3.0_linux_amd64 --repo tyler-rich/shell-mcp \
+  --signer-workflow tyler-rich/shell-mcp/.github/workflows/release-build.yml --source-ref refs/tags/v0.3.0
 ```
 
 ```bash
 cosign verify ghcr.io/tyler-rich/shell-mcp@sha256:<digest from the release notes> \
-  --certificate-identity https://github.com/tyler-rich/shell-mcp/.github/workflows/release-build.yml@refs/tags/v0.2.0 \
+  --certificate-identity https://github.com/tyler-rich/shell-mcp/.github/workflows/release-build.yml@refs/tags/v0.3.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 
 ```bash
 gh attestation verify oci://ghcr.io/tyler-rich/shell-mcp@sha256:<digest from the release notes> --repo tyler-rich/shell-mcp \
-  --signer-workflow tyler-rich/shell-mcp/.github/workflows/release-build.yml --source-ref refs/tags/v0.2.0
+  --signer-workflow tyler-rich/shell-mcp/.github/workflows/release-build.yml --source-ref refs/tags/v0.3.0
 ```
 
 Run the `cosign verify-blob` line for each binary you use, the examples archive and `SHA256SUMS`, and the `gh attestation verify` line for each file you use that `SHA256SUMS` lists. `SHA256SUMS` itself has a signature but no attestation of its own: the provenance is recorded for each file it lists, so `gh attestation verify SHA256SUMS` finds nothing (HTTP 404). These are the checks the release workflow itself runs after signing, together with the refusal of another ref ([ARCHITECTURE §7](docs/ARCHITECTURE.md#7-build-release-and-supply-chain)).
@@ -627,7 +627,7 @@ The release workflow runs it after signing: a release's files must pass, and a c
 3. **Targets first.** [Verify](#verifying-a-release) and `install` the new `shell-mcp-gate` (and `shell-mcp-privd`) over the old ones; both start per request, so nothing restarts. Run both `check-policy` commands. A new helper with an unchanged policy needs no new units; if the release notes change the units, run `shell-mcp-privd install` again with the policy's hash ([TARGET-SETUP §12.3](docs/TARGET-SETUP.md#123-shell-mcp-privd-install-container-with---no-start-real-host)).
 4. **Then the server.** Set the new `image: …@sha256:<digest>`, run `docker compose up -d`, then `docker compose exec shell-mcp /shell-mcp doctor`. Run it with `exec`, inside the running server: `docker compose run` starts a second container on the same fixed address, which Docker refuses while the server runs. Approval records are in memory: pending approvals are lost on restart.
 
-The server, the gate and the helper check each other's protocol version and refuse a mismatch with an actionable error (`protocol_mismatch`, naming the side to upgrade; nothing runs), so upgrade all three within one window. From 0.1.0 to 0.2.0 the protocol version changes and the helper's units must be regenerated: follow the numbered steps in [`CHANGELOG.md`](CHANGELOG.md), "Upgrading from 0.1.0". Details: [TARGET-SETUP §11](docs/TARGET-SETUP.md#11-updating-and-removing).
+The server, the gate and the helper check each other's protocol version and refuse a mismatch with an actionable error (`protocol_mismatch`, naming the side to upgrade; nothing runs), so upgrade all three within one window. From 0.1.0 to 0.2.0 the protocol version changes and the helper's units must be regenerated: follow the numbered steps in [`CHANGELOG.md`](CHANGELOG.md), "Upgrading from 0.1.0". From 0.2.0 to 0.3.0 the protocol and the units are unchanged, but a target with the helper whose service account also serves keys without privileged forwarding must be split into two accounts: [`CHANGELOG.md`](CHANGELOG.md), "Upgrading from 0.2.0", and the section below. Details: [TARGET-SETUP §11](docs/TARGET-SETUP.md#11-updating-and-removing).
 
 ### Upgrading from 0.2.0
 

@@ -1,6 +1,6 @@
 # shell-mcp — Project Plan
 
-> Status: **`v0.1.0` is released (every v1 session done, S0–S5b). The open items after it were decided (maintainer, 2026-10-25) in `docs/handoff/POST-RELEASE.md` and done in S6-1 to S7-7 (#61 to #73); `v0.2.0` is released (2026-10-30; CHANGELOG `## [0.2.0]`, image pinned by digest in `deploy/`).** Last updated 2026-10-30.
+> Status: **`v0.1.0` is released (every v1 session done, S0–S5b). The open items after it were decided (maintainer, 2026-10-25) in `docs/handoff/POST-RELEASE.md` and done in S6-1 to S7-7 (#61 to #73); `v0.2.0` is released (2026-10-30; CHANGELOG `## [0.2.0]`, image pinned by digest in `deploy/`). The setup tooling (S8-1 to S8-4, #79 to #84) and the shared-account security fix (#90, #94) are done; `v0.3.0` is prepared (CHANGELOG `## [0.3.0]`), the image pin in `deploy/` stays on 0.2.0 until it is released.** Last updated 2026-11-09.
 > Read `CLAUDE.md` first, then this file, then `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/POLICY.md` and `docs/PRIVILEGED.md`.
 
 ## 1. What this is
