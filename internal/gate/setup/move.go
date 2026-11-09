@@ -334,12 +334,12 @@ func (mv *mover) checkPolicy() bool {
 		case "command":
 			mv.o.Policy, _, _ = ForcedCommand(o.Value)
 		case "from":
-			es, _, err := ParseFrom(strings.Split(o.Value, ","))
-			if err != nil {
-				mv.refuse("key", "from", "the line to move: from=: %v", err)
+			es, _, ferr := ParseFrom(strings.Split(o.Value, ","))
+			if ferr != nil {
+				mv.refuse("key", "from", "the line to move: from=: %v", ferr) // readKeys checked it
 				return false
 			}
-			mv.installer.from = es
+			mv.from = es
 		}
 	}
 	p, err := mv.h.LoadPolicy(mv.o.Policy, mv.toAcct.Home)
@@ -407,7 +407,7 @@ func (mv *mover) checkPolkit() {
 		mv.refuse("file", "polkit", "polkit rule: %v", err)
 		return
 	}
-	mv.dstRule = mv.owned(PolkitRuleFor(mv.m.ToUser, mv.isFirst(mv.m.ToUser)), rule, 0o644, "polkit")
+	mv.dstRule = mv.owned(PolkitRuleFor(mv.m.ToUser, mv.isFirst(mv.m.ToUser)), rule, "polkit")
 	moved, err := polkitRule(mv.m.FromUser, mv.p)
 	if err != nil {
 		mv.refuse("file", "polkit", "polkit rule: %v", err)

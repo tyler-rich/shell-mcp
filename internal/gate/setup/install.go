@@ -340,9 +340,14 @@ func (in *installer) state(p string) (setupx.FileState, bool) {
 	return st, true
 }
 
-// owned classifies an owned file (handoff §3.2): absent → create,
-// identical → unchanged, anything else refused with a diff.
-func (in *installer) owned(p string, data []byte, mode fs.FileMode, object string) file {
+// ownedMode is every owned file's mode (TARGET-SETUP §12.1's table).
+const ownedMode fs.FileMode = 0o644
+
+// owned classifies an owned file (handoff §3.2), root:root ownedMode:
+// absent → create, identical → unchanged, anything else refused with a
+// diff.
+func (in *installer) owned(p string, data []byte, object string) file {
+	mode := ownedMode
 	f := file{path: p, data: data, mode: mode, object: object}
 	st, ok := in.state(p)
 	if !ok {
@@ -562,7 +567,7 @@ func (in *installer) checkSlice() {
 		return
 	}
 	in.sliceDir = in.ownedDir(SliceDir(o.UID), 0o755)
-	in.sliceFile = in.owned(SliceDir(o.UID)+"/"+sliceDropIn, SliceDropIn(in.memoryText), 0o644, "slice")
+	in.sliceFile = in.owned(SliceDir(o.UID)+"/"+sliceDropIn, SliceDropIn(in.memoryText), "slice")
 }
 
 // isFirst reports whether user is the drop-in's first account (the one
@@ -592,7 +597,7 @@ func (in *installer) checkPolkit() {
 		in.refuse("file", "polkit", "polkit rule: %v", err)
 		return
 	}
-	in.polkitFile = in.owned(PolkitRuleFor(in.o.User, in.isFirst(in.o.User)), rule, 0o644, "polkit")
+	in.polkitFile = in.owned(PolkitRuleFor(in.o.User, in.isFirst(in.o.User)), rule, "polkit")
 }
 
 func (in *installer) checkSSHFiles() {
@@ -614,7 +619,7 @@ func (in *installer) readDropIn(user string) (st setupx.FileState, users []strin
 		return st, nil, ok
 	}
 	if !st.IsRegular() || st.Perm() != 0o644 || st.Owner != setupx.Root {
-		in.owned(SSHDropIn, DropIn(user), 0o644, "sshd") // refuses, naming what differs
+		in.owned(SSHDropIn, DropIn(user), "sshd") // refuses, naming what differs
 		return st, nil, false
 	}
 	users, err := ParseDropIn(st.Data)
@@ -1260,9 +1265,9 @@ func (in *installer) verifySSHD() error {
 	}
 	for _, u := range in.checked() {
 		spec := in.specFor(u)
-		m, _, err := in.sshdT(spec)
-		if err != nil {
-			return fmt.Errorf("sshd -T -C %s: %w", spec, err)
+		m, _, terr := in.sshdT(spec)
+		if terr != nil {
+			return fmt.Errorf("sshd -T -C %s: %w", spec, terr)
 		}
 		if bad := blockMismatch(m); len(bad) > 0 {
 			return fmt.Errorf("sshd -T -C %s: the Match block is not in force (an earlier drop-in or Match block wins, or sshd_config does not include %s/*.conf): %s",

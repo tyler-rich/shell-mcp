@@ -307,9 +307,9 @@ func TestMoveKeyRefusals(t *testing.T) {
 	member := func(group string, gid string) func(*host) {
 		return func(h *host) {
 			if gid != "" {
-				_, _ = h.Fake.Simulate(setupx.Groupadd, []string{"--gid", gid, group})
+				_, _ = h.Simulate(setupx.Groupadd, []string{"--gid", gid, group})
 			}
-			_, _ = h.Fake.Simulate(setupx.Usermod, []string{"-aG", group, stdUser})
+			_, _ = h.Simulate(setupx.Usermod, []string{"-aG", group, stdUser})
 		}
 	}
 	for _, c := range []struct {

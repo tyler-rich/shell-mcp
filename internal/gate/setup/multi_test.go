@@ -166,16 +166,16 @@ func TestInstallSecondAccount(t *testing.T) {
 	// The same flags again, the first account's again, and dry runs of both:
 	// only unchanged, nothing written, no reload.
 	for _, args := range [][]string{stdFlags(), nil, stdFlags("--dry-run"), {"--dry-run"}} {
-		r := install(t, h, args...)
+		again := install(t, h, args...)
 		done := "nothing to do: every item unchanged"
 		if slices.Contains(args, "--dry-run") {
 			done = "dry run: every check passed"
 		}
-		if r.code != 0 || !strings.Contains(r.out, done) || !reflect.DeepEqual(h.Snapshot(), r.before) {
-			t.Fatalf("%v: %d, changed %v:\n%s", args, r.code, !reflect.DeepEqual(h.Snapshot(), r.before), r.out)
+		if again.code != 0 || !strings.Contains(again.out, done) || !reflect.DeepEqual(h.Snapshot(), again.before) {
+			t.Fatalf("%v: %d, changed %v:\n%s", args, again.code, !reflect.DeepEqual(h.Snapshot(), again.before), again.out)
 		}
-		if strings.Contains(r.out, ": create") || strings.Contains(r.out, ": replace") {
-			t.Fatalf("%v plans a change:\n%s", args, r.out)
+		if strings.Contains(again.out, ": create") || strings.Contains(again.out, ": replace") {
+			t.Fatalf("%v plans a change:\n%s", args, again.out)
 		}
 		for _, o := range h.order {
 			if strings.HasSuffix(o, "reload ssh.service") || strings.HasPrefix(o, "write ") || strings.HasPrefix(o, "mkdir ") {
@@ -231,7 +231,7 @@ func handSplit(t *testing.T, h *host) {
 		{setupx.Useradd, "--uid", "60125", "--gid", "60125", "--home-dir", "/var/lib/svc-shell-std", "--create-home", "--shell", "/bin/sh", stdUser},
 		{setupx.Usermod, "-L", stdUser},
 	} {
-		if _, err := h.Fake.Simulate(c[0], c[1:]); err != nil {
+		if _, err := h.Simulate(c[0], c[1:]); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -373,7 +373,7 @@ func TestInstallSecondAccountRefusals(t *testing.T) {
 			for _, c := range [][]string{{setupx.Groupadd, "--gid", "60125", stdUser},
 				{setupx.Useradd, "--uid", "60125", "--gid", "60125", "--home-dir", "/var/lib/svc-shell-std", "--create-home", "--shell", "/bin/sh", stdUser},
 				{setupx.Usermod, "-aG", group, stdUser}} {
-				_, _ = h.Fake.Simulate(c[0], c[1:])
+				_, _ = h.Simulate(c[0], c[1:])
 			}
 		}
 	}
