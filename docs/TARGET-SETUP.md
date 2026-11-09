@@ -131,7 +131,7 @@ usermod -L svc-shell
 Groups, only as needed, and nothing else (the gate refuses to serve as a member of `root`, `sudo`, `wheel`, `adm`, `docker`, `lxd`, `incus-admin`, `libvirt`, `kvm`, `disk` or `shadow`):
 
 ```bash
-usermod -aG systemd-journal svc-shell       # only if the policy has a journal section
+usermod -aG systemd-journal svc-shell       # only if its keys' policies have a journal section (then every one must, below)
 groupadd --gid 60124 svc-shell-priv         # only if you install the helper (step 9)
 usermod -aG svc-shell-priv svc-shell        # only for the account whose keys' policies have privileged.enabled: true
 id svc-shell
@@ -154,7 +154,7 @@ find / -xdev \( -uid 60125 -o -gid 60125 \) -print
 groupadd --gid 60125 svc-shell-std
 useradd --uid 60125 --gid svc-shell-std --home-dir /var/lib/svc-shell-std --create-home --shell /bin/sh svc-shell-std
 usermod -L svc-shell-std
-usermod -aG systemd-journal svc-shell-std   # only if its policies have a journal section (all of them, below)
+usermod -aG systemd-journal svc-shell-std   # only if its keys' policies have a journal section (then every one must, below)
 mkdir -p /etc/systemd/system/user-60125.slice.d
 printf '[Slice]\nMemoryMax=4G\nMemorySwapMax=0\n' >/etc/systemd/system/user-60125.slice.d/50-shell-mcp.conf
 systemctl daemon-reload

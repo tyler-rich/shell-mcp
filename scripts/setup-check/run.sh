@@ -9,7 +9,9 @@
 #   - a host set up by hand (TARGET-SETUP §4, §7, §8, §9.2 as written): install
 #     and privd install over it report every item unchanged (byte identity);
 #   - several service accounts: a host split by hand with PR #90's steps,
-#     where install for every key of both accounts reports only unchanged; a
+#     where install refuses the first account's leftover systemd-journal
+#     membership until TARGET-SETUP §4's usermod -r removes it, and then
+#     reports only unchanged for every key of both accounts; a
 #     fresh host taken to the same accounts by install alone, byte-identical
 #     to it; and the upgrade by install and move-key over SSH, each login
 #     naming its account, before and after each move (the second account's
@@ -342,6 +344,28 @@ for i in "${images[@]}"; do
 	keys_to "$sh_"
 	ex "$sh_" bash /src/scripts/setup-check/target.sh hand-shared "$cip" /root/key_admin.pub /root/key_ro.pub
 	ex "$sh_" bash /src/scripts/setup-check/target.sh hand-split "$cip" /root/key_op.pub
+	# The first account's groups after a split (TARGET-SETUP §4, README
+	# "Upgrading from 0.2.0" step 3): 0.2.0's §4 put svc-shell in
+	# systemd-journal for a key whose policy reads the journal, and that key
+	# moved. install for the remaining admin key refuses the membership, and
+	# the documented command, run as written, removes it (usermod, not setuid).
+	ex "$sh_" usermod -aG systemd-journal svc-shell
+	install "$sh_" "${adm[@]}"
+	if [[ "$code" != 0 ]] && grep -q '^FAIL account svc-shell is a member of systemd-journal; .*remove the membership' <<<"$out"; then
+		ok "$i: after the split, install for svc-shell's admin key refuses its leftover systemd-journal membership"
+	else
+		bad "$i: the leftover systemd-journal membership: exit $code"
+		echo "$out" | grep FAIL | head || true
+	fi
+	if [[ -z "$(ex "$sh_" sh -c 'find "$(command -v usermod)" -perm -4000')" ]]; then ok "$i: usermod is not setuid"; else bad "$i: usermod is setuid"; fi
+	rc=0
+	ex "$sh_" usermod -r -G systemd-journal svc-shell || rc=$?
+	g="$(ex "$sh_" id -nG svc-shell)"
+	if [[ "$rc" == 0 ]] && ! grep -qw systemd-journal <<<"$g" && grep -qw svc-shell-priv <<<"$g"; then
+		ok "$i: usermod -r -G systemd-journal svc-shell as written: the membership is gone, the socket group kept"
+	else
+		bad "$i: usermod -r -G systemd-journal svc-shell: exit $rc, groups $g"
+	fi
 	unchanged "$sh_" "PR #90's hand split, svc-shell's admin key" "${adm[@]}"
 	unchanged "$sh_" "PR #90's hand split, svc-shell-std's service key" "${std_op[@]}"
 	unchanged "$sh_" "PR #90's hand split, svc-shell-std's moved read-only key" "${std_ro[@]}"

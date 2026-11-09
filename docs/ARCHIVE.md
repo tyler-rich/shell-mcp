@@ -5293,7 +5293,7 @@ The "no refusal" cases at serve (`…NotMemberServes`, `…NoHelperServes`, `…
 - **The journal rule stays per key (S8 Q5).** setup-check's first run found the conflict:
   - PR #90's hand step adds `systemd-journal` to the second account "if a policy it serves has a journal section", while `install` judges the allowed groups from the one key it installs.
   - An account serving a journal key (the operator preset) and a key without one (read-only) is therefore refused for the latter (`supplementary_group`, "member of systemd-journal").
-  - The maintainer kept the rule. TARGET-SETUP §4 and README step 3 now say that an account's keys agree on the journal.
+  - The maintainer kept the rule. TARGET-SETUP §4 and README step 3 now say that an account's keys agree on the journal, and §4's two `usermod -aG systemd-journal` lines (the first account's and the hand-built second account's, where PR #90's sentence was) say "only if its keys' policies have a journal section (then every one must, below)". The other mentions (plan.md D-020, SECURITY §5 item 8, TARGET-SETUP §12.1, S8 handoff Q5) already state the rule for one policy and needed no change; ARCHIVE entries stay as written.
   - The acceptance tests give the second account a service-control policy without a journal section (`service.yaml`, invented).
   - Rejected: allowing `systemd-journal` when any key of the account needs it, a change to S8 Q5 beyond the three items.
 
@@ -5325,7 +5325,7 @@ Any failure after the first write restores every file, and a run leaves no temp 
   - Its `state` comparison of a hand-split host with one made by `install` alone found no difference in paths, owners, modes, types, SHA-256s, `passwd`, `group` or the shadow password field.
 - **Not bytes, but found:**
   - The journal rule above.
-  - The first account keeps `systemd-journal` after its journal keys move, and `install` then refuses it for its remaining keys. Documented with `usermod -r -G systemd-journal svc-shell`: `usermod -r` exists in all three images' shadow, while `gpasswd`, which would also do it, is setuid there.
+  - The first account keeps `systemd-journal` after its journal keys move, and `install` then refuses it for its remaining keys. Documented with `usermod -r -G systemd-journal svc-shell`: `usermod -r` exists in all three images' shadow, while `gpasswd`, which would also do it, is setuid there. At the maintainer's request (2026-11-09) setup-check runs it as written on all three images, in scenario (1) below; it works on each, so the `gpasswd -d` fallback was not needed.
   - The hand steps' "regenerate the first account's rule" case, which `move-key` refuses as described above.
 
 **Tests, failing first.**
@@ -5336,7 +5336,7 @@ Any failure after the first write restores every file, and a run leaves no temp 
 - `FuzzParseDropIn` (new; whatever it accepts round-trips through `DropInFor`, and its names are distinct and plain): 60 s, 34.1 million executions, no finding. `FuzzParseKeyLine` again, since the keys file reader was refactored: 60 s, 28.0 million executions, no finding.
 
 **Acceptance in `scripts/setup-check/`** on Debian 13, Ubuntu 24.04 and Ubuntu 26.04:
-- **(1) PR #90's hand steps, adopted:** a host built with 0.2.0's shared layout and then PR #90's hand steps as TARGET-SETUP's reference part writes them (`target.sh hand-shared`, `hand-split`). `install` for svc-shell's admin key and for svc-shell-std's two keys reports only `unchanged`.
+- **(1) PR #90's hand steps, adopted:** a host built with 0.2.0's shared layout and then PR #90's hand steps as TARGET-SETUP's reference part writes them (`target.sh hand-shared`, `hand-split`). The first account is then put in `systemd-journal`, as 0.2.0's §4 did for a key whose policy read the journal and which moved: `install` for the admin key refuses the membership ("member of systemd-journal … remove the membership"), `usermod` is checked not to be setuid, and TARGET-SETUP §4's `usermod -r -G systemd-journal svc-shell`, run as written, removes it and keeps the socket group. `install` for svc-shell's admin key and for svc-shell-std's two keys then reports only `unchanged`, and the host is still byte-identical to (2).
 - **(2) `install` alone:** a fresh host taken to the same accounts by `install` alone is byte-identical to it.
 - **(3) The upgrade by `install` and `move-key` over SSH,** on another host with the shared layout and `sshd -D`. Every login names its account: the `login`, `serves` and `refused` helpers take the account and the key, and none defaults to svc-shell, which is what failed PR #90's shard 4. The checks:
   - both keys log in as svc-shell before;
@@ -5344,7 +5344,7 @@ Any failure after the first write restores every file, and a run leaves no temp 
   - `move-key --dry-run` changes nothing; `move-key` finishes the move; the key logs in as svc-shell-std and is refused as svc-shell; the same command again is `unchanged`;
   - a third account (svc-shell-ops 60126) gets a third block, then a full move to it, and logins as all three accounts after it;
   - `move-key` refuses the admin key; every key's `install` reports `unchanged` afterwards; no temp file.
-- **Results per distribution:** `bash scripts/setup-check/run.sh`: 301 passed, 0 failed. Each of Debian 13, Ubuntu 24.04 and Ubuntu 26.04 passed its 92 checks, 34 of them the multi-account checks above; the rest are the root credential tests and init's checks. The first run (Debian 13 only), before the journal decision, failed the 3 checks the journal rule refuses.
+- **Results per distribution:** `bash scripts/setup-check/run.sh`: 310 passed, 0 failed. Each of Debian 13, Ubuntu 24.04 and Ubuntu 26.04 passed its 95 checks, 37 of them the multi-account checks above (3 of them the journal removal); the rest are the root credential tests and init's checks. The first run (Debian 13 only), before the journal decision, failed the 3 checks the journal rule refuses. The journal removal's first run failed its refusal check on each image only because the check looked for the code `supplementary_group`, which install's FAIL line does not print; the refusal, the setuid check and `usermod -r` passed on all three.
 - **e2e:** `sshClient` now requires the account. The default svc-shell is gone and `sshClientAs` is merged into it, so no e2e caller can assume the first account. No e2e-host case was added: a second install account on the runner's own sshd is beyond Q3's approval, which covers `svc-install` alone.
 
 **Docs.**
