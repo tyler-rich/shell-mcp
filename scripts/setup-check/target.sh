@@ -3,7 +3,8 @@
 # container's own root (scripts/setup-check/run.sh starts it, unprivileged,
 # with Docker's default capabilities and the repository read-only at /src).
 # It changes only that throwaway container. Every name, id and address is a
-# placeholder (TARGET-SETUP's svc-shell 60123, svc-shell-priv 60124); the
+# placeholder (TARGET-SETUP's svc-shell 60123, svc-shell-priv 60124,
+# svc-shell-std 60125, and svc-shell-ops 60126 for a third account); the
 # policies are invented for the test and use landlock: best-effort, because
 # a CI kernel may lack Landlock ABI 4.
 #
@@ -19,6 +20,15 @@
 #   temps              every install temp file left anywhere
 #   hand <from> <key>  TARGET-SETUP §4, §7 and §8 by hand, for the operator
 #                      policy and the key file <key>
+#   hand-shared <from> <admin.pub> <ro.pub>
+#                      0.2.0's shared layout by hand: svc-shell in the
+#                      socket group with the admin and read-only keys
+#   hand-split <from> <op.pub>
+#                      PR #90's hand steps on it: svc-shell-std 60125, its
+#                      block, the service key, the read-only line moved,
+#                      its polkit rule
+#   state              the managed files and account entries, to compare
+#   hup-sshd           SIGHUP to sshd -D (the reload, without systemd)
 #   hand-units         TARGET-SETUP §9.2 by hand (units --out, the store)
 #   break <case>       set up one refusal case of TARGET-SETUP §12.1
 set -euo pipefail
@@ -52,6 +62,22 @@ services:
 journal:
   units: ["example-app.service"]
 EOF
+	cat >/etc/shell-mcp/service.yaml <<'EOF'
+# setup-check test policy (invented): service control without the journal,
+# so that it shares an account with read-only.yaml (an account's keys agree
+# on systemd-journal: TARGET-SETUP §4).
+version: 1
+max_tier: operator
+sandbox:
+  landlock: best-effort
+paths:
+  read: [/srv/setup-check]
+services:
+  status: ["example-app.service"]
+  control:
+    units: ["example-app.service"]
+    verbs: [restart]
+EOF
 	cat >/etc/shell-mcp/admin.yaml <<'EOF'
 # setup-check test policy (invented): forwarding to the helper.
 version: 1
@@ -76,7 +102,7 @@ sandbox:
 paths:
   read: [/srv/setup-check]
 EOF
-	chmod 0644 /etc/shell-mcp/read-only.yaml /etc/shell-mcp/operator.yaml /etc/shell-mcp/admin.yaml
+	chmod 0644 /etc/shell-mcp/read-only.yaml /etc/shell-mcp/operator.yaml /etc/shell-mcp/service.yaml /etc/shell-mcp/admin.yaml
 	chmod 0600 /etc/shell-mcp/privileged.yaml
 }
 
@@ -171,6 +197,103 @@ EOF
 	shell-mcp-gate polkit --policy /etc/shell-mcp/operator.yaml --user svc-shell >/tmp/60-shell-mcp.rules
 	install -o root -g root -m 0644 /tmp/60-shell-mcp.rules /etc/polkit-1/rules.d/60-shell-mcp.rules
 	;;
+hand-shared)
+	# 0.2.0's TARGET-SETUP §4 and §7 as written then: one account for every
+	# key, in the helper's socket group, with the admin key (forwarding) and
+	# the read-only key. No journal or polkit: neither policy needs one.
+	from="${2:?from}"
+	admin="$(cut -d' ' -f1,2 "${3:?admin key file}")"
+	ro="$(cut -d' ' -f1,2 "${4:?read-only key file}")"
+	groupadd --gid 60123 svc-shell
+	useradd --uid 60123 --gid svc-shell --home-dir /var/lib/svc-shell --create-home --shell /bin/sh svc-shell 2>/dev/null
+	usermod -L svc-shell
+	groupadd --gid 60124 svc-shell-priv
+	usermod -aG svc-shell-priv svc-shell
+	mkdir -p /etc/systemd/system/user-60123.slice.d
+	printf '[Slice]\nMemoryMax=4G\nMemorySwapMax=0\n' >/etc/systemd/system/user-60123.slice.d/50-shell-mcp.conf
+	install -o root -g root -m 0755 -d /etc/ssh/authorized_keys.d
+	cat >/etc/ssh/sshd_config.d/60-shell-mcp.conf <<'EOF'
+Match User svc-shell
+    AuthorizedKeysFile /etc/ssh/authorized_keys.d/%u
+    AuthenticationMethods publickey
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    PermitTTY no
+    AllowTcpForwarding no
+    AllowStreamLocalForwarding no
+    AllowAgentForwarding no
+    X11Forwarding no
+    PermitTunnel no
+    PermitUserRC no
+    MaxSessions 8
+EOF
+	{
+		echo "restrict,from=\"$from\",command=\"/usr/local/bin/shell-mcp-gate serve --policy /etc/shell-mcp/admin.yaml --principal admin\" $admin shell-mcp-admin"
+		echo "restrict,from=\"$from\",command=\"/usr/local/bin/shell-mcp-gate serve --policy /etc/shell-mcp/read-only.yaml --principal readonly\" $ro shell-mcp-readonly"
+	} >/etc/ssh/authorized_keys.d/svc-shell
+	;;
+hand-split)
+	# PR #90's hand steps, as TARGET-SETUP's reference part writes them, on a
+	# hand-shared host: §4 "A second service account" (svc-shell-std 60125;
+	# not in systemd-journal: neither of its policies has a journal
+	# section), §7 "With a second account" (the drop-in command as written),
+	# the service key's line added for it (service.yaml, services.control),
+	# §7 "Moving a line" (the read-only key, as written), and §8 "Per
+	# account" (its polkit rule).
+	from="${2:?from}"
+	op="$(cut -d' ' -f1,2 "${3:?service key file}")"
+	groupadd --gid 60125 svc-shell-std
+	useradd --uid 60125 --gid svc-shell-std --home-dir /var/lib/svc-shell-std --create-home --shell /bin/sh svc-shell-std 2>/dev/null
+	usermod -L svc-shell-std
+	mkdir -p /etc/systemd/system/user-60125.slice.d
+	printf '[Slice]\nMemoryMax=4G\nMemorySwapMax=0\n' >/etc/systemd/system/user-60125.slice.d/50-shell-mcp.conf
+	f=/etc/ssh/sshd_config.d/60-shell-mcp.conf
+	test "$(head -n1 "$f")" = "Match User svc-shell" && test "$(grep -c '^Match ' "$f")" = 1 &&
+		{ cat "$f"; echo; sed '1s/^Match User svc-shell$/Match User svc-shell-std/' "$f"; } >/root/60-shell-mcp.conf &&
+		install -o root -g root -m 0644 /root/60-shell-mcp.conf "$f" && rm /root/60-shell-mcp.conf ||
+		{
+			echo "target.sh hand-split: TARGET-SETUP §7's drop-in command did not run" >&2
+			exit 1
+		}
+	echo "restrict,from=\"$from\",command=\"/usr/local/bin/shell-mcp-gate serve --policy /etc/shell-mcp/service.yaml --principal service\" $op shell-mcp-service" \
+		>/etc/ssh/authorized_keys.d/svc-shell-std
+	chmod 0644 /etc/ssh/authorized_keys.d/svc-shell-std
+	(
+		cd /etc/ssh/authorized_keys.d
+		grep -F -- '--principal readonly"' svc-shell >/root/moved.keys
+		cat /root/moved.keys >&2
+		cat svc-shell-std /root/moved.keys 2>/dev/null >/root/svc-shell-std.keys
+		install -o root -g root -m 0644 /root/svc-shell-std.keys svc-shell-std
+		grep -vF -- '--principal readonly"' svc-shell >/root/svc-shell.keys
+		install -o root -g root -m 0644 /root/svc-shell.keys svc-shell
+		rm /root/moved.keys /root/svc-shell-std.keys /root/svc-shell.keys
+	)
+	(
+		cd /tmp
+		shell-mcp-gate polkit --policy /etc/shell-mcp/service.yaml --user svc-shell-std >60-shell-mcp-svc-shell-std.rules
+		install -o root -g root -m 0644 60-shell-mcp-svc-shell-std.rules /etc/polkit-1/rules.d/60-shell-mcp-svc-shell-std.rules
+		rm 60-shell-mcp-svc-shell-std.rules
+	)
+	;;
+state)
+	# What two hosts with the same accounts must agree on, byte for byte:
+	# the files install manages (owner, mode, type, SHA-256), the accounts'
+	# and groups' entries, and the password field (locked).
+	shopt -s nullglob
+	for p in /etc/ssh/sshd_config.d/60-shell-mcp.conf /etc/ssh/authorized_keys.d /etc/ssh/authorized_keys.d/* \
+		/etc/systemd/system/user-*.slice.d /etc/systemd/system/user-*.slice.d/* /etc/polkit-1/rules.d/60-shell-mcp*.rules /var/lib/svc-shell*; do
+		stat -c '%U:%G %a %F %n' "$p"
+		if [ -f "$p" ]; then sha256sum "$p"; fi
+	done
+	getent passwd svc-shell svc-shell-std svc-shell-ops || true
+	getent group svc-shell svc-shell-std svc-shell-ops svc-shell-priv systemd-journal || true
+	grep -E '^svc-shell(-std|-ops)?:' /etc/shadow | cut -d: -f1,2
+	;;
+hup-sshd)
+	# The reload of a container's sshd -D (no systemd): SIGHUP re-executes it
+	# with the new configuration.
+	kill -HUP "$(cat /run/sshd.pid)"
+	;;
 hand-units)
 	# TARGET-SETUP §9.2.
 	/usr/local/libexec/shell-mcp-privd units --policy /etc/shell-mcp/privileged.yaml --out /etc/systemd/system >/dev/null
@@ -208,7 +331,7 @@ break)
 	esac
 	;;
 *)
-	echo "usage: target.sh prepare|prepare-bare|app|answers <preset> <landlock>|bad-answers <case>|snapshot|temps|hand <from> <key>|hand-units|break <case>" >&2
+	echo "usage: target.sh prepare|prepare-bare|app|answers <preset> <landlock>|bad-answers <case>|snapshot|temps|hand <from> <key>|hand-shared <from> <admin> <ro>|hand-split <from> <op>|state|hup-sshd|hand-units|break <case>" >&2
 	exit 2
 	;;
 esac
