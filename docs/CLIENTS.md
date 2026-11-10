@@ -162,7 +162,7 @@ claude mcp add --transport stdio shell-mcp-local -- docker run --rm -i --user "$
   -e SHELL_MCP_TRANSPORT=stdio -e SHELL_MCP_AUTH_MODE=none -e SHELL_MCP_SSH_KEY_FILE=/run/secrets/ssh_key \
   -e SHELL_MCP_TARGET_NAME=app-host -e SHELL_MCP_TARGET_HOST=target-a.example.test -e SHELL_MCP_TARGET_USER=svc-shell \
   -e "SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:<the host key's fingerprint>" \
-  ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:323149155f5be042949ec5291812104351f365a693dbdfb8cd2171b95ee30e6a serve
+  ghcr.io/tyler-rich/shell-mcp:0.3.0@sha256:95fd125d8f18c869b884f336881b24383383270f5d7b63a6efaa145d6a3eb537 serve
 ```
 
 The server logs to stderr only under stdio.

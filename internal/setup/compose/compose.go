@@ -84,7 +84,7 @@ func Template() []byte { return append([]byte(nil), template...) }
 // Reference is the values deploy/docker-compose.yml holds.
 func Reference() Values {
 	return Values{
-		Image:      "ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:323149155f5be042949ec5291812104351f365a693dbdfb8cd2171b95ee30e6a",
+		Image:      "ghcr.io/tyler-rich/shell-mcp:0.3.0@sha256:95fd125d8f18c869b884f336881b24383383270f5d7b63a6efaa145d6a3eb537",
 		HostKeys:   []string{"ssh-ed25519 SHA256:placeholder"},
 		TargetName: "app-host", TargetHost: "target-a.example.test", TargetUser: "svc-shell",
 		MCPHost: "mcp.example.test", Subnet: "172.30.80.0/24", ServerAddr: "172.30.80.10", ProxyAddr: "172.30.80.5",
@@ -298,7 +298,7 @@ func (v *Values) checkAddresses() []error {
 const (
 	headerRef     = "# All names, hosts and fingerprints are placeholders.\n"
 	headerPrinted = "# Printed by `shell-mcp init compose` from deploy/docker-compose.yml with this deployment's values.\n"
-	imageStart    = "    # The 0.2.0 image index"
+	imageStart    = "    # The 0.3.0 image index"
 	imageEnd      = "    restart:"
 	mountLine     = "    secrets: [mcp_token, ssh_key]\n"
 	mountBlock    = "secrets:\n  mcp_token: { file: ./secrets/mcp_token }\n  ssh_key: { file: ./secrets/ssh_key }\n"
