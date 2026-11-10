@@ -5415,3 +5415,32 @@ Any failure after the first write restores every file, and a run leaves no temp 
 **Deferred:** none.
 
 **Versions (D-013):** Go 1.27.3. Direct modules: go-landlock v0.11.1, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6 (held, PR #91), x/crypto v0.58.0, x/sys v0.50.0. Indirect: psx v1.2.78, x/oauth2 v0.38.0, x/sync v0.25.0. Tools: golangci-lint v2.15.0, govulncheck v1.9.0, actionlint v1.7.12, Trivy v0.76.2, Grype v0.121.3, gitleaks v8.30.1, cosign v3.1.4, syft v1.57.1. No dependency added.
+
+### 2026-11-10 — Release 0.3.0, its verification, and the image digest pinned (N-29) (branch release/0.3.0-pins)
+**The release (D-010).** #95 ("chore: prepare 0.3.0") and #97 (the release date moved to 2026-11-10, with go-landlock v0.11.1, Grype v0.121.3 and syft v1.57.1) went to `dev`; `dev` at `abd75c5` went to `main` by PR #96 ("Release 0.3.0", #77 to #97), merged by the maintainer with a merge commit: `1510e9f03a244f6afca973834d1bd2cebf0116b4` (parents `b47e94b`, `abd75c5`). `ci`, `analyze (go)` and `analyze (actions)` ran on that commit from the push to `main` and succeeded (22 check runs, all successful). The `workflow_dispatch` dry run on `main` (`version=0.3.0`, run 42813876495) passed on the same commit: preflight (`ci` and `analyze (go)` succeeded on it, the CHANGELOG's 0.3.0 section, the `release` environment with a required reviewer and exactly `tag:v*.*.*`), build, verify, sign into the loopback registry (`verify.sh`: every check passed for `…@refs/heads/main`); approve and publish skipped; afterwards no release, no `v0.3.0` tag and no `0.3.0` image. The maintainer created the annotated tag `v0.3.0` (tag object `ef04398f…`, message "shell-mcp 0.3.0") on `1510e9f…` on 2026-11-10, the CHANGELOG's date, pushed it and approved the `release` environment. The release run (run 42816113745) passed every job: preflight (the tagged commit is on `main` included), build, verify, approve, sign and attest to GHCR (`verify.sh`: "every check passed for …/release-build.yml@refs/tags/v0.3.0"), publish. Published 2026-11-10T13:22:54Z: https://github.com/tyler-rich/shell-mcp/releases/tag/v0.3.0.
+
+**The image:** `ghcr.io/tyler-rich/shell-mcp:0.3.0`, index `sha256:95fd125d8f18c869b884f336881b24383383270f5d7b63a6efaa145d6a3eb537` (linux/amd64 `sha256:35591e47a869565390c8f3187625746bc4bc4f07031a5782b59a60d379abdbd0`, linux/arm64 `sha256:75a80c47e8f65195c989f1200259b3f32de2f6ea8f449ab62fd6fe01ec796d92`). `version` in the image prints `shell-mcp 0.3.0 (commit 1510e9f03a244f6afca973834d1bd2cebf0116b4, go1.27.3)`.
+
+**Verified as a user would**, in new empty directories outside the repository, on the maintainer's Windows workstation with Git Bash; the tag checked out separately (a fresh clone at `refs/tags/v0.3.0`); Docker with an empty `DOCKER_CONFIG`, so nothing was signed in:
+
+| Check | Result |
+|---|---|
+| `gh release download v0.3.0` (every asset) | 26 files, as for 0.2.0: 6 binaries, 8 SBOMs, the examples archive, `LICENSE`, `NOTICE`, `SHA256SUMS`, 8 Sigstore bundles |
+| the tag's `scripts/verify-release.sh 0.3.0 --dir <download>` (gh mode; cosign is not installed on the workstation) | exit 0, 34 checks ok, "every check passed (gh) for …/release-build.yml@refs/tags/v0.3.0" |
+| `cosign verify-blob` (v3.1.4) for the 6 binaries, the examples archive and `SHA256SUMS`, identity `…/release-build.yml@refs/tags/v0.3.0`, issuer `https://token.actions.githubusercontent.com` | 8 of 8 "Verified OK" |
+| the same for `SHA256SUMS` with the `refs/heads/main` identity | refused ("no matching CertificateIdentity found") |
+| `cosign verify` of the image index, the tag's identity | pass; with the `refs/heads/main` identity refused |
+| `gh attestation verify oci://…@sha256:95fd125d…` (provenance of the index), `--signer-workflow …/release-build.yml --source-ref refs/tags/v0.3.0` | pass; the certificate's SAN is `…/release-build.yml@refs/tags/v0.3.0`, source digest `1510e9f…`; with `--source-ref refs/heads/main` refused |
+| `--predicate-type https://cyclonedx.org/bom` for each platform image | 2 of 2 pass |
+| the release is immutable | `immutable: true`, not a draft or pre-release |
+| the notes | the CHANGELOG's `0.3.0` section, identical to the tag's `scripts/release/notes.sh 0.3.0` (up to blank lines), then `## Verify` with the index digest and the five commands, pinned to `refs/tags/v0.3.0` |
+| the image is publicly pullable | `docker buildx imagetools inspect …:0.3.0` resolves to the index above; `docker pull` by digest with no credentials; the package's visibility is `public` |
+| no `latest` tag | `imagetools inspect …:latest`: not found; the package's tags are `0.1.0`, `0.2.0`, `0.3.0` and the `sha256-<digest>` signature and attestation tags |
+
+cosign ran from `ghcr.io/sigstore/cosign/cosign:v3.1.4@sha256:0f06154836d2de34f887a5c273506d52ca43edaa1d9e53e6510fa78a48f69c2d` (the version the release workflow uses), one labelled container per command, files put in with `docker cp` (no host mount), removed by id; none was left. **Findings: none.**
+
+**N-29 (done for 0.3.0).** `deploy/docker-compose.yml` (the comment and `image:`), `deploy/README.md` (the notice and both `docker run` lines), SECURITY §7's copy, `docs/CLIENTS.md` (the stdio example), and `init compose`'s embedded template `internal/setup/compose/docker-compose.yml` (still byte-identical to `deploy/docker-compose.yml`) with `compose.go`'s default image and its `imageStart` marker now use `ghcr.io/tyler-rich/shell-mcp:0.3.0@sha256:95fd125d8f18c869b884f336881b24383383270f5d7b63a6efaa145d6a3eb537`. The golden files under `internal/setup/compose/testdata/` carry no image digest, so none changed. No 0.2.0 digest remains outside this ARCHIVE; every other `0.2.0` left in the repository is history or a fixture (the upgrade section and "every release after 0.2.0", the protocol-version table, the shared-account history, setup-check's 0.2.0 layout, the release and verify-release script tests, `version_test.go`). plan.md's status line says 0.3.0 is released.
+
+**Deferred:** the next release's pin repeats N-29. The GitHub security advisory for the shared-account fix is the maintainer's to file (the CHANGELOG's Security section is its draft).
+
+**Versions:** Go 1.27.3; direct modules: go-landlock v0.11.1, go-sdk v1.8.0, jsonschema-go v0.4.3, go.yaml.in/yaml/v3 v3.0.6 (held, PR #91), x/crypto v0.58.0, x/sys v0.50.0. No dependency added. Release tools: cosign v3.1.4, syft v1.57.1, Trivy v0.76.2, Grype v0.121.3, govulncheck v1.9.0.
