@@ -2,7 +2,7 @@
 
 All notable changes to shell-mcp. Versions follow [Semantic Versioning](https://semver.org); a release is the tag `vX.Y.Z` on `main`. The design record behind each change is `docs/ARCHIVE.md` §14.
 
-## [0.3.0] - 2026-11-09
+## [0.3.0] - 2026-11-10
 
 Setup commands that write every file the hand steps of TARGET-SETUP and `deploy/README.md` write, and a **security fix for targets set up with 0.1.0's or 0.2.0's TARGET-SETUP that run the privileged helper**: on those, the new gate refuses the read-only and operator keys until they move to a second service account (Upgrading, step 2). Protocol version 2, the tool catalogue, both policy schemas and the helper's units are unchanged from 0.2.0, so a 0.2.0 server works with a 0.3.0 gate and the reverse. The design record behind each change is `docs/ARCHIVE.md` §14, sessions S8-scope to S8-4 and PRs #77 to #94.
 
