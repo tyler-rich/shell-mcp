@@ -134,9 +134,8 @@ var HostKeyTypes = []string{
 // expected form and how to obtain it.
 const HostKeyPinFormat = `must be "<key-type> SHA256:<base64>" with key type ssh-ed25519, ` +
 	`ecdsa-sha2-nistp256, ecdsa-sha2-nistp384, ecdsa-sha2-nistp521 or ssh-rsa ` +
-	`(on the target, the key type is the first word of the host key's .pub file and ` +
-	`"ssh-keygen -lf <host key>.pub" prints its fingerprint; or run ` +
-	`"ssh-keyscan -t ed25519 <host> | ssh-keygen -lf -" and verify the fingerprint out of band)`
+	`(run "shell-mcp-gate host-key" on the target and carry the value after "=" over a trusted channel; ` +
+	`it reads the target's own host-key files, never what the network shows)`
 
 // ParseHostKeyPin parses "<key-type> SHA256:<base64>": exactly one space,
 // a type from HostKeyTypes and an OpenSSH SHA-256 fingerprint.
@@ -723,6 +722,16 @@ func (l *loader) buildTarget(ft *fileTarget, sharedKey *PrivateKey) (Target, err
 		HostKeys: pins, Key: key,
 	}, nil
 }
+
+// ValidTargetName reports whether name is a target name the loader accepts.
+func ValidTargetName(name string) bool { return targetNameRE.MatchString(name) }
+
+// ValidUser reports whether user is a target user the loader accepts.
+func ValidUser(user string) bool { return userRE.MatchString(user) }
+
+// ValidHost reports whether h is a target host the loader accepts: an IP
+// address or a DNS name.
+func ValidHost(h string) bool { return validHost(h) }
 
 func validHost(h string) bool {
 	if _, err := netip.ParseAddr(h); err == nil {

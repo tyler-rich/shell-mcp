@@ -34,7 +34,7 @@ func delTree(t *testing.T, dir string) []string {
 			t.Fatal(err)
 		}
 	}
-	if out, err := exec.CommandContext(t.Context(), "chown", "-R", "svc-shell:svc-shell", dir).CombinedOutput(); err != nil { //nolint:gosec // G204: a fixed command on the test's own path
+	if out, err := exec.CommandContext(t.Context(), "chown", "-R", "svc-shell-std:svc-shell-std", dir).CombinedOutput(); err != nil { //nolint:gosec // G204: a fixed command on the test's own path
 		t.Fatalf("chown: %v: %s", err, out)
 	}
 	return []string{dir + "/a.txt", dir + "/sub/b.txt", dir + "/sub/c.txt"}

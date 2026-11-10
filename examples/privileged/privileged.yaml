@@ -5,13 +5,13 @@
 # root reads it. Then, as root:
 #   shell-mcp-privd check-policy --policy /etc/shell-mcp/privileged.yaml
 #   shell-mcp-privd units --policy /etc/shell-mcp/privileged.yaml --out /etc/systemd/system
-# and review every REVIEW line check-policy prints. Regenerate the units
-# after every edit: the helper refuses to serve a policy whose SHA-256 is
-# not the one its units were generated from.
+# and review every REVIEW line check-policy prints.
 #
-# Write this file for the worst case: what would you accept a fully
-# compromised MCP server doing as root with it? Human approval (D-006)
-# stops a misled model, not a compromised server (PRIVILEGED §3).
+# Regenerate the units after every edit: the helper refuses to serve a
+# policy whose SHA-256 is not the one its units were generated from. Write
+# this file for the worst case: what would you accept a fully compromised
+# MCP server doing as root with it? Human approval (D-006) stops a misled
+# model, not a compromised server (PRIVILEGED §3).
 
 version: 1
 
@@ -57,7 +57,7 @@ paths:
     - path: /etc/systemd/system/example-app.service.d
       acknowledge: "drop-ins for example-app only"
   # Added to the built-in read deny list (POLICY §3).
-  deny: ["/etc/example-app/secrets/**"]
+  deny: ["/srv/app/secrets/**", "**/*.key", "/etc/example-app/secrets/**"]
 
 owners:
   # The only users and groups priv_chown, priv_write_file, priv_copy and
@@ -82,9 +82,16 @@ backups:
 # gate policy (POLICY §4). A command whose binary is a power, kernel,
 # storage or firewall tool (POLICY §5 groups 11–13) needs an acknowledge;
 # shells, interpreters, launchers and the like are never allowed.
+#
+# Core unit (the default): no network, writes only to the roots above,
+# Landlock, a four-capability bounding set. A core command may add
+# capabilities: CAP_SYS_BOOT, CAP_KILL or (with root_equivalent: true)
+# CAP_SYS_ADMIN.
+# Broad unit (unit: broad): network and full root capabilities —
+# root-equivalent by design, always reported. Only for commands that need
+# it. A broad command may also add CAP_SYS_TIME (drops ProtectClock=),
+# CAP_NET_ADMIN or CAP_NET_BIND_SERVICE.
 commands:
-  # Core unit (the default): no network, writes only to the roots above,
-  # Landlock, a four-capability bounding set.
   - id: mounts
     path: /usr/bin/findmnt
     tier: read
@@ -95,19 +102,12 @@ commands:
     tier: read
     description: "Block devices and their mount points"
     templates: [["--json", "--output", "NAME,SIZE,TYPE,MOUNTPOINTS"]]
-    # capabilities: [CAP_KILL]   # a core command may add CAP_SYS_BOOT,
-    #                            # CAP_KILL or (root_equivalent) CAP_SYS_ADMIN
-  # Broad unit: network and full root capabilities — root-equivalent by
-  # design, always reported. Only for commands that need it.
   - id: resolve-name
     path: /usr/bin/getent
     tier: read
     unit: broad
     description: "Resolve a host name through the system resolver"
     templates: [["hosts", "{regex:^[a-z0-9.-]{1,253}$}"]]
-    # capabilities: [CAP_NET_BIND_SERVICE]   # broad commands may also add
-    #                                        # CAP_SYS_TIME (drops ProtectClock=),
-    #                                        # CAP_NET_ADMIN, CAP_NET_BIND_SERVICE
 
 # The built-in priv_power operation (destructive): answered first, then,
 # 60 s later unless cancelled, asks logind from the broad unit to start

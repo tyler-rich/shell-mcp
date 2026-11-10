@@ -19,3 +19,14 @@ a53197e4d089d6c98ad594d5e09d75417438bcdc:internal/redact/fuzz_test.go:private-ke
 # invented PEM block whose body is "AAAA" (the next commit on the branch
 # assembles it at run time).
 9a2dcfe0d81eab35757825e2a172442b49872312:internal/approval/mask_test.go:private-key:82
+#
+# Branch feat/s8-1-install-commands (S8-1), the key-line parser tests: an
+# invented Ed25519 public key as a constant (generic-api-key on its name; a
+# later commit on the branch builds it from a fixed seed at run time).
+c86957ca893b17f77092160bdd1c0f6f9c75710e:internal/gate/setup/parse_test.go:generic-api-key:88
+#
+# Branch test/live-proxy-and-quickstart, proxy-live-check: the docker flag
+# -u 65532:65532 (the containers' uid:gid), a few lines after a curl, read by
+# curl-auth-user as curl's -u user:password: a false positive, no credential (a
+# later commit on the branch passes the user through an array).
+9517d11c165c9af4cee9307ad27ad576b7400cf8:scripts/proxy-live-check/run.sh:curl-auth-user:374

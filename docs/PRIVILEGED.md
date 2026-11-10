@@ -22,7 +22,7 @@ This document is normative. The helper implements it exactly; changing it is a S
 | `/etc/shell-mcp/privileged.yaml` | `root:root 0600` | The privileged policy (§4). Only root reads it. |
 | `shell-mcp-privd.socket` + `shell-mcp-privd@.service` | generated, `root:root 0644` in `/etc/systemd/system/` | **Core** unit: tight sandbox, no network (§5.1). |
 | `shell-mcp-privd-broad.socket` + `shell-mcp-privd-broad@.service` | generated, same | **Broad** unit: for package management, commands declared `unit: broad` and the power operation (§5.2). Generated and installed only when the policy uses it (`packages.enabled`, a `unit: broad` command, or `power`). |
-| Socket group (placeholder name `svc-shell-priv`) | system group | The gate's service account is its only member; sockets are `root:<group> 0660`. |
+| Socket group (placeholder name `svc-shell-priv`) | group with an explicit gid (D-020) | The gate's service account is its only member; sockets are `root:<group> 0660`. |
 | `/run/shell-mcp/` | `root:root 0711` | Created by systemd for the socket (`DirectoryMode=0711`). `SocketUser=`/`SocketGroup=` apply to the socket node only, so the directory stays root's; the gate needs only search permission to reach the socket by name, not to list the directory. |
 | `/var/lib/shell-mcp/backups/` | `root:root 0700` | Previous versions of files the helper overwrites or deletes (§6). Created at install; the core unit lists it in `ReadWritePaths=` and does not start without it. |
 
@@ -34,7 +34,7 @@ Sockets use `Accept=yes`: systemd starts one short-lived helper instance per con
 
 1. The gate connects to `/run/shell-mcp/privd.sock` (or `privd-broad.sock`). File permissions (`0660`, group-owned) are the first gate.
 2. The helper reads `SO_PEERCRED` on the accepted socket and requires the uid to equal the unit's `SHELL_MCP_PRIVD_CLIENT_UID` (generated from the policy's `client_uid`; once the peer has passed, the policy's value must equal it too, §7). Anything else: close without a response and audit-log it. This is the first thing the helper does (§7).
-3. One request per connection, same wire format and version as the gate protocol (version 2, ARCHITECTURE §4; a request of another version is refused with `protocol_mismatch`, naming both versions and the side to upgrade, §4.0), ops prefixed `priv_`. Request ≤ 2 MiB, response ≤ 4 MiB, strict decoding (unknown fields and duplicate keys are errors).
+3. One request per connection, same wire format and version as the gate protocol (version 2, ARCHITECTURE §4; a request of another version is refused with `protocol_mismatch`, naming both versions and the side to upgrade, ARCHITECTURE §4.0), ops prefixed `priv_`. Request ≤ 2 MiB, response ≤ 4 MiB, strict decoding (unknown fields and duplicate keys are errors).
 4. The helper **never trusts the gate**: it re-validates tier, paths, owners, modes, templates and sizes against its own policy. The gate's policy and the helper's policy are independent; both must allow an operation. The request's `ceiling` (ARCHITECTURE §4.1), forwarded by the gate unchanged, is applied by the helper itself as well (§6). Its `timeout_ms` is the timeout the gate waits for (the request's, clamped to the gate policy's limits), and the helper clamps it again to its own `limits.max_timeout_s` (§6).
 5. Every response carries the helper's own block: its version, the privileged policy's SHA-256, its `max_tier` and its `unit` (`core` or `broad`). The gate passes it to the server unchanged as the response's `helper` block (ARCHITECTURE §4.2), and the server binds the privileged policy's hash into the approval of every privileged operation (D-006), so an edit of this policy between an approval and its re-call is `approval_invalid`.
 
@@ -102,7 +102,7 @@ packages:
   allow_upgrade: false           # apt-get upgrade of everything installed
 ```
 
-`examples/privileged/privileged.yaml` is a complete, commented example with placeholders; a test loads it and generates both unit pairs from it.
+`examples/privileged/privileged.yaml` is a complete, commented example with placeholders; a test loads it and generates both unit pairs from it. `shell-mcp-privd policy new` writes a privileged policy from an answers file and that example (POLICY §9); the answers file is an input format, not a change to this schema.
 
 Rules:
 - Strict parsing, as the gate policy. Roots absolute and already clean; not `/`, `/proc`, `/sys`, `/dev`, `/run`. A root may appear under both `paths.read` and `paths.write` (write roots are readable anyway).

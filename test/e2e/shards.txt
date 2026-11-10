@@ -1,0 +1,26 @@
+# The e2e-host shards (.github/workflows/ci.yml, test/e2e/shards.sh). Each
+# shard is a runner VM of its own with a full setup. A test named here runs
+# in its shard; every other test runs in the last shard (one more than the
+# highest named here), so a new test is never left out. The e2e-host
+# coverage job checks that the shards' lists together are exactly the
+# binary's tests, each in one shard, and that each passed.
+#
+# Balanced by the durations of the e2e-host runs of 2026-11-02 (ARCHIVE §14):
+# TestApprovalWebFlow and TestGateKeyRotation wait out 30 s TOTP steps (about
+# 280 s each) and so are in different shards; shard 3 holds the tests that
+# wait out real power-action and package delays. The last shard keeps the
+# zz_ files (install, init, doctor) after every other test of its VM.
+#
+# <shard> <test>
+1 TestApprovalWebFlow
+1 TestPackageReinstallStopPoints
+1 TestPackageRecoverStopPoints
+2 TestGateKeyRotation
+2 TestPrivExecPathChain
+2 TestPrivExecPathChainRace
+2 TestPackageLock
+3 TestPowerLogindRefusals
+3 TestPowerInstanceKilled
+3 TestPackageStopPoints
+3 TestPrivExecKilledOnHangup
+3 TestPackageRecoverInterrupted

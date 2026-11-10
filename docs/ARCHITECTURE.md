@@ -60,13 +60,15 @@ Python remains viable for the server alone, but one language for all three binar
 | `internal/gate/policy` | Strict YAML load (unknown keys are errors), schema validation, hard-deny list, protected-path set, template compilation, binary resolution and ownership checks, policy SHA-256. |
 | `internal/gate/procself` | This process's own `/proc/<pid>` as an `O_PATH` descriptor opened before the sandbox, with bounded `openat`/`readlinkat` reads relative to it: the sandbox's thread check, the helper's child listing and, in the helper, fsx's real paths (PRIVILEGED §5.1). |
 | `internal/gate/fsx` | Root selection (longest matching root), `os.Root` operations, `/proc/self/fd/N` real-path re-check (through `procself` when the helper sets it), O_NOFOLLOW final component, deny matching, bounded reads, atomic writes with read-back, mode/owner preservation, setuid/setgid refusal. |
-| `internal/gate/execx` | Template matching, argv construction, scrubbed env, `SysProcAttr{Setpgid, Pdeathsig}`, rlimits in force before the command's first instruction (`RLIMIT_CORE=0`, `RLIMIT_NOFILE`, `RLIMIT_NPROC` and `RLIMIT_DATA` at the policy's `limits.max_memory_mb`, soft and hard, without which nothing runs; POLICY §4a) (the running binary re-executes itself as a trampoline: it reads the command from an inherited socketpair, lowers its own limits with `setrlimit(2)`, marks every descriptor above stderr close-on-exec, clears the flag on exactly the files passed for `{path:read:fd}` (descriptors 4 and up, each checked to be a regular file open read-only; POLICY §4) and `execve(2)`s the command; it refuses any other way of being started), output capture with per-stream caps, timeout SIGTERM→SIGKILL on the process group, exit-code/signal reporting. Used by the gate and the helper. |
+| `internal/gate/execx` | Template matching, argv construction, scrubbed env, `SysProcAttr{Setpgid, Pdeathsig}`, rlimits in force before the command's first instruction (`RLIMIT_CORE=0`, `RLIMIT_NOFILE`, `RLIMIT_NPROC` and `RLIMIT_DATA` at the policy's `limits.max_memory_mb`, soft and hard, without which nothing runs; POLICY §4a) (the running binary re-executes itself as a trampoline: it reads the command from an inherited socketpair, lowers its own limits with `setrlimit(2)`, marks every descriptor above stderr close-on-exec, clears the flag on exactly the files passed for `{path:read:fd}` (descriptors 4 and up, each checked to be a regular file open read-only; POLICY §4) and `execve(2)`s the command; it refuses any other way of being started), output capture with per-stream caps, timeout SIGTERM→SIGKILL on the process group, exit-code/signal reporting. Used by the gate and the helper. One option, `Spec.Credential`, runs a command as another account: honoured only in a process running as uid 0 (refused before anything starts otherwise), the trampoline switches with `setgroups`, `setgid`, `setuid` after all its checks, verifies the ids, groups and every thread and that no permitted, effective or ambient capability is left, and sets `no_new_privs` before the `execve`; `RLIMIT_NPROC` then counts that account's tasks. Its only caller is `shell-mcp-gate install`'s `check-policy` step (a call-site test enforces it). |
 | `internal/gate/ops` | One file per op (§4.3). Each op declares its tier; the dispatcher refuses ops above min(`max_tier`, the request's `ceiling`) before doing anything else. |
 | `internal/gate/audit` | One syslog line per request (authpriv; info on success, notice on refusal): request id, the request's tier `ceiling` (empty when the request was refused before it was read), principal, client address (`SSH_CONNECTION`), op, sanitized args (paths, units, ids, flags; an argument list only as its count), outcome, duration and, for a delete or a discard that set an entry aside and could not put it back, that entry's temporary path (`set_aside`), as one JSON object. Never content, stdin, output or environment. One datagram to `/dev/log` with a 250 ms dial and write deadline: a missing socket or full queue never blocks the request. |
 | `internal/gate/procfs`, `systemd`, `gitx`, `certs` | Bounded, fuzzed parsers for `/proc` and os-release, systemctl/journalctl arguments and output, git output and repository configuration, and certificates. |
 | `internal/gate/sandbox` | Compute the Landlock ruleset from the policy (system read/execute paths, read roots, write roots, allowed TCP connect ports, IPC scoping) and apply it with `no_new_privs` to all threads before the request is read; report the effective ABI level. |
 | `internal/template` | The argv-template engine shared by the gate and the helper (POLICY §4). |
 | `internal/gate/polkit` | Generate the polkit rule for `services.control` (exact units × verbs, `subject.user` match, no wildcards); refuse if any unit name is not exact. |
+| `internal/gate/setupx` | What the install commands share (TARGET-SETUP §12.4): the root-only programs run through `execx`, the write helper (a temp file in the target's directory, `fsync`, owner and mode on the descriptor, `rename`, read-back by SHA-256, rollback), the user and group databases read from `/etc/passwd` and `/etc/group`, the install audit record (stderr and syslog), dry-run and the report lines. |
+| `internal/gate/setup` | `shell-mcp-gate install` and `host-key` (TARGET-SETUP §12.1, §12.2): a `Host` interface whose only production implementation is the real host, a planner from flags and host facts to checks and steps (what the unit tests drive), and the executor; the `from=`, key-line and keys-file parsers. |
 
 ### Helper (`cmd/shell-mcp-privd`) — normative detail in `docs/PRIVILEGED.md`
 
@@ -79,6 +81,7 @@ Python remains viable for the server alone, but one language for all three binar
 | `internal/privd/ops` | Privileged read/write/mkdir/chown/chmod/copy/move/delete with backups and read-back; backup list/restore; root exec through `internal/template` and the gate's exec engine. |
 | `internal/privd/pkg` | apt (broad unit): the fixed apt-get argv per operation (unpinned for previews, pinned to the approved transaction for the run), Debian package-name validation, the `-s` simulation parser behind the previews and its hash, the bounded dpkg status reader, its diff and the unfinished-state check, the dpkg lock holder, and a bounded wait for a held dpkg or lists lock. |
 | `internal/privd/dbus` | The smallest D-Bus client the power operations need (broad unit): EXTERNAL authentication, Hello, one method call at a time with string and `uint64` arguments, strict bounded decoding of basic types, structs, arrays and variants; standard library only. |
+| `internal/privd/setup` | `shell-mcp-privd install` (TARGET-SETUP §12.3): the review bound to the policy's SHA-256, the cross-checks, the backup store, the units from `internal/privd/units` written in the generated class with `systemd-analyze verify` and rollback, the sockets enabled, restarted after an edit, and the broad pair removed when unused. |
 
 ## 3. Request lifecycle
 
@@ -102,7 +105,7 @@ One request per SSH session, UTF-8 JSON, newline-terminated, on stdin. One respo
 
 ### 4.0 Versions
 
-- **Version 1** is shell-mcp 0.1.x. **Version 2** is shell-mcp 0.2.0 (handoff N-22, maintainer decision 2026-10-25: a new version, not amended in place). Its wire changes: `exec_preview` and `exec` report `fds`, the descriptors a command is given (`{path:read:fd}`, POLICY §4), and `exec_preview`'s hash moves to the domain `shell-mcp exec preview v2`, which covers each descriptor's number, path, device and inode. No op, request field, error code or envelope changed.
+- **Version 1** is shell-mcp 0.1.x. **Version 2** is shell-mcp 0.2.0 and 0.3.0 (handoff N-22, maintainer decision 2026-10-25: a new version, not amended in place). Its wire changes: `exec_preview` and `exec` report `fds`, the descriptors a command is given (`{path:read:fd}`, POLICY §4), and `exec_preview`'s hash moves to the domain `shell-mcp exec preview v2`, which covers each descriptor's number, path, device and inode. No op, request field, error code or envelope changed.
 - **Version 2 is frozen from the `v0.2.0` tag.** Until the tag it was open for additions in place, and only additively (maintainer decision 2026-10-26); the additions below are all of them. From `v0.2.0` on, any wire change (an op, a request or response field, an error code, a hash domain or the envelope) is a new version. No operation is reserved for it.
   - **Added in place (S6-4, handoff N-5, the private-key half):** the read-tier privileged op `priv_hash_file`, `{path}` → `{path, size, sha256, binary, lines, private_key}`, never content (PRIVILEGED §6), in the core unit. The gate forwards it at tier `read` like `priv_read_file`. No request field, error code or envelope changed. A server of this release asks a helper from before the addition (an unreleased version 2 build) for an op it does not know: `unknown_op`, and the overwrite's preview is refused before any approval.
   - **Added in place (S7-3, handoff N-5, the gate's half):** the read-tier gate op `hash_file`, `{path}` → `{path, size, sha256, binary, lines, private_key}`, never content, under `read_file`'s path rules (POLICY §3), refused above 256 MiB (`too_large`); `hello` lists it after `read_file`. The server's `shell_write_file`, `shell_copy_path` and `shell_move_path` previews hash an existing destination with it instead of reading it (TOOLS.md). No request field, error code or envelope changed. A server of this release asks a gate from before the addition (an unreleased version 2 build) for an op it does not know: `unknown_op`, and the overwrite's preview is refused before any approval.
@@ -162,7 +165,7 @@ One request per SSH session, UTF-8 JSON, newline-terminated, on stdin. One respo
   "ok": true,
   "data": { … op-specific … },
   "warnings": [],
-  "gate": { "version": "0.2.0", "principal": "readonly-key", "policy_sha256": "…", "max_tier": "read", "duration_ms": 12 }
+  "gate": { "version": "0.3.0", "principal": "readonly-key", "policy_sha256": "…", "max_tier": "read", "duration_ms": 12 }
 }
 ```
 
@@ -170,8 +173,8 @@ A response the gate forwarded from the privileged helper also carries `helper`, 
 
 ```json
 { "v": 2, "id": "0b5c…", "ok": true, "data": { … }, "warnings": [],
-  "gate":   { "version": "0.2.0", "principal": "admin-key", "policy_sha256": "…", "max_tier": "destructive", "duration_ms": 31 },
-  "helper": { "version": "0.2.0", "principal": "shell-mcp-privd", "policy_sha256": "…", "max_tier": "operator", "unit": "core", "duration_ms": 9 } }
+  "gate":   { "version": "0.3.0", "principal": "admin-key", "policy_sha256": "…", "max_tier": "destructive", "duration_ms": 31 },
+  "helper": { "version": "0.3.0", "principal": "shell-mcp-privd", "policy_sha256": "…", "max_tier": "operator", "unit": "core", "duration_ms": 9 } }
 ```
 
 Failure: `"ok": false, "error": {"code": "<closed set>", "message": "<one line, no content>"}`. Exec ops report process results in `data` (`exit_code`, `signal`, `stdout`, `stderr`, `stdout_truncated`, `stderr_truncated`, `timed_out`) and use `ok: true` whenever the process was started — a non-zero exit is data, not a gate error.
@@ -223,7 +226,7 @@ All variables are read at startup; `*_FILE` reads the value from a file (Docker 
 | `SHELL_MCP_RATE_LIMIT_PER_MIN` | `120` | Per client IP. |
 | `SHELL_MCP_TARGETS_FILE` | — | YAML list of targets (below). Mutually exclusive with the single-target variables. |
 | `SHELL_MCP_TARGET_NAME` / `_HOST` / `_PORT` / `_USER` | — / — / `22` / — | Single-target shorthand for stack-editor deployments. |
-| `SHELL_MCP_TARGET_HOST_KEYS` | *(required)* | Comma list of typed host-key pins, each `<key-type> SHA256:<base64>` (for example `ssh-ed25519 SHA256:…`); several pins of any mix of types allow rotation. Key types: `ssh-ed25519`, `ecdsa-sha2-nistp256`/`384`/`521`, `ssh-rsa`. The SSH client offers only the pinned types (`ssh-rsa` as `rsa-sha2-512`/`rsa-sha2-256`, never SHA-1); DSA and certificates are never accepted. An untyped or unknown-type pin fails startup. On the target the type is the first word of the host key's `.pub` file and `ssh-keygen -lf <host key>.pub` prints the fingerprint; `ssh-keyscan -t <type> <host>` piped to `ssh-keygen -lf -` works too when the result is verified out of band. |
+| `SHELL_MCP_TARGET_HOST_KEYS` | *(required)* | Comma list of typed host-key pins, each `<key-type> SHA256:<base64>` (for example `ssh-ed25519 SHA256:…`); several pins of any mix of types allow rotation. Key types: `ssh-ed25519`, `ecdsa-sha2-nistp256`/`384`/`521`, `ssh-rsa`. The SSH client offers only the pinned types (`ssh-rsa` as `rsa-sha2-512`/`rsa-sha2-256`, never SHA-1); DSA and certificates are never accepted. An untyped or unknown-type pin fails startup. On the target, `shell-mcp-gate host-key` prints the pins from the host's own key files (`docs/TARGET-SETUP.md` §12.2); by hand, the type is the first word of the host key's `.pub` file and `ssh-keygen -lf <host key>.pub` prints the fingerprint. Carry a pin over a trusted channel, never from what the network shows (`ssh-keyscan`). |
 | `SHELL_MCP_SSH_KEY` / `_FILE` | *(required)* | OpenSSH-format Ed25519 private key, unencrypted. `_FILE` (a mounted secret) is recommended and wins. The plain variable also accepts the single-line standard base64 of the whole key file (recognised by the absence of a `-----BEGIN` header; it must decode to an OpenSSH private key), for environment stores that cannot hold multi-line values. |
 | `SHELL_MCP_DEFAULT_TARGET` | — | Makes `target` optional when several targets exist. |
 | `SHELL_MCP_SSH_CONNECT_TIMEOUT` | `10` | Seconds. |
@@ -265,7 +268,7 @@ targets:
   "exec": { "exit_code": 0, "signal": null, "timed_out": false, "stdout_truncated": false, "stderr_truncated": false },
   "verified": true,
   "warnings": [],
-  "gate": { "version": "0.2.0", "principal": "operator-key", "max_tier": "operator", "policy_sha256": "…" }
+  "gate": { "version": "0.3.0", "principal": "operator-key", "max_tier": "operator", "policy_sha256": "…" }
 }
 ```
 

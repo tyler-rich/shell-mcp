@@ -5,9 +5,10 @@
 #   /etc/shell-mcp/read-only.yaml   root:root 0644
 # and select it from the SSH key's forced command:
 #   command="/usr/local/bin/shell-mcp-gate serve --policy /etc/shell-mcp/read-only.yaml --principal readonly"
-# Run `shell-mcp-gate check-policy --policy /etc/shell-mcp/read-only.yaml`
-# after every edit. Write it for the worst case: "what would I accept a fully
-# compromised MCP server doing with this key?"
+#
+# Run `shell-mcp-gate check-policy --policy <this file>` after every edit.
+# Write it for the worst case: "what would I accept a fully compromised MCP
+# server doing with this key?"
 
 version: 1
 
@@ -68,10 +69,10 @@ redact:
   patterns: ['(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*\S+']
 
 # Declared commands: an absolute, root-owned binary and exact argv templates.
-# check-policy prints a GTFOBins WARN for apt (it can run other programs in
-# some modes); this exact template, with the gate's fixed PAGER=cat
-# environment, has no such path.
 commands:
+  # check-policy prints a GTFOBins WARN for apt (it can run other programs in
+  # some modes); this exact template, with the gate's fixed PAGER=cat
+  # environment, has no such path.
   - id: apt-upgradable
     path: /usr/bin/apt
     tier: read

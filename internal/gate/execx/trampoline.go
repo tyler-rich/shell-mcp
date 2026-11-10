@@ -68,6 +68,11 @@ const statusAccepted = 0xA5
 
 var configMagic = [4]byte{'S', 'M', 'X', '2'}
 
+// credMagic marks a command that carries a Spec.Credential (SMX3): the same
+// encoding with the credential between the descriptor count and the limits.
+// A command without one is SMX2, byte for byte as before the option.
+var credMagic = [4]byte{'S', 'M', 'X', '3'}
+
 // childLimit is one resource limit the trampoline lowers itself to: both
 // the soft and the hard limit become min(current, Max).
 type childLimit struct {
@@ -83,6 +88,8 @@ type trampolineConfig struct {
 	Dir    string
 	Files  uint32 // descriptors FirstFile… passed to the command
 	Limits []childLimit
+	// Cred is Spec.Credential (nil: none).
+	Cred *Credential
 }
 
 var errConfig = errors.New("malformed trampoline command")
@@ -93,6 +100,8 @@ var errConfig = errors.New("malformed trampoline command")
 // Strings are bytes, so argv and paths need not be UTF-8. A string with a
 // NUL cannot reach execve(2) (EINVAL, as os/exec reports it); a command
 // over the bounds is E2BIG.
+// A credential is encoded only as Run accepts it (credentialRefusal), as
+// SMX3: uid, gid, the number of groups, then the groups.
 func encodeConfig(c *trampolineConfig) ([]byte, error) {
 	if len(c.Argv) > maxConfigItems || len(c.Env) > maxConfigItems || len(c.Limits) > maxConfigLimits || c.Files > MaxFiles {
 		return nil, unix.E2BIG
@@ -102,7 +111,14 @@ func encodeConfig(c *trampolineConfig) ([]byte, error) {
 			return nil, unix.EINVAL
 		}
 	}
-	b := append([]byte(nil), configMagic[:]...)
+	magic := configMagic
+	if c.Cred != nil {
+		if credentialRefusal(c.Cred) != "" {
+			return nil, unix.EINVAL
+		}
+		magic = credMagic
+	}
+	b := append([]byte(nil), magic[:]...)
 	str := func(s string) { b = binary.LittleEndian.AppendUint32(b, uint32(len(s))); b = append(b, s...) } //nolint:gosec // G115: bounded by maxConfigBytes below
 	list := func(l []string) {
 		b = binary.LittleEndian.AppendUint32(b, uint32(len(l))) //nolint:gosec // G115: bounded by maxConfigItems
@@ -115,6 +131,14 @@ func encodeConfig(c *trampolineConfig) ([]byte, error) {
 	list(c.Env)
 	str(c.Dir)
 	b = binary.LittleEndian.AppendUint32(b, c.Files)
+	if c.Cred != nil {
+		b = binary.LittleEndian.AppendUint32(b, c.Cred.UID)
+		b = binary.LittleEndian.AppendUint32(b, c.Cred.GID)
+		b = binary.LittleEndian.AppendUint32(b, uint32(len(c.Cred.Groups))) //nolint:gosec // G115: at most MaxCredentialGroups
+		for _, g := range c.Cred.Groups {
+			b = binary.LittleEndian.AppendUint32(b, g)
+		}
+	}
 	b = binary.LittleEndian.AppendUint32(b, uint32(len(c.Limits))) //nolint:gosec // G115: bounded by maxConfigLimits
 	for _, l := range c.Limits {
 		b = binary.LittleEndian.AppendUint32(b, l.Resource)
@@ -129,9 +153,14 @@ func encodeConfig(c *trampolineConfig) ([]byte, error) {
 // decodeConfig is the strict inverse of encodeConfig: every count and
 // length is bounded, the input must be consumed exactly, strings may not
 // contain NUL, path and dir must be absolute, argv[0] must be the path, and
-// each environment entry must be NAME=value.
+// each environment entry must be NAME=value. An SMX3 command carries a
+// credential that credentialRefusal accepts.
 func decodeConfig(b []byte) (*trampolineConfig, error) {
-	if len(b) > maxConfigBytes || len(b) < len(configMagic) || [4]byte(b[:4]) != configMagic {
+	if len(b) > maxConfigBytes || len(b) < len(configMagic) {
+		return nil, errConfig
+	}
+	magic := [4]byte(b[:4])
+	if magic != configMagic && magic != credMagic {
 		return nil, errConfig
 	}
 	b = b[4:]
@@ -183,6 +212,24 @@ func decodeConfig(b []byte) (*trampolineConfig, error) {
 	}
 	if c.Files, ok = u32(); !ok || c.Files > MaxFiles {
 		return nil, errConfig
+	}
+	if magic == credMagic {
+		cr := &Credential{}
+		var ok1, ok2 bool
+		cr.UID, ok1 = u32()
+		cr.GID, ok2 = u32()
+		n, ok3 := u32()
+		if !ok1 || !ok2 || !ok3 || n > MaxCredentialGroups || uint64(n)*4 > uint64(len(b)) {
+			return nil, errConfig
+		}
+		for range n {
+			g, _ := u32()
+			cr.Groups = append(cr.Groups, g)
+		}
+		if credentialRefusal(cr) != "" {
+			return nil, errConfig
+		}
+		c.Cred = cr
 	}
 	n, ok := u32()
 	if !ok || n > maxConfigLimits || uint64(n)*12 != uint64(len(b)) {
@@ -310,7 +357,8 @@ func init() {
 // trampoline runs the command Run sent on fd 3. It returns only when it
 // refuses or the command cannot be started.
 func trampoline() int {
-	if why := trampolineRefusal(liveTrampolineEnv()); why != "" {
+	env := liveTrampolineEnv()
+	if why := trampolineRefusal(env); why != "" {
 		_, _ = fmt.Fprintf(os.Stderr, "%s: refusing to run the internal exec trampoline: %s\n", os.Args[0], why)
 		return TrampolineRefused
 	}
@@ -373,6 +421,15 @@ func trampoline() int {
 		}
 		if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, 0); err != nil {
 			return fail(err)
+		}
+	}
+	// A Spec.Credential: every check above ran as root, the limits are
+	// lowered and the descriptors set; now the switch to the account, which
+	// becomeAccount verifies before anything of the command runs.
+	if c.Cred != nil {
+		if why, errno := becomeAccount(c.Cred, env.ppid); why != "" {
+			_, _ = fmt.Fprintf(os.Stderr, "%s: refusing to run the internal exec trampoline: %s\n", os.Args[0], why)
+			return fail(errno)
 		}
 	}
 	return fail(syscall.Exec(c.Path, c.Argv, c.Env)) //nolint:gosec // G204: the command Run sent over the checked control socket: a path resolved and ownership-checked at policy load, an argv matched to a policy template; no shell

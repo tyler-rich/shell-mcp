@@ -58,7 +58,7 @@ func privServer(t *testing.T) *mcp.ClientSession {
 			return
 		}
 		// The run's token is redacted only by this server-side pattern.
-		cs, err := startServer(t, &privLog, "SHELL_MCP_PROFILE=admin", "SHELL_MCP_SSH_KEY_FILE="+filepath.Join(bin(), "e2e-client-key"),
+		cs, err := startServer(t, &privLog, "SHELL_MCP_PROFILE=admin", "SHELL_MCP_TARGET_USER=svc-shell", "SHELL_MCP_SSH_KEY_FILE="+filepath.Join(bin(), "e2e-client-key"),
 			"SHELL_MCP_REDACT_PATTERNS=e2eprivtok_[0-9a-f]{32}")
 		if err != nil {
 			privErr = fmt.Sprintf("connect: %v; server log: %s", err, privLog.String())
@@ -258,7 +258,7 @@ func TestPrivToolJournalJoin(t *testing.T) {
 // answered, beside the gate's own policy hash.
 func TestPrivHelperBlockReachesServer(t *testing.T) {
 	needSSHD(t)
-	c := sshClient(t, []config.HostKey{hostPin(t, "ssh_host_ed25519_key.pub")}, clientKey(t, "e2e-client-key"))
+	c := sshClient(t, "svc-shell", []config.HostKey{hostPin(t, "ssh_host_ed25519_key.pub")}, clientKey(t, "e2e-client-key"))
 	resp, err := gateclient.New(gateclient.Options{}).Call(t.Context(), c, protocol.OpPrivStat, protocol.TierRead,
 		map[string]any{"path": "/etc/example-app"}, 20*time.Second)
 	if err != nil {

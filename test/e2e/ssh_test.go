@@ -74,9 +74,14 @@ func clientKey(t *testing.T, name string) *config.PrivateKey {
 	return config.PrivateKeyFromSigner(s)
 }
 
-func sshClient(t *testing.T, pins []config.HostKey, key *config.PrivateKey) *sshx.Client {
+// sshClient connects to the test sshd as the account user, which every
+// caller names: svc-shell for the forwarding keys (e2e-client-key and
+// e2e-client-key-other-from), svc-shell-std for the read and operator keys.
+// There is no default account: a caller that assumed the first one is what
+// failed PR #90's shard 4.
+func sshClient(t *testing.T, user string, pins []config.HostKey, key *config.PrivateKey) *sshx.Client {
 	t.Helper()
-	c, err := sshx.New(&config.Target{Name: "app-host", Host: sshdHost, Port: sshdPort, User: "svc-shell", HostKeys: pins, Key: key},
+	c, err := sshx.New(&config.Target{Name: "app-host", Host: sshdHost, Port: sshdPort, User: user, HostKeys: pins, Key: key},
 		sshx.Options{ConnectTimeout: 5 * time.Second})
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +111,7 @@ func TestServerSSHReachesGate(t *testing.T) {
 	for _, hk := range []string{"ssh_host_ed25519_key.pub", "ssh_host_ecdsa_key.pub"} {
 		t.Run(hk, func(t *testing.T) {
 			pin := hostPin(t, hk)
-			c := sshClient(t, []config.HostKey{pin}, clientKey(t, "e2e-client-key"))
+			c := sshClient(t, "svc-shell", []config.HostKey{pin}, clientKey(t, "e2e-client-key"))
 			resp, err := hello(t, c)
 			if err != nil {
 				t.Fatal(err)
@@ -130,11 +135,11 @@ func TestServerSSHWrongPinRefused(t *testing.T) {
 	needSSHD(t)
 	wrong := hostPin(t, "ssh_host_ed25519_key.pub")
 	wrong.Fingerprint = "SHA256:" + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-	_, err := hello(t, sshClient(t, []config.HostKey{wrong}, clientKey(t, "e2e-client-key")))
+	_, err := hello(t, sshClient(t, "svc-shell", []config.HostKey{wrong}, clientKey(t, "e2e-client-key")))
 	wantSSHCode(t, err, envelope.CodeHostKeyMismatch)
 	// A pin of a type the target does not offer.
 	rsa := config.HostKey{Type: "ssh-rsa", Fingerprint: wrong.Fingerprint}
-	_, err = hello(t, sshClient(t, []config.HostKey{rsa}, clientKey(t, "e2e-client-key")))
+	_, err = hello(t, sshClient(t, "svc-shell", []config.HostKey{rsa}, clientKey(t, "e2e-client-key")))
 	wantSSHCode(t, err, envelope.CodeHostKeyMismatch)
 }
 
@@ -142,7 +147,7 @@ func TestServerSSHWrongPinRefused(t *testing.T) {
 // is refused when used from 127.0.0.1 (the control is the key above).
 func TestServerSSHKeyOutsideFromRefused(t *testing.T) {
 	needSSHD(t)
-	_, err := hello(t, sshClient(t, []config.HostKey{hostPin(t, "ssh_host_ed25519_key.pub")}, clientKey(t, "e2e-client-key-other-from")))
+	_, err := hello(t, sshClient(t, "svc-shell", []config.HostKey{hostPin(t, "ssh_host_ed25519_key.pub")}, clientKey(t, "e2e-client-key-other-from")))
 	wantSSHCode(t, err, envelope.CodeAuthFailedSSH)
 }
 

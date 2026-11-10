@@ -54,8 +54,10 @@ const usage = `usage: shell-mcp <command> [flags]
 commands:
   serve        start the MCP server (HTTP, or stdio with --transport stdio)
   check        connect to every target, verify its host key and gate, and print the result
+  doctor       run check, then check the secrets, helper sockets, trusted proxies, approval page and MCP endpoint
   tools        print the tool catalogue (with schema hashes)
   approver     enrol, remove or list approvers (add, remove, list)
+  init         create the server's secrets (init), or print its compose file (init compose)
   healthcheck  exit 0 if the local /healthz answers {"status":"ok"}
   version      print version information
 `
@@ -77,10 +79,14 @@ func run(ctx context.Context, stdin io.Reader, args []string, lookup config.Look
 		return cmdServe(ctx, args[1:], lookup, stdin, stdout, stderr)
 	case "check":
 		return cmdCheck(ctx, args[1:], lookup, stdout, stderr)
+	case "doctor":
+		return cmdDoctor(ctx, args[1:], lookup, stdout, stderr)
 	case "tools":
 		return cmdTools(args[1:], lookup, stdout, stderr)
 	case "approver":
 		return cmdApprover(args[1:], stdout, stderr, processApproverEnv)
+	case "init":
+		return cmdInit(args[1:], stdout, stderr, processInitEnv)
 	case "healthcheck":
 		url, err := healthcheckURL(lookup)
 		if err != nil {
@@ -113,10 +119,16 @@ func loadConfig(lookup config.LookupFunc, stderr io.Writer) (*config.Config, boo
 }
 
 func cmdServe(ctx context.Context, args []string, lookup config.LookupFunc, stdin io.Reader, stdout, stderr io.Writer) int {
+	const serveUsage = "usage: shell-mcp serve [--transport http|stdio]\n"
+	if helpRequested(args) {
+		_, _ = io.WriteString(stdout, serveUsage)
+		return 0
+	}
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs.SetOutput(io.Discard)
 	transportFlag := fs.String("transport", "", "override SHELL_MCP_TRANSPORT (http or stdio)")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		_, _ = io.WriteString(stderr, serveUsage)
 		return 2
 	}
 	if *transportFlag != "" {
@@ -330,8 +342,12 @@ type targetCheck struct {
 // cmdCheck connects to every target, verifies its host key, calls the
 // gate's hello and prints what it found. It exits 1 if any target fails.
 func cmdCheck(ctx context.Context, args []string, lookup config.LookupFunc, stdout, stderr io.Writer) int {
+	if helpRequested(args) {
+		_, _ = io.WriteString(stdout, "usage: shell-mcp check\n")
+		return 0
+	}
 	if len(args) != 0 {
-		_, _ = io.WriteString(stderr, "shell-mcp: check takes no arguments\n")
+		_, _ = io.WriteString(stderr, "shell-mcp: check takes no arguments\nusage: shell-mcp check\n")
 		return 2
 	}
 	cfg, ok := loadConfig(lookup, stderr)
@@ -409,8 +425,12 @@ type catalogueEntry struct {
 }
 
 func cmdTools(args []string, lookup config.LookupFunc, stdout, stderr io.Writer) int {
+	if helpRequested(args) {
+		_, _ = io.WriteString(stdout, "usage: shell-mcp tools\n")
+		return 0
+	}
 	if len(args) != 0 {
-		_, _ = io.WriteString(stderr, "shell-mcp: tools takes no arguments\n")
+		_, _ = io.WriteString(stderr, "shell-mcp: tools takes no arguments\nusage: shell-mcp tools\n")
 		return 2
 	}
 	d, err := catalogueDeps(lookup)

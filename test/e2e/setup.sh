@@ -16,12 +16,16 @@ fi
 # writes under /etc, /usr/local and /var/lib.
 #
 # Everything here is invented test data. Test identities use the documented
-# test id range 4200001-4200009, above distribution, systemd dynamic-user
+# test id range 4200001-4200019, above distribution, systemd dynamic-user
 # and common container id ranges:
-#   svc-shell       4200001  the gate's service account (the helper's client_uid)
+#   svc-shell       4200001  the gate's service account for the policies that
+#                            forward to the helper (the helper's client_uid)
 #   svc-shell-priv  4200002  the helper's socket group
 #   svc-other       4200003  a second account in the socket group (the wrong peer)
 #   example-app     4200004  an owner the helper may chown to
+#   svc-shell-std   4200010  the second service account, for the policies
+#                            without privileged forwarding (not in the
+#                            socket group: TARGET-SETUP §4)
 #
 #   E2E_BIN       directory holding the built binaries and this script's inputs
 #   E2E_LANDLOCK  required (default) or best-effort, for both policies
@@ -49,8 +53,11 @@ getent group svc-other >/dev/null || groupadd -g 4200003 svc-other
 getent passwd svc-other >/dev/null || useradd -u 4200003 -g svc-other -G svc-shell-priv -M -d /home/svc-other -s /bin/sh svc-other
 getent group example-app >/dev/null || groupadd -g 4200004 example-app
 getent passwd example-app >/dev/null || useradd -u 4200004 -g example-app -M -d /nonexistent -s /usr/sbin/nologin example-app
+getent group svc-shell-std >/dev/null || groupadd -g 4200010 svc-shell-std
+getent passwd svc-shell-std >/dev/null || useradd -u 4200010 -g svc-shell-std -G systemd-journal -M -d /home/svc-shell-std -s /bin/sh svc-shell-std
 passwd -l svc-shell >/dev/null
 passwd -l svc-other >/dev/null
+passwd -l svc-shell-std >/dev/null
 
 # --- Binaries (root:root 0755) ----------------------------------------------
 # The gate and the helper refuse binaries whose directories are group- or
@@ -336,7 +343,7 @@ chmod 0644 /etc/shell-mcp/gate-operator.yaml
 # file beneath it.
 rm -rf /srv/e2e-gate
 install -o root -g root -m 0755 -d /srv/e2e-gate
-install -o svc-shell -g svc-shell -m 0755 -d /srv/e2e-gate/work
+install -o svc-shell-std -g svc-shell-std -m 0755 -d /srv/e2e-gate/work
 cat >/etc/shell-mcp/gate-hardening.yaml <<EOF
 version: 1
 max_tier: destructive
@@ -426,6 +433,25 @@ commands:
 EOF
 chmod 0644 /etc/shell-mcp/gate-multicall.yaml
 
+# The shared-account policy (shared_account_test.go): no privileged
+# forwarding, and one read command, the test probe asking a helper socket
+# for priv_policy (a read op that changes nothing). Served by svc-shell (in
+# the socket group) the gate refuses it; served by svc-shell-std the probe's
+# connect is refused by the socket's permissions.
+cat >/etc/shell-mcp/gate-shared.yaml <<EOF
+version: 1
+max_tier: read
+sandbox:
+  landlock: $landlock
+commands:
+  - id: probe-priv-ask
+    path: /usr/local/bin/example-probe
+    tier: read
+    templates: [["priv-ask", "{enum:/run/shell-mcp/privd.sock|/run/shell-mcp/privd-broad.sock}"]]
+EOF
+chmod 0644 /etc/shell-mcp/gate-shared.yaml
+/usr/local/bin/shell-mcp-gate check-policy --policy /etc/shell-mcp/gate-shared.yaml >/dev/null
+
 # Static read-tool fixtures: a tree with a directory symlink whose target is
 # absolute (os.Root refuses to follow it), a file on the built-in deny list
 # and one under the policy's deny pattern. Fixtures with token- or key-shaped
@@ -439,21 +465,22 @@ printf 'denied by the policy\n' >"$fx/tree/private/note.txt"
 chmod 0644 "$fx/tree/sub/file.txt" "$fx/tree/.netrc" "$fx/tree/private/note.txt"
 ln -s "$fx/tree/sub" "$fx/tree/abs-link"
 
-# Operator-tool roots: the service account owns the two write roots; a file
+# Operator-tool roots: the second service account (the operator policy has
+# no privileged forwarding) owns the two write roots; a file
 # in the read root outside them shows a write being refused. The tests make
 # the files and the repositories.
 ox=/srv/example-ops
 umount "$ox/work/mounted/point" 2>/dev/null || true # a rerun: the tmpfs below
 rm -rf "$ox"
 install -o root -g root -m 0755 -d "$ox"
-install -o svc-shell -g svc-shell -m 0755 -d "$ox/work" "$ox/repos"
+install -o svc-shell-std -g svc-shell-std -m 0755 -d "$ox/work" "$ox/repos"
 printf 'read only\n' >"$ox/readonly.txt"
 chmod 0644 "$ox/readonly.txt"
 # A tmpfs mounted inside a write root (delete_tools_test.go): the delete
 # operations never delete a mount point nor descend into one, so both the
 # mount point and the directory holding it are refused.
-install -o svc-shell -g svc-shell -m 0755 -d "$ox/work/mounted" "$ox/work/mounted/point"
-mount -t tmpfs -o size=1m,mode=0755,uid=4200001,gid=4200001 e2e-delete-mount "$ox/work/mounted/point"
+install -o svc-shell-std -g svc-shell-std -m 0755 -d "$ox/work/mounted" "$ox/work/mounted/point"
+mount -t tmpfs -o size=1m,mode=0755,uid=4200010,gid=4200010 e2e-delete-mount "$ox/work/mounted/point"
 printf 'on the mount\n' >"$ox/work/mounted/point/inside.txt"
 
 # BEGIN privileged-policies: scripts/exposure/gen.sh extracts this block (up to
@@ -649,7 +676,10 @@ done
 /usr/local/libexec/shell-mcp-privd check-policy --policy /etc/shell-mcp/privileged.yaml
 /usr/local/libexec/shell-mcp-privd units --policy /etc/shell-mcp/privileged.yaml --out /etc/systemd/system
 /usr/local/bin/shell-mcp-gate polkit --policy "$bin/gate-rule.yaml" --user svc-shell >/etc/polkit-1/rules.d/60-shell-mcp.rules
-chmod 0644 /etc/polkit-1/rules.d/60-shell-mcp.rules
+# The second account's own rule, in a file of its own (TARGET-SETUP §4,
+# "A second service account"): the operator policy's key runs as svc-shell-std.
+/usr/local/bin/shell-mcp-gate polkit --policy "$bin/gate-rule.yaml" --user svc-shell-std >/etc/polkit-1/rules.d/60-shell-mcp-svc-shell-std.rules
+chmod 0644 /etc/polkit-1/rules.d/60-shell-mcp.rules /etc/polkit-1/rules.d/60-shell-mcp-svc-shell-std.rules
 
 systemctl daemon-reload
 systemctl enable --now example-app.service example-other.service
@@ -660,9 +690,11 @@ systemctl restart polkit.service 2>/dev/null || systemctl restart polkitd.servic
 # A second sshd, on 127.0.0.1:2222 only, with its own configuration, host
 # keys and keys file, so the machine's own sshd is untouched. It has an
 # Ed25519 and an ECDSA host key (the client must negotiate the pinned type),
-# and two client keys for svc-shell, each with restrict, from= and the gate
-# as its forced command: one usable from 127.0.0.1, one only from
-# 192.0.2.1 (TEST-NET-1, never this machine). The directives follow
+# and two client keys for svc-shell (the forwarding policy), each with
+# restrict, from= and the gate as its forced command: one usable from
+# 127.0.0.1, one only from 192.0.2.1 (TEST-NET-1, never this machine); the
+# read and operator keys, whose policies have no privileged forwarding, are
+# svc-shell-std's, in its own keys file (TARGET-SETUP §4). The directives follow
 # SECURITY §5 and are checked with `sshd -t` against this machine's OpenSSH.
 if [ -x /usr/sbin/sshd ]; then
 	sd=/etc/shell-mcp-e2e-sshd
@@ -681,10 +713,12 @@ if [ -x /usr/sbin/sshd ]; then
 	{
 		printf 'restrict,from="127.0.0.1",%s %s\n' "$forced" "$(cut -d' ' -f1,2 "$bin/e2e-client-key.pub")"
 		printf 'restrict,from="192.0.2.1",%s %s\n' "$forced" "$(cut -d' ' -f1,2 "$bin/e2e-client-key-other-from.pub")"
+	} >"$sd/authorized_keys.d/svc-shell"
+	{
 		printf 'restrict,from="127.0.0.1",%s %s\n' "$forced_read" "$(cut -d' ' -f1,2 "$bin/e2e-client-key-read.pub")"
 		printf 'restrict,from="127.0.0.1",%s %s\n' "$forced_operator" "$(cut -d' ' -f1,2 "$bin/e2e-client-key-operator.pub")"
-	} >"$sd/authorized_keys.d/svc-shell"
-	chmod 0644 "$sd/authorized_keys.d/svc-shell"
+	} >"$sd/authorized_keys.d/svc-shell-std"
+	chmod 0644 "$sd/authorized_keys.d/svc-shell" "$sd/authorized_keys.d/svc-shell-std"
 	printf '%s\n' \
 		'Port 2222' \
 		'ListenAddress 127.0.0.1' \
@@ -692,7 +726,7 @@ if [ -x /usr/sbin/sshd ]; then
 		"HostKey $sd/ssh_host_ecdsa_key" \
 		'PidFile /run/shell-mcp-e2e-sshd.pid' \
 		"AuthorizedKeysFile $sd/authorized_keys.d/%u" \
-		'AllowUsers svc-shell' \
+		'AllowUsers svc-shell svc-shell-std' \
 		'AuthenticationMethods publickey' \
 		'PubkeyAuthentication yes' \
 		'PasswordAuthentication no' \

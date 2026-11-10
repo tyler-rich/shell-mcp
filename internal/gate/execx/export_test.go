@@ -15,7 +15,7 @@ func RunWithStartDelay(ctx context.Context, spec *Spec, d time.Duration) (Result
 }
 
 // UserTasks is userTasks, for the rlimit tests' expected bound.
-var UserTasks = userTasks
+var UserTasks = func(uid int) uint64 { return userTasks(uidOf(uid)) }
 
 // UserTasksIn is userTasksIn, for the task-count tests.
 var UserTasksIn = userTasksIn

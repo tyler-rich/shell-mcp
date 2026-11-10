@@ -1,0 +1,52 @@
+# Run `shell-mcp-gate check-policy --policy <this file>` after every edit.
+# Write it for the worst case: "what would I accept a fully compromised MCP
+# server doing with this key?"
+
+version: 1
+
+# operator = service lifecycle, writes inside write roots with read-back,
+# fast-forward git pulls. Nothing destructive.
+max_tier: operator
+
+sandbox:
+  landlock: required
+  system_read_exec: []
+  # git_pull connects to the remote over HTTPS; nothing else may connect.
+  tcp_connect_ports: [443]
+
+limits:
+  default_timeout_s: 30
+  max_timeout_s: 300
+  max_output_bytes: 1048576
+  max_write_bytes: 1048576
+
+paths:
+  read: [/srv/app]
+  # Write roots are implicitly readable. They may not be, contain or sit
+  # inside a protected path (/etc/ssh, /etc/systemd, /usr, cron, the policy
+  # directory, the service account's home, ...).
+  write: [/srv/app/config]
+
+services:
+  control:
+    # Exact unit names only (no globs): they become the polkit rule.
+    units: ["example-app.service"]
+    verbs: [restart]
+
+redact:
+  patterns: ['(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*\S+']
+
+commands:
+  # Prints the application's public key, never the key itself.
+  - id: app-public-key
+    path: /usr/bin/openssl
+    tier: read
+    reads_private_keys: true
+    templates:
+      - ["pkey", "-pubout", "-in", "{path:read}"]
+  - id: app-disk
+    path: /usr/bin/df
+    tier: read
+    templates:
+      - ["-h"]
+      - ["-h", "{path:read}"]

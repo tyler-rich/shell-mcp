@@ -3,11 +3,14 @@
 # Fails when
 #   - a module we build from is behind its newest stable release;
 #   - a direct requirement has a stable next major version (<path>/vN+1, or
-#     <path>/v2 for a v0/v1 module) — pre-release-only next majors are info;
+#     <path>/v2 for a v0/v1 module) — pre-release-only next majors are info,
+#     and so is a next major held back by a dated exception below until the
+#     exception expires;
 #   - a tool pinned in the workflows or scripts/ci-local.sh is older than its
 #     newest stable release, or the files that pin it disagree, or a pin is
 #     missing: golangci-lint and govulncheck (ci.yml, ci-local.sh and, for
-#     govulncheck, release-build.yml), Trivy and Grype (ci.yml and
+#     govulncheck, release-build.yml), actionlint (ci.yml and ci-local.sh),
+#     Trivy and Grype (ci.yml and
 #     release-build.yml), gitleaks (ci.yml), cosign and syft
 #     (release-build.yml);
 #   - the release workflow's loopback registry image
@@ -74,6 +77,41 @@ fi
 # --- Next major versions -------------------------------------------------------
 # `go list -m -u` never crosses a major version, so query the module proxy for
 # the next major path of every direct requirement.
+#
+# Next-major exceptions: a direct requirement the maintainer decided to hold
+# below one stable next major. Each entry names exactly that requirement and
+# that next major path, the day it was granted, the last day it applies, and
+# why. From the day after its last day the next major fails again, with no
+# edit needed. Fields: requirement, next major path, granted, last day, why.
+next_major_exceptions=(
+	"go.yaml.in/yaml/v3|go.yaml.in/yaml/v4|2026-11-08|2026-12-08|v4.0.0 accepts YAML that v3 refuses at the policy boundary (docs/ARCHIVE.md, 2026-11-08; PR #91)"
+)
+date_re='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+today="$(date -u +%F)"
+if [[ ! "$today" =~ $date_re ]]; then
+	echo "deps-current: FAIL — cannot read today's date (got '$today')"
+	exit 1
+fi
+for e in "${next_major_exceptions[@]}"; do
+	IFS='|' read -r e_mod e_next e_granted e_until e_why <<<"$e"
+	if [[ -z "$e_mod" || -z "$e_next" || ! "$e_granted" =~ $date_re || ! "$e_until" =~ $date_re ||
+		"$e_granted" > "$e_until" || -z "$e_why" ]]; then
+		echo "deps-current: FAIL — malformed next-major exception: $e"
+		exit 1
+	fi
+done
+# exception_for MOD NEXT: the matching exception's "granted|last day|why", or
+# nothing.
+exception_for() {
+	local e e_mod e_next e_granted e_until e_why
+	for e in "${next_major_exceptions[@]}"; do
+		IFS='|' read -r e_mod e_next e_granted e_until e_why <<<"$e"
+		if [[ "$e_mod" == "$1" && "$e_next" == "$2" ]]; then
+			printf '%s|%s|%s\n' "$e_granted" "$e_until" "$e_why"
+			return
+		fi
+	done
+}
 direct="$(go mod edit -print | awk '
 	/^require \(/ { inblock = 1; next }
 	inblock && /^\)/ { inblock = 0; next }
@@ -95,7 +133,16 @@ while read -r mod; do
 	versions="$(go list -m -versions "$next" 2>/dev/null | awk '{ $1 = ""; print }' | tr ' ' '\n' | grep -v '^$' || true)"
 	newest_stable="$(grep -E "$stable_re" <<<"$versions" | sort -V | tail -n1 || true)"
 	newest_any="$(sort -V <<<"$versions" | tail -n1 || true)"
-	if [[ -n "$newest_stable" ]]; then
+	exception="$(exception_for "$mod" "$next")"
+	if [[ -n "$newest_stable" && -n "$exception" ]]; then
+		IFS='|' read -r granted until why <<<"$exception"
+		if [[ "$today" > "$until" ]]; then
+			echo "deps-current: FAIL — $mod has a stable next major: $next $newest_stable (the exception granted $granted applied through $until; today is $today)"
+			fail=1
+		else
+			echo "deps-current: info — $mod is held below its stable next major $next $newest_stable by the exception granted $granted, through $until: $why"
+		fi
+	elif [[ -n "$newest_stable" ]]; then
 		echo "deps-current: FAIL — $mod has a stable next major: $next $newest_stable"
 		fail=1
 	elif [[ -n "$newest_any" ]]; then
@@ -165,6 +212,10 @@ check_pins govulncheck "$(go list -m -f '{{.Version}}' golang.org/x/vuln@latest 
 	"$ci_yml=$(pin_of "$ci_yml" GOVULNCHECK_VERSION)" \
 	"$ci_local=$(sed -n 's/^govulncheck_version="\(v[0-9.]*\)"$/\1/p' "$ci_local" 2>/dev/null || true)" \
 	"$release_yml=$(pin_of "$release_yml" GOVULNCHECK_VERSION)"
+# actionlint (G2), the same way.
+check_pins actionlint "$(go list -m -f '{{.Version}}' github.com/rhysd/actionlint@latest 2>/dev/null || true)" \
+	"$ci_yml=$(pin_of "$ci_yml" ACTIONLINT_VERSION)" \
+	"$ci_local=$(sed -n 's/^actionlint_version="\(v[0-9.]*\)"$/\1/p' "$ci_local" 2>/dev/null || true)"
 
 check_pins Trivy "$(newest_tag aquasecurity/trivy)" \
 	"$ci_yml=$(pin_of "$ci_yml" TRIVY_VERSION)" "$release_yml=$(pin_of "$release_yml" TRIVY_VERSION)"
@@ -250,14 +301,15 @@ effective="$(printf '%s\n%s\n' "$go_line" "${toolchain_line:-$go_line}" | sort -
 lint_go_ok=1
 lint_run='in_lint() { in_go go run "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$golangci_lint_version" "$@"; }'
 if ! grep -q -x -F -- "$lint_run" "$ci_local" ||
-	! grep -q -x -F -- 'in_go() { docker run "${common[@]}" "$go_image" "$@"; }' "$ci_local" ||
+	! grep -q -x -F -- '		-v "$cache_volume:/cache" -v "$repo:/src:ro" -w /src "$go_image" "$@"' "$ci_local" ||
 	! grep -q '^go_image="$(awk .* Dockerfile)"$' "$ci_local"; then
 	echo "deps-current: FAIL — golangci-lint in $ci_local does not run with the Go image's go (expected: $lint_run, with in_go on the Dockerfile's golang image)"
 	fail=1
 	lint_go_ok=0
 fi
-lint_steps="$(grep -c '^step "golangci-lint' "$ci_local" || true)"
-lint_steps_in_go="$(grep -c '^step "golangci-lint[^"]*" "" in_lint run ' "$ci_local" || true)"
+# The steps sit in ci-local's lane functions, indented.
+lint_steps="$(grep -c '^[[:space:]]*\(full \)\?step "golangci-lint' "$ci_local" || true)"
+lint_steps_in_go="$(grep -c '^[[:space:]]*\(full \)\?step "golangci-lint[^"]*" "" in_lint run ' "$ci_local" || true)"
 if [[ "$lint_steps" -eq 0 || "$lint_steps" != "$lint_steps_in_go" ]]; then
 	echo "deps-current: FAIL — golangci-lint in $ci_local does not run with the Go image's go ($lint_steps_in_go of $lint_steps lint steps use in_lint)"
 	fail=1

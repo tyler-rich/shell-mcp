@@ -1,0 +1,20 @@
+# Operator answers without git, with a command comment and a command that
+# reads private keys. Every value is invented. (No opening comment is
+# carried: this one is directly above preset:.)
+preset: operator
+account: { user: svc-shell, uid: 60123 }
+read: [/srv/app]
+write: [/srv/app/config]
+services:
+  control: { units: [example-app.service], verbs: [restart] }
+commands:
+  # Prints the application's public key, never the key itself.
+  - id: app-public-key
+    path: /usr/bin/openssl
+    tier: read
+    reads_private_keys: true
+    templates: [["pkey", "-pubout", "-in", "{path:read}"]]
+  - id: app-disk
+    path: /usr/bin/df
+    tier: read
+    templates: [["-h"], ["-h", "{path:read}"]]

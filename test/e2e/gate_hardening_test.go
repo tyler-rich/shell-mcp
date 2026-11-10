@@ -18,7 +18,7 @@ import (
 
 // The gate's own versions of two gaps closed on the privileged side
 // (handoff docs/handoff/S4C-PRIVILEGED.md N-11, N-18), end to end: the
-// real gate as the service account (svc-shell), with Landlock, and a real
+// real gate as the service account for policies without forwarding (svc-shell-std), with Landlock, and a real
 // other account (example-app). setup.sh declares the policy
 // /etc/shell-mcp/gate-hardening.yaml: the read root /srv/e2e-gate (root's)
 // with the write root /srv/e2e-gate/work (the service account's), and the
@@ -36,7 +36,7 @@ const (
 // service account, at ceiling destructive.
 func hard(t *testing.T, op string, args any) response {
 	t.Helper()
-	r, _ := gatePolicyAt(t, hardPolicy, svcShell, "destructive", op, args)
+	r, _ := gatePolicyAt(t, hardPolicy, svcStd, "destructive", op, args)
 	return r
 }
 
@@ -114,15 +114,15 @@ func TestGateExecPathChain(t *testing.T) {
 	a := hardWork + "/chain"
 	b := a + "/b"
 	sub := b + "/c"
-	ownDir(t, a, svcShell, svcShell, 0o755)
+	ownDir(t, a, svcStd, svcStd, 0o755)
 	for _, d := range []string{b, sub} {
 		if err := os.Mkdir(d, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		setDir(t, d, svcShell, svcShell, 0o755)
+		setDir(t, d, svcStd, svcStd, 0o755)
 	}
 	file := b + "/t"
-	ownFile(t, file, "original\n", svcShell, 0o644)
+	ownFile(t, file, "original\n", svcStd, 0o644)
 	newFile := b + "/new"
 
 	t.Run("closed", func(t *testing.T) {
@@ -152,7 +152,7 @@ func TestGateExecPathChain(t *testing.T) {
 		name string
 		dir  string
 		uid  int
-	}{{"read root", hardRoot, 0}, {"write root", hardWork, svcShell}, {"intermediate", a, svcShell}, {"parent", b, svcShell}} {
+	}{{"read root", hardRoot, 0}, {"write root", hardWork, svcStd}, {"intermediate", a, svcStd}, {"parent", b, svcStd}} {
 		for _, o := range []struct {
 			name string
 			app  bool
@@ -216,12 +216,12 @@ func TestGateExecPathChain(t *testing.T) {
 		{"sticky, not writable", false, os.ModeSticky | 0o755},
 	} {
 		t.Run("directory target "+o.name, func(t *testing.T) {
-			uid := svcShell
+			uid := svcStd
 			if o.app {
 				uid = exampleApp
 			}
 			setDir(t, sub, uid, uid, o.mode)
-			defer setDir(t, sub, svcShell, svcShell, 0o755)
+			defer setDir(t, sub, svcStd, svcStd, 0o755)
 			reqs := []struct {
 				command string
 				args    []string
@@ -265,9 +265,9 @@ func TestGateExecPathChain(t *testing.T) {
 func TestGateExecPathChainRace(t *testing.T) {
 	vault := hardWork + "/vault"
 	race := hardWork + "/race"
-	ownDir(t, vault, svcShell, svcShell, 0o700)
+	ownDir(t, vault, svcStd, svcStd, 0o700)
 	victim := vault + "/t"
-	ownFile(t, victim, "VICTIM\n", svcShell, 0o600)
+	ownFile(t, victim, "VICTIM\n", svcStd, 0o600)
 	for _, c := range []struct{ name, target, swap, to, cwd string }{
 		{"the target in its parent", "t", "t", victim, ""},
 		{"a directory above the target", "sub/t", "sub", vault, ""},
@@ -329,8 +329,8 @@ func TestGateExecPathChainRace(t *testing.T) {
 func TestGateMoveReplacedRace(t *testing.T) {
 	shared := hardWork + "/shared"
 	vault := hardWork + "/vault-move"
-	ownDir(t, shared, svcShell, exampleApp, 0o770)
-	ownDir(t, vault, svcShell, svcShell, 0o700)
+	ownDir(t, shared, svcStd, exampleApp, 0o770)
+	ownDir(t, vault, svcStd, svcStd, 0o700)
 	sum := sha256.Sum256([]byte("OLD\n"))
 	oldSHA := hex.EncodeToString(sum[:])
 	for _, verified := range []bool{true, false} {
@@ -340,11 +340,11 @@ func TestGateMoveReplacedRace(t *testing.T) {
 			clearDir(t, shared)
 			clearDir(t, vault)
 			y := shared + "/y"
-			stop := startRacer(t, "GRABS", "E2E_CLIENT=grab", "E2E_GRAB="+y, "E2E_GRAB_UID="+strconv.Itoa(svcShell))
+			stop := startRacer(t, "GRABS", "E2E_CLIENT=grab", "E2E_GRAB="+y, "E2E_GRAB_UID="+strconv.Itoa(svcStd))
 			got := map[string]int{}
 			for i := range 200 {
 				old := fmt.Sprintf("%s/o%d", vault, i)
-				ownFile(t, old, "OLD\n", svcShell, 0o600)
+				ownFile(t, old, "OLD\n", svcStd, 0o600)
 				if _, err := os.Lstat(y); err != nil {
 					appFile(t, y, "new\n")
 				}
@@ -385,13 +385,13 @@ func TestGateMoveReplacedRace(t *testing.T) {
 // left as it was.
 func TestGateMoveStagingEntry(t *testing.T) {
 	dir := hardWork + "/strand"
-	ownDir(t, dir, svcShell, svcShell, 0o755)
+	ownDir(t, dir, svcStd, svcStd, 0o755)
 	staged := dir + "/" + movePrefix + strings.Repeat("0f", 16)
-	ownFile(t, staged, "left by a stopped move\n", svcShell, 0o640)
+	ownFile(t, staged, "left by a stopped move\n", svcStd, 0o640)
 	x := dir + "/x.conf"
-	ownFile(t, x, "x\n", svcShell, 0o640)
+	ownFile(t, x, "x\n", svcStd, 0o640)
 	out := hardWork + "/strand-out.conf"
-	ownFile(t, out, "out\n", svcShell, 0o640)
+	ownFile(t, out, "out\n", svcStd, 0o640)
 	t.Cleanup(func() { _ = os.Remove(out); _ = os.Remove(hardWork + "/strand-x.conf") })
 	for _, c := range []struct {
 		op   string
@@ -516,11 +516,11 @@ func TestGateExecOwnerMatchedRead(t *testing.T) {
 // 0600) never is.
 func TestGateExecOwnerMatchedReadRace(t *testing.T) {
 	vault := hardWork + "/vault-read"
-	ownDir(t, vault, svcShell, svcShell, 0o700)
-	ownFile(t, vault+"/t", "SERVICE-ONLY\n", svcShell, 0o600)
+	ownDir(t, vault, svcStd, svcStd, 0o700)
+	ownFile(t, vault+"/t", "SERVICE-ONLY\n", svcStd, 0o600)
 	denied := hardWork + "/denied"
-	ownDir(t, denied, svcShell, svcShell, 0o755)
-	ownFile(t, denied+"/t", "DENIED\n", svcShell, 0o644)
+	ownDir(t, denied, svcStd, svcStd, 0o755)
+	ownFile(t, denied+"/t", "DENIED\n", svcStd, 0o644)
 	rootVault := hardWork + "/root-only"
 	ownDir(t, rootVault, 0, 0, 0o700)
 	rootFile(t, rootVault+"/t", "ROOT-ONLY\n", 0o600)

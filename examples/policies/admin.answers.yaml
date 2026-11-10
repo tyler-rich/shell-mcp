@@ -1,0 +1,86 @@
+# Example gate policy: admin (destructive operations and root forwarding).
+#
+# Placeholders only. Install as root at /etc/shell-mcp/admin.yaml
+# (root:root 0644) for its own SSH key; the server using that key runs with
+# SHELL_MCP_PROFILE=admin, and every destructive or privileged operation
+# needs a human approval on the server's approval page (D-006).
+# Root actions are not done here: they are forwarded to the privileged
+# helper, which applies its own policy (docs/PRIVILEGED.md).
+
+# Answers for `shell-mcp-gate policy new` and `shell-mcp-privd policy new`
+# (docs/POLICY.md §9). With these answers they write
+# examples/policies/admin.yaml and examples/privileged/privileged.yaml byte
+# for byte. Every value is a placeholder. The opening comment above becomes
+# the top of the gate policy's header, and the comment directly above root:
+# the top of the privileged policy's; this one is not carried.
+preset: admin
+account: { user: svc-shell, uid: 60123 }
+read: [/srv/app, /etc/example-app, /var/log/example-app]
+write: [/srv/app/config, /srv/app/deploy, /srv/app/cache]
+deny: ["/srv/app/secrets/**", "**/*.key", "/etc/example-app/secrets/**"]
+services:
+  status: ["example-*.service"]
+  control:
+    units: ["example-app.service", "example-worker.service"]
+    verbs: [start, stop, restart, reload]
+journal:
+  units: ["*"]
+git:
+  repos:
+    - path: /srv/app/deploy
+      remote: https://git.example.test/org/deploy.git
+commands:
+  - id: apt-upgradable
+    path: /usr/bin/apt
+    tier: read
+    description: "Packages with available upgrades"
+    templates:
+      - ["list", "--upgradable"]
+  - id: cache-filesystem
+    path: /usr/bin/findmnt
+    tier: read
+    description: "Filesystem and free space holding the application cache"
+    templates:
+      - ["--noheadings", "--output", "SOURCE,FSTYPE,SIZE,USED,AVAIL", "--target", "{path:read}"]
+# Example privileged policy for shell-mcp-privd (docs/PRIVILEGED.md §4).
+#
+# Placeholders only: every path, name, id and package here is invented.
+# Install as root at /etc/shell-mcp/privileged.yaml, root:root 0600 — only
+# root reads it. Then, as root:
+#   shell-mcp-privd check-policy --policy /etc/shell-mcp/privileged.yaml
+#   shell-mcp-privd units --policy /etc/shell-mcp/privileged.yaml --out /etc/systemd/system
+# and review every REVIEW line check-policy prints.
+root:
+  socket_group: { name: svc-shell-priv, gid: 60124 }
+  read: [/etc/example-app, /var/log/example-app]
+  write: [/etc/example-app/conf.d]
+  persistence:
+    - path: /etc/systemd/system/example-app.service.d
+      acknowledge: "drop-ins for example-app only"
+  owners:
+    users: [root, example-app]
+    groups: [root, example-app]
+  commands:
+    - id: mounts
+      path: /usr/bin/findmnt
+      tier: read
+      description: "Mounted filesystems, as root"
+      templates: [["--json"], ["--json", "--target", "{path:read}"]]
+    - id: block-devices
+      path: /usr/bin/lsblk
+      tier: read
+      description: "Block devices and their mount points"
+      templates: [["--json", "--output", "NAME,SIZE,TYPE,MOUNTPOINTS"]]
+    - id: resolve-name
+      path: /usr/bin/getent
+      tier: read
+      unit: broad
+      description: "Resolve a host name through the system resolver"
+      templates: [["hosts", "{regex:^[a-z0-9.-]{1,253}$}"]]
+  power:
+    allowed: [reboot]
+    acknowledge: "planned maintenance windows only"
+  packages:
+    install: [htop, jq]
+    remove: [htop]
+    allow_update_index: true

@@ -24,8 +24,12 @@ import (
 	"github.com/tyler-rich/shell-mcp/internal/gate/install"
 	"github.com/tyler-rich/shell-mcp/internal/gate/ops"
 	"github.com/tyler-rich/shell-mcp/internal/gate/policy"
+	"github.com/tyler-rich/shell-mcp/internal/gate/policy/gen"
 	"github.com/tyler-rich/shell-mcp/internal/gate/polkit"
 	"github.com/tyler-rich/shell-mcp/internal/gate/sandbox"
+	"github.com/tyler-rich/shell-mcp/internal/gate/setup"
+	"github.com/tyler-rich/shell-mcp/internal/gate/setupx"
+	"github.com/tyler-rich/shell-mcp/internal/gate/setupx/system"
 	"github.com/tyler-rich/shell-mcp/internal/protocol"
 	"github.com/tyler-rich/shell-mcp/internal/template"
 )
@@ -45,6 +49,16 @@ commands:
                 check the install, the policy and the sandbox on this host
   polkit --policy <file> --user <name>
                 print the polkit rule for the policy's services.control
+  install --policy <file> --principal <label> --from <addr>[,<addr>…] --key <file.pub> --uid <n> --gid <n> […]
+                as root: the service account, the slice, the polkit rule, sshd and the key line
+                (docs/TARGET-SETUP.md §12.1; --dry-run changes nothing)
+  move-key --principal <label> --from-user <name> --to-user <name> […]
+                as root: move a key line from one service account's keys file to another's
+                (docs/TARGET-SETUP.md §12.1; --dry-run changes nothing)
+  policy new --answers <file> --out <file>|- [--dry-run]
+                as root: write the gate policy from an answers file and a preset
+                (docs/POLICY.md §9; --out - prints it and writes nothing)
+  host-key      print this host's host-key pin for SHELL_MCP_TARGET_HOST_KEYS
   version       print version information
 `
 
@@ -71,6 +85,14 @@ func runWith(args []string, stdin io.Reader, stdout, stderr io.Writer, mk option
 		return checkPolicy(args[1:], stdout, stderr)
 	case "polkit":
 		return polkitWith(args[1:], stdout, stderr, policy.RootTrust())
+	case "install":
+		return installWith(args[1:], stdout, stderr, setup.NewHost)
+	case "move-key":
+		return moveKeyWith(args[1:], stdout, stderr, setup.NewHost)
+	case "policy":
+		return policyWith(args[1:], stdout, stderr, func() (setupx.Host, error) { return system.NewSystem() })
+	case "host-key":
+		return hostKey(args[1:], stdout, stderr)
 	case "version":
 		_, _ = fmt.Fprintf(stdout, "shell-mcp-gate %s (commit %s, %s)\n", version, commit, runtime.Version())
 		return 0
@@ -138,12 +160,17 @@ func checkPolicy(args []string, stdout, stderr io.Writer) int {
 // home directory in the protected set. Only tests pass a trust set other
 // than policy.RootTrust().
 func polkitWith(args []string, stdout, stderr io.Writer, trust policy.Trust) int {
+	const usage = "usage: shell-mcp-gate polkit --policy <file> --user <name>\n"
+	if helpRequested(args) {
+		_, _ = io.WriteString(stdout, usage)
+		return 0
+	}
 	fs := flag.NewFlagSet("polkit", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	policyPath := fs.String("policy", "", "")
 	userName := fs.String("user", "", "")
 	if err := fs.Parse(args); err != nil || *policyPath == "" || *userName == "" || fs.NArg() != 0 {
-		_, _ = io.WriteString(stderr, "usage: shell-mcp-gate polkit --policy <file> --user <name>\n")
+		_, _ = io.WriteString(stderr, usage)
 		return 2
 	}
 	fail := func(format string, a ...any) int {
@@ -190,6 +217,11 @@ var (
 	// devFDPath is where commands reopen a {path:read:fd}; tests replace
 	// it.
 	devFDPath = "/dev/fd"
+	// currentIdentity and helperRunDir are the process's identity and the
+	// privileged helper's socket directory, for the install checks; tests
+	// replace them.
+	currentIdentity = install.Current
+	helperRunDir    = install.HelperRunDir
 )
 
 func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust, home string) int {
@@ -199,11 +231,16 @@ func checkPolicyWith(args []string, stdout, stderr io.Writer, trust policy.Trust
 // checkPolicyWithParam is checkPolicyWith reading the kernel's
 // ignore_rlimit_data parameter from param.
 func checkPolicyWithParam(args []string, stdout, stderr io.Writer, trust policy.Trust, home, param string) int {
+	const usage = "usage: shell-mcp-gate check-policy --policy <file>\n"
+	if helpRequested(args) {
+		_, _ = io.WriteString(stdout, usage)
+		return 0
+	}
 	fs := flag.NewFlagSet("check-policy", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	policyPath := fs.String("policy", "", "")
 	if err := fs.Parse(args); err != nil || *policyPath == "" || fs.NArg() != 0 {
-		_, _ = io.WriteString(stderr, "usage: shell-mcp-gate check-policy --policy <file>\n")
+		_, _ = io.WriteString(stderr, usage)
 		return 2
 	}
 	pr := func(format string, a ...any) { _, _ = fmt.Fprintf(stdout, format+"\n", a...) }
@@ -224,13 +261,13 @@ func checkPolicyWithParam(args []string, stdout, stderr io.Writer, trust policy.
 	if err != nil {
 		failf("binary: cannot resolve own path: %v", err)
 	}
-	id, err := install.Current()
+	id, idErr := currentIdentity()
 	switch {
-	case err != nil:
-		failf("install: cannot read own identity: %v", err)
+	case idErr != nil:
+		failf("install: cannot read own identity: %v", idErr)
 	case id.UID == 0:
 		pr("NOTE install: running as root, so the uid and group checks describe root, not the service account;")
-		pr("     run check-policy as the service account to check its identity and home directory;")
+		pr("     run check-policy as the service account to check its identity, its groups against the helper's socket group, and its home directory;")
 		pr("     the roots' paths and git.repos are checked trusting root only")
 		if _, err = policy.CheckChain(policy.RootTrust(), exe); err != nil {
 			failf("install: gate binary: %v", err)
@@ -255,6 +292,17 @@ func checkPolicyWithParam(args []string, stdout, stderr io.Writer, trust policy.
 		}
 	} else {
 		pr("ok   policy: sha256 %s, max_tier %s, %d commands", p.SHA256, p.MaxTier, len(p.Commands))
+		// The shared-account rule (SECURITY §2), as serve applies it, for
+		// the service account (as root there is no account to check).
+		if idErr == nil && id.UID != 0 {
+			if err := install.CheckSocketGroup(&install.SocketGroupEnv{Identity: id, RunDir: helperRunDir, Forwarding: p.Privileged.Enabled}); err != nil {
+				failf("install: %v", err)
+			} else if p.Privileged.Enabled {
+				pr("ok   install: privileged forwarding is enabled, so this account may be in the helper's socket group")
+			} else {
+				pr("ok   install: this account is not in the group of the helper's sockets in %s (a policy without privileged forwarding)", helperRunDir)
+			}
+		}
 		usesFD := false
 		for i := range p.Commands {
 			if c := &p.Commands[i]; c.ReadsPrivateKeys {
@@ -408,4 +456,114 @@ func rlimitDataWarning(param string) string {
 		return "kernel: ignore_rlimit_data is set (boot option); mmap(2) past limits.max_memory_mb only logs a warning, so the limit binds brk(2) only; remove the boot option"
 	}
 	return ""
+}
+
+// installWith is shell-mcp-gate install (TARGET-SETUP §12.1) on the host
+// newHost returns; production passes setup.NewHost, and no flag or
+// variable chooses another.
+func installWith(args []string, stdout, stderr io.Writer, newHost func() (setup.Host, error)) int {
+	if helpRequested(args) {
+		_, _ = io.WriteString(stdout, setup.Usage)
+		return 0
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "/"
+	}
+	o, err := setup.ParseFlags(args, cwd)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-gate install: %v\n%s", err, setup.Usage)
+		return 2
+	}
+	h, err := newHost()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-gate install: %v\n", err)
+		return 1
+	}
+	a := &setupx.Auditor{Stderr: stderr, Syslog: "/dev/log", Tag: "shell-mcp-gate", Component: "gate", DryRun: o.DryRun}
+	return setup.Install(o, h, stdout, a)
+}
+
+// moveKeyWith is shell-mcp-gate move-key (TARGET-SETUP §12.1, "Moving a
+// key between accounts").
+func moveKeyWith(args []string, stdout, stderr io.Writer, newHost func() (setup.Host, error)) int {
+	if helpRequested(args) {
+		_, _ = io.WriteString(stdout, setup.MoveUsage)
+		return 0
+	}
+	o, err := setup.ParseMoveFlags(args)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-gate move-key: %v\n%s", err, setup.MoveUsage)
+		return 2
+	}
+	h, err := newHost()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-gate move-key: %v\n", err)
+		return 1
+	}
+	a := &setupx.Auditor{Stderr: stderr, Syslog: "/dev/log", Tag: "shell-mcp-gate", Component: "gate", DryRun: o.DryRun}
+	return setup.MoveKey(o, h, stdout, a)
+}
+
+// hostKey is shell-mcp-gate host-key (TARGET-SETUP §12.2): this host's pin
+// lines, from its own host-key files, as any user.
+func hostKey(args []string, stdout, stderr io.Writer) int {
+	const usage = "usage: shell-mcp-gate host-key\n"
+	if helpRequested(args) {
+		_, _ = io.WriteString(stdout, usage)
+		return 0
+	}
+	if len(args) != 0 {
+		_, _ = io.WriteString(stderr, usage)
+		return 2
+	}
+	h, err := system.NewSystem()
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-gate host-key: %v\n", err)
+		return 1
+	}
+	return setup.HostKey(h, stdout)
+}
+
+// policyWith is shell-mcp-gate policy new (POLICY §9) on the host newHost
+// returns; production passes system.NewSystem, and no flag or variable
+// chooses another.
+func policyWith(args []string, stdout, stderr io.Writer, newHost func() (setupx.Host, error)) int {
+	if helpRequested(args) {
+		_, _ = io.WriteString(stdout, policyUsage)
+		return 0
+	}
+	if len(args) == 0 || args[0] != "new" {
+		_, _ = io.WriteString(stderr, policyUsage)
+		return 2
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "/"
+	}
+	o, err := gen.ParseFlags(args[1:], cwd)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "shell-mcp-gate policy new: %v\n%s", err, policyUsage)
+		return 2
+	}
+	h, err := newHost()
+	if err == nil {
+		var exe string
+		if exe, err = h.Executable(); err == nil {
+			a := &setupx.Auditor{Stderr: stderr, Syslog: "/dev/log", Tag: "shell-mcp-gate", Component: "gate", DryRun: o.DryRun || o.Out == "-"}
+			check := func(p string, w io.Writer) int { return checkPolicy([]string{"--policy", p}, w, stderr) }
+			return gen.Run(o, gen.GateSpec(h, exe, check), h, stdout, stderr, a)
+		}
+	}
+	_, _ = fmt.Fprintf(stderr, "shell-mcp-gate policy new: %v\n", err)
+	return 1
+}
+
+const policyUsage = "usage: shell-mcp-gate policy new --answers <file> --out <file>|- [--dry-run]\n"
+
+// helpRequested reports whether a subcommand's args ask for its usage,
+// which then goes to stdout with exit 0; a usage error goes to stderr with
+// exit 2.
+func helpRequested(args []string) bool {
+	return slices.ContainsFunc(args, func(a string) bool { return a == "-h" || a == "-help" || a == "--help" })
 }

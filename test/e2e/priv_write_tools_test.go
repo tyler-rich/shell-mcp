@@ -35,7 +35,7 @@ func privWriteServer(t *testing.T) (*approvalServer, *human) {
 	h := newHuman(t, manyApprovers)
 	file := h.file(t)
 	srv := startApprovalServer(t, h, file, freeLoopbackPort(t), "SHELL_MCP_PROFILE=admin", "SHELL_MCP_APPROVAL_TIERS=destructive",
-		"SHELL_MCP_SSH_KEY_FILE="+filepath.Join(bin(), "e2e-client-key"))
+		"SHELL_MCP_TARGET_USER=svc-shell", "SHELL_MCP_SSH_KEY_FILE="+filepath.Join(bin(), "e2e-client-key"))
 	t.Cleanup(func() { _ = srv.cs.Close() })
 	return srv, h
 }

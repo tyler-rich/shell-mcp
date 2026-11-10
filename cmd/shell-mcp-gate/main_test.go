@@ -451,3 +451,34 @@ func TestCheckPolicyReportsPathReadFD(t *testing.T) {
 		t.Fatalf("/dev/fd checked for a policy without {path:read:fd}:\n%s", out)
 	}
 }
+
+// TestHelpExitsZero: --help (and -h) on every deployer-facing subcommand
+// prints its usage on stdout and exits 0; a missing required flag or
+// subcommand is a usage error, exit 2, on stderr. serve is the forced
+// command and is not one of them.
+func TestHelpExitsZero(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"install", "--help"}, "usage: shell-mcp-gate install"},
+		{[]string{"install", "-h"}, "usage: shell-mcp-gate install"},
+		{[]string{"host-key", "--help"}, "usage: shell-mcp-gate host-key"},
+		{[]string{"policy", "--help"}, "usage: shell-mcp-gate policy new"},
+		{[]string{"policy", "new", "--help"}, "usage: shell-mcp-gate policy new"},
+		{[]string{"policy", "new", "-h"}, "usage: shell-mcp-gate policy new"},
+		{[]string{"check-policy", "--help"}, "usage: shell-mcp-gate check-policy"},
+		{[]string{"polkit", "--help"}, "usage: shell-mcp-gate polkit"},
+	} {
+		code, out, errb := runCmd(c.args, "")
+		if code != 0 || !strings.Contains(out, c.want) || errb != "" {
+			t.Errorf("%v: exit %d, stdout %q, stderr %q; want 0 and %q on stdout", c.args, code, out, errb, c.want)
+		}
+	}
+	for _, args := range [][]string{{"install"}, {"policy"}, {"policy", "new"}, {"check-policy"}, {"polkit"}, {"host-key", "extra"}} {
+		code, out, errb := runCmd(args, "")
+		if code != 2 || out != "" || !strings.Contains(errb, "usage:") {
+			t.Errorf("%v: exit %d, stdout %q, stderr %q; want 2 and the usage on stderr", args, code, out, errb)
+		}
+	}
+}

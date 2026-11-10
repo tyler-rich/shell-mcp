@@ -17,7 +17,9 @@
 #            image index (SHA256SUMS itself is covered by its cosign
 #            signature, not an attestation), attests SBOMs for the binaries
 #            and platform images, and verifies all of it
-#            (scripts/release/verify.sh)
+#            (scripts/release/verify.sh), then runs the users' own
+#            scripts/verify-release.sh against the signed files
+#            (scripts/release/verify-release-check.sh)
 #   publish  a real release only: a draft GitHub Release with every file,
 #            then published
 #
@@ -46,13 +48,20 @@ on:
 
 env:
   GOTOOLCHAIN: local
-  TRIVY_VERSION: v0.76.1
-  GRYPE_VERSION: v0.121.0
+  TRIVY_VERSION: v0.76.2
+  GRYPE_VERSION: v0.121.3
   COSIGN_VERSION: v3.1.4
-  SYFT_VERSION: v1.55.0
+  SYFT_VERSION: v1.57.1
   GOVULNCHECK_VERSION: v1.9.0
   VERSION: ${{ inputs.version }}
   LOOPBACK: localhost:5000/shell-mcp
+
+# An explicit shell makes every run step bash --noprofile --norc -eo pipefail:
+# without it GitHub uses bash -e, and a step piped through tee takes tee's
+# exit status (scripts/workflowcheck keeps this present in every workflow).
+defaults:
+  run:
+    shell: bash
 
 jobs:
   build:
@@ -74,7 +83,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         with:
           cosign-release: ${{ env.COSIGN_VERSION }}
       - id: syft
@@ -177,7 +186,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         with:
           cosign-release: ${{ env.COSIGN_VERSION }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -334,7 +343,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         with:
           cosign-release: ${{ env.COSIGN_VERSION }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -431,6 +440,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash scripts/release/verify.sh dist "$VERSION" "$IMAGE_REPO@$INDEX" "$GITHUB_REPOSITORY" "$GITHUB_REF"
+      # The script users run (scripts/verify-release.sh, also in the examples
+      # archive) against the files just signed and tampered copies of them: a
+      # release must pass; a dry run's files, signed by the run's own ref, are
+      # refused in every mode (handoff §4.F, decided in S8-4).
+      - name: verify-release.sh against the signed files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/release/verify-release-check.sh dist "$VERSION" "$PUBLISH"
       - name: release notes
         env:
           NOTES_VERSION: ${{ inputs.notes-version }}

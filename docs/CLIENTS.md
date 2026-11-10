@@ -15,7 +15,7 @@ Names below are placeholders: `mcp.example.test` (the MCP endpoint behind your r
 
 The server speaks MCP 2026-07-28 (stateless) and 2025-11-25 (D-014). Over HTTP it serves `POST /mcp` (`SHELL_MCP_PATH`) and an unauthenticated `GET /healthz` that answers `{"status":"ok"}` and nothing else. Every other request needs the bearer token, `tools/list` included; a request refused earlier by the rate limit (`429`) or the Host/Origin checks (`421`, `403`) learns nothing either.
 
-**Behind a reverse proxy.** The server speaks plain HTTP; terminate TLS at a proxy or run over a VPN, and never publish it on the public internet (SECURITY §3). Add the name clients use to `SHELL_MCP_ALLOWED_HOSTS` (otherwise `421 {"error":"host_not_allowed"}`).
+**Behind a reverse proxy.** The server speaks plain HTTP; terminate TLS at a proxy or run over a VPN, and never publish it on the public internet (SECURITY §3), neither directly nor through a tunnel or an internet-facing relay (Cloudflare Tunnel, ngrok, Tailscale Funnel or similar): the proxy would see the tunnel connector's address, a local one, and its LAN/VPN filter would let the internet through ([`deploy/caddy/README.md`](../deploy/caddy/README.md), property 4). The proxy is a container on the server's network; one installed on the host is not supported by this layout (property 1). Add the name clients use to `SHELL_MCP_ALLOWED_HOSTS` (otherwise `421 {"error":"host_not_allowed"}`).
 
 **Trusting the proxy (`SHELL_MCP_TRUSTED_PROXIES`).** The server takes a request's client address from `X-Forwarded-For` only when the request's peer is in this list, and then from the entry that peer appended; that address is what the rate limits, the auth lockout and the approval page's logs see. Whoever can connect from a trusted address can therefore name any client it likes. The safe layout:
 
@@ -32,7 +32,15 @@ Measured with Docker Desktop 29 (on Windows; a Linux host's networking can diffe
 | A container at `192.0.2.5` on the shared network, sending `X-Forwarded-For: 198.51.100.20` | `192.0.2.5/32` | `192.0.2.5/32` | `198.51.100.20/32` (the proxy's word, as intended) |
 | A container on another network, through the published port, sending `X-Forwarded-For: 203.0.113.99` | `192.0.2.1/32` (the gateway) | `203.0.113.99/32` (forged, believed) | `192.0.2.1/32` (ignored) |
 
-**Set the value from what the server logs, never from a guess.** Start the server with `SHELL_MCP_TRUSTED_PROXIES` empty, send one request without a token through the proxy (`curl -s -X POST https://mcp.example.test/mcp`), and read the `client` field of the server's `authentication failed` WARN line (`docker logs shell-mcp 2>&1 | grep 'authentication failed'`, which shows for example `"client":"172.30.80.5/32","reason":"missing"`; a request without a token does not count toward the lockout). That address is the one to list. Then repeat: the line should now show the address of the machine you sent it from (the proxy must append `X-Forwarded-For`; most do when told to). An IPv6 peer is logged as its /64, which is how it is counted, not as one address; give the proxy a fixed IPv4 address on the network instead. The same list applies to the approval listener (§3.2).
+**Confirm the value from what the server logs, never from a guess.** `shell-mcp init compose` already sets `SHELL_MCP_TRUSTED_PROXIES` to the proxy's fixed address (`--proxy-addr`). Confirm it once: send one request without a token through the proxy from a client machine (`curl -s -X POST https://mcp.example.test/mcp`), and read the `client` field of the server's `authentication failed` WARN line, in the deployment's directory:
+
+```bash
+docker compose logs shell-mcp 2>&1 | grep 'authentication failed'
+```
+
+It must show the address of the machine you sent the request from (for example `"client":"192.0.2.20/32","reason":"missing"`; a request without a token does not count toward the lockout). If it shows the proxy's address instead, the proxy is not setting `X-Forwarded-For`; if it shows another address on the server's network, the proxy is not at the address you listed: in either case, `deploy/caddy/README.md`, "Check it once", says what to change. An IPv6 peer is logged as its /64, which is how it is counted, not as one address; give the proxy a fixed IPv4 address on the network instead. The same list applies to the approval listener (§3.2).
+
+`shell-mcp doctor`, run inside the server's container, checks the list statically (`docs/TARGET-SETUP.md` §12.6): an entry that is or holds one of the container's gateways is a FAIL, a prefix or an address on no network the container is attached to a WARN. Whether the server sees each client's own address is still the log-line check above, which it cannot run. What any proxy must do for this to hold, for Caddy, nginx or Traefik, with an example Caddyfile: [`deploy/caddy/README.md`](../deploy/caddy/README.md).
 
 Quick check from the client's machine (a `200` with a JSON-RPC result means the token, the host name and the path are right):
 
@@ -50,7 +58,7 @@ One server instance has one profile, set by `SHELL_MCP_PROFILE` at start (D-005)
 | Profile | Tools | Adds | Approval |
 |---|---|---|---|
 | `read-only` (default) | 19 | System, disk, processes, services, journal, files, find, certificates, git status/log/diff, read-tier policy commands, delete and discard previews, `shell_get_policy`, `shell_list_targets` | Never needed |
-| `operator` | 27 | Service control, write, mkdir, copy, move, chmod, `git pull`, `shell_run_command` (read and operator commands) | Only if `SHELL_MCP_APPROVAL_TIERS=operator,destructive` |
+| `operator` | 27 | Service control, write, mkdir, copy, move, chmod, `git pull`, `shell_run_command` (read and operator commands) | Only if `SHELL_MCP_APPROVAL_TIERS=operator,destructive`, which `init compose --profile operator --approve-host` sets |
 | `admin` | 52 | Delete, git discard, destructive commands, and the 23 `shell_priv_*` tools (root, through the helper) | Always for destructive tools and for privileged tools of tier operator or above |
 
 `shell-mcp tools` prints the catalogue with each tool's tier, profiles, annotations and schema hashes; keep its output to diff against the next release (tool poisoning, SECURITY §2). `SHELL_MCP_DISABLE_TOOLS` removes individual tools; nothing adds a tool above the profile. The full catalogue is `docs/TOOLS.md`.
@@ -59,7 +67,7 @@ Run separate instances, with separate keys and policies, for separate ceilings: 
 
 ## 3. Approvals
 
-Destructive tools, privileged tools of tier operator or above, and the tiers in `SHELL_MCP_APPROVAL_TIERS` need a human's approval (D-006). `SHELL_MCP_APPROVAL_METHOD` decides how:
+Destructive tools, privileged tools of tier operator or above, and the tiers in `SHELL_MCP_APPROVAL_TIERS` need a human's approval (D-006). The tiers default to `destructive`; `shell-mcp init compose` sets `operator,destructive` when it is given both `--profile operator` and `--approve-host`, and leaves the default for `admin` (add `operator` by hand there if operator tools should need a code too). `SHELL_MCP_APPROVAL_METHOD` decides how:
 
 - **`none` (the default):** those tools refuse with `approval_unavailable`, and nothing is sent to the target.
 - **`web`:** the out-of-band approval page below. The model cannot approve.
@@ -75,26 +83,47 @@ Records expire after `SHELL_MCP_APPROVAL_TTL` (default 300 s) and are lost when 
 
 ### 3.2 Setting it up
 
-Enrol the approver **on the server host**, never on the machine where the agent runs. The seed is shown once, as a QR code and an `otpauth://` URI, and stdout must be a terminal (hence `-it`):
+Enrol the approver **on the server host**, never on the machine where the agent runs. The seed is shown once, as a QR code and an `otpauth://` URI, and stdout must be a terminal (hence `-it`). `shell-mcp init --approver` does it while it creates the other secrets, in a directory it makes `0700` and owned by the server's uid 65532, and writes `secrets/approvers` `0600`, owned by 65532 (`deploy/README.md`, "Secrets" and [`shell-mcp init`](../deploy/README.md#shell-mcp-init)):
 
 ```bash
-docker run --rm -it -v "$PWD/secrets:/run/secrets" ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:9c19075aadb69950eb71d69d840e64ba021fcabf22c7df32a76a229d3c387dd4 \
-  approver add --name alice --file /run/secrets/approvers
+install -d -o 65532 -g 65532 -m 0700 secrets
+docker run --rm -it --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  -v "$PWD/secrets:/secrets" ghcr.io/tyler-rich/shell-mcp:<version>@sha256:<digest> init --dir /secrets --approver alice
 ```
 
-The container runs as uid 65532, so `secrets/` must be writable by it while you enrol; afterwards `secrets/approvers` must be `0600` and owned by 65532, like the other secrets (`deploy/README.md`). The server refuses to start if the file is group- or world-accessible. One approver is allowed by default; more need `--allow-multiple` and `SHELL_MCP_APPROVAL_MAX_APPROVERS`. `approver list` and `approver remove` manage the file; restart the server after a change.
+`<version>` is a release that has `init` (any after 0.2.0). Running `init` again with the same name keeps the file and shows nothing.
 
-Add to the server's environment:
+Later, with `approver add`, in the image you verified (`$IMAGE`, the README's quick start, step 1), with the same hardening flags as `init`. It runs as uid 65532, which owns the directory `init` made:
 
-```yaml
-SHELL_MCP_APPROVAL_METHOD: web
-SHELL_MCP_APPROVAL_PUBLIC_URL: https://approve.example.test
-SHELL_MCP_APPROVERS_FILE: /run/secrets/approvers
-SHELL_MCP_APPROVAL_BIND: 0.0.0.0          # inside the container; publish the port only on loopback or a VPN address
-SHELL_MCP_TRUSTED_PROXIES: 172.30.80.5    # the proxy's fixed address on the shared network (§1); required for a non-loopback bind without native TLS
+```bash
+docker run --rm -it --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  -v "$PWD/secrets:/run/secrets" "$IMAGE" approver add --name alice --file /run/secrets/approvers
 ```
 
-with the approvers file in `secrets:`. Publish no port for it: the proxy forwards `approve.example.test` to the server's port 8081 on the shared network, as it forwards `mcp.example.test` to 8080.
+Either way, `secrets/approvers` must stay `0600` and owned by 65532, like the other secrets. The server refuses to start if the file is group- or world-accessible. One approver is allowed by default; more need `approver add --allow-multiple` and `SHELL_MCP_APPROVAL_MAX_APPROVERS`. `approver list` and `approver remove` manage the file; restart the server after a change.
+
+**Turning approvals on for a running deployment**, in the deployment's directory on the server host:
+
+1. Enrol the approver, as above (`init --approver alice`, or `approver add`).
+2. Print the compose file again with `--approve-host approve.example.test` added to exactly the flags you used before (with `--profile operator` or `--profile admin`, whichever profile the approvals are for; see §2), and compare it with the old one before you replace it:
+
+   ```bash
+   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true "$IMAGE" init compose \
+     <the flags you used before> --approve-host approve.example.test > docker-compose.new.yml
+   diff docker-compose.yml docker-compose.new.yml
+   mv docker-compose.new.yml docker-compose.yml
+   ```
+
+   It adds `SHELL_MCP_APPROVAL_METHOD: web`, `SHELL_MCP_APPROVAL_PUBLIC_URL`, `SHELL_MCP_APPROVERS_FILE: /run/secrets/approvers`, `SHELL_MCP_APPROVAL_BIND: 0.0.0.0` (inside the container), with `--profile operator` also `SHELL_MCP_APPROVAL_TIERS: operator,destructive`, and, in the `secrets` form, the `approvers` secret ([`deploy/README.md`](../deploy/README.md#shell-mcp-init-compose)). `SHELL_MCP_TRUSTED_PROXIES` is already the proxy's address, which the approval listener needs for its non-loopback bind.
+3. Have the proxy forward `approve.example.test` to the server's port 8081 on the shared network, as it forwards `mcp.example.test` to 8080, for the LAN or VPN only. Publish no port for it.
+4. Restart the server, which reads the approvers file only at start, and check:
+
+   ```bash
+   docker compose up -d
+   docker compose exec shell-mcp /shell-mcp doctor --mcp-url https://mcp.example.test/mcp
+   ```
+
+Under the `operator` profile, step 2's `--approve-host` is what puts the operator tools behind an approver's code (through `SHELL_MCP_APPROVAL_TIERS: operator,destructive`). Under `admin`, the tiers stay at the default: destructive and privileged operations need a code, and operator tools need one only if you add `SHELL_MCP_APPROVAL_TIERS: operator,destructive` to the environment by hand, as `init compose`'s NOTE says.
 
 - The approval listener (default `127.0.0.1:8081`) is separate from `/mcp`, never accepts the bearer token, and answers only for the origin of `SHELL_MCP_APPROVAL_PUBLIC_URL` (any other `Host` is `421`). A non-loopback bind needs native TLS (`SHELL_MCP_APPROVAL_TLS_CERT_FILE`/`_KEY_FILE`) or `SHELL_MCP_TRUSTED_PROXIES`, and then serves only those proxies.
 - `SHELL_MCP_APPROVAL_NOTIFY_URL` (an ntfy topic URL) with `SHELL_MCP_APPROVAL_NOTIFY_TOKEN_FILE` pushes each request and every lockout to the approver's phone, with a link to the page; the push never carries an approve or decline action.
@@ -133,7 +162,7 @@ claude mcp add --transport stdio shell-mcp-local -- docker run --rm -i --user "$
   -e SHELL_MCP_TRANSPORT=stdio -e SHELL_MCP_AUTH_MODE=none -e SHELL_MCP_SSH_KEY_FILE=/run/secrets/ssh_key \
   -e SHELL_MCP_TARGET_NAME=app-host -e SHELL_MCP_TARGET_HOST=target-a.example.test -e SHELL_MCP_TARGET_USER=svc-shell \
   -e "SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:<the host key's fingerprint>" \
-  ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:9c19075aadb69950eb71d69d840e64ba021fcabf22c7df32a76a229d3c387dd4 serve
+  ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:323149155f5be042949ec5291812104351f365a693dbdfb8cd2171b95ee30e6a serve
 ```
 
 The server logs to stderr only under stdio.
@@ -163,7 +192,7 @@ Any client that can send an `Authorization` header to a Streamable HTTP server w
 
 ## 5. What clients were seen doing with approvals
 
-From the maintainer's live test (2026-10-16) and S4b-scope's research at the source (`docs/handoff/S4B-APPROVAL.md` §1). None of these clients shows an MCP elicitation to a person, which is why v1 approves out of band; under `web` every one of them works, because the model only relays a URL and re-calls a tool.
+From a live test (2026-10-16) and the clients' own documentation. None of these clients shows an MCP elicitation to a person, which is why v1 approves out of band; under `web` every one of them works, because the model only relays a URL and re-calls a tool.
 
 | Client (version) | Protocol revision | Declared | With an elicitation | With `web` approval |
 |---|---|---|---|---|
@@ -190,4 +219,4 @@ From the maintainer's live test (2026-10-16) and S4b-scope's research at the sou
 | `approval_unavailable` | `SHELL_MCP_APPROVAL_METHOD=none`, or five approvals already pending for this principal. |
 | `approval_invalid` | The id is unknown, expired or used, or the target, arguments or a policy changed since the approval. Request a new one. |
 | `tier_denied`, `policy_denied`, `path_denied` | The target's policy refused it; `shell_get_policy` shows what it allows. |
-| `host_key_mismatch`, `target_unreachable`, `gate_unavailable` | The server could not reach the gate: run `shell-mcp check` on the server (`docs/TARGET-SETUP.md` §10). |
+| `host_key_mismatch`, `target_unreachable`, `gate_unavailable` | The server could not reach the gate: run `shell-mcp doctor` in the server's container, which names the failing step (`docs/TARGET-SETUP.md` §12.6), or `shell-mcp check` (TARGET-SETUP §10). |

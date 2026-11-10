@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Proves deps-current.sh cannot pass vacuously: on a scratch copy of the
 # module it must fail when a real go.mod requirement is behind its newest
-# release, when the go line is behind the newest stable Go, when a CI tool pin
-# (golangci-lint, govulncheck, Trivy, Grype, gitleaks, cosign, syft, the loopback
+# release, when a direct requirement has a stable next major (an invented
+# module on a file:// proxy, and a dated exception only up to its last day),
+# when the go line is behind the newest stable Go, when a CI tool pin
+# (golangci-lint, govulncheck, actionlint, Trivy, Grype, gitleaks, cosign, syft, the loopback
 # registry image) is behind or drifts, and when ci-local's golangci-lint runs on a Go older than
 # go.mod's go line; and that the Go check follows the published golang image
 # (deps-current-go.sh, against a fake go.dev and registry, offline). Needs go,
@@ -16,9 +18,10 @@ trap 'rm -rf "$work"' EXIT
 
 pass=0
 fail=0
-expect() { # expect <name> <want-exit> <want-substring> <dir>
+expect() { # expect <name> <want-exit> <want-substring> <dir> [VAR=value...]
 	local name="$1" want="$2" needle="$3" dir="$4" out code=0
-	out="$(DEPS_CURRENT_DIR="$dir" bash "$check" 2>&1)" || code=$?
+	shift 4
+	out="$(env DEPS_CURRENT_DIR="$dir" "$@" bash "$check" 2>&1)" || code=$?
 	if [[ "$code" == "$want" ]] && grep -q -F -- "$needle" <<<"$out"; then
 		echo "ok   $name"
 		pass=$((pass + 1))
@@ -60,11 +63,62 @@ add_direct() {
 	fi
 }
 
-# 1. The repository as committed passes; a next major that has only
-#    pre-releases (go.yaml.in/yaml/v4 at the time of writing) is info only.
+# Offline next majors: a file:// module proxy in front of the real one serves
+# invented modules (example.test, go.mod only, no code), so the next-major
+# rule is tested on fixed versions, not on whatever majors exist today.
+proxy="$work/proxy"
+fake_module() { # fake_module <path> <version>...
+	local mod="$1" d v
+	shift
+	d="$proxy/$mod/@v"
+	mkdir -p "$d"
+	printf '%s\n' "$@" >"$d/list"
+	for v in "$@"; do
+		printf '{"Version":"%s","Time":"2026-01-01T00:00:00Z"}\n' "$v" >"$d/$v.info"
+		printf 'module %s\n\ngo 1.21\n' "$mod" >"$d/$v.mod"
+	done
+}
+fake_module example.test/premajor v1.0.0
+fake_module example.test/premajor/v2 v2.0.0-rc.1
+fake_module example.test/stablemajor v1.0.0
+fake_module example.test/stablemajor/v2 v2.0.0-rc.1 v2.0.0
+offline=(GOPROXY="file://$proxy,$(go env GOPROXY)" GONOSUMDB=example.test GOFLAGS="$(go env GOFLAGS) -mod=mod")
+# require_fake <dir> <module>: a direct requirement on the fake module's v1.0.0.
+require_fake() {
+	(cd "$1" && go mod edit -require="$2@v1.0.0")
+	grep -q -F "$2 v1.0.0" "$1/go.mod"
+}
+
+# A fake date for the dated next-major exceptions: `date -u +%F` prints
+# FAKE_TODAY, anything else runs the real date.
+fakedate="$work/fakedate"
+mkdir -p "$fakedate"
+printf '#!/usr/bin/env bash\nif [[ "$*" == "-u +%%F" ]]; then echo "$FAKE_TODAY"; else exec %q "$@"; fi\n' "$(command -v date)" >"$fakedate/date"
+chmod +x "$fakedate/date"
+
+# 1. The repository as committed passes (while its next-major exception
+#    applies; from the day after it, this case fails, as deps-current does).
 current="$(copy current)"
 expect "current repository passes" 0 "all current" "$current"
-expect "next-major pre-releases are info only" 0 "info — next major has only pre-releases: go.yaml.in/yaml/v4" "$current"
+
+# 1a. A next major that has only pre-releases is info only.
+premajor="$(copy premajor)"
+if require_fake "$premajor" example.test/premajor; then
+	expect "next-major pre-releases are info only" 0 "info — next major has only pre-releases: example.test/premajor/v2 v2.0.0-rc.1 (required: example.test/premajor)" "$premajor" "${offline[@]}"
+else setup_failed "could not require example.test/premajor"; fi
+
+# 1b. The go.yaml.in/yaml/v3 exception (granted 2026-11-08, through
+#     2026-12-08): info on any day up to its last, a FAIL from the day after,
+#     and it holds back nothing but go.yaml.in/yaml/v4.
+expect "the yaml/v4 exception applies inside its window" 0 "info — go.yaml.in/yaml/v3 is held below its stable next major go.yaml.in/yaml/v4 v" "$current" PATH="$fakedate:$PATH" FAKE_TODAY=2026-11-20
+expect "the yaml/v4 exception applies on its last day" 0 "by the exception granted 2026-11-08, through 2026-12-08: v4.0.0 accepts YAML that v3 refuses" "$current" PATH="$fakedate:$PATH" FAKE_TODAY=2026-12-08
+expect "the yaml/v4 exception expires" 1 "deps-current: FAIL — go.yaml.in/yaml/v3 has a stable next major: go.yaml.in/yaml/v4 v" "$current" PATH="$fakedate:$PATH" FAKE_TODAY=2026-12-09
+expect "the expiry names its dates" 1 "(the exception granted 2026-11-08 applied through 2026-12-08; today is 2026-12-09)" "$current" PATH="$fakedate:$PATH" FAKE_TODAY=2026-12-09
+stablemajor="$(copy stablemajor)"
+if require_fake "$stablemajor" example.test/stablemajor; then
+	expect "the exception holds back nothing else" 1 "deps-current: FAIL — example.test/stablemajor has a stable next major: example.test/stablemajor/v2 v2.0.0" "$stablemajor" "${offline[@]}" PATH="$fakedate:$PATH" FAKE_TODAY=2026-11-20
+else setup_failed "could not require example.test/stablemajor"; fi
+expect "an unreadable date fails" 1 "deps-current: FAIL — cannot read today's date" "$current" PATH="$fakedate:$PATH" FAKE_TODAY=yesterday
 
 # 2. A direct go.mod requirement one release behind fails and is named.
 behind="$(copy behind)"
@@ -141,6 +195,32 @@ if ! grep -q '^in_lint() { docker run ' "$lintimage/scripts/ci-local.sh"; then
 else
 	expect "lint step outside the Go image fails" 1 "golangci-lint in scripts/ci-local.sh does not run with the Go image's go" "$lintimage"
 fi
+
+# 11b. in_go (which in_lint runs through) on another image than the
+#     Dockerfile's Go image fails, and so does a lint step that does not go
+#     through in_lint.
+ingoimage="$(copy ingoimage)"
+sed -i 's#^\(\t\t-v "$cache_volume:/cache" -v "$repo:/src:ro" -w /src \)"$go_image" "$@"$#\1"golang:1.20" "$@"#' "$ingoimage/scripts/ci-local.sh"
+if grep -q -F '"golang:1.20" "$@"' "$ingoimage/scripts/ci-local.sh"; then
+	expect "in_go on another image fails" 1 "golangci-lint in scripts/ci-local.sh does not run with the Go image's go" "$ingoimage"
+else setup_failed "could not point the scratch ci-local.sh in_go at another image"; fi
+lintdirect="$(copy lintdirect)"
+sed -i 's#^\(\tstep "golangci-lint" "" \)in_lint run#\1docker run golangci/golangci-lint:v2.14.0 golangci-lint run#' "$lintdirect/scripts/ci-local.sh"
+if grep -q 'step "golangci-lint" "" docker run' "$lintdirect/scripts/ci-local.sh"; then
+	expect "a lint step outside in_lint fails" 1 "1 of 2 lint steps use in_lint" "$lintdirect"
+else setup_failed "could not change the scratch ci-local.sh lint step"; fi
+
+# 11a. An actionlint pin older than its newest stable release fails, and
+#     ci.yml and ci-local.sh must agree on it.
+oldal="$(copy oldal)"
+sed -i 's/^\(  ACTIONLINT_VERSION: \).*/\1v1.7.0/' "$oldal/.github/workflows/ci.yml"
+sed -i 's/^actionlint_version="v[0-9.]*"/actionlint_version="v1.7.0"/' "$oldal/scripts/ci-local.sh"
+if grep -q '^actionlint_version="v1.7.0"$' "$oldal/scripts/ci-local.sh" && grep -q '^  ACTIONLINT_VERSION: v1.7.0$' "$oldal/.github/workflows/ci.yml"; then
+	expect "old actionlint pin fails" 1 "actionlint v1.7.0 is older than the newest stable" "$oldal"
+else setup_failed "could not set the actionlint pins"; fi
+aldrift="$(copy aldrift)"
+sed -i 's/^actionlint_version="v[0-9.]*"/actionlint_version="v1.7.0"/' "$aldrift/scripts/ci-local.sh"
+expect "actionlint pin drift fails" 1 "actionlint is pinned differently" "$aldrift"
 
 # 12-20. The release and scanner tools: each pin older than its newest stable
 #     release fails, the files that pin one tool must agree, and a pin that

@@ -1,0 +1,53 @@
+# Reference deployment (docs/SECURITY.md §7, normative hardening flags).
+# Printed by `shell-mcp init compose` from deploy/docker-compose.yml with this deployment's values.
+services:
+  shell-mcp:
+    # The image index, pinned by digest: the digest in its release notes.
+    # Verify it before you deploy it (README, "Verifying a release").
+    image: ghcr.io/tyler-rich/shell-mcp@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    # No published port: clients reach the server only through your reverse
+    # proxy, which joins the `front` network below at its fixed address
+    # 198.51.100.5 and is the only service with a published port (on a LAN or VPN
+    # address, never all interfaces by accident). docs/CLIENTS.md §1 says why,
+    # and how to confirm the address from the server's log.
+    networks:
+      front:
+        ipv4_address: 198.51.100.10
+    environment:
+      SHELL_MCP_BIND: 0.0.0.0           # inside the container; only the `front` network reaches it
+      SHELL_MCP_PROFILE: read-only
+      SHELL_MCP_TOKEN_FILE: /run/secrets/mcp_token
+      SHELL_MCP_SSH_KEY_FILE: /run/secrets/ssh_key
+      SHELL_MCP_TARGET_NAME: app-host
+      SHELL_MCP_TARGET_HOST: 192.0.2.20
+      SHELL_MCP_TARGET_USER: svc-shell
+      SHELL_MCP_TARGET_HOST_KEYS: "ssh-ed25519 SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      SHELL_MCP_ALLOWED_HOSTS: localhost,127.0.0.1,mcp.example.test
+      SHELL_MCP_TRUSTED_PROXIES: 198.51.100.5 # the proxy's fixed address on `front`, and nothing else; never the network's gateway
+    volumes:
+      - /srv/shell-mcp/secrets:/run/secrets:ro # init's directory: 0700, owned by the server's uid
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    pids_limit: 64
+    deploy:
+      resources:
+        limits: { cpus: "0.50", memory: 128M, pids: 64 }   # pids repeated: Compose rejects pids_limit next to a limits block without it
+    healthcheck:
+      test: ["CMD", "/shell-mcp", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+networks:
+  front:                                # user-defined; the proxy and this server only
+    ipam:
+      config:
+        # An RFC 1918 example. Pick a subnet that does not clash with your own
+        # networks (LAN, VPN, other Docker networks), and change the two fixed
+        # addresses above and SHELL_MCP_TRUSTED_PROXIES to match it.
+        - subnet: 198.51.100.0/24

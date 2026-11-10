@@ -1,14 +1,27 @@
 # Deploying shell-mcp
 
-> **Pin the image by digest.** The commands below and the reference compose use the 0.1.0 image index by digest, `ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:9c19075aadb69950eb71d69d840e64ba021fcabf22c7df32a76a229d3c387dd4`, as its release notes give it and as
-> `docker buildx imagetools inspect ghcr.io/tyler-rich/shell-mcp:0.1.0 --format '{{.Manifest.Digest}}'` prints it.
+> **Pin the image by digest.** The commands below and the reference compose use the 0.2.0 image index by digest, `ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:323149155f5be042949ec5291812104351f365a693dbdfb8cd2171b95ee30e6a`, as its release notes give it and as
+> `docker buildx imagetools inspect ghcr.io/tyler-rich/shell-mcp:0.2.0 --format '{{.Manifest.Digest}}'` prints it.
 > Verify it before you deploy it (README, "Verifying a release"). For a later release, use that release's digest.
 
 The server needs only two secrets, the MCP bearer token and the SSH private key, plus each target's pinned host-key fingerprint. It needs no Docker socket, host mounts or capabilities. See [`../docs/SECURITY.md`](../docs/SECURITY.md) §3 and §7, and [`.env.example`](.env.example) for every variable.
 
 ## Secrets
 
-Run these in this directory, next to `docker-compose.yml`: Compose resolves its `./secrets/…` paths relative to the compose file.
+`shell-mcp init` creates them: the bearer token, the SSH key pair and, with `--approver`, the approvers file, each `0600` (the `.pub` file `0644`) and owned by the server's uid, in a directory `0700` owned by that uid. It never overwrites a secret and never prints one. [`shell-mcp init`](#shell-mcp-init) below is its reference. The image has no shell and runs as uid 65532, so create the directory with one host command, as root, then run `init` in the image. It needs no network, no capability and no root inside the container:
+
+```sh
+install -d -o 65532 -g 65532 -m 0700 secrets
+docker run --rm -it --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  -v "$PWD/secrets:/secrets" ghcr.io/tyler-rich/shell-mcp:<version>@sha256:<digest> \
+  init --dir /secrets --approver alice
+```
+
+Run it in this directory, next to `docker-compose.yml`, because Compose resolves `./secrets/…` relative to the compose file. `<version>` is a release that has `init` (any after 0.2.0), with its digest from the release notes. Leave out `--approver alice` when you run without approvals. With it, the approver's code is shown once, as a QR code and an `otpauth://` URI, which is why it needs `-it` ([`../docs/CLIENTS.md`](../docs/CLIENTS.md) §3.2). `init` prints `ssh_key.pub`: install it on the target with `shell-mcp-gate install --key` ([`../docs/TARGET-SETUP.md`](../docs/TARGET-SETUP.md) §12.1), which also prints the target's host-key pin. On the host, as root, the release's `shell-mcp` binary does the same: `shell-mcp init --dir /srv/shell-mcp/secrets` creates the directory if it is absent and gives every file to uid 65532.
+
+### By hand
+
+The same result without `init`:
 
 ```sh
 mkdir -p secrets && chmod 700 secrets
@@ -21,7 +34,7 @@ chmod 600 secrets/*
 chown 65532:65532 secrets/mcp_token secrets/ssh_key
 ```
 
-Install `secrets/ssh_key.pub` on the target as described in [`../docs/TARGET-SETUP.md`](../docs/TARGET-SETUP.md) §7, and pin the target's host key: `ssh-keyscan -t ed25519 <host> | ssh-keygen -lf -` prints the `SHA256:` fingerprint. Check it against the host's own `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` over a trusted channel. Never trust a key on first use.
+Install `secrets/ssh_key.pub` on the target as described in [`../docs/TARGET-SETUP.md`](../docs/TARGET-SETUP.md) §7, and pin the target's host key from the target itself: run `shell-mcp-gate host-key` there (TARGET-SETUP §12.2), which reads the host's own key files, and carry the value after `=` to the server over a channel you trust, such as your own SSH session to the target. Never take a pin from what the network shows (`ssh-keyscan`, a first connection), and never trust a key on first use. `init` keeps these files once the directory and every file in it are owned by 65532 (`chown -R 65532:65532 secrets`, as root).
 
 ## Plain docker
 
@@ -41,20 +54,25 @@ docker run -d --name shell-mcp \
   -e "SHELL_MCP_TARGET_HOST_KEYS=ssh-ed25519 SHA256:placeholder" \
   -v "$PWD/secrets/mcp_token:/run/secrets/mcp_token:ro" \
   -v "$PWD/secrets/ssh_key:/run/secrets/ssh_key:ro" \
-  ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:9c19075aadb69950eb71d69d840e64ba021fcabf22c7df32a76a229d3c387dd4
+  ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:323149155f5be042949ec5291812104351f365a693dbdfb8cd2171b95ee30e6a
 ```
 
-`docker run --rm ghcr.io/tyler-rich/shell-mcp:0.1.0@sha256:9c19075aadb69950eb71d69d840e64ba021fcabf22c7df32a76a229d3c387dd4 check` (with the same environment and mounts) validates the configuration, connects to every target, verifies its host key and calls the gate's `hello`, and prints the result: the configuration with the token shown only as a length and the key only as its fingerprint, then per target the verified host-key pin, gate version, protocol, principal, policy hash, `max_tier`, sandbox status and the profile's tools that target can serve. It exits non-zero if any target fails.
+`docker run --rm ghcr.io/tyler-rich/shell-mcp:0.2.0@sha256:323149155f5be042949ec5291812104351f365a693dbdfb8cd2171b95ee30e6a check` (with the same environment and mounts) validates the configuration, connects to every target, verifies its host key and calls the gate's `hello`, and prints the result: the configuration with the token shown only as a length and the key only as its fingerprint, then per target the verified host-key pin, gate version, protocol, principal, policy hash, `max_tier`, sandbox status and the profile's tools that target can serve. It exits non-zero if any target fails.
 
 ## Docker Compose
 
 [`docker-compose.yml`](docker-compose.yml) is the reference deployment. Its hardening flags (`user`, `read_only`, `cap_drop`, `security_opt`, limits) are normative. Keep them. It is laid out for a reverse proxy: the server publishes no port and sits on a user-defined network, `front`, which your proxy joins at the fixed address `172.30.80.5`, the only entry in `SHELL_MCP_TRUSTED_PROXIES`. The subnet (`172.30.80.0/24`, RFC 1918) is an example: pick one that does not clash with your own networks and change the addresses to match.
 
+`shell-mcp init compose` prints this file with your values in place: the image, the target and its pin, the MCP host name, the subnet and the two fixed addresses, the profile and, with `--approve-host`, the approval page ([below](#shell-mcp-init-compose)). The hardening flags are not parameters: the output is this file with only those values changed.
+
 ```sh
 docker compose up -d
+docker compose exec shell-mcp /shell-mcp doctor --mcp-url https://mcp.example.test/mcp
 ```
 
-Attach the proxy in its own compose file or service, for example:
+`doctor` checks the running deployment from inside the server's container: the configuration and secret files, each target, the privileged helper's sockets, the trusted proxy, the approval page and the MCP endpoint, naming the step that fixes each failure ([`../docs/TARGET-SETUP.md`](../docs/TARGET-SETUP.md) §12.6). Run it with `exec`: `docker compose run` would start a second container on the server's fixed address, which Docker refuses while the server runs. Compose names the container `<project>-shell-mcp-1`; no command here assumes a container name.
+
+What any reverse proxy must do, for Caddy, nginx or Traefik, with an example Caddyfile, is in [`caddy/README.md`](caddy/README.md). Attach the proxy in its own compose file or service, for example:
 
 ```yaml
     networks:
@@ -70,7 +88,13 @@ The compose runs the `read-only` profile with approvals off. For the `operator` 
 
 In a stack editor such as DockHand or Portainer, never put secrets in the YAML, and keep every hardening flag from the reference compose.
 
-- **SSH key — recommended:** keep it a mounted file and set `SHELL_MCP_SSH_KEY_FILE`, as in the reference compose, if your tool can provide one (Docker secrets, or a bind-mounted file readable only by the container user, UID 65532).
+**The bind form needs no environment store at all, and is the way to run shell-mcp from a stack editor.** `init compose --form bind --dir /srv/shell-mcp/secrets` prints the reference compose with one read-only bind mount of `init`'s directory on `/run/secrets` in place of the `secrets:` blocks, so the `*_FILE` paths stay the same and both the token and the SSH key stay files that only uid 65532 can read. An editor runs Compose in its own container, where a relative path such as `./secrets/mcp_token` is resolved inside that container, not on the host. The bind form names the directory by its absolute host path, which the Docker daemon resolves, in one entry instead of one per file. The container can read the directory because `init` made it `0700` and owned by uid 65532.
+
+- **Host root once.** The editor cannot create that directory or run `init` for you: the README's quick start, steps 2 and 9 (`install -d`, `init`, `init compose`), need root on the host, or Docker access, which is root-equivalent, once. After that, the editor deploys and updates the stack.
+- **`doctor` from the editor's console.** The image has no shell, so the console must run the binary directly: set the command to `/shell-mcp doctor --mcp-url https://mcp.example.test/mcp` (or, from the host, `docker exec <container> /shell-mcp doctor --mcp-url https://mcp.example.test/mcp`, with the name the editor gave the container).
+
+**Fallbacks, only when the bind form is impossible** (an editor that cannot bind-mount a host directory). An environment store is weaker than a file: anyone with editor access, or with access to the Docker API on that host, can read the values, and they appear in `docker inspect` of the container, in plain text, for anyone who can run it.
+
 - **SSH key — fallback:** put it in the tool's encrypted environment store as `SHELL_MCP_SSH_KEY`. Environment stores usually cannot hold the key's multi-line PEM, so store the single-line base64 of the whole key file instead:
 
   ```sh
@@ -82,6 +106,150 @@ In a stack editor such as DockHand or Portainer, never put secrets in the YAML, 
   ```
 
   `shell-mcp check` shows only the key's fingerprint, never the value.
-- **Bearer token:** `SHELL_MCP_TOKEN` in the encrypted environment store. It is a single line.
+- **Bearer token — fallback:** `SHELL_MCP_TOKEN` in the encrypted environment store. It is a single line.
 - **What to drop:** the `secrets:` blocks and any `*_FILE` variable you are not using.
 - **Several redaction patterns:** mount a file with one pattern per line and point `SHELL_MCP_REDACT_PATTERNS_FILE` at it, because environment stores cannot hold the multi-line value.
+
+## `shell-mcp init`
+
+```text
+shell-mcp init --dir <dir> [--uid <n>] [--gid <n>] [--approver <name>] [--dry-run]
+```
+
+| File (under `--dir`) | Owner, mode | Content |
+|---|---|---|
+| `<dir>/` | `<uid>:<gid> 0700` | created when absent (its parent must exist) |
+| `mcp_token` | `<uid>:<gid> 0600` | 32 bytes from the system's random source, base64url without padding: 43 characters on one line |
+| `ssh_key` | `<uid>:<gid> 0600` | an unencrypted OpenSSH Ed25519 private key, comment `shell-mcp` |
+| `ssh_key.pub` | `<uid>:<gid> 0644` | its public half, `ssh-ed25519 <base64> shell-mcp`; written again from `ssh_key` when absent |
+| `approvers` | `<uid>:<gid> 0600` | with `--approver <name>` only: the name and a new seed, in `shell-mcp approver`'s format |
+
+- **Who runs it.** `--uid` and `--gid` default to 65532, the image's user. It runs as root (on the host) or as `--uid` itself (in the image, after the host command above), and refuses any other effective uid, so it can never leave files the server cannot read. `--uid` or `--gid` 0 is refused: the server never runs as root.
+- **The directory.** `--dir` must be absolute and clean, and neither it nor any directory above it may be a symbolic link. No directory above it may be writable by group or other, except a sticky one such as `/tmp`, whose entry on the path must then belong to root, `--uid` or the user running `init` (and `--dir` itself is never created directly in one). When it exists, it must be a directory with no group or other access, owned by `--uid` or, on the host, by root. A root-owned directory works for the `secrets` form, where Docker mounts each file, but not for the `bind` form, and `init` says so.
+- **Existing files are kept, never overwritten.** Each existing file must have the table's owner, no group or other access (for the `.pub` file, no group or other write), and valid content: a token of at least 43 characters with no line break inside, an unencrypted Ed25519 key, a `.pub` file holding that key's public half, and an approvers file the server would load. Anything else is refused, with the command that fixes it; nothing is repaired. A second run with the same flags changes nothing and reports each file `kept`. To rotate a secret, delete its file and run `init` again, then update the target's key line or the client's token.
+- **`--approver <name>`** enrols that approver when the name is new. The seed, its QR code and URI go to a terminal only, shown once. When stdout is not a terminal, `--approver` for a new name is refused before anything is generated or written (a `--dry-run` refuses the same way): run `init` interactively (in the image, `docker run --rm -it`), or run it without `--approver` and enrol later with `shell-mcp approver add`. A name already enrolled is `kept` and nothing is shown. A second approver needs `shell-mcp approver add --allow-multiple` ([`../docs/CLIENTS.md`](../docs/CLIENTS.md) §3.2).
+- **What it prints.** `ok`, `NOTE` and `FAIL` lines, the `ssh_key.pub` line and its fingerprint (for `shell-mcp-gate install --key`), then a one-line result. It never prints the token, the private key or a seed; the one exception is the approver's QR code and URI, shown once. Stderr gets one JSON audit line per file created or kept: the file name, owner, mode and, for the key, its fingerprint, never a value.
+- **`--dry-run`** prints every check and every file with its owner, mode and result (`create`, `kept`, `refuse`), with values shown as `<43 random characters>` and `<new Ed25519 key>`. It writes nothing and shows no seed.
+- **Writes and failures.** Each file is written the way the install commands write theirs ([`../docs/TARGET-SETUP.md`](../docs/TARGET-SETUP.md) §12.4): a temporary file `.<name>.shell-mcp-<12 random lowercase letters and digits>` in `--dir`, created `0600`, given its owner and mode on its descriptor, renamed over the target, and read back by SHA-256. A run that fails part-way removes the files it created (and the directory, if it created it) and leaves no temporary file. The next run removes any temporary file a killed run left.
+- **Exit codes.** 0 done or nothing to do, 1 refused or failed, 2 usage (a missing required flag, an unknown one). `--help` prints the usage on stdout and exits 0.
+
+### `shell-mcp init compose`
+
+```text
+shell-mcp init compose --image <repository>[:<tag>]@sha256:<digest> --host-key '<type> SHA256:<fingerprint>' [--host-key …]
+    --target-name <name> --target-host <host> [--target-user <user>] --mcp-host <name>
+    --subnet <IPv4 prefix> --server-addr <address> --proxy-addr <address>
+    [--profile read-only|operator|admin] [--approve-host <name>] [--form secrets|bind] [--dir <absolute host path>]
+```
+
+It prints [`docker-compose.yml`](docker-compose.yml) to stdout with these values in place, and writes nothing. Redirect it to a file (`> docker-compose.yml` in a copy of this directory), or paste it into your stack editor. It reads no secret and prints none: the output names files only. Notes go to stderr.
+
+- **`--form secrets`** (the default, for `docker compose` on the host): this file exactly, with its `secrets:` entries `file: ./secrets/<name>`, so run it next to `init`'s directory as above.
+- **`--form bind --dir <absolute host path>`** (for stack editors): no `secrets:` blocks, and one read-only bind mount `<dir>:/run/secrets:ro`. `--dir` is the host path of `init`'s directory and may contain only `A-Z a-z 0-9 . _ / -`.
+- **`--image`** must carry `@sha256:` and 64 hex digits. A tag alone is refused, so the deployment stays pinned to what you verified.
+- **`--host-key`** is the pin that `shell-mcp-gate install` or `host-key` printed on the target, parsed by the server's own parser. Nothing fills it in from the network. `--target-user` defaults to `svc-shell`, as `install`'s `--user` does.
+- **`--profile`** (default `read-only`) sets `SHELL_MCP_PROFILE`. **`--approve-host <name>`** adds the approval page ([`../docs/CLIENTS.md`](../docs/CLIENTS.md) §3.2): `SHELL_MCP_APPROVAL_METHOD=web`, `SHELL_MCP_APPROVAL_PUBLIC_URL=https://<name>`, `SHELL_MCP_APPROVERS_FILE=/run/secrets/approvers`, `SHELL_MCP_APPROVAL_BIND=0.0.0.0` and, in the `secrets` form, the `approvers` secret. Enrol the approver with `init --approver` first.
+  - `--profile admin` without `--approve-host` is refused. Every destructive and privileged tool needs an approval, so `admin` without the approval page would only refuse those calls.
+  - `--profile operator` with it also sets `SHELL_MCP_APPROVAL_TIERS: operator,destructive`, so operator tools need an approver's code. Without it, a NOTE says that operator tools then run without approval under the default `SHELL_MCP_APPROVAL_TIERS` (`destructive`).
+  - `--profile admin` with it keeps the default tiers, and a NOTE says so: destructive and privileged operations need a code; add `SHELL_MCP_APPROVAL_TIERS: operator,destructive` to the environment by hand if operator tools should too.
+- **Addresses.** `--subnet` is an IPv4 prefix in canonical form, between /16 and /28. `--server-addr` (the server's `ipv4_address`) and `--proxy-addr` (your proxy's fixed address, the only entry in `SHELL_MCP_TRUSTED_PROXIES`) must be two different hosts inside it. Neither may be the subnet's network or broadcast address or its first host, which Docker gives the network's gateway: the trusted proxy must never be the gateway ([`../docs/CLIENTS.md`](../docs/CLIENTS.md) §1).
+- **Refused** (exit 1): a malformed value for any flag above, and a host name that is not a DNS name (`--target-host` may also be an IP address). A missing required flag, an unknown flag and `--dir` without `--form bind` are usage errors (exit 2). A value that YAML would read as something other than the string given (`00000000`, `true`, `null`) is printed quoted, so the server gets exactly what you typed.
+- **Never generated:** an environment-store form (`SHELL_MCP_TOKEN`, `SHELL_MCP_SSH_KEY`). It would put the secrets in the YAML or the editor's store. [Stack editors](#stack-editors-dockhand-portainer-) describes doing that by hand when there is no other way.
+
+## Rotating secrets
+
+The server reads every secret (the token, the SSH key, the approvers file) and the host-key pins only at start. After a change, recreate its container, not just restart it: in the `secrets` form Docker mounts each file, and `init` replaces a file by renaming a new one over it, which a restarted container would not see.
+
+```sh
+docker compose up -d --force-recreate shell-mcp
+```
+
+Every `docker run` below uses the image you verified (`$IMAGE`, the README's quick start, step 1) and runs in the deployment's directory as root (or with Docker access) on the server host.
+
+### The bearer token
+
+1. Delete the old token and let `init` write a new one (it creates only what is absent, and keeps the rest):
+
+   ```sh
+   rm secrets/mcp_token
+   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+     -v "$PWD/secrets:/secrets" "$IMAGE" init --dir /secrets
+   ```
+
+2. Recreate the server's container (above). The old token stops working at that moment.
+3. Give each client the new token over a channel you trust (`claude mcp add … --header "Authorization: Bearer $SHELL_MCP_TOKEN"` again, or the variable its configuration reads).
+
+### The SSH key, with an overlap
+
+The target accepts both keys while the server moves from the old to the new one, so no request fails.
+
+1. **A new key pair beside the running server**, which keeps the old key it read at start. Move the old pair out of the directory, as root, and let `init` write a new one:
+
+   ```sh
+   install -d -m 0700 /root/shell-mcp-old-key
+   mv secrets/ssh_key secrets/ssh_key.pub /root/shell-mcp-old-key/
+   docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+     -v "$PWD/secrets:/secrets" "$IMAGE" init --dir /secrets
+   ```
+
+   `init` prints the new `ssh_key.pub` line: copy it to the target as `ssh_key.pub`.
+2. **On the target, add the new key** with `shell-mcp-gate install` and exactly the flags you used before (the same `--principal`), with `--key` naming the new file. `install` matches key lines by the key, not by the principal: the new key gets a line of its own, with the same principal and policy, and the old line stays. Both keys can log in now.
+3. **Move the server to the new key:** recreate its container (above), then `docker compose exec shell-mcp /shell-mcp doctor`. The target rows must be `ok`; the gate's audit line on the target shows the new key's fingerprint.
+4. **On the target, remove the old line**, as root, keeping the file `root:root 0644`. The old key's base64 is the second field of `/root/shell-mcp-old-key/ssh_key.pub` on the server host:
+
+   ```sh
+   cd /etc/ssh/authorized_keys.d
+   grep -vF -- '<the old key base64>' svc-shell > svc-shell.new
+   chmod 0644 svc-shell.new && mv svc-shell.new svc-shell
+   ```
+
+   Then run `install` once more with the new key's flags: it checks every line and reports each item `unchanged`.
+5. **On the server host, destroy the old key:** `shred -u /root/shell-mcp-old-key/ssh_key /root/shell-mcp-old-key/ssh_key.pub && rmdir /root/shell-mcp-old-key` (on SSD or journaling filesystems `shred` cannot promise the bytes are gone; the key is harmless once step 4 removed its line).
+
+### A target's host key
+
+`SHELL_MCP_TARGET_HOST_KEYS` takes several pins (`init compose` takes `--host-key` up to eight times), and the server accepts the target while it presents any pinned key. To replace the target's host key:
+
+1. On the target, create the new key and read its pin there: the key type (the first word of its `.pub` file) and the `SHA256:` fingerprint that `ssh-keygen -lf <new key>.pub` prints, as `ssh-ed25519 SHA256:…`; `shell-mcp-gate host-key` prints it once the key is one of `/etc/ssh/ssh_host_*_key.pub`.
+2. Pin both: run `init compose` again with your flags and two `--host-key` options, the old pin and the new one, replace the compose file, and recreate the server's container.
+3. Switch sshd to the new key (its `HostKey` lines), reload sshd, and run `doctor`: the target row shows the new pin verified.
+4. Drop the old pin: `init compose` with only the new `--host-key`, then recreate the container.
+
+Carry every pin over a channel you trust, never from what the network shows.
+
+### A lost authenticator, or an approver who leaves
+
+Remove the approver, enrol again (a new seed, shown once on a terminal: hence `-it`), and recreate the container, which reads the approvers file only at start. Pending approvals are lost with the restart.
+
+```sh
+docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  -v "$PWD/secrets:/run/secrets" "$IMAGE" approver remove --name alice --file /run/secrets/approvers
+docker run --rm -it --network none --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+  -v "$PWD/secrets:/run/secrets" "$IMAGE" approver add --name alice --file /run/secrets/approvers
+```
+
+The old seed is useless once its entry is removed. Delete the old entry from the authenticator app if you still have it.
+
+## Removing the server
+
+In the deployment's directory on the server host. The target's side, which is what actually revokes the server's access, is [`../docs/TARGET-SETUP.md`](../docs/TARGET-SETUP.md) §11.1.
+
+1. **Stop and remove the container and its network.** `docker compose down` removes both (the network as `<project>_front`). Docker refuses to remove a network that another container still uses: stop or detach your proxy from it first, and remove its shell-mcp sites (`mcp.example.test`, `approve.example.test`) from its configuration.
+
+   ```sh
+   docker compose down
+   docker network ls
+   ```
+
+2. **Destroy the secrets**, as root. `shred` overwrites each file before removing it; on SSD or journaling filesystems it cannot promise the bytes are gone, which is why removing the key's line on every target comes first.
+
+   ```sh
+   shred -u secrets/mcp_token secrets/ssh_key secrets/ssh_key.pub
+   test -f secrets/approvers && shred -u secrets/approvers
+   rmdir secrets
+   ```
+
+3. **The image:** `docker image rm "$IMAGE"`.
+4. **The clients:** remove the server from each client's configuration, and the token from wherever it was kept: `claude mcp remove shell-mcp` (with `-s user` or `-s project` for the scope you added it in), its entry in a project's `.mcp.json` or in `claude_desktop_config.json`, and `SHELL_MCP_TOKEN` or `SHELL_MCP_AUTH_HEADER` from the environment or shell profile that held it.
+5. **The approver's authenticator:** delete the shell-mcp entry from the app.
+6. **The firewall rule**, when the server ran on a target: TARGET-SETUP §11.1, step 9.
