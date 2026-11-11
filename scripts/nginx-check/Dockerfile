@@ -3,7 +3,7 @@
 # document runs this image; it ships to no one. Pinned by digest to the
 # newest stable nginx (D-013); Dependabot's docker ecosystem tracks this
 # directory.
-FROM nginx:1.30.6@sha256:42c68eab6f7e22611786a9fe1d1c019e275c50185bd54b8f75dc2b9184322703
+FROM nginx:1.31.8@sha256:165ddde8751e75a1c907d24ef10d9f6deb08b57e0fe56caf67512486aff76d82
 # nginx -t opens every certificate the configuration names. These are
 # throwaway self-signed certificates for the example's placeholder names,
 # made here and never used for anything but this syntax check. The image's
